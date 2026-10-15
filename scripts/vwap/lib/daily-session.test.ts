@@ -33,6 +33,85 @@ const capture = (bytes: Uint8Array, receivedAt = RECEIVED): YahooRawCapture => (
 const fresh = async (bytes: Uint8Array, receivedAt = RECEIVED) => parseDailyChart(symbol, "10y", bytes, receivedAt);
 const emptyOld = JSON.stringify({ code: "1301", bars: [], splits: [] });
 
+describe("same-target historical NULL row accounting", () => {
+  const MIDDLE = START - 86400, range = tenYearRangeForDate(reference.date);
+  // 既存構造分岐入力のNULL配置だけを変える。市場事実として使わない。
+  function nullable(indices = [1], partial = false, timestamps = [1475452800, MIDDLE, START]) {
+    const json = JSON.parse(new TextDecoder().decode(raw({}, timestamps)));
+    for (const i of indices) for (const key of partial ? ["close"] : ["open", "high", "low", "close", "volume"]) {
+      json.chart.result[0].indicators.quote[0][key][i] = null;
+    }
+    return new TextEncoder().encode(JSON.stringify(json));
+  }
+  async function saved(bytes = nullable()) {
+    const parsed = await fresh(bytes), c = capture(bytes);
+    const completedFetch = completedDailyFetch(parsed, c, range, reference);
+    expect(completedFetch).not.toBeNull();
+    return assertSavedDailyShape(JSON.stringify({ code: "1301", ...parsed, completedFetch }), "daily/1301.json", "1301");
+  }
+
+  it("accounts every actual timestamp without creating a NULL price or changing source clocks/span", async () => {
+    const bytes = nullable(), parsed = await fresh(bytes), before = JSON.stringify(parsed), s = await saved(bytes);
+    expect(qualifyDailySourceRange(parsed, capture(bytes), reference)).toEqual(range);
+    expect(s.completedFetch?.rawRows).toEqual({ version: "historical-null-ohlcv-v1", count: 3, nullTimestamps: [MIDDLE] });
+    expect(s.bars).toEqual(parsed.bars);
+    expect(s.bars).toHaveLength(2);
+    expect(s.proof).toEqual(parsed.proof);
+    expect(s.proof?.rawSha).toBe(sha(bytes));
+    expect(s.proof?.observedAt).toBe(RECEIVED);
+    expect(JSON.stringify(parsed)).toBe(before);
+    expect(hasCompletedDailyFetch(s, range)).toBe(true);
+    expect(hasCompletedDailyFetch(s, tenYearRangeForDate("2026-10-05"))).toBe(false);
+    expect(() => buildRepairPost({ code: "1301", oldRaw: JSON.stringify({ code: "1301", bars: [{ ...parsed.bars[0], date: "2026-10-01" }], splits: [] }),
+      fresh: parsed, range, updatedAt: RECEIVED })).toThrow("in-range 旧 1 件");
+  });
+
+  it.each([
+    ["partial OHLCV NULL", [1], true], ["first endpoint NULL", [0], false], ["current target NULL", [2], false],
+  ] as const)("%s stays HOLD", async (_name, indices, partial) => {
+    const bytes = nullable([...indices], partial), parsed = await fresh(bytes);
+    expect(completedDailyFetch(parsed, capture(bytes), range, reference)).toBeNull();
+  });
+
+  it.each([[1475452800, MIDDLE, MIDDLE, START], [1475452800, START, MIDDLE, START]])(
+    "duplicate/out-of-order raw timestamps stay HOLD", async (...timestamps) => {
+      const bytes = nullable([1], false, timestamps);
+      const parsed = await fresh(bytes);
+      expect(completedDailyFetch(parsed, capture(bytes), range, reference)).toBeNull();
+    });
+
+  it("rejects forming sessions and edited source/valid prices, keeping the original raw SHA contract", async () => {
+    const bytes = nullable(), parsed = await fresh(bytes);
+    expect(completedDailyFetch({ ...parsed, bars: parsed.bars.map((b, i) => i === 0 ? { ...b, c: b.c + 1 } : b) },
+      capture(bytes), range, reference)).toBeNull();
+    expect(() => completedDailyFetch(parsed, capture(raw()), range, reference)).toThrow("証跡不一致");
+    const s = await saved();
+    expect(hasCompletedDailyFetch({ ...s, completedFetch: { ...s.completedFetch!, regularEnd: Date.parse(RECEIVED) / 1000 + 1 } }, range)).toBe(false);
+  });
+
+  it.each([
+    { version: "unknown", count: 3, nullTimestamps: [MIDDLE] },
+    { version: "historical-null-ohlcv-v1", count: 4, nullTimestamps: [MIDDLE] },
+    { version: "historical-null-ohlcv-v1", count: 3, nullTimestamps: [START] },
+    { version: "historical-null-ohlcv-v1", count: 3, nullTimestamps: [1475452800] },
+    { version: "historical-null-ohlcv-v1", count: 4, nullTimestamps: [MIDDLE, MIDDLE] },
+    { version: "historical-null-ohlcv-v1", count: 4, nullTimestamps: [MIDDLE, MIDDLE - 86400] },
+    { version: "historical-null-ohlcv-v1", count: 2, nullTimestamps: [] },
+    { version: "historical-null-ohlcv-v1", count: 3, nullTimestamps: [MIDDLE], inferredNonTrading: true },
+    null,
+  ])("invalid/unknown cached accounting never qualifies: %j", async rawRows => {
+    const s = await saved(), invalid = { ...s, completedFetch: { ...s.completedFetch!, rawRows } };
+    expect(hasCompletedDailyFetch(invalid as typeof s, range)).toBe(false);
+    expect(() => assertSavedDailyShape(JSON.stringify(invalid), "daily/1301.json", "1301")).toThrow();
+  });
+
+  it("does not add accounting to the unchanged legacy full-row proof", async () => {
+    const bytes = raw(), parsed = await fresh(bytes), completedFetch = completedDailyFetch(parsed, capture(bytes), range, reference);
+    expect(completedFetch).not.toBeNull();
+    expect(completedFetch).not.toHaveProperty("rawRows");
+  });
+});
+
 describe("source 10y bounds and independent session", () => {
   it("Sunday full body retains its first bar, events, source SHA/clock/URL, without moving data to Sunday", async () => {
     const bytes = raw(), parsed = await fresh(bytes), c = capture(bytes);
