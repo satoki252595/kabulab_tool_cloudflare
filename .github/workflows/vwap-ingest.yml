@@ -75,6 +75,9 @@ on:
 concurrency:
   group: vwap-ingest
   cancel-in-progress: false
+  # 既定 queue:single は pending を1件だけ残し、次の pending が先の pending を cancel する。
+  # queue:max は最大100件まで待たせる（cancel-in-progress: true とは併用不可）。
+  queue: max
 
 permissions:
   contents: read
