@@ -2,7 +2,14 @@
 
 追跡: [#348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)。監査と全20機能の完了条件は [feature-gap-audit-20261014.md](feature-gap-audit-20261014.md)。作業開始2026-10-14 JST。全件の本番受入が済むまではこのIssueを閉じない。
 
-## 10/16 00:27 JSTの追加確認
+## 10/16 00:37 JSTの追加確認
+
+- 本文は新039も全50通の物理PRE/POST/FINAL・旧最後退役まで完了し、固定3,666通中2,654通を受入。新040〜060の996通は実行中、typed/legacy16と通常補足同期は別で、DDLは引き続き未実行。
+- RAW run38752510418は500全照合/新規486/既完14、cursor9,320/残69,512で正常終了。元サイトGET0・Notion10要求、3,326.695秒、原本の観測転送296,480,157B（SDK/header/失敗応答bytesは含まない）。native log112,311B/SHA `842f115e7df5b1d894006be782eae4553558b803298189c27f568e247fc85820`。後続38760878683は通常継続で修正済main ee17fd42から起動済み。独立の再dispatchはせず、元poolと同じ固定manifestを維持する。
+- 10/15のMac事業タグは20:14:33、優待要約は21:15:41の開始記録だけがあり、両LaunchAgent終了code1・本体log0B・終了receiptなし。R2 DNS失敗`ENOTFOUND`を確認。新namespaceの単発R2 GET2回/647B/453ms/書込0で、両latestが10/14成功receiptのまま（SHA `e9b946744e606ebcee1588db6ae5e9dafd22e42b5fdcc10fece6af1003b71906` / `c58ce44f436d3de5e3eb304c72d218362269cbe46e42f8db76fbece3eb0405fc`）と照合した。元開始結果不明は保持し、10/15定時は未完とする。
+- #421はCI成功/main0076aeefへ反映済み。優待の定型化・共通方針は実装済みだがMacは049e39a4固定のまま。R2 GETの名前解決失敗を既存3試行へ接続し、Mac receiptを16KiB/60秒signalで読む修正を通常共有経路へ追加する。単発GET指定・PUT単発/CAS/unknown保護は維持する。Mac切替えと定時の本番受入は未完。
+
+## 10/16 00:27 JSTの追加確認（以下はその時点の観測）
 
 全20機能の本番受入は未完。[決定的な処理を優先する方針と実行先](../deterministic-production.md)に、通常のWorkers/Actions処理とMac/LLM依存、今回の有限復旧を分けて記録した。
 

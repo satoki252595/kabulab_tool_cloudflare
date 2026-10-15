@@ -185,7 +185,7 @@ export async function r2GetBytesVersion(key: string, bucket: string | undefined,
   // 成功 envelope は strict 200 + body + nonempty ETag を要求する。
   try {
     // GET は mutation と異なり再読しても適用結果が曖昧にならない。
-    // nativeな既知5xx familyだけ既存backoffへ接続し、認可/404/未知schemaは即STOP。
+    // nativeな既知5xx・名前解決失敗だけ既存backoffへ接続し、認可/404/未知schemaは即STOP。
     let signal: AbortSignal;
     const attempt = async () => {
       opts?.abortSignal?.throwIfAborted();
@@ -197,8 +197,11 @@ export async function r2GetBytesVersion(key: string, bucket: string | undefined,
     };
     const r = opts?.singleAttempt === true ? await attempt() : await retry(attempt, 3, 1000, (e) => {
         const { code, status } = r2CauseOf(e);
-        return ["InternalError", "InternalServerError", "ServiceUnavailable", "SlowDown"].includes(code) &&
-          [500, 502, 503, 504].includes(status as number);
+        const dns = e as { code?: unknown; syscall?: unknown } | null;
+        return (e instanceof Error && status === "none" && dns?.syscall === "getaddrinfo" &&
+          ["ENOTFOUND", "EAI_AGAIN"].includes(dns.code as string)) ||
+          (["InternalError", "InternalServerError", "ServiceUnavailable", "SlowDown"].includes(code) &&
+          [500, 502, 503, 504].includes(status as number));
       });
     const status = (r as { $metadata?: { httpStatusCode?: unknown } }).$metadata?.httpStatusCode;
     const etag = r.ETag;

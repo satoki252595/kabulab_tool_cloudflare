@@ -3,14 +3,35 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
+import { S3Client, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
+import { sharedEnv } from "../../src/shared/env.js";
 import { localJobScheduledFor, parseLocalJobReceipt, startLocalJobReceipt, mirrorLocalJobReceipt, type LocalJobReceipt } from "./receipt.js";
 
 const running = (): LocalJobReceipt => parseLocalJobReceipt({ version: 1, kind: "biztag", phase: "running",
   scheduledFor: "2026-10-14T11:00:00.000Z", startedAt: "2026-10-14T11:00:01.000Z", finishedAt: null,
   revision: "a".repeat(40), acceptedRevision: "a".repeat(40), code: null, signal: null, retries: 0 });
-afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
+afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); vi.useRealTimers(); });
 
 describe("Macの実行receipt", () => {
+  it("通常入口のDNS失敗はGETだけ再読し、bounded本文照合と単発PUTを通す", async () => {
+    vi.spyOn(sharedEnv, "R2_ACCOUNT_ID").mockReturnValue("test-account");
+    vi.spyOn(sharedEnv, "R2_ACCESS_KEY_ID").mockReturnValue("test-access");
+    vi.spyOn(sharedEnv, "R2_SECRET_ACCESS_KEY").mockReturnValue("test-secret");
+    vi.spyOn(sharedEnv, "R2_BUCKET").mockReturnValue("test-bucket");
+    const current = running(), body = Buffer.from(JSON.stringify(current));
+    const send = vi.spyOn(S3Client.prototype, "send")
+      .mockRejectedValueOnce(Object.assign(new Error("EXPLICIT_DNS_FAILURE"), { code: "ENOTFOUND", syscall: "getaddrinfo" }))
+      .mockRejectedValueOnce(Object.assign(new Error("EXPLICIT_MISSING"), { name: "NoSuchKey", $metadata: { httpStatusCode: 404 } }))
+      .mockImplementationOnce(async () => ({ ETag: '"new"', $metadata: { httpStatusCode: 200 } }))
+      .mockImplementationOnce(async () => ({ ETag: '"new"', ContentLength: body.length, Body: Readable.from([body]), $metadata: { httpStatusCode: 200 } }));
+    const result = expect(startLocalJobReceipt(current)).resolves.toBe('"new"');
+    await result;
+    expect(send.mock.calls.map(([command]) => command instanceof GetObjectCommand ? "GET" : command instanceof PutObjectCommand ? "PUT" : "unknown"))
+      .toEqual(["GET", "GET", "PUT", "GET"]);
+    for (const [command, options] of send.mock.calls) if (command instanceof GetObjectCommand)
+      expect((options as { abortSignal: AbortSignal }).abortSignal).toBeInstanceOf(AbortSignal);
+  });
   it("JSTの毎日20時/21時を使い、早朝RunAtLoadを当日夜の定時成功へしない", () => {
     expect(localJobScheduledFor("biztag", "2026-10-14T11:00:01.000Z")).toBe("2026-10-14T11:00:00.000Z");
     expect(localJobScheduledFor("yutai-summary", "2026-10-14T12:00:01.000Z")).toBe("2026-10-14T12:00:00.000Z");
