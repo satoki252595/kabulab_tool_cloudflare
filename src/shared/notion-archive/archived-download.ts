@@ -15,6 +15,8 @@ function transportError(error: unknown): boolean {
   return ["fetch failed", "Failed to fetch", "Load failed", "NetworkError when attempting to fetch resource.", "terminated"].includes(error.message);
 }
 
+export { transportError as isRetryableTransportError };
+
 /** 同じ保管済みURLだけを読む。全体90秒・各45秒・最大2GET、mutation/別原典への切替0。 */
 export async function downloadArchivedFile(file: { name: string; url: string }, context: string, options?: ArchivedDownloadOptions): Promise<Uint8Array> {
   const maxBytes = options?.maxBytes;

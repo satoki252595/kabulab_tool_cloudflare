@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "../../src/shared/zod-mini.js";
 import { canonicalRawKey } from "./raw-index-plan.js";
-import { safeRawFailure, createRawDownloader, expectedRawIndex, inspectRawBackfill, parseRawManifest, runRawBackfill, type BackfillIo, type RawBackfillOptions, type RawItem, type RawIndexRow } from "./raw-index-backfill.js";
+import { safeRawFailure, createRawDownloader, expectedRawIndex, inspectRawBackfill, parseRawManifest, readRawIndex, runRawBackfill, type BackfillIo, type RawBackfillOptions, type RawItem, type RawIndexRow } from "./raw-index-backfill.js";
+import { sharedEnv } from "../../src/shared/env.js";
 import { downloadArchivedFile, type ArchivedDownloadOptions } from "../../src/shared/notion-archive/archived-download.js";
 import type { CanonicalRawFile } from "../../src/shared/notion-archive/raw-files.js";
 
@@ -17,6 +18,46 @@ const item: RawItem = { ...safe, source: "EDINET", licenseTag: "commercial-ok", 
 const key = canonicalRawKey(raw, item.docId), legacy = canonicalRawKey(raw, null);
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 const opts: RawBackfillOptions = { mode: "apply", planId: "test-plan", limit: 50, maxBytes: 67108864, maxSeconds: 1200, expectedCount: 1 };
+
+describe("fixed SHA SELECT bounded native retry", () => {
+  function credentials() {
+    vi.spyOn(sharedEnv, "CLOUDFLARE_ACCOUNT_ID").mockReturnValue("explicit-transport-test-account");
+    vi.spyOn(sharedEnv, "D1_DATABASE_ID").mockReturnValue("explicit-transport-test-database");
+    vi.spyOn(sharedEnv, "CLOUDFLARE_API_TOKEN").mockReturnValue("explicit-transport-test-token");
+  }
+  const index = expectedRawIndex(item, "raw-bucket", key);
+  const ok = () => new Response(JSON.stringify({ success: true, result: [{ success: true, results: [index] }] }), { status: 200 });
+  it.each([502, 503, 504, "socket"])("%s retries the identical SELECT only after admission", async fault => {
+    credentials(); const beforeRetry = vi.fn();
+    const native = vi.spyOn(globalThis, "fetch").mockImplementationOnce(async () => {
+      if (fault === "socket") throw new TypeError("fetch failed", { cause: { code: "ECONNRESET" } });
+      return new Response("EXPLICIT_GATEWAY_FAILURE", { status: fault as number });
+    }).mockImplementationOnce(async () => { expect(beforeRetry).toHaveBeenCalledOnce(); return ok(); });
+    expect(await readRawIndex(sha, { beforeRetry })).toEqual(index);
+    expect(native).toHaveBeenCalledTimes(2);
+    expect(native.mock.calls[1]).toEqual(native.mock.calls[0]);
+    const request = JSON.parse(native.mock.calls[0][1]!.body as string);
+    expect(request.sql).toMatch(/^SELECT .* FROM jss_raw_files WHERE sha256=\?$/);
+    expect(request.params).toEqual([sha]);
+  });
+  it.each([403, 429, 500, "schema", "json"])("%s stops without retry", async fault => {
+    credentials(); const beforeRetry = vi.fn();
+    const native = vi.spyOn(globalThis, "fetch").mockResolvedValue(fault === "schema"
+      ? new Response(JSON.stringify({ success: true, result: [] }))
+      : fault === "json" ? new Response("EXPLICIT_INVALID_JSON") : new Response("EXPLICIT_REFUSAL", { status: fault as number }));
+    await expect(readRawIndex(sha, { beforeRetry })).rejects.toThrow();
+    expect(native).toHaveBeenCalledOnce(); expect(beforeRetry).not.toHaveBeenCalled();
+  });
+  it("second gateway failure and rejected admission never send a third/native second request", async () => {
+    credentials(); const native = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("EXPLICIT_GATEWAY_FAILURE", { status: 502 }));
+    await expect(readRawIndex(sha, { beforeRetry: vi.fn() })).rejects.toThrow("D1 read HTTP 502");
+    expect(native).toHaveBeenCalledTimes(2); native.mockClear();
+    await expect(readRawIndex(sha, { beforeRetry: () => { throw new Error("EXPLICIT_BUDGET_STOP"); } })).rejects.toThrow("EXPLICIT_BUDGET_STOP");
+    expect(native).toHaveBeenCalledOnce(); native.mockClear();
+    await expect(readRawIndex(sha)).rejects.toThrow("D1 read HTTP 502");
+    expect(native).toHaveBeenCalledOnce();
+  });
+});
 
 function fixture() {
   const objects = new Map<string, { body: Uint8Array; etag: string }>();
@@ -76,6 +117,30 @@ describe("保存済⑤原本のbounded publisher", () => {
     expect(f.events.indexOf("D1:GET", inserted)).toBeGreaterThan(inserted);
     expect(f.rows.get(sha)).toEqual(expectedRawIndex(item, f.io.rawBucket, key));
     for (const stored of f.objects.values()) if (stored.body !== body) expect(new TextDecoder().decode(stored.body)).not.toContain("never-log");
+  });
+  it("通常経路は再SELECTの送信前予約も計数し、INSERT/PUTは増やさない", async () => {
+    const baseline = await runRawBackfill(opts, fixture().io);
+    const f = fixture(), index = f.io.index;
+    f.io.index = vi.fn(async (digest, options) => {
+      if (vi.mocked(f.io.index).mock.calls.length === 1) await options!.beforeRetry();
+      return index(digest);
+    });
+    const result = await runRawBackfill(opts, f.io);
+    expect(result).toMatchObject({ status: "snapshot_complete", d1Reads: baseline.d1Reads + 1,
+      d1ReadsCountKind: "admitted_attempts_including_retry", rawPuts: 1, d1Inserts: 1 });
+    expect(f.events.indexOf("fsync:d1_read_retry_inflight")).toBeLessThan(f.events.indexOf("D1:GET"));
+    expect(f.io.insert).toHaveBeenCalledOnce(); expect(f.rawPuts()).toHaveLength(1);
+  });
+  it("再SELECTの予約保管失敗では原本PUT/索引INSERT/cursor進行をしない", async () => {
+    const f = fixture(), emit = f.io.emit;
+    f.io.index = vi.fn(async (_digest, options) => { await options!.beforeRetry(); return null; });
+    f.io.emit = vi.fn(async record => {
+      if ((record as { phase: string }).phase === "d1_read_retry_inflight") throw new Error("EXPLICIT_RECEIPT_FAILURE");
+      await emit(record);
+    });
+    await expect(runRawBackfill(opts, f.io)).rejects.toThrow("EXPLICIT_RECEIPT_FAILURE");
+    expect(f.io.index).toHaveBeenCalledOnce(); expect(f.io.insert).not.toHaveBeenCalled();
+    expect(f.rawPuts()).toHaveLength(0); expect(f.state().cursor).toBe(0);
   });
   it("保存済同値はraw/index write0、取得履歴とderived metadataを上書きしない", async () => {
     const f = fixture();
