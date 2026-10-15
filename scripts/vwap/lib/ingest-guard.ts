@@ -143,7 +143,7 @@ export type SavedDaily = {
   /** この fetch の provenance (legacy object には無い。ある場合は形状 strict)。 */
   proof?: DailyFetchProof;
   corporateEvents?: CorporateEvents;
-  /** 同じ明示range/対象日の再開専用。session確定と全raw行の採用を証明。 */
+  /** 同じ明示range/対象日の再開専用。session確定と全raw行の分類を証明。 */
   completedFetch?: CompletedDailyFetch;
 };
 
@@ -151,6 +151,8 @@ export type CompletedDailyFetch = {
   from: string; to: string;
   regularStart: number; regularEnd: number; regularMarketTime: number;
   bars: number; rawSha: string; priceSnapshotSha256: string;
+  /** 価格を作らず、内側の過去OHLCV全欄NULLを原timestampのまま区別する。 */
+  rawRows?: { version: "historical-null-ohlcv-v1"; count: number; nullTimestamps: number[] };
   /** 照合済み独立benchmark。最終約定時刻を閉場時刻と混同しない。 */
   sessionReference?: DailySessionReference;
   /** 実原本の無約定末尾。価格/quote日のbar timestampも推測せず保持する。 */
@@ -194,7 +196,7 @@ function noTradeTailMatches(
     tail.every((b) => b.v === 0 && b.o === price && b.h === price && b.l === price && b.c === price);
 }
 
-/** 原本を再取得せず、取得済み同一応答からだけ再開証跡を作る。欠落は未適格。 */
+/** 原本を再取得せず、取得済み同一応答からだけ再開証跡を作る。歴史全体の完全性は主張しない。 */
 export function completedDailyFetch(
   fresh: DailyResult, capture: YahooRawCapture | undefined, range: { from: string; to: string },
   sessionReference?: DailySessionReference
@@ -217,15 +219,40 @@ export function completedDailyFetch(
   const end = meta?.currentTradingPeriod?.regular?.end, marketTime = meta?.regularMarketTime;
   const ts = result?.timestamp;
   if (meta?.symbol !== fresh.proof.symbol || meta?.range !== "10y" || meta?.dataGranularity !== "1d" ||
-      meta?.exchangeTimezoneName !== "Asia/Tokyo" || !Array.isArray(ts) || ts.length !== fresh.bars.length ||
+      meta?.exchangeTimezoneName !== "Asia/Tokyo" || !Array.isArray(ts) ||
       ![start, end, marketTime].every((v) => typeof v === "number" && Number.isSafeInteger(v) && v > 0)) return null;
-  // 全timestampと採用barの1:1一致。null脱落・重複・順序崩れは証明へ昇格しない。
   if (ts.some((t, i) => typeof t !== "number" || !Number.isSafeInteger(t) || t <= 0 ||
-      jstDateSec(t) !== fresh.bars[i].date || (i > 0 && ts[i - 1] >= t)) ||
+      (i > 0 && ts[i - 1] >= t)) ||
       ts[0] !== fresh.proof.firstTs || ts[ts.length - 1] !== fresh.proof.lastTs) return null;
+  let rawRows: CompletedDailyFetch["rawRows"];
+  if (ts.length === fresh.bars.length) {
+    // legacyの全行採用証跡は従来条件のまま。
+    if (ts.some((t, i) => jstDateSec(t) !== fresh.bars[i].date)) return null;
+  } else {
+    const quote = result?.indicators?.quote?.[0];
+    const keys = ["open", "high", "low", "close", "volume"] as const;
+    if (quote === undefined || keys.some(k => !Array.isArray(quote[k]) || quote[k]!.length !== ts.length)) return null;
+    const nullTimestamps: number[] = [];
+    let adopted = 0;
+    for (let i = 0; i < ts.length; i++) {
+      const values = keys.map(k => quote[k]![i]), timestamp = ts[i] as number, date = jstDateSec(timestamp);
+      if (values.every(v => v === null)) {
+        // 部分NULL/当日NULL/端点NULLは救済しない。無約定や価格へ読み替えない。
+        if (i === 0 || i === ts.length - 1 || date >= range.to) return null;
+        nullTimestamps.push(timestamp);
+      } else {
+        const bar = fresh.bars[adopted++];
+        if (values.some(v => typeof v !== "number" || !Number.isFinite(v)) || bar?.date !== date ||
+            [bar.o, bar.h, bar.l, bar.c, bar.v].some((v, n) => v !== (n === 4 ? values[n] : +values[n]!.toFixed(2)))) return null;
+      }
+    }
+    if (adopted !== fresh.bars.length || nullTimestamps.length === 0) return null;
+    rawRows = { version: "historical-null-ohlcv-v1", count: ts.length, nullTimestamps };
+  }
   const proof: CompletedDailyFetch = { ...range, regularStart: start as number, regularEnd: end as number,
     regularMarketTime: marketTime as number, bars: fresh.bars.length, rawSha: fresh.proof.rawSha,
     priceSnapshotSha256: bodyPin(priceSnapshotJson(fresh.bars)),
+    ...(rawRows === undefined ? {} : { rawRows }),
     ...(sessionReference === undefined ? {} : { sessionReference: { ...sessionReference } }) };
   // 元rawで検査する。丸め後にflatに見えた行を証明へ昇格しない。
   if (sessionReference !== undefined && typeof meta.regularMarketPrice === "number") {
@@ -244,7 +271,7 @@ export function completedDailyFetch(
   return proof;
 }
 
-/** wall clock/mtimeだけではskipしない。明示対象日と確定session/全bars/SHAが一致する時だけ。 */
+/** wall clock/mtimeだけではskipしない。同じ明示対象日と確定session/採用bars/NULL会計/SHAを検査する。 */
 export function hasCompletedDailyFetch(saved: SavedDaily, range: { from: string; to: string }): boolean {
   const c = saved.completedFetch, p = saved.proof;
   if (c === undefined || !isDailyFetchProof(p) || saved.corporateEvents === undefined) return false;
@@ -288,6 +315,23 @@ export function hasCompletedDailyFetch(saved: SavedDaily, range: { from: string;
     }
   }
   const dates = saved.bars.map((b) => b.date as string);
+  if (c.rawRows !== undefined) {
+    const rows = c.rawRows;
+    if (rows === null || typeof rows !== "object" || rows.version !== "historical-null-ohlcv-v1" ||
+        Object.keys(rows).sort().join(",") !== "count,nullTimestamps,version" ||
+        !Number.isSafeInteger(rows.count) || !Array.isArray(rows.nullTimestamps) || rows.nullTimestamps.length === 0 ||
+        rows.count !== saved.bars.length + rows.nullTimestamps.length) return false;
+    const adoptedDates = new Set(dates), missingDates = new Set<string>();
+    for (let i = 0; i < rows.nullTimestamps.length; i++) {
+      const t = rows.nullTimestamps[i];
+      if (!Number.isSafeInteger(t) || t <= p.firstTs || t >= p.lastTs ||
+          (i > 0 && rows.nullTimestamps[i - 1] >= t)) return false;
+      const d = jstDateSec(t);
+      if (d < range.from || d >= range.to || d <= dates[0] || d >= dates[dates.length - 1] ||
+          adoptedDates.has(d) || missingDates.has(d)) return false;
+      missingDates.add(d);
+    }
+  }
   return dates[0] === jstDateSec(p.firstTs) && dates[dates.length - 1] === jstDateSec(p.lastTs) &&
     dates[dates.length - 1] === range.to && dates.every((d, i) => d >= range.from && d <= range.to && (i === 0 || dates[i - 1] < d));
 }
