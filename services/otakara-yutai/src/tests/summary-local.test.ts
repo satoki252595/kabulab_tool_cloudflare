@@ -14,6 +14,7 @@ import {
 import {
   buildLocalResults,
   companyValue,
+  compileSimpleSummary,
   parseLocalArgs,
   runLocalSummary,
   selectFairBatch,
@@ -123,6 +124,45 @@ function dependencies(initial: BenefitRow[]): {
 }
 
 describe("local summary generation/import boundary", () => {
+  it("種類・額面の全文が一意な入力だけを定型化し、未知の条件や見出しを落とさない", () => {
+    const task = (description: string) => selectSummaryTasks([row(1, { description })])[0];
+    for (const description of ["QUOカード 3,000円分", '【種別："QUOカード"】\nQUOカード ３０００円分を贈呈。',
+      '【種別："QUOカード"】\n3,000円分']) {
+      expect(compileSimpleSummary(task(description))).toMatchObject({ shortSummary: "QUOカード 3,000円分", estimatedValue: 3000 });
+    }
+    expect(compileSimpleSummary(task("自社商品 3,000円相当"))).toMatchObject({ shortSummary: "自社商品 3,000円相当", estimatedValue: 3000 });
+    for (const description of ["QUOカード 3,000円分\n※1年以上保有", "QUOカード 3,000円分から選択",
+      "QUOカード 3,000円分 抽選", "QUOカード 3,000円分 申込必要", "QUOカード 3,000円引き",
+      "QUOカード 3,00円分", "QUOカード 0円分", "QUOカード 3,000円分と商品券 2,000円分",
+      '【種別："1年以上保有"】\nQUOカード 3,000円分', '【種別：壊れた見出し】\nQUOカード 3,000円分']) {
+      expect(compileSimpleSummary(task(description))).toBeNull();
+    }
+  });
+  it("定型だけのbatchはモデルを起動せず、通常の物理PRE/原子取込/全POSTを通す", async () => {
+    const { deps, events, rows } = dependencies([row(1, { description: "QUOカード 3,000円分" })]);
+    const dir = state();
+    expect(await runLocalSummary({ stateDir: dir, limit: 60 }, deps)).toMatchObject({ accepted: 1, pendingAfter: 0,
+      modelCalls: 0, modelResidents: 0, deterministic: 1 });
+    expect(deps.generate).not.toHaveBeenCalled();
+    expect(events).toEqual(["archive-pre", "apply", "archive-post"]);
+    expect(rows()[0]).toMatchObject({ shortSummary: "QUOカード 3,000円分", estimatedValue: 3000 });
+    const run = readdirSync(dir).find(name => name !== "progress.json")!;
+    const pre = JSON.parse(gunzipSync(readFileSync(join(dir, run, "pre-import.json.gz"))).toString());
+    expect(pre).toMatchObject({ model: null, revision: null, protocol: "", deterministicRule: "simple-face-value-v1" });
+    expect(parseTaskFile(readFileSync(join(dir, run, "model-tasks.jsonl"), "utf8"))).toEqual([]);
+  });
+  it("混在batchは未対応の群だけをモデルに渡し、全タスク共通の取込契約を守る", async () => {
+    const { deps, rows } = dependencies([row(1, { description: "QUOカード 3,000円分" }), row(2)]);
+    const generate = deps.generate;
+    deps.generate = vi.fn(async (path, run) => {
+      expect(parseTaskFile(readFileSync(path, "utf8")).map(task => task.stockCode)).toEqual(["9002"]);
+      return generate(path, run);
+    });
+    expect(await runLocalSummary({ stateDir: state(), limit: 60 }, deps)).toMatchObject({ accepted: 2, pendingAfter: 0,
+      modelCalls: 1, modelResidents: 1, deterministic: 1 });
+    expect(deps.generate).toHaveBeenCalledOnce();
+    expect(rows().map(r => r.estimatedValue)).toEqual([3000, 3000]);
+  });
   it("keeps choice/holding/lottery qualifications instead of silently taking a representative benefit", () => {
     expect(missingSummaryConditions("合成商品から選択、1年以上保有、抽選で当選者に贈呈", "商品")).toEqual([
       "choice_condition_missing",
