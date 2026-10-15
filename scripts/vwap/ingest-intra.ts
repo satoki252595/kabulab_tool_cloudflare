@@ -18,7 +18,12 @@ import { scheduledVwapGuard } from "./lib/scheduled-window.js";
 export async function main() {
   const startedAt = new Date().toISOString();
   const runId = resolveRunId();
-  const schedule = scheduledVwapGuard({ plannedDate: arg("scheduled-date"), runId, phase: "intra" });
+  const only = arg("codes"), maxStartSeconds = arg("max-start-seconds");
+  if (maxStartSeconds !== undefined && (!only || only.split(",").length > 100 ||
+      new Set(only.split(",")).size !== only.split(",").length || arg("limit") !== undefined)) {
+    throw new Error("有限5分足は重複のない1〜100コードを明示し、limitを併用しないでください");
+  }
+  const schedule = scheduledVwapGuard({ plannedDate: arg("scheduled-date"), runId, phase: "intra", maxStartSeconds });
   // knob は main 内で型付き取得する (未設定・不正値は final catch で exit 2)。
   // 通常値は vwap-ingest.yml・.env.example で明示宣言。黙示既定なし。
   const { delayMs: DELAY, keepDays: KEEP_DAYS } = sharedEnv.vwapKnobs();
@@ -26,7 +31,7 @@ export async function main() {
   // Yahoo の 5m 上限は 60d。未知値は弾く (ルール2: 黙って既定に倒さない)。
   // どちらも無ければ必須エラー (未設定フォールバックなし)。
   const rangeArg = arg("range");
-  const only = arg("codes"), limit = arg("limit");
+  const limit = arg("limit");
   const sourceWindow = resolveIntraRecoveryWindow({ from: arg("from"), toExclusive: arg("to-exclusive"),
     codes: only, range: rangeArg, limit, now: new Date().toISOString() });
   const RANGE = sourceWindow === null ? rangeArg ?? sharedEnv.VWAP_INTRA_RANGE() :
@@ -259,6 +264,11 @@ export async function main() {
     summary.metadata.scheduledWindow = schedule.admission;
     const body = JSON.parse(new TextDecoder().decode(summary.files[0].bytes));
     summary.files[0].bytes = new TextEncoder().encode(JSON.stringify({ ...body, scheduledWindow: schedule.admission }));
+  }
+  if (schedule.startBudget !== undefined) {
+    summary.metadata.finiteStartBudget = schedule.startBudget;
+    const body = JSON.parse(new TextDecoder().decode(summary.files[0].bytes));
+    summary.files[0].bytes = new TextEncoder().encode(JSON.stringify({ ...body, finiteStartBudget: schedule.startBudget }));
   }
   const local = writeSummaryLocal(summary);
   if (!local.ok) {
