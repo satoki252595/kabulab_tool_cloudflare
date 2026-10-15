@@ -11,7 +11,8 @@ goldenの定期実行、競合判定は再開しない。
 `com.kabulab-cf.biztag` LaunchAgentが毎日Macの現地時刻20:00に起動する。
 このMacはAsia/Tokyo。ログイン時の`RunAtLoad`も同じ入口を通る。
 優待要約は別label `com.kabulab-cf.yutai-summary`で毎日21:00に同じ入口の
-`run yutai-summary`を実行する。原文変更・未要約・契約違反の最大60群を既存固定モデルで処理し、
+`run yutai-summary`を実行する。原文変更・未要約・契約違反の最大60群について、全文が単純な種類＋額面なら定型処理し、残りだけ既存固定モデルで処理する。
+定型分も同じ共有取込契約と物理PRE/POST照合を通す。配備状況と例外は[決定的な本番処理](deterministic-production.md)を参照。
 新しい有料APIは使わない。`tmp/yutai-local`にprivate進捗・原本・送信中記録を残す。
 実行コードはCIを確認してmainへmergeした専用runtime worktreeに固定し、
 自動pull/resetや未レビューのPR実行はしない。
