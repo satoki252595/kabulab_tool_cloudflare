@@ -178,6 +178,24 @@ describe("通常定時VWAPの5分足は同run受付と終了窓を継承", () =>
 });
 
 describe("ingest-intra main flow", () => {
+  it("有限手動intraはcustody中の期限到達後PUT0、原本/全outcome/予算を保管してexit2", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); const start = Date.parse("2026-10-14T08:00:00.000Z"); vi.setSystemTime(start);
+    process.argv.push("--codes=A", "--max-start-seconds=1");
+    mockLoadCodes.mockResolvedValue(["A"]); mockR2Get.mockResolvedValue(null);
+    mockFetch5m.mockResolvedValue([{ ...BAR, ts: Date.parse("2026-10-14T06:00:00.000Z") / 1000 }]);
+    mockRawArchive.mockImplementationOnce(async () => {
+      vi.setSystemTime(start + 1000); return { pages: ["test-page"], rawBytes: 1, compressedBytes: 1 };
+    });
+    await main();
+    expect(mockFetch5m).toHaveBeenCalledTimes(1); expect(mockRawArchive).toHaveBeenCalledTimes(1);
+    expect(mockR2Put).not.toHaveBeenCalled(); expect(mockRecord).toHaveBeenCalledTimes(1); expect(process.exitCode).toBe(2);
+    expect(recordedBody().finiteStartBudget).toEqual({ startedAt: new Date(start).toISOString(), deadline: new Date(start + 1000).toISOString(), seconds: 1 });
+    expect(recordedBody().outcomes).toMatchObject({ A: { status: "error" } });
+  });
+  it.each([[], ["--codes=A,A"], ["--codes=A", "--limit=1"], ["--codes=" + Array.from({ length: 101 }, (_, i) => String(i)).join(",")]])("有限手動intraの曖昧/重複/過大対象はD1/source前に拒否 %s", async (...args) => {
+    process.argv.push("--max-start-seconds=900", ...args);
+    await expect(main()).rejects.toThrow("1〜100コード"); expect(mockLoadCodes).not.toHaveBeenCalled(); expect(mockFetch5m).not.toHaveBeenCalled();
+  });
   it.each(["success", "unknown", "rejected", "deadline"])("custody後のR2だけ最大2・%s後は開始済みをsettleし後続を止める", async (mode) => {
     vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-10-14T08:00:00.000Z"));
     const codes = mode === "success" ? ["A", "B", "C"] : ["A", "B", ...Array.from({ length: 29 }, (_, i) => `C${i}`)];
