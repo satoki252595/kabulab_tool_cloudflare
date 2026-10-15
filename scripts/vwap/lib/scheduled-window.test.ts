@@ -58,4 +58,18 @@ describe("VWAP定時窓と同run受付時計", () => {
     expect(guard.admission).toBeNull(); guard.assertActive();
     expect(readdirSync(directory)).toEqual([]);
   });
+  it("明示した手動intraの予算だけを固定し、期限ちょうどと不正/定時併用を拒否する", () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(start);
+    const input = { plannedDate: undefined, runId: "local-finite", phase: "intra" as const, maxStartSeconds: "900" };
+    const guard = scheduledVwapGuard(input);
+    expect(guard.startBudget).toEqual({ startedAt: new Date(start).toISOString(), deadline: new Date(start + 900_000).toISOString(), seconds: 900 });
+    vi.setSystemTime(start + 899_999); guard.assertActive();
+    vi.setSystemTime(start + 900_000); expect(() => guard.assertActive()).toThrow("開始期限");
+    vi.setSystemTime(start - 1); expect(() => guard.assertActive()).toThrow("開始期限");
+    for (const maxStartSeconds of ["", "0", "901", "-1", "1.5", "01", "NaN"]) {
+      expect(() => scheduledVwapGuard({ ...input, maxStartSeconds })).toThrow("整数秒");
+    }
+    expect(() => scheduledVwapGuard({ ...input, plannedDate: date })).toThrow();
+    expect(() => scheduledVwapGuard({ ...input, phase: "daily" })).toThrow();
+  });
 });
