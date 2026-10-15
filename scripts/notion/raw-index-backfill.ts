@@ -14,12 +14,13 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
 import { z } from "../../src/shared/zod-mini.js";
 import { sharedEnv } from "../../src/shared/env.js";
 import { assertD1SingleQueryResponse, createD1HttpBatchSender, d1HttpQueryUrl } from "../../src/shared/db/d1-http-client.js";
 import { assertCanonicalRawMetadata, findCanonicalRawFileAttachments, listCanonicalRawFiles, type CanonicalRawAttachment } from "../../src/shared/notion-archive/raw-files.js";
 import { notionStats, setNotionMaxRps, paceNotionNativeRequest } from "../../src/shared/notion-archive/client.js";
-import { downloadArchivedFile, type ArchivedDownloadOptions } from "../../src/shared/notion-archive/archived-download.js";
+import { downloadArchivedFile, isRetryableTransportError, type ArchivedDownloadOptions } from "../../src/shared/notion-archive/archived-download.js";
 import { unzip } from "../../services/yuho-quant/src/services/edinet/zip.js";
 import { r2GetBytesVersion, r2PutBytes, type R2ReadOptions } from "../vwap/lib/r2.js";
 import { canonicalRawKey, readD1RawIndexes, verifiedDocId } from "./raw-index-plan.js";
@@ -146,13 +147,17 @@ export interface RawIndexRow {
   license_tag: string; convert_status: string; first_fetched_at: number; last_fetched_at: number;
 }
 type Version = Awaited<ReturnType<typeof r2GetBytesVersion>>;
+export interface RawIndexReadOptions {
+  /** Bulkだけが再読取を明示許可し、実attemptを送信前に計数・journalへ確定する。 */
+  beforeRetry: () => void | Promise<void>;
+}
 export interface BackfillIo {
   rawBucket: string; receiptBucket: string;
   get: (key: string, bucket: string, options?: R2ReadOptions) => Promise<Version>;
   put: (key: string, bytes: Uint8Array, previous: string | null, bucket: string, contentType: string) => Promise<void>;
   list: typeof listCanonicalRawFiles;
   download: (item: RawItem, cohort: readonly RawItem[], options?: Pick<ArchivedDownloadOptions, "signal" | "onAttempt">) => Promise<{ body: Uint8Array; wireBytes: number }>;
-  index: (sha: string) => Promise<RawIndexRow | null>;
+  index: (sha: string, options?: RawIndexReadOptions) => Promise<RawIndexRow | null>;
   insert: (row: RawIndexRow) => Promise<void>;
   antiJoin: (items: readonly RawItem[]) => Promise<{ checked: number; missing: number }>;
   now: () => number;
@@ -367,14 +372,30 @@ export function createRawDownloader(find = findCanonicalRawFileAttachments, down
   };
 }
 
-/** 一意SHAだけをread。原本metadataを書き換えるUPDATE/UPSERTは使わない。 */
-export async function readRawIndex(sha: string): Promise<RawIndexRow | null> {
+/** 固定の一意SHA SELECTだけをread。明示bulkは合計60秒/最大2回、inspect/reconcileは従来の単発。 */
+export async function readRawIndex(sha: string, options?: RawIndexReadOptions): Promise<RawIndexRow | null> {
   if (!/^[a-f0-9]{64}$/.test(sha)) throw new Error("[raw-backfill] D1 SHA不正");
-  const response = await fetch(d1HttpQueryUrl(), { method: "POST", headers: {
+  const url = d1HttpQueryUrl(), init = { method: "POST", headers: {
     Authorization: `Bearer ${sharedEnv.CLOUDFLARE_API_TOKEN()}`, "Content-Type": "application/json" },
     signal: AbortSignal.timeout(60_000),
-    body: JSON.stringify({ sql: "SELECT sha256,r2_bucket,r2_key,source,datatype,scope,doc_id,code,data_date,ext,size_bytes,license_tag,convert_status,first_fetched_at,last_fetched_at FROM jss_raw_files WHERE sha256=?", params: [sha] }) });
-  if (!response.ok) throw new Error(`[raw-backfill] D1 read HTTP ${response.status}`);
+    body: JSON.stringify({ sql: "SELECT sha256,r2_bucket,r2_key,source,datatype,scope,doc_id,code,data_date,ext,size_bytes,license_tag,convert_status,first_fetched_at,last_fetched_at FROM jss_raw_files WHERE sha256=?", params: [sha] }) };
+  let response: Response;
+  for (let attempt = 0; ; attempt++) {
+    init.signal.throwIfAborted();
+    try { response = await fetch(url, init); }
+    catch (error) {
+      if (attempt !== 0 || options === undefined || !isRetryableTransportError(error) || init.signal.aborted) throw error;
+      await delay(250, undefined, { signal: init.signal });
+      await options.beforeRetry();
+      continue;
+    }
+    if (response.ok) break;
+    if (attempt !== 0 || options === undefined || ![502, 503, 504].includes(response.status) || init.signal.aborted)
+      throw new Error(`[raw-backfill] D1 read HTTP ${response.status}`);
+    if (response.body !== null) await response.body.cancel();
+    await delay(250, undefined, { signal: init.signal });
+    await options.beforeRetry();
+  }
   const rows = assertD1SingleQueryResponse(await response.json());
   if (rows.length > 1) throw new Error("[raw-backfill] D1 SHA重複");
   if (rows.length === 0) return null;
@@ -565,7 +586,13 @@ export async function runRawBackfill(opts: RawBackfillOptions, io: BackfillIo) {
     stateVersion = await persist(`${prefix}/state.json`, next, stateVersion); state = next;
   };
   if (stateVersion === null && opts.mode === "apply") await saveState(state);
-  const readIndex = async (item: RawItem) => { checkClock(); stats.d1Reads++; return io.index(item.sha256); };
+  const readIndex = async (item: RawItem) => {
+    checkClock(); stats.d1Reads++;
+    return io.index(item.sha256, { beforeRetry: async () => {
+      checkClock(); stats.d1Reads++;
+      await io.emit({ phase: "d1_read_retry_inflight", sha256: item.sha256, d1Reads: stats.d1Reads, maxAttempts: 2 });
+    } });
+  };
   const readBody = async (key: string, item: RawItem) => {
     checkClock(); stats.rawGets++;
     const got = await io.get(key, io.rawBucket);
@@ -681,7 +708,7 @@ export async function runRawBackfill(opts: RawBackfillOptions, io: BackfillIo) {
     }
     processingItem = false;
   }
-  const result = { ...stats, mode: opts.mode, manifestSha256: manifestSha, cursor: state.cursor, remaining: manifest.items.length - state.cursor,
+  const result = { ...stats, d1ReadsCountKind: "admitted_attempts_including_retry", mode: opts.mode, manifestSha256: manifestSha, cursor: state.cursor, remaining: manifest.items.length - state.cursor,
     status: antiJoin !== null && opts.mode === "apply" ? "snapshot_complete" : "partial",
     stoppedByBudget, budgetStopReason, limitReached: stats.processed === opts.limit && state.cursor < manifest.items.length,
     indexAntiJoin: antiJoin, indexAntiJoinRequests: antiJoin === null ? 0 : Math.ceil(antiJoin.checked / 100),
