@@ -122,6 +122,7 @@ async function runCommand(): Promise<void> {
     limit,
     codes,
     dryRun,
+    mechanicalOnly: hasFlag("mechanical-only"),
     // 本文同期・機械照合は較正不要。実際のAI判定直前だけ固定モデルと閾値を検証する。
     get thresholds() {
       calibration ??= loadCalibration("clef");
@@ -139,6 +140,7 @@ async function runCommand(): Promise<void> {
     [
       `## biztag run`,
       `- 対象: ${summary.totalStocks} 銘柄 (処理 ${summary.processed} / 残 ${summary.remaining})`,
+      `- 機械処理のみ: ${summary.mechanicalOnly === true}`,
       `- 判定済率: ${(summary.coverage.ratio * 100).toFixed(1)}%`,
       `- Clef-Flash: ${summary.judge.calls}回 / ローカル推論 (トークン数・計算費用未計測、外部判定API 0回)`,
       `- Notion: ${summary.notion.requests}リクエスト (429 ${summary.notion.rateLimited}回)`,

@@ -249,17 +249,34 @@ describe("runBiztag 新規と既存の外部判定境界", () => {
     expect(notionMocks.createSupplementRow.mock.calls[0][1].judgeInput).toMatch(/^Clef-Flash新規銘柄の初回判定/);
   });
 
-  it("新規のdry-runは推論も機械への代替もせず保留する", async () => {
+  it.each(["dryRun", "mechanicalOnly"] as const)("新規の%sは推論も機械への代替もせず保留する", async (mode) => {
     vi.mocked(loadLatestDocs).mockResolvedValue([latest]);
     vi.mocked(loadNewStockEligibility).mockResolvedValue({ eligibleCodes: new Set(["0001"]), heldCodes: new Set() });
-    const summary = await runBiztag({ ...opts, dryRun: true });
+    const summary = await runBiztag({ ...opts, [mode]: true });
     expect(createJevClient).not.toHaveBeenCalled();
     expect(createClefClient).not.toHaveBeenCalled();
     expect(jevEnv.TYPESAFE_API_KEY).not.toHaveBeenCalled();
     expect(notionMocks.readStockTextRow).not.toHaveBeenCalled();
     expect(notionMocks.createSupplementRow).not.toHaveBeenCalled();
     expect(summary.qualificationHeld).toEqual(["0001"]);
-    expect(summary.countsByKind.initial_judge_dry_run_hold).toBe(1);
+    expect(summary.countsByKind[mode === "mechanicalOnly" ? "initial_judge_mechanical_hold" : "initial_judge_dry_run_hold"]).toBe(1);
+  });
+
+  it("mechanical-onlyの本文同期は旧判定を保持し、較正・モデルに触れず共通publisherを使う", async () => {
+    vi.mocked(loadLatestDocs).mockResolvedValue([latest]);
+    notionMocks.loadSupplementRows.mockResolvedValueOnce([minimalRow({ stockCode: "0001", docId: "TEST_DOC",
+      tagStatus: "判定済", tagDoc: "TEST_DOC 2026年3月期", vocabVersion: MINI_VOCAB.version, judgeInput: "保存済み旧判定" })]);
+    notionMocks.readStockTextRow.mockResolvedValueOnce(text);
+    const summary = await runBiztag({ ...opts, mechanicalOnly: true, get thresholds(): typeof opts.thresholds { throw new Error("機械処理では較正を読まない"); } });
+    expect(summary.mechanicalOnly).toBe(true);
+    expect(summary.countsByKind.sync_text).toBe(1);
+    expect(summary.judge?.calls).toBe(0);
+    expect(summary.failures).toEqual([]);
+    expect(notionMocks.replaceEvidenceBlock).toHaveBeenCalledTimes(1);
+    expect(notionMocks.replaceEvidenceBlock.mock.calls[0][2].judgeInput).toContain("保存済み旧判定");
+    expect(notionMocks.replaceEvidenceBlock.mock.calls[0][2].upstream).toBeUndefined();
+    expect(createClefClient).not.toHaveBeenCalled();
+    expect(createJevClient).not.toHaveBeenCalled();
   });
 });
 
@@ -490,10 +507,10 @@ describe("runBiztag input-change safety", () => {
       doc: { docId: "S100YFQC", docTypeCode: "120", periodEnd: "2026-03-31", submittedAt: "2026-06-25T00:00:00Z", notionDocPageId: "new-text", textParseStatus: "ok" } }]);
     notionMocks.loadSupplementRows.mockResolvedValueOnce([minimalRow({ stockCode: "6103", docId: "S100OLD", tagDoc: "S100OLD 2025年3月期", tagStatus: "判定済", vocabVersion: "v0", upstream: ["工作機械"], evidenceText: "保存済み根拠" })]);
   }
-  it("dry-run source changes do not read fulltext, infer, or change existing values", async () => {
+  it.each(["dryRun", "mechanicalOnly"] as const)("%s source changes do not read fulltext, infer, or change existing values", async (mode) => {
     changedSource();
-    const summary = await runBiztag({ budgetMs: 10_000, dryRun: true, thresholds: { yesMin: 0.8, noMax: 0.2 }, model: CLEF_MODEL });
-    expect(summary.countsByKind.source_change_dry_run_hold).toBe(1);
+    const summary = await runBiztag({ budgetMs: 10_000, [mode]: true, thresholds: { yesMin: 0.8, noMax: 0.2 }, model: CLEF_MODEL });
+    expect(summary.countsByKind[mode === "mechanicalOnly" ? "source_change_mechanical_hold" : "source_change_dry_run_hold"]).toBe(1);
     expect(summary.qualificationHeld).toEqual(["6103"]);
     expect(summary.coverage.judged).toBe(0);
     expect(notionMocks.readStockTextRow).not.toHaveBeenCalled();

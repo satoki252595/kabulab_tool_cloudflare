@@ -72,6 +72,8 @@ export interface RunBiztagOptions {
    * DB 確保・単語帳解決は行う。
    */
   dryRun?: boolean;
+  /** 本文同期・機械照合だけを実行し、初回/入力変更のモデル判定はHOLDする。 */
+  mechanicalOnly?: boolean;
   thresholds: BtThresholds;
   model: string;
 }
@@ -81,6 +83,7 @@ export interface RunSummary {
   elapsedMs: number;
   budgetMs: number;
   dryRun: boolean;
+  mechanicalOnly?: boolean;
   totalStocks: number;
   processed: number;
   remaining: number;
@@ -263,6 +266,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
   const jevClient: JevClient = { askNoul: async (state, questions) => {
     if (localJudgeStop !== undefined) throw localJudgeStop.error;
     try {
+      if (opts.mechanicalOnly) throw new Error("mechanical-onlyではモデル判定を開始できません");
       let exchange: LocalDecisionExchange | undefined;
       if (opts.localJournal) {
         if (!currentItem?.doc || !currentInput || activeVocabHash === undefined) throw new Error("Clef journalの実入力来歴がありません");
@@ -389,10 +393,11 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
       }
       workBudgetLeft--;
     }
-    if (opts.dryRun && (item.initialSemif || item.sourceChangedLocalJudge)) {
-      // 新規初回は下見で推論しない。機械判定へも切り替えず保留を明示。
+    if ((opts.dryRun || opts.mechanicalOnly) && (item.initialSemif || item.sourceChangedLocalJudge)) {
+      // 明示モードでは推論しない。機械判定へも切り替えず保留を明示。
       qualificationHeld.push(item.stockCode);
-      const kind = item.sourceChangedLocalJudge ? "source_change_dry_run_hold" : "initial_judge_dry_run_hold";
+      const mode = opts.mechanicalOnly ? "mechanical" : "dry_run";
+      const kind = `${item.sourceChangedLocalJudge ? "source_change" : "initial_judge"}_${mode}_hold`;
       countsByKind[kind] = (countsByKind[kind] ?? 0) + 1;
       processed++;
       continue;
@@ -441,6 +446,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     elapsedMs,
     budgetMs: opts.budgetMs,
     dryRun: opts.dryRun ?? false,
+    mechanicalOnly: opts.mechanicalOnly === true,
     totalStocks: items.length,
     processed,
     remaining: items.length - processed,
