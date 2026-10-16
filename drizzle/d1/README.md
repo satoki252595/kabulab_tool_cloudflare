@@ -16,14 +16,18 @@ Cloudflare D1 (`kabulab-cf`) 用のスキーマ生成物。生成は
 
 ## 適用先が 2 系統あることに注意
 
-### 0030 — 地域注記の省略理由（準備のみ・本番未適用）
+### 0030 — 地域注記の省略理由（2026-10-16 本番適用済み）
 
 `0030_overseas_omission_proof.sql` は `yuho_documents.overseas_omission_json`
 nullable TEXT 1列のADDだけ。既存行はNULLで、UPDATEやfacts/statusの変更はない。
-本文・safe20の実処理終端と受入、最新mainへの統合を確認した後、ROOTの別承認で
-SQL適用・列の読戻し・コード配信を行う。既存955件への理由反映も別intentであり、
-このmigrationやデプロイが過去行を埋めることはない。未適用の本番に新query/writerを
-配信しない。snapshot/journalはgenerateで作り、直前0029 snapshotのみ削除した。
+本文固定3,666件・safe20の受入、旧有限writerの終端と歴史POSTの保全、最新mainへの
+統合後、10/16 20:30 JST前後に生成SQLそのものを既存D1 batch senderで1回だけ送信した。
+38,219行の行数・既存列定義・索引の一致、新列のnullable TEXT/default NULL・全行NULLを
+確認し、schema PRE/POSTをNotionへ物理保管・全SHA読戻しした。単一SQLにはファイル
+importを使わず、応答不明の自動再送をしない。受入receipt SHA:
+`a02500f5e5f95d4a306f30ad406b68f4fee6814cc18c49198a09ab20166f1ab5`。
+既存955件への理由反映は別intent。このmigrationやデプロイが過去行を埋めることはない。
+snapshot/journalはgenerateで作り、直前0029 snapshotのみ削除した。
 
 | 適用先 | やること |
 | --- | --- |
