@@ -52,6 +52,7 @@ import {
 } from "../src/biztag/competitors/evaluate.js";
 import { loadCompetitorEvalSet } from "../src/biztag/competitors/evalset.js";
 import { runCompetitors } from "../src/biztag/competitors/pipeline.js";
+import { prepareCompetitors } from "./lib/prepare-competitors.js";
 
 const [, , subcommand, ...rest] = process.argv;
 
@@ -267,6 +268,19 @@ async function goldenCommand(): Promise<void> {
 }
 
 async function competitorsCommand(): Promise<void> {
+  if (hasFlag("prepare-only")) {
+    if (hasFlag("dry-run") || arg("judge") !== "semif" || arg("codes") === undefined || arg("limit") === undefined ||
+        arg("budget-min") === undefined || arg("out") === undefined || rest.length !== (arg("notion-max-rps") === undefined ? 6 : 7) ||
+        new Set(rest.map(value => value.split("=")[0])).size !== rest.length) {
+      throw new Error("prepare-onlyには --judge=semif --codes=... --limit=... --budget-min=... --out=<private-dir> を明示してください。dry-runとは併用しません");
+    }
+    const summary = await prepareCompetitors({ judge: "semif", codes: arg("codes")!.split(","), limit: Number(arg("limit")),
+      budgetMs: Number(arg("budget-min")) * 60_000, outDir: arg("out")!,
+      maxRps: arg("notion-max-rps") === undefined ? undefined : Number(arg("notion-max-rps")) });
+    console.info(JSON.stringify(summary, null, 2));
+    writeGithubStepSummary(`## biztag competitors prepare-only\n- 入力準備: ${summary.ready} / 保留: ${summary.holds.length}\n- モデル呼出・競合書込・schema変更: 0\n- 競合判定完了ではありません`);
+    return;
+  }
   const budgetMin = arg("budget-min") ? Number(arg("budget-min")) : 20;
   const limit = arg("limit") ? Number(arg("limit")) : undefined;
   const codes = arg("codes")
@@ -491,7 +505,7 @@ async function statsCommand(): Promise<void> {
 async function main(): Promise<void> {
   if (
     ["gate", "golden"].includes(subcommand) ||
-    (["competitors", "competitors-eval"].includes(subcommand) && judgeArg() === "jev")
+    (((subcommand === "competitors" && !hasFlag("prepare-only")) || subcommand === "competitors-eval") && judgeArg() === "jev")
   ) {
     assertTypeSafeEnabled();
   }
@@ -524,7 +538,7 @@ async function main(): Promise<void> {
 // 本番・手動とも同じMac/受入済みmain/環境/プロジェクト排他を通す。
 // 停止済み有料コマンドは環境読取より先に既存mainのpreflightで拒否する。
 if (["gate", "golden"].includes(subcommand) ||
-    (["competitors", "competitors-eval"].includes(subcommand) && judgeArg() === "jev")) {
+    (((subcommand === "competitors" && !hasFlag("prepare-only")) || subcommand === "competitors-eval") && judgeArg() === "jev")) {
   assertTypeSafeEnabled();
 }
 await withBiztagWriter(main);

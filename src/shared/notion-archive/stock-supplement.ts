@@ -27,6 +27,7 @@ import { verifyArchivedAttachments } from "./readback.js";
 import { canonicalizeForHash } from "./biztag-ledger.js";
 import { sha256Hex } from "../sha256.js";
 import { RICH_TEXT_MAX, joinRichText, splitRichText } from "./rich-text.js";
+import { NotionConfigError } from "./env.js";
 
 export const SUPPLEMENT_DB_TITLE = "銘柄マスタ（補足）";
 
@@ -338,6 +339,8 @@ export interface SupplementRow {
 }
 
 interface NotionPageProperty {
+  type?: string;
+  has_more?: boolean;
   title?: Array<{ plain_text?: string }>;
   rich_text?: Array<{ plain_text?: string }>;
   select?: { name?: string } | null;
@@ -348,6 +351,9 @@ interface NotionPageProperty {
 }
 interface NotionPage {
   id: string;
+  archived?: boolean;
+  in_trash?: boolean;
+  parent?: { type?: string; database_id?: string };
   properties: Record<string, NotionPageProperty>;
 }
 interface QueryResponse {
@@ -442,7 +448,7 @@ function buildFilterPropertiesQs(
 export async function loadSupplementRows(
   dbId: string,
   propertyIds: Record<string, string>,
-  opts?: { textColumns?: string[]; codes?: string[] }
+  opts?: { textColumns?: string[]; codes?: string[]; strictNative?: boolean; beforeRequest?: () => void }
 ): Promise<SupplementRow[]> {
   const textColumns = opts?.textColumns ?? [];
   const columnNames = [...Object.values(SUPPLEMENT_PROPS), ...textColumns];
@@ -466,12 +472,14 @@ export async function loadSupplementRows(
     const res = await notionRequest<QueryResponse>(
       "POST",
       `/databases/${dbId}/query?${qs}`,
-      body
+      body,
+      opts?.beforeRequest === undefined ? undefined : { beforeRequest: opts.beforeRequest }
     );
     if (res.has_more === true) {
       assertCursorProgress(seen, res.next_cursor as string);
     }
     for (const page of res.results) {
+      if (opts?.strictNative) assertCompleteSupplementPage(page, dbId, textColumns);
       const row = parseSupplementRow(page, textColumns);
       rows.push(row);
       const ids = codeToPageIds.get(row.stockCode) ?? [];
@@ -491,6 +499,38 @@ export async function loadSupplementRows(
     );
   }
   return rows;
+}
+
+/** 長文の未完/未知形状を空文字へ読み替えない。既存readerの明示strict経路だけに適用。 */
+export function assertCompleteSupplementPage(page: NotionPage, dbId: string, textColumns: string[]): void {
+  const stop = (): never => { throw new NotionConfigError("補足のnative行・長文が未完/不正です。準備を停止します"); };
+  if (typeof page.id !== "string" || page.id.length === 0 || page.archived !== false || page.in_trash !== false ||
+      page.parent?.type !== "database_id" || page.parent.database_id?.replaceAll("-", "") !== dbId.replaceAll("-", "")) stop();
+  const rich = [SUPPLEMENT_PROPS.code, SUPPLEMENT_PROPS.docId, SUPPLEMENT_PROPS.tagDoc, SUPPLEMENT_PROPS.judgeInput,
+    SUPPLEMENT_PROPS.uncertain, SUPPLEMENT_PROPS.evidenceText, SUPPLEMENT_PROPS.error, ...textColumns];
+  for (const name of rich) {
+    const p = page.properties[name];
+    if (p?.type !== "rich_text" || p.has_more === true || !Array.isArray(p.rich_text) ||
+        p.rich_text.some(v => typeof v.plain_text !== "string")) stop();
+  }
+  const title = page.properties[SUPPLEMENT_PROPS.name];
+  if (title?.type !== "title" || title.has_more === true || !Array.isArray(title.title) || title.title.some(v => typeof v.plain_text !== "string")) stop();
+  for (const name of [SUPPLEMENT_PROPS.upstream, SUPPLEMENT_PROPS.downstream, SUPPLEMENT_PROPS.distribution, SUPPLEMENT_PROPS.themes]) {
+    const p = page.properties[name];
+    if (p?.type !== "multi_select" || !Array.isArray(p.multi_select) || p.multi_select.some(v => typeof v.name !== "string")) stop();
+  }
+  for (const name of [SUPPLEMENT_PROPS.sector33, SUPPLEMENT_PROPS.docType, SUPPLEMENT_PROPS.textStatus, SUPPLEMENT_PROPS.tagStatus, SUPPLEMENT_PROPS.vocabVersion]) {
+    const p = page.properties[name];
+    if (p?.type !== "select" || !(p.select === null || typeof p.select?.name === "string")) stop();
+  }
+  for (const name of [SUPPLEMENT_PROPS.periodEnd, SUPPLEMENT_PROPS.submittedAt, SUPPLEMENT_PROPS.judgedAt, SUPPLEMENT_PROPS.nextRetryAt]) {
+    const p = page.properties[name];
+    if (p?.type !== "date" || !(p.date === null || typeof p.date?.start === "string")) stop();
+  }
+  for (const name of [SUPPLEMENT_PROPS.candidateCount, SUPPLEMENT_PROPS.attempts]) {
+    const p = page.properties[name];
+    if (p?.type !== "number" || !(p.number === null || typeof p.number === "number" && Number.isFinite(p.number))) stop();
+  }
 }
 
 /**
