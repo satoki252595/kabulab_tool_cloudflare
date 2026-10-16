@@ -2,6 +2,21 @@
 
 追跡は[#348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)。この記録は以下の対象の実測であり、全20機能・全空欄の完了を意味しない。
 
+## 10月17日01:37 JSTの追加確認
+
+| 対象 | 受入済み | 残件 |
+|---|---|---|
+| 事業タグ本文 | 固定776社中255社。新しい固定13組の先頭2組・100社は01:17:27/01:28:00に全39値・他props・旧根拠・最新source・物理PRE/POSTを独立照合 | 残521社を同じ通常機械処理で継続。旧判定の未知SHAは補わない |
+| 保有明細 | 追加6文書31行を照合し、計13文書177行。全332 native要求/応答SHA、旧値、全period、物理5組10ファイルを01:31:27にrootが独立照合 | この13文書の価格は未受入。原表HOLD計7文書・原本未照合の旧22行を保持。全市場の原本列完了ではない |
+| 通常競合の機械準備 | #440をmainへ統合し、01:28:04にversion `115fca7d-ca24-43d7-b043-b4dfb0a0ccb2`を配信。現在doc/実39列・候補・質問を照合し、モデル0で物理保管するCLI | Mac定時stageの配備・実行は未受入。競合の意味判定を完了扱いにしない |
+| 株式の報告権利診断 | #441をmainへ統合し、01:34:04にversion `2679f017-10b7-4d54-8126-4df1cdb0fa37`を配信。同じ原本のイベントと実計算窓を既存batchへ保存 | 次の通常runは未受入。増資等の網羅性・OHLC/出来高基準は未確認のまま |
+
+本文の追加100社は2,634 native要求（Notion2,222）・349,688,121 response bytes。業務PATCH100、モデル・上流APIは0。別の保存原本監査で全100の通常publisher物理PREと外側PRE/POSTを全文SHA照合した。保有明細31行は旧25・新6、D1 SELECT18/924 rows/11.5667ms、Notion294・hosted20、実mutation85。元wrapperは715.877秒で保護原本の署名URL更新を差分とみなして停止した。更新を再送せず、既存共有file比較で署名query/expiryだけを正規化し、残7ページを7GET/15.209秒/書込0で確認して閉じた。元停止記録と全原値・時計を保持する。
+
+株式診断は保存済み7,373応答を同じ共通資格化で再生し、全3,686 raw/3,639金融snapshotが診断以外同値、当日足欠測47と8303のRSI履歴HOLDを保持。追加source/Notion要求・モデル・業務書込0、診断約8.09MB、単回比較のparser差は約0.734秒だった。通常環境の全量性能保証ではない。海外売上の次候補15文書も現在main `9c40ba85`のparserで保存原本を純再生し15/15抽出同値を確認したが、fresh PRE・atomic反映・本番受入は別途必要。
+
+私有証跡は`A621-mechanical-remaining-v1/batch-{01,02}/{SUCCESS,independent-acceptance,root-physical-acceptance}.json`、保有明細`apply31-after137A-v1/{independent-acceptance,root-independent-acceptance}.json`と`protect-post7-readonly-v1`、`continuation/cf-main-{440,441}-logs.txt`、`tmp/feature-audit-20261017/overseas-next15-current-main-pure-v2/result.json`。全20機能の最終受入は引き続き未完。
+
 ## 10月17日01:10 JSTの追加確認
 
 本文は固定776社中155社を独立受入、残621社。追加50社は通常機械処理で更新・全POST確認後、見直し台帳の送信日時がNotionで分単位になったため検証側が停止した。業務更新は再送せず、現在の全文・最新source・全39値/他props/根拠を読取確認し、01:05:29に物理POSTを閉じ、01:05:58にrootが全SHAと通常builderで独立受入した。残621社は別の固定13組で開始し、停止したrunnerの名前空間は再開していない。
