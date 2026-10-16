@@ -1,0 +1,143 @@
+{
+  "provenance": "Exact retained issuer ZIPs; no new source request or generated financial values.",
+  "manifestSha256": "5fa05d6ce0245679af3ed0d22dba1a371420eb700ba0a4f494dd19a025af87aa",
+  "inventorySha256": "0e830222a4b7f2f6741f0c77fe02bbdce8a1ec35fd15431639df0846c2605f57",
+  "items": [
+    {
+      "code": "4116",
+      "filename": "4116-S100YGML.zip",
+      "source": {
+        "docId": "S100YGML",
+        "stockCode": "4116",
+        "edinetCode": "E00902",
+        "fiscalYearEnd": "2026-03-31"
+      },
+      "ownerName": "大日精化工業株式会社",
+      "archivePageId": "3e1d74ff-84cd-8186-9fed-e427180addda",
+      "zipSha256": "123971147071120e95e3a2f28df4d26c6d7fec40f99362a8b885ced196227b21",
+      "zipBytes": 1114170,
+      "sourceFetchedAt": "2026-06-25T12:45:00.000+00:00",
+      "sourceClockStatus": "retained metadata value; native source API retrieval time not independently upgraded",
+      "sourceMetadata": {
+        "docID": "S100YGML",
+        "edinetCode": "E00902",
+        "secCode": "41160",
+        "filerName": "大日精化工業株式会社",
+        "docTypeCode": "120",
+        "docDescription": "有価証券報告書－第123期(2025/04/01－2026/03/31)",
+        "periodStart": "2025-04-01",
+        "periodEnd": "2026-03-31",
+        "submitDateTime": "2026-06-25 12:45",
+        "parseStatus": "no_order_table",
+        "honbunFile": "XBRL/PublicDoc/0102010_honbun_jpcrp030000-asr-001_E00902-000_2026-03-31_01_2026-06-25_ixbrl.htm",
+        "factCount": 0,
+        "overseasParseStatus": "no_overseas_table",
+        "overseasHonbunFile": "XBRL/PublicDoc/0102010_honbun_jpcrp030000-asr-001_E00902-000_2026-03-31_01_2026-06-25_ixbrl.htm",
+        "overseasFactCount": 0,
+        "textParseStatus": "ok",
+        "textSectionCount": 35,
+        "xbrlUnavailable": false
+      },
+      "basis": {
+        "source": {
+          "docId": "S100YGML",
+          "stockCode": "4116",
+          "edinetCode": "E00902",
+          "fiscalYearEnd": "2026-03-31"
+        },
+        "filename": "XBRL/PublicDoc/jpcrp030000-asr-001_E00902-000_2026-03-31_01_2026-06-25.xbrl",
+        "memberSha256": "e4b11471d4960c045da289bf93f7ac4334d76d1ccb1d0fd09e8f1abc22f3783f",
+        "factSha256": "1fe6a9a51f3644a0faa7e2c5a498222428cc64f526933adf71d9268e9afc2889",
+        "element": "jpcrp_cor:NotesRegardingIssuedSharesAndTreasurySharesTextBlock",
+        "context": {
+          "contextRef": "CurrentYearDuration",
+          "entity": "E00902-000",
+          "startDate": "2025-04-01",
+          "endDate": "2026-03-31"
+        },
+        "statement": "当社は2026年4月1日付で普通株式1株につき4株の割合で株式分割を行っておりますが、上記の事項は、当該株式分割前の株式数を基準としております。",
+        "legalEffectiveDate": "2026-04-01",
+        "numerator": 4,
+        "denominator": 1,
+        "fiscalYearShares": "18113110",
+        "issuedSharesFactSha256": "2c7578cff96c61d3eee3bf13b60e5f056c8cd6e8baf143b8d014e33241cefd98"
+      },
+      "derivedPriceReference": {
+        "status": "previous unavailable result projection, not a native price response",
+        "bodySha256": "0b43dd63f3d53daa442927eaa8dca91acc1a893f05b607a0bd8514ddcab6a6b2",
+        "receivedAt": "2026-10-04T12:55:06.017Z",
+        "reportedSplit": {
+          "date": "2026-03-30",
+          "ratio": 4
+        },
+        "ownerFiscalYearEnd": "2026-03-31"
+      }
+    },
+    {
+      "code": "7609",
+      "filename": "7609-S100XUE0.zip",
+      "source": {
+        "docId": "S100XUE0",
+        "stockCode": "7609",
+        "edinetCode": "E02898",
+        "fiscalYearEnd": "2025-12-31"
+      },
+      "ownerName": "ダイトロン株式会社",
+      "archivePageId": "364d74ff-84cd-81ac-9323-e6259a329153",
+      "zipSha256": "06512aab03ad6bc0839031dc4a548341889a499c4d1fbf838dcbcd129a5470c7",
+      "zipBytes": 554069,
+      "sourceFetchedAt": "2026-03-27T09:16:00.000+00:00",
+      "sourceClockStatus": "retained metadata value; native source API retrieval time not independently upgraded",
+      "sourceMetadata": {
+        "docID": "S100XUE0",
+        "edinetCode": "E02898",
+        "secCode": "76090",
+        "filerName": "ダイトロン株式会社",
+        "docTypeCode": "120",
+        "docDescription": "有価証券報告書－第74期(2025/01/01－2025/12/31)",
+        "periodStart": "2025-01-01",
+        "periodEnd": "2025-12-31",
+        "submitDateTime": "2026-03-27 09:16",
+        "parseStatus": "ok_pattern_a",
+        "honbunFile": "XBRL/PublicDoc/0102010_honbun_jpcrp030000-asr-001_E02898-000_2025-12-31_01_2026-03-27_ixbrl.htm",
+        "factCount": 4,
+        "xbrlUnavailable": false
+      },
+      "basis": {
+        "source": {
+          "docId": "S100XUE0",
+          "stockCode": "7609",
+          "edinetCode": "E02898",
+          "fiscalYearEnd": "2025-12-31"
+        },
+        "filename": "XBRL/PublicDoc/jpcrp030000-asr-001_E02898-000_2025-12-31_01_2026-03-27.xbrl",
+        "memberSha256": "f5156d45e9ddebf20708c86830bbad8152613e5b70c9696a29c4c7eae66d53ae",
+        "factSha256": "51f30e2190840b4b0ced978996bbde957bf3b38cbb5063d6bbd03a6e0e05402c",
+        "element": "jpcrp_cor:NotesRegardingIssuedSharesAndTreasurySharesTextBlock",
+        "context": {
+          "contextRef": "CurrentYearDuration",
+          "entity": "E02898-000",
+          "startDate": "2025-01-01",
+          "endDate": "2025-12-31"
+        },
+        "statement": "当社は、2026年1月1日付で普通株式1株につき2株の割合で株式分割を行っておりますが、上記の事項は、当該株式分割前の株式数を基準としております。",
+        "legalEffectiveDate": "2026-01-01",
+        "numerator": 2,
+        "denominator": 1,
+        "fiscalYearShares": "10633349",
+        "issuedSharesFactSha256": "697cfac3756db67eb6e0ad709ce4be4c00cc5e0361597b58f3d1f7004a78db95"
+      },
+      "derivedPriceReference": {
+        "status": "previous unavailable result projection, not a native price response",
+        "bodySha256": "237678871db37fc923f14fcd926bca5dd9c97cf5b1223e7dd8223d4d79c91660",
+        "receivedAt": "2026-10-04T13:36:53.450Z",
+        "reportedSplit": {
+          "date": "2025-12-29",
+          "ratio": 2
+        },
+        "ownerFiscalYearEnd": "2026-03-31"
+      }
+    }
+  ],
+  "limits": "Explicit issuer/FY pre-split unit evidence only. No OHLCV/provider basis proof, no coefficient/share/price correction, no price acceptance."
+}
