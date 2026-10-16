@@ -94,9 +94,11 @@ export async function prepareLatestHoldings(args: { limit: number; afterCode: st
 export async function applyLatestHoldings(dir: string, maxRows: number): Promise<void> {
   assert.ok(Number.isSafeInteger(maxRows) && maxRows >= 1 && maxRows <= 1000);
   assert.equal(readdirSync(dir).some(name => name.endsWith(".pending-write.json")), false, "前回の結果未確定journalがあります。読取照合が必要です");
-  const plan = read(join(dir, "plan.json")) as { version: number; parserSourceSha256: string; selection: { afterCode: string | null; limit: number }; valuationPath: string | null; items: Item[] };
+  const plan = read(join(dir, "plan.json")) as { version: number; parserSourceSha256: string; issuedSharesSourceSha256: string; selection: { afterCode: string | null; limit: number }; valuationPath: string | null; items: Item[] };
   assert.equal(plan.version, 1);
   assert.equal(plan.parserSourceSha256, PARSER_SOURCE_SHA256, "旧parser planは未受入です。保存ZIPから再準備してください");
+  assert.equal(plan.issuedSharesSourceSha256, ISSUED_SOURCE_SHA256, "旧observer planは別planへ再準備してください");
+  for (const item of plan.items) assert.equal(item.issuedSharesSourceSha256, ISSUED_SOURCE_SHA256, "旧observer itemは別planへ再準備してください");
   assertParserSourceUnchanged();
   const db = createD1HttpDb(schema);
   const evidence = valuationSources(plan.valuationPath);

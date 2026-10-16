@@ -12,7 +12,7 @@
 
 保存再生は既存 `pnpm yuho:backfill:holdings prepare <limit> <afterCode|START> <privateDir>`。既存 `readSavedHoldingsZip` のDEI資格化済みMapから同関数を呼び、itemへ全文診断とobserver source SHAを保存する。源再取得・追加ZIP展開・upload・業務書込は0（従来のD1/Notion保存原本読取はある）。準備は有効な `.env` をプロジェクトのNix環境から読む既存運用を使う。applyの適用契約は変更しない。
 
-`shareholdings.ts` source SHAが変更されるため、旧parser SHAのbulk plan/itemは既存guardで適用できない。正常な旧ZIP bytesを保存したまま、別private planへ再prepare・全値照合する。今回古いplanを新SHAへ書き換えて受け入れた件数は0。
+`shareholdings.ts` source SHAが変更されるため、旧parser SHAのbulk plan/itemは既存guardで適用できない。observer SHAもprepare再開とapplyのplan/item両方で照合し、欠測/旧hashをnative読取・writerの前に停止する。正常な旧ZIP bytesを保存したまま、別private planへ再prepare・全値照合する。今回古いplanを新SHAへ書き換えて受け入れた件数は0。
 
 ## 一次資料と資格
 

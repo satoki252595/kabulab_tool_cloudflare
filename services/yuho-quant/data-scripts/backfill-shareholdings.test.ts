@@ -27,12 +27,13 @@ const source = { docId: "S100STRUCTURAL", stockCode: "1001", edinetCode: "E00001
 const bytes = Buffer.from("Protocol test only; source parser covered in separate suites");
 const sha = createHash("sha256").update(bytes).digest("hex");
 const parserSourceSha256 = createHash("sha256").update(readFileSync(new URL("../src/services/edinet/shareholdings.ts", import.meta.url))).digest("hex");
+const issuedSharesSourceSha256 = createHash("sha256").update(readFileSync(new URL("../src/services/edinet/issued-shares.ts", import.meta.url))).digest("hex");
 const metadata = { docID: source.docId, edinetCode: source.edinetCode, secCode: "10010", periodEnd: source.fiscalYearEnd };
 let dir: string;
 function fixture(status = "ready", rows = 2) {
   const zipPath = join(dir, "saved.zip"); writeFileSync(zipPath, bytes);
-  writeFileSync(join(dir, "plan.json"), JSON.stringify({ version: 1, parserSourceSha256, selection: { afterCode: null, limit: 50 }, valuationPath: null,
-    items: [{ parserSourceSha256, source, ownerName: "構造検証", status, reason: status === "held" ? "明細表なし" : null, parsedRows: rows,
+  writeFileSync(join(dir, "plan.json"), JSON.stringify({ version: 1, parserSourceSha256, issuedSharesSourceSha256, selection: { afterCode: null, limit: 50 }, valuationPath: null,
+    items: [{ parserSourceSha256, issuedSharesSourceSha256, source, ownerName: "構造検証", status, reason: status === "held" ? "明細表なし" : null, parsedRows: rows,
       archivePageId: "a".repeat(32), zipPath, zipSha256: sha, sourceCustody: "legacy", sourceMetadata: metadata, sourceFetchedAt: "2026-06-30T00:00:00Z" }] }));
 }
 beforeEach(() => { vi.clearAllMocks(); process.exitCode = 0; dir = mkdtempSync(join(tmpdir(), "kabulab-holdings-protocol-"));
@@ -45,6 +46,30 @@ beforeEach(() => { vi.clearAllMocks(); process.exitCode = 0; dir = mkdtempSync(j
 });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); process.exitCode = 0; });
 describe("保有明細backfillのlegacy適用境界", () => {
+  it("現observer SHAへ新規準備した実ZIP planは同じwriterへ到達する（typed custodyはprotocol境界）", async () => {
+    const nativeSource = { docId: "S100X7D0", stockCode: "9252", edinetCode: "E37098", fiscalYearEnd: "2025-08-31" };
+    const nativeBytes = readFileSync(new URL("../src/tests/fixtures/issued-shares-9252-S100X7D0.zip", import.meta.url));
+    const nativeSha = createHash("sha256").update(nativeBytes).digest("hex"), zipPath = join(dir, "S100X7D0.zip"); writeFileSync(zipPath, nativeBytes);
+    vi.mocked(selectLatestHoldingsDocuments).mockResolvedValue({ rows: [{ stockId: 1, ...nativeSource, ownerName: "株式会社ラストワンマイル", submittedAt: new Date("2025-11-28T10:39:00+09:00") }], more: false });
+    writeFileSync(join(dir, "plan.json"), JSON.stringify({ version: 1, parserSourceSha256, issuedSharesSourceSha256,
+      selection: { afterCode: null, limit: 1 }, valuationPath: null, items: [{ parserSourceSha256, issuedSharesSourceSha256, source: nativeSource,
+        ownerName: "株式会社ラストワンマイル", status: "ready", reason: null, parsedRows: 1, archivePageId: "a".repeat(32), sourceCustody: "typed", zipPath, zipSha256: nativeSha,
+        sourceMetadata: { docID: nativeSource.docId, secCode: "92520", edinetCode: nativeSource.edinetCode, periodEnd: nativeSource.fiscalYearEnd, submitDateTime: "2025-11-28 10:39" } }] }));
+    vi.mocked(publishVerifiedShareholdings).mockResolvedValueOnce({ status: "published", parsed: 1, created: 1, updated: 0, unchanged: 0 });
+    await applyLatestHoldings(dir, 1);
+    expect(publishVerifiedShareholdings).toHaveBeenCalledWith(expect.objectContaining({ source: nativeSource, zip: nativeBytes, observeIssuedShares: true,
+      issuedSharesFilingDateEvidence: { rawSubmitDateTime: "2025-11-28 10:39", provenance: "saved-archive-metadata" } }));
+    expect(recordEdinetZip).not.toHaveBeenCalled(); expect(readSavedHoldingsZip).not.toHaveBeenCalled();
+  });
+  it.each([["plan", undefined], ["plan", "0".repeat(64)], ["item", undefined], ["item", "0".repeat(64)]] as const)("旧observer %s/%s はnative読取/書込前に停止する", async (scope, pin) => {
+    fixture();
+    const path = join(dir, "plan.json"), plan = JSON.parse(readFileSync(path, "utf8"));
+    if (scope === "plan") plan.issuedSharesSourceSha256 = pin; else plan.items[0].issuedSharesSourceSha256 = pin;
+    writeFileSync(path, JSON.stringify(plan));
+    await expect(applyLatestHoldings(dir, 100)).rejects.toThrow("旧observer");
+    expect(selectLatestHoldingsDocuments).not.toHaveBeenCalled(); expect(readSavedHoldingsZip).not.toHaveBeenCalled();
+    expect(recordEdinetZip).not.toHaveBeenCalled(); expect(verifyArchivedAttachments).not.toHaveBeenCalled(); expect(publishVerifiedShareholdings).not.toHaveBeenCalled();
+  });
   it("保存prepareの実ZIPは通常archiveと同じ純observerへ渡し、書込/再取得を足さない", async () => {
     const nativeSource = { docId: "S100X7D0", stockCode: "9252", edinetCode: "E37098", fiscalYearEnd: "2025-08-31" };
     const nativeBytes = readFileSync(new URL("../src/tests/fixtures/issued-shares-9252-S100X7D0.zip", import.meta.url));
