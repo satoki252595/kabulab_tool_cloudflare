@@ -1,0 +1,26 @@
+{
+  "source": "actual normal orders prepare six-table PRE and exact saved EDINET ZIP; no generated business rows",
+  "sourceHead": "7d938e38462b5cf151ff53172faac052a4b7ae8d",
+  "sourceCapsulePath": "/Users/satoki252595/projects/kabulab-cf/.runtime/orders-fixed-cohort/source-v1/tmp/orders-disjoint112-plan-v1/first20-prepare-v1/PRE-capsule.json.gz",
+  "sourceCapsuleSha256": "bccaf870b19ba408922b7e0b2c7a07c99c88475ddf96fb5cc3d99e24cf46d4b7",
+  "rootReadReleaseSha256": "a4afc1116ae5d58fdcb7a0185f3e611374112effd9e954408c2cf963c75cf35a",
+  "item": {
+    "stockCode": "1768",
+    "stockId": 1558,
+    "documentId": 36225,
+    "docId": "S100YEJU",
+    "edinetCode": "E00279",
+    "periodEnd": "2026-03-31",
+    "zipSha256": "4aa57617aacad5e933af48a93d9cb16d20d291e3ea11a86cfd07b215c63832af",
+    "archivePageId": "3e1d74ff-84cd-818c-b787-debe46bdb4d6",
+    "originalManifest": "unknown",
+    "sourceFetchedAt": "2026-06-22T09:09:00.000+00:00"
+  },
+  "canonicalArchivePageId": "3e1d74ff-84cd-818c-b787-debe46bdb4d6",
+  "sourceLastEdited": "2026-09-20T17:44:00.000Z",
+  "zipSha256": "4aa57617aacad5e933af48a93d9cb16d20d291e3ea11a86cfd07b215c63832af",
+  "snapshotSha256": "e4a5273e60451f20d6eabc2be7577dabf6e139045af6468012239cd5abf77c7d",
+  "sourceAPI": 0,
+  "newReads": 0,
+  "businessWrites": 0
+}

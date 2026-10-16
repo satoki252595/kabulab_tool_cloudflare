@@ -325,7 +325,9 @@ async function buildAtomic(
       stockIds: [target.stockId],
       runStartedSec,
     });
-    assert.equal(rebuilt.stocks, 1);
+    // Qualified order segments/subtotals need not contain a total growth window.
+    if (input.kind === "orders") assert([0, 1].includes(rebuilt.stocks));
+    else assert.equal(rebuilt.stocks, 1);
     assert(projection.length > 0);
     const expected = readSnapshot(sqlite, target.stockId);
     same(expected.core_stocks, before.core_stocks);
