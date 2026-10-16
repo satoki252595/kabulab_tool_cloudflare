@@ -18,6 +18,11 @@ import {
 } from "../../src/services/overseas-parser.js";
 import { serializeOverseasOmission } from "../../src/services/overseas-omission.js";
 import { toOverseasSaveRows } from "../../src/services/overseas-save-rows.js";
+import type { OrderExtraction } from "../../src/services/edinet/order-parser.js";
+import {
+  toOrderSaveRows,
+  validateOrderRepairSet,
+} from "../../src/services/order-save-rows.js";
 import { canonicalizeForHash } from "../../../../src/shared/notion-archive/biztag-ledger.js";
 
 export type Row = Record<string, string | number | null>;
@@ -127,6 +132,38 @@ export async function buildAtomicWithCommonProjection(
   target: Target,
   parsed: OverseasExtraction,
   runStartedSec: number,
+) {
+  return buildAtomic(
+    codeRoot,
+    pre,
+    target,
+    { kind: "overseas", parsed },
+    runStartedSec,
+  );
+}
+export async function buildOrdersAtomicWithCommonProjection(
+  codeRoot: string,
+  pre: Snapshot,
+  target: Target,
+  parsed: OrderExtraction,
+  runStartedSec: number,
+) {
+  return buildAtomic(
+    codeRoot,
+    pre,
+    target,
+    { kind: "orders", parsed },
+    runStartedSec,
+  );
+}
+async function buildAtomic(
+  codeRoot: string,
+  pre: Snapshot,
+  target: Target,
+  input:
+    | { kind: "overseas"; parsed: OverseasExtraction }
+    | { kind: "orders"; parsed: OrderExtraction },
+  runStartedSec: number,
 ): Promise<{
   statements: D1BatchStatement[];
   expected: Snapshot;
@@ -135,7 +172,7 @@ export async function buildAtomicWithCommonProjection(
 }> {
   assert(Number.isSafeInteger(runStartedSec) && runStartedSec > 0);
   let overseasOmissionJson: string | null = null;
-  if (parsed.omission !== undefined) {
+  if (input.kind === "overseas" && input.parsed.omission !== undefined) {
     assert(
       target.omissionSource,
       "omission requires qualified saved source provenance",
@@ -144,7 +181,7 @@ export async function buildAtomicWithCommonProjection(
       docId: target.docId,
       periodEnd: target.periodEnd,
       ...target.omissionSource,
-      omission: parsed.omission,
+      omission: input.parsed.omission,
     });
   }
   const before = targetRows(pre, target),
@@ -152,16 +189,21 @@ export async function buildAtomicWithCommonProjection(
   assert.equal(doc.length, 1);
   assert.equal(doc[0].id, target.documentId);
   assert.equal(doc[0].period_end, target.periodEnd);
-  assert(["ok_geo_rows", "ok_geo_cols"].includes(parsed.status));
-  assert.notEqual(parsed.honbunFile, null);
-  validateOverseasSaveSet(parsed.facts, parsed.proof);
-  assert(
-    parsed.facts.length > 0 &&
-      parsed.facts.every(
-        (f) =>
-          f.fiscalYearEnd === target.periodEnd && f.isConsolidated === true,
-      ),
-  );
+  if (input.kind === "orders")
+    validateOrderRepairSet(input.parsed, target.periodEnd);
+  else {
+    const parsed = input.parsed;
+    assert(["ok_geo_rows", "ok_geo_cols"].includes(parsed.status));
+    assert.notEqual(parsed.honbunFile, null);
+    validateOverseasSaveSet(parsed.facts, parsed.proof);
+    assert(
+      parsed.facts.length > 0 &&
+        parsed.facts.every(
+          (f) =>
+            f.fiscalYearEnd === target.periodEnd && f.isConsolidated === true,
+        ),
+    );
+  }
   for (const row of before.p_yuho_growth)
     assert(
       typeof row.computed_at === "number" && row.computed_at <= runStartedSec,
@@ -194,28 +236,56 @@ export async function buildAtomicWithCommonProjection(
     const buildDb = drizzle(async () => {
       throw new Error("toSQL-only builder must not execute");
     }) as unknown as Database;
-    const rows = toOverseasSaveRows(parsed.facts, parsed.status).map((row) => ({
-      documentId: target.documentId,
-      stockId: target.stockId,
-      ...row,
-    }));
-    const builders: Parameters<typeof toD1BatchStatements>[0] = [
-      buildDb
-        .update(schema.yuhoDocuments)
-        .set({
-          overseasParseStatus: parsed.status,
-          overseasHonbunFile: parsed.honbunFile,
-          overseasOmissionJson,
-        })
-        .where(eq(schema.yuhoDocuments.id, target.documentId)),
-      buildDb
-        .delete(schema.overseasSalesFacts)
-        .where(eq(schema.overseasSalesFacts.documentId, target.documentId)),
-    ];
-    for (let i = 0; i < rows.length; i += 8)
-      builders.push(
-        buildDb.insert(schema.overseasSalesFacts).values(rows.slice(i, i + 8)),
+    let builders: Parameters<typeof toD1BatchStatements>[0];
+    if (input.kind === "orders") {
+      const parsed = input.parsed;
+      const rows = toOrderSaveRows(parsed.facts, parsed.status).map((row) => ({
+        documentId: target.documentId,
+        stockId: target.stockId,
+        ...row,
+      }));
+      builders = [
+        buildDb
+          .update(schema.yuhoDocuments)
+          .set({ parseStatus: parsed.status, honbunFile: parsed.honbunFile })
+          .where(eq(schema.yuhoDocuments.id, target.documentId)),
+        buildDb
+          .delete(schema.orderFacts)
+          .where(eq(schema.orderFacts.documentId, target.documentId)),
+      ];
+      for (let i = 0; i < rows.length; i += 8)
+        builders.push(
+          buildDb.insert(schema.orderFacts).values(rows.slice(i, i + 8)),
+        );
+    } else {
+      const parsed = input.parsed;
+      const rows = toOverseasSaveRows(parsed.facts, parsed.status).map(
+        (row) => ({
+          documentId: target.documentId,
+          stockId: target.stockId,
+          ...row,
+        }),
       );
+      builders = [
+        buildDb
+          .update(schema.yuhoDocuments)
+          .set({
+            overseasParseStatus: parsed.status,
+            overseasHonbunFile: parsed.honbunFile,
+            overseasOmissionJson,
+          })
+          .where(eq(schema.yuhoDocuments.id, target.documentId)),
+        buildDb
+          .delete(schema.overseasSalesFacts)
+          .where(eq(schema.overseasSalesFacts.documentId, target.documentId)),
+      ];
+      for (let i = 0; i < rows.length; i += 8)
+        builders.push(
+          buildDb
+            .insert(schema.overseasSalesFacts)
+            .values(rows.slice(i, i + 8)),
+        );
+    }
     const facts = toD1BatchStatements(builders);
     for (const statement of facts)
       sqlite
@@ -259,29 +329,53 @@ export async function buildAtomicWithCommonProjection(
     assert(projection.length > 0);
     const expected = readSnapshot(sqlite, target.stockId);
     same(expected.core_stocks, before.core_stocks);
-    same(expected.yuho_order_facts, before.yuho_order_facts);
     same(expected.yuho_text_sections, before.yuho_text_sections);
-    same(
-      expected.yuho_documents,
-      before.yuho_documents.map((row) =>
-        row.id === target.documentId
-          ? {
-              ...row,
-              overseas_parse_status: parsed.status,
-              overseas_honbun_file: parsed.honbunFile,
-              overseas_omission_json: overseasOmissionJson,
-            }
-          : row,
-      ),
-    );
-    same(
-      expected.yuho_overseas_facts.filter(
-        (row) => row.document_id !== target.documentId,
-      ),
-      before.yuho_overseas_facts.filter(
-        (row) => row.document_id !== target.documentId,
-      ),
-    );
+    if (input.kind === "orders") {
+      same(expected.yuho_overseas_facts, before.yuho_overseas_facts);
+      same(
+        expected.yuho_documents,
+        before.yuho_documents.map((row) =>
+          row.id === target.documentId
+            ? {
+                ...row,
+                parse_status: input.parsed.status,
+                honbun_file: input.parsed.honbunFile,
+              }
+            : row,
+        ),
+      );
+      same(
+        expected.yuho_order_facts.filter(
+          (row) => row.document_id !== target.documentId,
+        ),
+        before.yuho_order_facts.filter(
+          (row) => row.document_id !== target.documentId,
+        ),
+      );
+    } else {
+      same(expected.yuho_order_facts, before.yuho_order_facts);
+      same(
+        expected.yuho_documents,
+        before.yuho_documents.map((row) =>
+          row.id === target.documentId
+            ? {
+                ...row,
+                overseas_parse_status: input.parsed.status,
+                overseas_honbun_file: input.parsed.honbunFile,
+                overseas_omission_json: overseasOmissionJson,
+              }
+            : row,
+        ),
+      );
+      same(
+        expected.yuho_overseas_facts.filter(
+          (row) => row.document_id !== target.documentId,
+        ),
+        before.yuho_overseas_facts.filter(
+          (row) => row.document_id !== target.documentId,
+        ),
+      );
+    }
     return {
       statements: [...assertions, ...facts, ...projection],
       expected,
@@ -297,9 +391,12 @@ export function assertTargetPost(
   actual: Snapshot,
   expected: Snapshot,
   target: Target,
+  kind: "overseas" | "orders" = "overseas",
 ): void {
+  const factTable =
+    kind === "orders" ? "yuho_order_facts" : "yuho_overseas_facts";
   for (const table of tables) {
-    if (table !== "yuho_overseas_facts") {
+    if (table !== factTable) {
       same(actual[table], expected[table]);
       continue;
     }
@@ -310,10 +407,13 @@ export function assertTargetPost(
     const noId = (rows: Row[]) =>
       rows
         .map(({ id: _id, ...row }) => row)
-        .sort(
-          (a, b) =>
-            String(a.region_kind).localeCompare(String(b.region_kind)) ||
-            String(a.region_name).localeCompare(String(b.region_name)),
+        .sort((a, b) =>
+          kind === "orders"
+            ? String(a.fiscal_year_end).localeCompare(
+                String(b.fiscal_year_end),
+              ) || String(a.segment_name).localeCompare(String(b.segment_name))
+            : String(a.region_kind).localeCompare(String(b.region_kind)) ||
+              String(a.region_name).localeCompare(String(b.region_name)),
         );
     same(
       noId(

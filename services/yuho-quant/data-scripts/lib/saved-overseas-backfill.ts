@@ -56,6 +56,7 @@ import {
 } from "../../src/services/overseas-parser.js";
 import {
   buildAtomicWithCommonProjection,
+  buildOrdersAtomicWithCommonProjection,
   assertTargetPost,
   openActualSnapshot,
   same,
@@ -65,6 +66,13 @@ import {
   type Target,
 } from "./saved-overseas-atomic.js";
 
+import {
+  parseOrderData,
+  type OrderExtraction,
+} from "../../src/services/edinet/order-parser.js";
+import { validateOrderRepairSet } from "../../src/services/order-save-rows.js";
+
+type SavedKind = "overseas" | "orders";
 const digest = (bytes: Uint8Array | string) =>
   createHash("sha256").update(bytes).digest("hex");
 const id = z.string().regex(/^[a-f0-9-]{32,36}$/i);
@@ -86,34 +94,43 @@ const itemSchema = z.strictObject({
   originalManifest: z.enum(["known", "unknown"]),
   sourceFetchedAt: iso,
 });
-export const savedCohortSchema = z
-  .strictObject({
-    version: z.literal(1),
-    stateDir: z
-      .string()
-      .refine((value) => resolve(value) === value, "stateDir must be absolute"),
-    items: z.array(itemSchema).min(1).max(200),
-  })
-  .superRefine(({ items }, ctx) => {
-    for (const key of [
-      "stockCode",
-      "stockId",
-      "documentId",
-      "docId",
-    ] as const) {
-      if (new Set(items.map((item) => item[key])).size !== items.length)
-        ctx.addIssue({ code: "custom", message: `duplicate ${key}` });
-    }
-    if (
-      items.some(
-        (item, index) =>
-          index > 0 && items[index - 1].stockCode >= item.stockCode,
-      )
+const cohortFields = {
+  stateDir: z
+    .string()
+    .refine((value) => resolve(value) === value, "stateDir must be absolute"),
+  items: z.array(itemSchema).min(1).max(200),
+};
+const checkCohortItems = (
+  { items }: { items: z.infer<typeof itemSchema>[] },
+  ctx: z.RefinementCtx,
+) => {
+  for (const key of ["stockCode", "stockId", "documentId", "docId"] as const) {
+    if (new Set(items.map((item) => item[key])).size !== items.length)
+      ctx.addIssue({ code: "custom", message: `duplicate ${key}` });
+  }
+  if (
+    items.some(
+      (item, index) =>
+        index > 0 && items[index - 1].stockCode >= item.stockCode,
     )
-      ctx.addIssue({ code: "custom", message: "cohort must be in code order" });
-  });
+  )
+    ctx.addIssue({ code: "custom", message: "cohort must be in code order" });
+};
+export const savedCohortSchema = z
+  .strictObject({ version: z.literal(1), ...cohortFields })
+  .superRefine(checkCohortItems);
+export const savedOrdersCohortSchema = z
+  .strictObject({
+    version: z.literal(2),
+    kind: z.literal("orders"),
+    ...cohortFields,
+  })
+  .superRefine(checkCohortItems);
 export type SavedOverseasItem = z.infer<typeof itemSchema>;
 export type SavedOverseasCohort = z.infer<typeof savedCohortSchema>;
+export type SavedOrdersCohort = z.infer<typeof savedOrdersCohortSchema>;
+type SavedCohort = SavedOverseasCohort | SavedOrdersCohort;
+type SourceCohort = Pick<SavedOverseasCohort, "stateDir" | "items">;
 type Page = {
   id: string;
   object: "page";
@@ -123,22 +140,50 @@ type Page = {
   last_edited_time: string;
   properties: Record<string, unknown>;
 };
-type Qualified = {
+type Qualified<E = OverseasExtraction | OrderExtraction> = {
   item: SavedOverseasItem;
   sourcePage: Page;
   bodyPage: Page;
   sections: Awaited<ReturnType<typeof readStockTextRow>>;
   archivePageId: string;
-  extraction: OverseasExtraction;
+  extraction: E;
   zipPath: string;
   zipSha256: string;
 };
-export interface SavedOverseasCapsule {
-  version: 1;
+interface SavedCapsule {
+  version: 1 | 2;
+  kind?: "orders";
   cohortSha256: string;
   schema: Record<string, string[]>;
   d1: Snapshot;
   qualified: Qualified[];
+}
+export interface SavedOverseasCapsule extends SavedCapsule {
+  version: 1;
+  kind?: never;
+  qualified: Qualified<OverseasExtraction>[];
+}
+export interface SavedOrdersCapsule extends SavedCapsule {
+  version: 2;
+  kind: "orders";
+  qualified: Qualified<OrderExtraction>[];
+}
+function parseSavedExtraction(zip: Buffer, periodEnd: string, kind: SavedKind) {
+  if (kind === "orders") {
+    const parsed = parseOrderData(zip, periodEnd);
+    validateOrderRepairSet(parsed, periodEnd);
+    return parsed;
+  }
+  const parsed = parseOverseasData(zip, periodEnd);
+  validateOverseasSaveSet(parsed.facts, parsed.proof);
+  assert(["ok_geo_rows", "ok_geo_cols"].includes(parsed.status));
+  assert(
+    parsed.facts.length > 0 &&
+      parsed.facts.every(
+        (f) => f.isConsolidated === true && f.fiscalYearEnd === periodEnd,
+      ),
+  );
+  return parsed;
 }
 const nid = (value: string) => value.replaceAll("-", "").toLowerCase();
 const sourceOf = (item: SavedOverseasItem) => ({
@@ -160,16 +205,25 @@ const targetOf = (value: Qualified): Target => ({
   },
 });
 /** Identity/derived clocks do not turn equal business values into a destructive rewrite. */
-export function savedBusinessView(value: Snapshot): unknown {
+export function savedBusinessView(
+  value: Snapshot,
+  kind: SavedKind = "overseas",
+): unknown {
   return {
     ...value,
-    yuho_overseas_facts: value.yuho_overseas_facts
+    [kind === "orders" ? "yuho_order_facts" : "yuho_overseas_facts"]: value[
+      kind === "orders" ? "yuho_order_facts" : "yuho_overseas_facts"
+    ]
       .map(({ id: _id, ...row }) => row)
       .sort(
         (a, b) =>
           Number(a.document_id) - Number(b.document_id) ||
-          String(a.region_kind).localeCompare(String(b.region_kind)) ||
-          String(a.region_name).localeCompare(String(b.region_name)),
+          (kind === "orders"
+            ? String(a.fiscal_year_end).localeCompare(
+                String(b.fiscal_year_end),
+              ) || String(a.segment_name).localeCompare(String(b.segment_name))
+            : String(a.region_kind).localeCompare(String(b.region_kind)) ||
+              String(a.region_name).localeCompare(String(b.region_name))),
       ),
     p_yuho_growth: value.p_yuho_growth.map(
       ({
@@ -272,7 +326,7 @@ export function assertSavedCanonicalSource(
 
 /** A prepared canonical source is admitted only through the same pinned input and verified lineage. */
 export function initialSavedSourceIds(
-  cohort: SavedOverseasCohort,
+  cohort: SourceCohort,
   qualified: readonly Pick<
     Qualified,
     "item" | "sourcePage" | "archivePageId" | "zipSha256"
@@ -321,7 +375,7 @@ const snapshotSql = (table: (typeof tables)[number], ids: number[]) => ({
   params: ids,
 });
 export function savedReadQueries(
-  cohort: SavedOverseasCohort,
+  cohort: SourceCohort,
 ): Array<{ sql: string; params: number[] }> {
   const ids = cohort.items.map((item) => item.stockId),
     groups = [ids.slice(0, 10), ids.slice(10)].filter(
@@ -442,10 +496,11 @@ async function body(item: SavedOverseasItem, pointer: string) {
 }
 async function capture(
   codeRoot: string,
-  cohort: SavedOverseasCohort,
+  cohort: SourceCohort,
   cohortSha256: string,
   dir: string,
-): Promise<SavedOverseasCapsule> {
+  kind: SavedKind,
+): Promise<SavedCapsule> {
   const schema = await columns(),
     d1 = await snapshot(cohort.items),
     pointers = await assertSavedLatest(codeRoot, d1, cohort.items),
@@ -461,17 +516,7 @@ async function capture(
       saved.archivePageId,
     );
     assertSavedCanonicalSource(item, sourcePage, saved.sha256, saved.fetchedAt);
-    const extraction = parseOverseasData(saved.bytes, item.periodEnd);
-    validateOverseasSaveSet(extraction.facts, extraction.proof);
-    assert(["ok_geo_rows", "ok_geo_cols"].includes(extraction.status));
-    assert(
-      extraction.facts.length > 0 &&
-        extraction.facts.every(
-          (fact) =>
-            fact.isConsolidated === true &&
-            fact.fiscalYearEnd === item.periodEnd,
-        ),
-    );
+    const extraction = parseSavedExtraction(saved.bytes, item.periodEnd, kind);
     const zipPath = durable(
         dir,
         `${item.stockCode}-${item.docId}.zip`,
@@ -490,11 +535,19 @@ async function capture(
     });
   }
   same(await snapshot(cohort.items), d1);
-  return { version: 1, cohortSha256, schema, d1, qualified };
+  return {
+    ...(kind === "orders"
+      ? { version: 2 as const, kind: "orders" as const }
+      : { version: 1 as const }),
+    cohortSha256,
+    schema,
+    d1,
+    qualified,
+  };
 }
 async function assertSources(
   current: Snapshot,
-  capsule: SavedOverseasCapsule,
+  capsule: SavedCapsule,
   codeRoot: string,
 ): Promise<void> {
   const pointers = await assertSavedLatest(
@@ -505,7 +558,14 @@ async function assertSources(
   for (const value of capsule.qualified) {
     const zip = readFileSync(value.zipPath);
     assert.equal(digest(zip), value.zipSha256);
-    same(parseOverseasData(zip, value.item.periodEnd), value.extraction);
+    same(
+      parseSavedExtraction(
+        zip,
+        value.item.periodEnd,
+        capsule.version === 2 ? "orders" : "overseas",
+      ),
+      value.extraction,
+    );
     const source = page(
       await notionRequest<Page>("GET", `/pages/${value.archivePageId}`),
       value.archivePageId,
@@ -541,9 +601,10 @@ export interface SavedRunOptions {
 /** Native guard is local to this finite command; normal shared clients still own all IO. */
 function installGuard(
   options: SavedRunOptions,
-  cohort: SavedOverseasCohort,
+  cohort: SourceCohort,
   dir: string,
-  ancestor: SavedOverseasCapsule | null,
+  ancestor: SavedCapsule | null,
+  kind: SavedKind,
 ) {
   const native = globalThis.fetch,
     start = performance.now(),
@@ -954,7 +1015,7 @@ function installGuard(
     } catch (error) {
       stopped = true;
       throw new NotionConfigError(
-        `saved overseas finite STOP (${error instanceof Error ? error.name : typeof error}); no retry`,
+        `saved ${kind} finite STOP (${error instanceof Error ? error.name : typeof error}); no retry`,
       );
     }
   };
@@ -995,18 +1056,18 @@ function installGuard(
           [
             {
               bytes,
-              filename: `overseas-saved-${phase}.json.gz`,
+              filename: `${kind}-saved-${phase}.json.gz`,
             },
           ],
-          `overseas-saved-independent-${phase}`,
+          `${kind}-saved-independent-${phase}`,
         );
       }
     },
     archive: async (phase: "PRE" | "POST", bytes: Buffer) => {
       assert.equal(proof, null);
       assert(bytes.length <= 20 * 1024 ** 2);
-      const key = `overseas-saved-cohort/${digest(readFileSync(options.cohortPath))}/${phase}/${digest(bytes)}`,
-        filename = `overseas-saved-${phase}.json.gz`;
+      const key = `${kind}-saved-cohort/${digest(readFileSync(options.cohortPath))}/${phase}/${digest(bytes)}`,
+        filename = `${kind}-saved-${phase}.json.gz`;
       proof = { key, filename, sha256: digest(bytes) };
       durable(
         dir,
@@ -1023,7 +1084,7 @@ function installGuard(
           receipt = await recordPrimaryData({
             service: "yuho-quant",
             key,
-            source: "normal saved EDINET overseas backfill",
+            source: `normal saved EDINET ${kind} backfill`,
             fetchedAt: new Date().toISOString(),
             metadata: {
               phase,
@@ -1052,9 +1113,7 @@ function assertSavedStateDirectory(stateDir: string): void {
   assert.equal(state.mode & 0o777, 0o700);
   assert.equal(state.uid, process.getuid!());
 }
-export function assertSavedClaimsAvailable(
-  cohort: SavedOverseasCohort,
-): string[] {
+export function assertSavedClaimsAvailable(cohort: SourceCohort): string[] {
   assertSavedStateDirectory(cohort.stateDir);
   const paths = cohort.items.map((item) =>
     join(cohort.stateDir, `${item.docId}-${item.zipSha256}.apply-claim.json`),
@@ -1067,7 +1126,7 @@ export function assertSavedClaimsAvailable(
   return paths;
 }
 export function reserveSavedClaims(
-  cohort: SavedOverseasCohort,
+  cohort: SourceCohort,
   binding: { cohortSha256: string; preSha256: string; outDir: string },
 ): void {
   const paths = assertSavedClaimsAvailable(cohort);
@@ -1089,6 +1148,19 @@ export function reserveSavedClaims(
 export async function runSavedOverseas(
   options: SavedRunOptions,
   codeRoot: string,
+): Promise<void> {
+  return runSaved(options, codeRoot, "overseas");
+}
+export async function runSavedOrders(
+  options: SavedRunOptions,
+  codeRoot: string,
+): Promise<void> {
+  return runSaved(options, codeRoot, "orders");
+}
+async function runSaved(
+  options: SavedRunOptions,
+  codeRoot: string,
+  kind: SavedKind,
 ): Promise<void> {
   assert(["prepare", "apply", "inspect"].includes(options.mode));
   assert.equal(resolve(options.outDir), options.outDir);
@@ -1120,7 +1192,10 @@ export async function runSavedOverseas(
   );
   const bytes = readFileSync(options.cohortPath);
   assert.equal(digest(bytes), options.cohortSha256);
-  const manifest = savedCohortSchema.parse(JSON.parse(bytes.toString()));
+  const manifest =
+    kind === "orders"
+      ? savedOrdersCohortSchema.parse(JSON.parse(bytes.toString()))
+      : savedCohortSchema.parse(JSON.parse(bytes.toString()));
   assert(
     Number.isSafeInteger(options.maxTargets) &&
       options.maxTargets > 0 &&
@@ -1129,9 +1204,8 @@ export async function runSavedOverseas(
   assert(
     options.afterCode === null || /^[0-9][0-9A-Z]{3}$/.test(options.afterCode),
   );
-  const cohort: SavedOverseasCohort = {
-    version: 1,
-    stateDir: manifest.stateDir,
+  const cohort: SavedCohort = {
+    ...manifest,
     items: manifest.items
       .filter(
         (item) =>
@@ -1143,13 +1217,14 @@ export async function runSavedOverseas(
     cohort.items.length > 0,
     "no target in the requested fixed-cohort window",
   );
-  let ancestor: SavedOverseasCapsule | null = null;
+  let ancestor: SavedCapsule | null = null;
   if (options.mode !== "prepare") {
     assert(options.capsulePath && options.capsuleSha256);
     const bytes = readFileSync(options.capsulePath);
     assert.equal(digest(bytes), options.capsuleSha256);
-    ancestor = JSON.parse(gunzipSync(bytes).toString()) as SavedOverseasCapsule;
-    assert.equal(ancestor.version, 1);
+    ancestor = JSON.parse(gunzipSync(bytes).toString()) as SavedCapsule;
+    assert.equal(ancestor.version, kind === "orders" ? 2 : 1);
+    assert.equal(ancestor.kind, kind === "orders" ? "orders" : undefined);
     assert.equal(ancestor.cohortSha256, options.cohortSha256);
     same(
       ancestor.qualified.map((value) => value.item),
@@ -1171,7 +1246,7 @@ export async function runSavedOverseas(
     }),
   );
   setNotionMaxRps(options.maxNotionRps);
-  const io = installGuard(options, cohort, options.outDir, ancestor);
+  const io = installGuard(options, cohort, options.outDir, ancestor, kind);
   let phase = "fresh PRE";
   try {
     if (options.mode === "apply") {
@@ -1188,6 +1263,7 @@ export async function runSavedOverseas(
           cohort,
           options.cohortSha256,
           options.outDir,
+          kind,
         ),
         bytes = gzipSync(JSON.stringify(capsule));
       durable(options.outDir, "PRE-capsule.json.gz", bytes);
@@ -1195,7 +1271,7 @@ export async function runSavedOverseas(
         options.outDir,
         "completed.json",
         JSON.stringify({
-          status: "SAVED_OVERSEAS_FRESH_PRE_QUALIFIED_NOT_APPLY_RELEASED",
+          status: `SAVED_${kind.toUpperCase()}_FRESH_PRE_QUALIFIED_NOT_APPLY_RELEASED`,
           capsuleSha256: digest(bytes),
           items: cohort.items.length,
           io: io.counts,
@@ -1230,8 +1306,7 @@ export async function runSavedOverseas(
         options.outDir,
         "completed.json",
         JSON.stringify({
-          status:
-            "SAVED_OVERSEAS_INDEPENDENT_FULL_SIX_TABLE_SOURCE_BODY_POST_MATCH",
+          status: `SAVED_${kind.toUpperCase()}_INDEPENDENT_FULL_SIX_TABLE_SOURCE_BODY_POST_MATCH`,
           capsuleSha256: options.capsuleSha256,
           items: cohort.items.length,
           verifiedNextAfterCode: cohort.items.at(-1)!.stockCode,
@@ -1247,22 +1322,33 @@ export async function runSavedOverseas(
     const runStartedSec = Math.floor(Date.now() / 1000),
       prepared = [];
     for (const value of ancestor.qualified) {
-      const built = await buildAtomicWithCommonProjection(
-        codeRoot,
-        current,
-        targetOf(value),
-        value.extraction,
-        runStartedSec,
-      );
+      const built =
+        kind === "orders"
+          ? await buildOrdersAtomicWithCommonProjection(
+              codeRoot,
+              current,
+              targetOf(value),
+              value.extraction as OrderExtraction,
+              runStartedSec,
+            )
+          : await buildAtomicWithCommonProjection(
+              codeRoot,
+              current,
+              targetOf(value),
+              value.extraction as OverseasExtraction,
+              runStartedSec,
+            );
       prepared.push({
         value,
         built,
         noop:
           JSON.stringify(
-            canonicalizeForHash(savedBusinessView(subset(current, value.item))),
+            canonicalizeForHash(
+              savedBusinessView(subset(current, value.item), kind),
+            ),
           ) ===
           JSON.stringify(
-            canonicalizeForHash(savedBusinessView(built.expected)),
+            canonicalizeForHash(savedBusinessView(built.expected, kind)),
           ),
       });
     }
@@ -1298,7 +1384,12 @@ export async function runSavedOverseas(
         await io.batch(built.statements);
       }
       const after = await snapshot([value.item]);
-      assertTargetPost(after, noop ? before : built.expected, targetOf(value));
+      assertTargetPost(
+        after,
+        noop ? before : built.expected,
+        targetOf(value),
+        kind,
+      );
       durable(
         options.outDir,
         `${value.item.stockCode}-verified.json`,
@@ -1318,6 +1409,7 @@ export async function runSavedOverseas(
         subset(final, value.item),
         noop ? subset(current, value.item) : built.expected,
         targetOf(value),
+        kind,
       );
     await assertSources(final, ancestor, codeRoot);
     const post = gzipSync(
@@ -1335,8 +1427,7 @@ export async function runSavedOverseas(
       options.outDir,
       "completed.json",
       JSON.stringify({
-        status:
-          "SAVED_OVERSEAS_NORMAL_ATOMIC_SIX_TABLE_AND_PHYSICAL_FULL_POST_VERIFIED",
+        status: `SAVED_${kind.toUpperCase()}_NORMAL_ATOMIC_SIX_TABLE_AND_PHYSICAL_FULL_POST_VERIFIED`,
         items: cohort.items.length,
         advanceRequiresIndependentInspect: true,
         proposedNextAfterCode: cohort.items.at(-1)!.stockCode,
