@@ -10,6 +10,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-10-17
 
 - 保有価格の共通資格で、保存有報1723の別文型が明示する分割前期末株数と法的効力日を読む。既知HOLDの根拠を増やし、価格・株数の補正や旧5,362行の単位証拠不足の解消とは扱わない。[743発行体の保存原本監査](test-logs/holdings-split-legal-basis-20261017.md)を記録する。
+- 本番作業: Macへ既存publisherの未閉鎖intent停止を配備し、保有37文書320行と海外売上20文書105数値を検証。本文2,417社の通常機械同期・104社のローカルClef生成を開始し、株価41銘柄の原典欠測・RAW同一pool再開と残る受入を[台帳](test-logs/recovery-acceptance-20261016.md)へ記録した。全20機能と次定時は未完。
 - 事業タグの既存行publisherは、物理PRE保管前に同じMac stateへ未閉鎖intentを永続保存する。途中PATCHや保管の結果不明は、別文書・変更後PREで次runへ進めず、全読戻し後だけ閉鎖する。追加通信0と[保存実入力の回帰・容量上限・未保護範囲](test-logs/biztag-sticky-publication-20261017.md)を記録する。
 - 海外売上の通常CLIに保存原本の有限cohort処理を追加。typed-first原本・最新本文・全6表を再資格化し、共通serializer/L2投影と全旧値CAS、物理PRE/POSTを一つの入口へ集約する。新源取得・モデル・DDLは増やさず、[保存実データと本番未受入の境界](test-logs/overseas-saved-cohort-20261017.md)を残す。
 
