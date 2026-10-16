@@ -14,7 +14,8 @@ export async function selectLatestHoldingsDocuments(
       (args.afterCode !== null && parseStockCode(args.afterCode) !== args.afterCode) ||
       (args.onlyCode !== undefined && (typeof args.onlyCode !== "string" || parseStockCode(args.onlyCode) !== args.onlyCode))) throw new Error("保有明細backfillの明示範囲が不正です");
   // 年報の無い銘柄にページ枠を使わず、今回の候補だけで履歴の順位を計算する。
-  const candidates = db.select({ id: stocks.id }).from(stocks).where(and(activeEquityCondition(),
+  // 実測済みのcode順走査を固定する。索引欠落はprepare失敗とし、別計画へ切り替えない。
+  const candidates = db.select({ id: sql<number>`${stocks.id}` }).from(sql`${stocks} INDEXED BY ${sql.identifier("core_stocks_code_unique")}`).where(and(activeEquityCondition(),
     args.afterCode === null ? undefined : gt(stocks.code, args.afterCode),
     args.onlyCode === undefined ? undefined : eq(stocks.code, args.onlyCode),
     exists(db.select({ stockId: yuhoDocuments.stockId }).from(yuhoDocuments).where(and(
@@ -26,9 +27,10 @@ export async function selectLatestHoldingsDocuments(
     rank: sql<number>`row_number() over (partition by ${yuhoDocuments.stockId} order by ${yuhoDocuments.periodEnd} desc, ${yuhoDocuments.submittedAt} desc, ${yuhoDocuments.id} desc)`.as("latest_rank"),
   }).from(yuhoDocuments).where(and(inArray(yuhoDocuments.docTypeCode, ["120", "130"]),
     inArray(yuhoDocuments.stockId, candidates))).as("latest_holdings");
-  const rows = await db.select({ stockId: latest.stockId, stockCode: stocks.code, docId: latest.docId,
+  const rows = await db.select({ stockId: latest.stockId, stockCode: sql<string>`${stocks.code}`, docId: latest.docId,
     edinetCode: latest.edinetCode, ownerName: latest.ownerName, fiscalYearEnd: latest.fiscalYearEnd, submittedAt: latest.submittedAt,
-  }).from(latest).innerJoin(stocks, eq(stocks.id, latest.stockId))
+  // NOT INDEXEDでもINTEGER PRIMARY KEYは使える。候補だけをrowidで引き、active全株を再走査しない。
+  }).from(latest).innerJoin(sql`${stocks} NOT INDEXED`, eq(stocks.id, latest.stockId))
     .where(and(eq(latest.rank, 1), activeEquityCondition(), args.afterCode === null ? undefined : gt(stocks.code, args.afterCode),
       args.onlyCode === undefined ? undefined : eq(stocks.code, args.onlyCode)))
     .orderBy(asc(stocks.code)).limit(args.limit + 1);
