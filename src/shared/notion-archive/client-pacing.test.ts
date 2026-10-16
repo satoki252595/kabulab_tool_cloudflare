@@ -27,7 +27,7 @@ afterEach(() => {
   vi.useRealTimers(); vi.resetModules();
 });
 const load = () => import("./client.js");
-it.each([2.0, 0.7])("通常CLIはtyped envだけでnative retryと次queueを%srpsへ抑える", async rps => {
+it.each([2.0, 0.7, 1.6, 1.0])("通常CLIはtyped envだけでnative retryと次queueを%srpsへ抑える", async rps => {
   process.env.NOTION_MAX_RPS = String(rps);
   const { notionRequest } = await load();
   statuses = [429, 200, 200];

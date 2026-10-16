@@ -68,25 +68,66 @@ workflowの行を分けるだけでは不十分なため、次の既存境界も
 
 ## Notion予算と未測定の背景処理
 
-旧stock/VWAPログにはNotion要求数が記録されていない。2.0rpsへ制限する場合、元380msとの差は1要求あたり最大120msの追加待機という条件上限までしか出せない。実HTTP遅延・CPU・既存間隔に隠れる部分は不明であり、任意の速度向上/低下を全量へ仮定しない。
+旧stock/VWAPログにはNotion要求数が記録されていない。今回の1.6rpsはnative625msで、retry0の場合、元のNode queue380msとの差は1要求あたり最大245msの追加待機という条件上限までしか出せない。旧queue内retryは380msの別native capを持たないため、retryがある場合は別途評価する（新しいpacing待機は最大625ms/試行、元のRetry-Afterは短縮しない）。実HTTP遅延・CPU・既存間隔に隠れる部分は不明であり、任意の速度向上/低下を全量へ仮定しない。
 
 独立moneyflowは、今日のglobalを除く同値4373行＋変更1707行だけでも旧方式は少なくとも `4373 + 1707×2 = 7787` Notion要求。source/物理保管/catalog/postverifyを除いても0.7rpsでは185.40分となり、120分job timeoutを超える。従って低rateと分離だけを対策にはしない。先に通常の共通batch precheckで完全同値だけをbounded natural-key OR queryにまとめ、変更/欠落は従来のfresh per-key upsertを維持する。全量の要求数/所要は修正後の実カウンタで確認する。
 
+#437の共通batchを通常Phase1の3経路にも接続した。保存native669の物理PRE/POST照合と分類は
+[batch受入記録](./moneyflow-observation-batch-20261017.md)を参照。今日logで行数が明記された
+非Yahoo25 specは6080行、50件chunkのsource別端数合計は133 query。同じ入力・同値/変更分類なら
+観測層は `133 + 1707×2 = 3547` 要求となる。Phase1のmarketcap/short-selling2 sourceは
+旧logに行数がないため、この6080行や下表の要求数には含めない。
+
+| 観測層のみの条件比較 | 要求数 | 間隔だけの最短時間 | 旧方式との差 |
+|---|---:|---:|---:|
+| 旧per-key・380ms・retry0 | 最低7787 | 49.31分 | — |
+| batch・0.7rps (1429ms) | 3547 | 84.45分 | +35.14分 |
+| **今回batch・1.0rps (1000ms)** | 3547 | **59.10分** | **+9.79分** |
+
+時間は最初の要求前の間隔を数えない `(要求数−1)×間隔`。0.7案は単体の待機/runner分増が
+大きいため採用せず、非Yahoo1.0/Yahoo1.6を初期配分にした。要求数は既知観測層で54.45%減る条件例だが、
+moneyflow全体のruntime低下/料金削減を保証しない。今回の59.10分から120分までの残60.90分に、
+Phase1・原本・catalog・POST検証・HTTP/CPU・setupが収まる必要がある。
+27sourceをYahoo待ちの外へ先行できる**全体の結果到着時刻**と、処理中に課金対象となる
+**job runner分数**は分けて測る。Notion/Yahooの取得回数を増やして高速化したことにはしない。
+
+Yahoo原本保管部分も保存nativeから別に確認した。二つのintra100 pilotの各26 API要求は、
+`startup2 + raw4part×5 + summary4` と実通信記録が一致し、retry0だった。
+共通helperの現在のhappy pathはraw1partあたりquery1/upload-create1/send1/page-create1/page-read1の5要求。
+summaryは4要求、process startupは2要求（1ページSearch/即時uploaded ACK等の条件付き）である。
+旧の「約6/part」は省略済みconfirm GETを含むため今回の実数には使わない。
+
+| 保存された原本scope | 現helperの条件要求数 | Node1.6と旧380msの追加待機上限例 |
+|---|---:|---:|
+| stockの保存38part（first37/session1） | raw192、failure summary込み196 | 約0.80分 |
+| 旧VWAP日足123＋**部分intra62**＋必須benchmark1part | summary/startup込み942 | 約3.85分 |
+
+これは **retry0・現在happy pathに同じpartsを渡す場合の条件数** であり、旧runのactual API試行数ではない。
+stockの他macro/overlay/追加保管、全量intraの未観測part、uploadの処理待ち/poll/retryは含めない。
+従って上の約4.65分を全量runtimeへ足して完走保証にはしない。次の通常終了ログのactual statsで不足分を測る。
+非Yahoo63.21分をYahoo排他から外した参考値379.69分に、この既知部分の約4.65分だけを足す比較なら
+384.34分。17:00基点の390分に残るのは約5.66分で、17:10基点では既に390分を超える。
+これは旧部分速度からの外挿と別runの合算で、残part・正常registry/sector33・queue・背景・global週更新等を
+測定していない。従って通常全量がこの時間内に終わるという予測には使わない。
+
 | 同時に動きうる処理 | 時刻/現在のrate設定 | この変更での扱い |
 |---|---|---|
-| VWAP/stock/context、Yahoo側moneyflow | 17時MWF/18時/翌06時。修正前Nodeはprocess内約2.63rps、sector33 Pythonは2.5rps | 共通Yahoo排他の1jobにNode/Python2.0rpsを設定する候補。Yahoo spacing/並列数は不変 |
-| 非Yahoo moneyflow | 18:15独立、stock後sector-turnover、手動subset | 0.7rps候補。低rate単独では上記120分超なのでbatch改善と併用して検証 |
+| VWAP/stock/context、Yahoo側moneyflow | 17時MWF/18時/翌06時。修正前Nodeはprocess内約2.63rps、sector33 Pythonは2.5rps | 共通Yahoo排他の1jobにNode/Python1.6rps。Yahoo spacing/並列数は不変 |
+| 非Yahoo moneyflow | 18:15独立、stock後sector-turnover、手動subset | 1.0rps。低rate単独では旧7787要求が約129.77分となるためbatch改善を併用 |
 | Node catchup | 平日19:00、初回<=19:05/19:59まで。既存380ms | このPRでrate/timeout/scheduleは変更しない |
 | Python tdnet_hourly | 09〜19時毎時、GHイベント遅配がありうる。`NOTION_RPS` 未設定なら既存2.5rps | 30分job timeoutを一律低rateで壊さない。実Notion要求数/他jobとの重なりは未測定 |
 | Python edinet_daily | 21:00、同じくGHイベント遅配あり。既存2.5rps | 120分timeout・scheduleは維持。重なりと実要求数は未測定 |
 | Python ops_check | 23:30、既存2.5rps | 15分timeoutを維持。主にD1 readだがNotion要求数の実測はない |
 | 手動raw/backfill・Mac writer | 実行ごとに異なる。CLI明示予算があるものもある | 定時と重なる場合の合計rateを個別releaseで確認する必要がある |
 
-`Yahoo側2.0 + 非Yahoo0.7 + 背景予約0.3 = 3.0` は**予算表であり、背景の実上限制御ではない**。現在の背景処理は0.3rpsに自動制限されていないため、ワークスペース全processの合計<=3rpsを保証しない。広範なschedule/timeout変更や新broker/DOをこの問題の代用にはしていない。bulk改善の保存native照合と通常callerの要求数差、次全量のactual statsを根拠に配分を決め、未観測の全量正常稼働はHOLDのまま扱う。
+`Yahoo側1.6 + 非Yahoo1.0 + 背景予約0.3 = 2.9` は**予算表であり、背景の実上限制御ではない**。現在の背景処理は0.3rpsに自動制限されていないため、ワークスペース全processの合計<=3rpsを保証しない。広範なschedule/timeout変更や新broker/DOをこの問題の代用にはしていない。初期配分の全量runtime/料金・背景実数は次の正常全量で受け入れ、未観測の全量正常稼働はHOLDのまま扱う。
 
 ## 証跡
 
 生ログ・原本・秘密はGitへ入れない。ローカルprivate集計は `tmp/feature-audit-20261016/yahoo-capacity-offline-v1/result.json`、SHA-256 `133daec518a4afd01249bb46fd8ee674f46852e2939ba4016fc24cc22481c50e`。
+観測要求数の再計算は同dir `observation-counts-v1.json`、SHA-256 `bc0a64097d32bf9fdd9aec5fe7314124c80978f7a71bcbbd345d30a8eb67afa1`。ともに本番通信0で保存logから導出した条件記録である。
+原本保管の独立集計は同dir `custody-rate-result-v1.json`、SHA-256 `f0b32e3c565b12b0ef5353e062437f9592e639ab57665250d36d8daffc876b14`。
+再計算helper `custody-rate-count-v1.mjs` のSHA-256は `9b567af37a0ba762486e7068219e93aee1a200704df475312855c2da3dcecebd`。
 
 | 保存済み入力 | SHA-256 |
 |---|---|
@@ -95,3 +136,8 @@ workflowの行を分けるだけでは不十分なため、次の既存境界も
 | `tmp/feature-audit-20261016/continuation/job-116901766737.log` | `206371d17681d2992e2ffdeb863b776da3be6c93b2785549daa13cfed2781003` |
 
 10/16に独立受入できたintra200社と残1656社は [200社の受入記録](./vwap-finite-start-budget-20261015.md) を参照。通常17時は実Cronイベントの秒をミリ秒完全一致で拒否した別障害で、#432で共有minute guardを修正した。200社受入もこの修正も、次の通常17時全量の成功証拠にはしない。
+
+ローカル検証: 同じNix/Nodeで関連13 suites281 PASS、実CLI入口を別processで動かす14 case PASS
+（合計14 suites295 PASS）、tsc/owned lint/diff PASS。初回envのみ1.0/1.6のnative retry/queue timings、
+期限切れqueueの通信前停止、Phase1の実as-of/4指標順/NULL保持、fatal/partial/successのexit保存を含む。
+本番のdispatch/source/writeは追加していない。

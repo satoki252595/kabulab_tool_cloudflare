@@ -41,7 +41,8 @@ import {
   recordPrimaryData,
   recordRunLog,
   upsertIndicatorDef,
-  upsertObservation,
+  upsertObservationBatch,
+  type ObservationInput,
   type MoneyflowRunStatus,
 } from "../../src/shared/notion-archive/index.js";
 import { sharedEnv } from "../../src/shared/env.js";
@@ -312,23 +313,21 @@ async function runSectorMarketCap(): Promise<RunOutcome> {
   // アーカイブ済み判定により以後ずっと欠落する — レビュー指摘の再発防止)。
   const { dbId: obsDbId } = await ensureObservationsDb();
   const indicatorPageId = requireIndicatorPageId("sector_market_cap");
-  for (const row of sectors) {
-    await upsertObservation(obsDbId, {
-      period,
-      periodStart: firstDayOfMonth(period),
-      periodEnd: asOfDate,
-      indicatorKey: "sector_market_cap",
-      indicatorPageId,
-      category: row.sector,
-      categoryKind: "業種",
-      value: row.marketCapMillionYen * 1_000_000,
-      unit: "円",
-      changeFromPrev: null,
-      approximate: true,
-      measureKind: "実測",
-      primaryDataPageId,
-    });
-  }
+  await upsertObservationBatch(obsDbId, sectors.map((row): ObservationInput => ({
+    period,
+    periodStart: firstDayOfMonth(period),
+    periodEnd: asOfDate,
+    indicatorKey: "sector_market_cap",
+    indicatorPageId,
+    category: row.sector,
+    categoryKind: "業種",
+    value: row.marketCapMillionYen * 1_000_000,
+    unit: "円",
+    changeFromPrev: null,
+    approximate: true,
+    measureKind: "実測",
+    primaryDataPageId,
+  })));
   return { source: "jpx-sector-marketcap", ok: true, detail };
 }
 
@@ -375,12 +374,13 @@ async function runShortSelling(): Promise<RunOutcome> {
   // 当月の売買代金合計が 0 の業種は比率が定義できない (null)。0 で埋めて
   // 書かず、行自体を書かない (取込ログの詳細に業種名を残す — ルール2)。
   const undefinedRatioSectors: string[] = [];
+  const inputs: ObservationInput[] = [];
   for (const row of monthly.sectors) {
     if (row.shortRatio === null) {
       undefinedRatioSectors.push(row.sector);
       continue;
     }
-    await upsertObservation(obsDbId, {
+    inputs.push({
       period: monthly.month,
       periodStart: firstDayOfMonth(monthly.month),
       periodEnd: data.date,
@@ -398,6 +398,7 @@ async function runShortSelling(): Promise<RunOutcome> {
       primaryDataPageId: null,
     });
   }
+  await upsertObservationBatch(obsDbId, inputs);
   return {
     source: "jpx-short-selling",
     ok: true,
@@ -512,7 +513,7 @@ async function runSectorTurnover(): Promise<RunOutcome> {
   const upPageId = requireIndicatorPageId("sector_up_turnover");
   const downPageId = requireIndicatorPageId("sector_down_turnover");
 
-  for (const row of rows) {
+  const inputs = rows.flatMap((row): ObservationInput[] => {
     const common = {
       period,
       periodStart: result.from,
@@ -524,35 +525,33 @@ async function runSectorTurnover(): Promise<RunOutcome> {
       measureKind: "実測" as const,
       primaryDataPageId: null,
     };
-    await upsertObservation(obsDbId, {
+    return [{
       ...common,
       indicatorKey: "sector_turnover",
       indicatorPageId: turnoverPageId,
       value: row.turnover,
       unit: "円",
-    });
-    await upsertObservation(obsDbId, {
+    }, {
       ...common,
       indicatorKey: "sector_turnover_share",
       indicatorPageId: sharePageId,
       value: row.turnoverShare,
       unit: "比率",
-    });
-    await upsertObservation(obsDbId, {
+    }, {
       ...common,
       indicatorKey: "sector_up_turnover",
       indicatorPageId: upPageId,
       value: row.upTurnover,
       unit: "円",
-    });
-    await upsertObservation(obsDbId, {
+    }, {
       ...common,
       indicatorKey: "sector_down_turnover",
       indicatorPageId: downPageId,
       value: row.downTurnover,
       unit: "円",
-    });
-  }
+    }];
+  });
+  await upsertObservationBatch(obsDbId, inputs);
   return {
     source: "sector-turnover",
     ok: true,

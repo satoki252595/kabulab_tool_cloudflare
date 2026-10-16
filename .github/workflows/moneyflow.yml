@@ -138,7 +138,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      NOTION_MAX_RPS: "0.7" # Yahoo専有側2.0＋このjob0.7＋背景予約0.3<=3。
+      NOTION_MAX_RPS: "1.0" # Yahoo専有側1.6＋このjob1.0＋背景予約0.3=2.9。
     steps:
       - uses: actions/checkout@v4
 
@@ -185,7 +185,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      NOTION_MAX_RPS: "2.0"
+      NOTION_MAX_RPS: "1.6"
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

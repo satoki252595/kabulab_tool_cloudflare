@@ -85,6 +85,32 @@ describe("normal mainのlane分離とqueue後の実期限", () => {
     await expect(main()).rejects.toThrow("23:40");
     expect(catalog).not.toHaveBeenCalled(); expect(runSpec).not.toHaveBeenCalled(); expect(existsSync(path)).toBe(false);
   });
+  it("stock後sector-turnoverは固定as-of/4指標順/原本relation NULLを変えず共通batchへ渡す", async () => {
+    vi.resetModules();
+    process.argv = [...originalArgv, "--only=sector-turnover", "--as-of=2026-09-28"];
+    vi.stubEnv("WORKER_BASE_URL", "https://worker.invalid"); vi.stubEnv("CRON_SECRET", "test-secret");
+    const batch = vi.fn().mockResolvedValue([]);
+    vi.doMock("../../src/shared/notion-archive/index.js", async original => ({
+      ...await original<typeof import("../../src/shared/notion-archive/index.js")>(),
+      ensureIndicatorDefsDb: vi.fn(async () => ({ dbId: "defs" })),
+      upsertIndicatorDef: vi.fn(async (_db, input) => ({ pageId: `def-${input.key}` })),
+      ensureObservationsDb: vi.fn(async () => ({ dbId: "obs" })), upsertObservationBatch: batch,
+      ensureRunLogDb: vi.fn(async () => ({ dbId: "logs" })), recordRunLog: vi.fn(async () => ({ pageId: "log" })),
+    }));
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      from: "2026-09-28", to: "2026-09-28", coverage: { date: "2026-09-28", universe: 3700, covered: 3700 },
+      sectors: [{ sector: "電気機器", turnover: 100, turnoverShare: 0.5, upTurnover: 60, downTurnover: 40, stockCount: 10 }],
+    })));
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const { main } = await import("./ingest.js"); await main();
+    expect(batch).toHaveBeenCalledTimes(1);
+    const rows = batch.mock.calls[0][1];
+    expect(rows.map((r: { indicatorKey: string }) => r.indicatorKey))
+      .toEqual(["sector_turnover", "sector_turnover_share", "sector_up_turnover", "sector_down_turnover"]);
+    expect(rows.map((r: { value: number }) => r.value)).toEqual([100, 0.5, 60, 40]);
+    for (const row of rows) expect(row).toMatchObject({ period: "2026-W40", periodStart: "2026-09-28", periodEnd: "2026-09-28",
+      category: "電気機器", changeFromPrev: null, primaryDataPageId: null, measureKind: "実測" });
+  });
 });
 
 describe("main() の結果不明時の保全停止", () => {
@@ -165,7 +191,7 @@ describe("main() の Phase1 原本保管失敗", () => {
     vi.resetModules();
     process.argv = [...originalArgv, `--only=${source}`];
     const ensureObservationsDb = vi.fn(async () => ({ dbId: "obs-db" }));
-    const upsertObservation = vi.fn(async () => ({ pageId: "obs-1" }));
+    const upsertObservationBatch = vi.fn(async () => []);
     const recordRunLog = vi.fn().mockResolvedValue({ pageId: "run-1" });
     vi.doMock("../../src/shared/notion-archive/index.js", async (importOriginal) => ({
       ...(await importOriginal<typeof import("../../src/shared/notion-archive/index.js")>()),
@@ -174,7 +200,7 @@ describe("main() の Phase1 原本保管失敗", () => {
       ensureRunLogDb: vi.fn(async () => ({ dbId: "run-db" })), recordRunLog,
       isArchived: vi.fn(async () => false),
       recordPrimaryData: vi.fn(async () => ({ pageId: "primary-1", fileTooLarge: failure === "too_large" })),
-      ensureObservationsDb, upsertObservation,
+      ensureObservationsDb, upsertObservationBatch,
     }));
     vi.doMock("./lib/archived-files.js", async (importOriginal) => ({
       ...(await importOriginal<typeof import("./lib/archived-files.js")>()),
@@ -202,7 +228,7 @@ describe("main() の Phase1 原本保管失敗", () => {
     const mod = await import("./ingest.js");
     await mod.main();
     expect(ensureObservationsDb).not.toHaveBeenCalled();
-    expect(upsertObservation).not.toHaveBeenCalled();
+    expect(upsertObservationBatch).not.toHaveBeenCalled();
     expect(recordRunLog.mock.calls[0]?.[1]).toMatchObject({ status: "失敗", successCount: 0, failedCount: 1 });
     expect(recordRunLog.mock.calls[0]?.[1].reason).toContain(failure === "too_large" ? "file_too_large" : "attachment_mismatch");
     expect(process.exitCode).toBe(1);
@@ -370,7 +396,7 @@ describe("main() の --dry-run 契約", () => {
       for (const name of [
         "recordPrimaryData",
         "ensureObservationsDb",
-        "upsertObservation",
+        "upsertObservationBatch",
         "ensureIndicatorDefsDb",
         "upsertIndicatorDef",
         "ensureRunLogDb",
