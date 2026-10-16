@@ -61,17 +61,9 @@ function chunk<T>(arr: T[], size: number): T[][] {
 }
 
 // 保存行変換は共有正準 (overseas-save-rows.ts) を使用する。
-// (toYen は orders 系が共用。orders の振舞い変更なし。)
-import { toYen, toOverseasSaveRows } from "../../src/services/overseas-save-rows.js";
-
-function orderPatternOf(status: ParseStatus | "parse_error"): string {
-  if (status === "ok_pattern_b") return "pattern_b";
-  if (status === "ok_pattern_c") return "pattern_c";
-  if (status === "ok_total_only") return "total_only";
-  return "pattern_a";
-}
-
-
+// 受注・海外はそれぞれ共有の正準保存変換を使用する。
+import { toOverseasSaveRows } from "../../src/services/overseas-save-rows.js";
+import { toOrderSaveRows } from "../../src/services/order-save-rows.js";
 
 /**
  * 同一 (会計期末, セグメント名) の重複は order_facts の一意制約に反する
@@ -156,19 +148,10 @@ export function buildMissingDocStatements(db: Database, w: MissingDocWriteSet) {
   const docIdSubquery = sql`(select ${yuhoDocuments.id} from ${yuhoDocuments} where ${yuhoDocuments.docId} = ${w.docId})`;
 
   // D1 bind 上限 100 に対し insert は 8 行/文に分割 (ingest.ts と同一)。
-  const orderRows = w.deduped.map((f) => ({
+  const orderRows = toOrderSaveRows(w.deduped, w.parseStatus).map((row) => ({
     documentId: docIdSubquery,
     stockId: w.stockId,
-    fiscalYearEnd: f.fiscalYearEnd,
-    segmentName: f.segmentName,
-    segmentKind: f.segmentKind,
-    isConsolidated: f.isConsolidated,
-    unitLabel: f.unitLabel,
-    ordersReceivedRaw: f.ordersReceived,
-    orderBacklogRaw: f.orderBacklog,
-    ordersReceivedYen: toYen(f.ordersReceived, f.unitYenFactor),
-    orderBacklogYen: toYen(f.orderBacklog, f.unitYenFactor),
-    pattern: orderPatternOf(w.parseStatus),
+    ...row,
   }));
   const overseasRows = toOverseasSaveRows(w.overseasFacts, w.overseasParseStatus).map((o) => ({
     documentId: docIdSubquery,

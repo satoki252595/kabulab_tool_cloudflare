@@ -2,7 +2,7 @@
 
 追跡は[#348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)。この記録は以下の対象の実測であり、全20機能・全空欄の完了を意味しない。
 
-## 10月17日07時台の追加確認
+## 10月17日07:25 JSTまでの追加確認
 
 | 対象 | 追加の受入・実行 | 残件 |
 |---|---|---|
@@ -15,7 +15,7 @@
 | 受注 | 固定818文書の保存原本を通常parserで再検査、813資格・5原本HOLD。D1 SELECT20の全応答を純再生し、221正資格のうち177文書に保存差分を確認 | B型の原本に明示された前期行・提出会社falseも保持する。旧比較の当期限定による過剰除外は保存再計算で訂正。parserHOLDかつ旧factsあり48文書は削除0、177文書もfresh latest/全PRE/適用は未受入 |
 | 権利・単位 | 735保存ZIPの旧新共有helper再生で、明示的な分割前期末株数基準が2→6社。追加4社以外の731社は全値同じ。法的日付とYahoo報告日の非同義を本番APIでも確認 | 追加25関連行中24行だけissuer/owner FY一致。価格・株数補正0、単位HOLD5,362行の一括解除0。履歴の増減を分割/併合係数へ流用しない |
 
-#463〜#466はexact headの3 CI成功後に通常マージ・Cloudflare実deployを確認した。最新mainは`faaf65ca`、07:10:15/version `752bb081-6088-4ccd-8774-745c73c3dea4`。Macは進行中writerのsourceを変えず`e4c1a7e3`を保持しており、新create/version journalのMac配備と次20/21時receiptは未受入である。
+#463〜#466はexact headの3 CI成功後に通常マージ・Cloudflare実deployを確認した。07:25 JST時点のCloudflare配信mainは`faaf65ca`、07:10:15/version `752bb081-6088-4ccd-8774-745c73c3dea4`。Macは進行中writerのsourceを変えず`e4c1a7e3`を保持しており、新create/version journalのMac配備と次20/21時receiptは未受入である。
 
 Notion予約は本文1.7＋保有0.75＋RAW0.25＋海外0.25＝2.95 req/s。VWAP残1,556は既存通常CLIを50×31＋6へ分け、API/hostedを共通25秒間隔（0.04rps、合計2.99）とする有限案を通信0で検査中。保存時計の条件計算は50件のsummaryまで467.905秒、実600秒制限への余地132.095秒。100件は778.933秒となるため採用しない。将来の原本量・通信時間・完走を保証せず、追加raw part・429・結果不明・期限超過で止める。
 

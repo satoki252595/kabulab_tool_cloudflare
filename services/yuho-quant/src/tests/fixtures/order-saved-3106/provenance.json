@@ -1,0 +1,21 @@
+{
+  "source": "actual normal prepare six-table PRE and exact saved EDINET ZIP; no generated rows",
+  "sourceCapsulePath": "/Users/satoki252595/projects/kabulab-cf/tmp/feature-audit-20261017/overseas-first20-normal-prepare-actual-v1/PRE-capsule.json.gz",
+  "sourceCapsuleSha256": "ac3b150374f5c88b73581d35bc6ee789acc323ee279419a026ad9b13b472357a",
+  "item": {
+    "stockCode": "3106",
+    "stockId": 2243,
+    "documentId": 37365,
+    "docId": "S100YIYE",
+    "edinetCode": "E00528",
+    "periodEnd": "2026-03-31",
+    "zipSha256": "3152951cd6ebac98a1a3742242681e2198ee1bcb427b0b1bf292395dc570ad8e",
+    "archivePageId": "3e1d74ff-84cd-81ab-a727-edcc78c17285",
+    "originalManifest": "unknown",
+    "sourceFetchedAt": "2026-06-25T13:02:00.000+00:00"
+  },
+  "zipSha256": "3152951cd6ebac98a1a3742242681e2198ee1bcb427b0b1bf292395dc570ad8e",
+  "snapshotSha256": "2d72b79630e2ca18d1fdd6afbd95f2eeb464b252c4d62dd72a62d7af8c0a4161",
+  "sourceAPI": 0,
+  "newReads": 0
+}

@@ -5,8 +5,7 @@
  * missing-backfill.ts (writer)・overseas-745-prep.ts・overseas-repair-prep.ts。
  * writers も PREP も同一関数 toOverseasSaveRows(facts, status) を呼び、
  * writers は documentId/stockId の付与のみ行う (9列組立の copy なし)。
- * orders 系は toYen のみ共用し、行組立・pattern は従来通り (orders の
- * 振舞い変更なし)。
+ * orders 系は order-save-rows.ts から toYen を共用する。
  *
  * 型は閉 domain: OverseasParseStatus (4種) | "parse_error"。
  * 実行時未知 (閉 domain 外) は pattern 化せず throw する
