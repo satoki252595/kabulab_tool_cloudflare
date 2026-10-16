@@ -106,6 +106,14 @@ describe("保有明細backfillのlegacy適用境界", () => {
     expect(existsSync(join(dir, `${source.stockCode}-${source.docId}.held.json`))).toBe(false);
   });
 
+  it("旧CLIが完了扱いした価格pending receiptを完了として再利用しない", async () => {
+    fixture();
+    writeFileSync(join(dir, `${source.stockCode}-${source.docId}.published.json`), JSON.stringify({ source, zipSha256: sha,
+      result: { status: "published", parsed: 1, created: 0, updated: 1, unchanged: 0, pending: true } }));
+    await expect(applyLatestHoldings(dir, 100)).rejects.toThrow("旧完了receiptに未完window");
+    expect(publishVerifiedShareholdings).not.toHaveBeenCalled();
+  });
+
   it("既存行の資格HOLDは既知結果として固定し、自動で再送しない", async () => {
     fixture();
     vi.mocked(publishVerifiedShareholdings).mockResolvedValueOnce({ status: "held", parsed: 2, reason: "旧行の保有主体名が一致しません" });

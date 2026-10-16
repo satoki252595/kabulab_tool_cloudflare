@@ -103,9 +103,19 @@ export async function applyLatestHoldings(dir: string, maxRows: number): Promise
       assert.equal(item.parserSourceSha256, PARSER_SOURCE_SHA256, "item parser SHA不一致");
       assertParserSourceUnchanged();
       const receipt = join(dir, `${item.source.stockCode}-${item.source.docId}.published.json`);
-      if (existsSync(receipt)) { assert.equal(read(receipt).result.status, "published"); continue; }
+      if (existsSync(receipt)) {
+        const previous = read(receipt);
+        assert.deepEqual(previous.source, item.source); assert.equal(previous.zipSha256, item.zipSha256);
+        assert.equal(previous.result.status, "published"); assert.notEqual(previous.result.pending, true, "旧完了receiptに未完windowがあります。読取照合が必要です");
+        continue;
+      }
       const heldReceipt = join(dir, `${item.source.stockCode}-${item.source.docId}.held.json`);
-      if (existsSync(heldReceipt)) { assert.equal(read(heldReceipt).result.status, "held"); held++; continue; }
+      if (existsSync(heldReceipt)) {
+        const previous = read(heldReceipt);
+        assert.deepEqual(previous.source, item.source); assert.equal(previous.zipSha256, item.zipSha256);
+        assert.equal(previous.result.status, "held"); assert.notEqual(previous.result.pending, true);
+        held++; continue;
+      }
       if (item.status !== "ready") { held++; continue; }
       if (usedRows === maxRows) { pending++; continue; }
       assert.ok(item.zipPath && item.zipSha256 && item.archivePageId);
@@ -159,6 +169,7 @@ export async function applyLatestHoldings(dir: string, maxRows: number): Promise
       assert.ok(Number.isSafeInteger(result.parsed) && result.parsed >= 0 && result.parsed <= windowRows);
       usedRows += result.parsed;
       if (result.pending === true) {
+        assert.ok(result.parsed > 0);
         pending++; save(join(dir, `${item.source.stockCode}-${item.source.docId}.window-${runId}.json`), proof); continue;
       }
       published++;
