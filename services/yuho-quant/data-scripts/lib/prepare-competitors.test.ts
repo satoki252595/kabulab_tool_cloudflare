@@ -78,6 +78,11 @@ it("受入済み実2社の全39/receipt→normal CLI prepareはモデル・認�
   const manifest = JSON.parse(gunzipSync(record.files[0].bytes).toString());
   expect(manifest.prepared.every((p: { status: string; qids: string[] }) => p.status === "prepared" && p.qids.length === 1)).toBe(true);
   expect(manifest.fullRows.every((r: { texts: object }) => Object.keys(r.texts).length === 39)).toBe(true);
+  expect(manifest.eligibility.policy).toBe("active-equity-current-annual-v1");
+  expect(manifest.eligibility.snapshot).toEqual([...fixture.latest].sort((a,b) => a.stockCode.localeCompare(b.stockCode)));
+  const { preparedSha, preparedJson } = await import("../../src/biztag/competitors/prepare-input.js");
+  expect(manifest.eligibility.snapshotSha256).toBe(preparedSha(preparedJson(manifest.eligibility.snapshot)));
+  expect(manifest.eligibilitySha256).toBe(preparedSha(preparedJson(manifest.eligibility)));
   expect(Object.values(manifest.qualification).every(q => (q as { historicalTagInputStatus: string }).historicalTagInputStatus === "unverified-legacy")).toBe(true);
   expect(requests).toBe(3); // schema + corpus1page + A/B full391page。archive transportは別途共通検証。
 });
@@ -122,6 +127,57 @@ it.each(["text", "receipt", "tag-doc", "latest-pointer"])("選出Bの%s不整合
   const manifest = JSON.parse(gunzipSync(model.record.mock.calls[0][0].files[0].bytes).toString());
   expect(manifest.prepared[0].candidates).toHaveLength(1); expect(manifest.prepared[0].qids).toEqual([`cp.${fixture.latest[1].stockCode}`]);
   expect(model.client).not.toHaveBeenCalled();
+});
+
+it.each(["outside-snapshot", "annual-missing", "unusable", "old-document"])("新prepare母集団は%sを選定前に除外し、空候補もA未資格もHOLD", async fault => {
+  const latest = structuredClone(fixture.latest), b = latest[1];
+  if (fault === "outside-snapshot") latest.splice(1, 1);
+  if (fault === "annual-missing") b.doc = null;
+  if (fault === "unusable") b.doc!.textParseStatus = null;
+  if (fault === "old-document") b.doc = structuredClone(fixture.latest[0].doc);
+  model.latest.mockResolvedValue(latest);
+  const summary = await run();
+  const manifest = JSON.parse(gunzipSync(model.record.mock.calls[0][0].files[0].bytes).toString());
+  expect(manifest.corpus.map((p: { stockCode: string }) => p.stockCode)).toEqual([fixture.latest[0].stockCode]);
+  expect(manifest.eligibility.excluded).toHaveLength(1);
+  expect(manifest.eligibility.excluded[0].stockCode).toBe(fixture.latest[1].stockCode);
+  expect(manifest.eligibility.excluded[0].reason).not.toMatch(/inactive/);
+  expect(manifest.prepared[0]).toMatchObject({ status: "hold", candidates: [], qids: [], holdReason: "candidate-set-empty" });
+  expect(manifest.prepared[1]).toMatchObject({ status: "hold", candidates: null });
+  expect(summary.ready).toBe(0); expect(summary.holds).toHaveLength(2);
+  expect(model.latest).toHaveBeenCalledTimes(2); expect(requests).toBe(3);
+  expect(model.client).not.toHaveBeenCalled(); expect(model.gate).not.toHaveBeenCalled(); expect(model.key).not.toHaveBeenCalled();
+});
+
+it("選出BのAfter世代差は元候補/qidsを保持してA HOLD、別候補へ置換しない", async () => {
+  const after = structuredClone(fixture.latest); after[1].doc!.notionDocPageId = fixture.dbId;
+  model.latest.mockResolvedValueOnce(structuredClone(fixture.latest)).mockResolvedValueOnce(after);
+  const summary = await run();
+  const manifest = JSON.parse(gunzipSync(model.record.mock.calls[0][0].files[0].bytes).toString());
+  expect(manifest.prepared[0].candidates).toHaveLength(1);
+  expect(manifest.prepared[0].qids).toEqual([`cp.${fixture.latest[1].stockCode}`]);
+  expect(manifest.qualification[fixture.latest[1].stockCode]).toMatchObject({ status: "hold", reason: "selected-active/latest-changed-during-read" });
+  expect(summary.ready).toBe(0); expect(model.client).not.toHaveBeenCalled();
+});
+
+it.each(["empty", "duplicate"])("%sの選定snapshotはarchive前にSTOPする", async fault => {
+  model.latest.mockResolvedValue(fault === "empty" ? [] : [fixture.latest[0], fixture.latest[0]]);
+  await expect(run()).rejects.toThrow("母集団が空・重複");
+  expect(model.latest).toHaveBeenCalledOnce(); expect(model.record).not.toHaveBeenCalled(); expect(requests).toBe(2);
+  expect(model.client).not.toHaveBeenCalled();
+});
+
+it("候補未採用の別docのAfter変更で全stageをSTOPせず、空候補HOLDを保管する", async () => {
+  pages.splice(1, 1); // 保存実2社のうちAだけをcorpusに返す。Bは選定/消費されない。
+  const after = structuredClone(fixture.latest); after[1].doc!.notionDocPageId = fixture.dbId;
+  model.latest.mockResolvedValueOnce(structuredClone(fixture.latest)).mockResolvedValueOnce(after);
+  const { prepareCompetitors } = await import("./prepare-competitors.js");
+  const summary = await prepareCompetitors({ ...options(), codes: [fixture.latest[0].stockCode], limit: 1 });
+  const manifest = JSON.parse(gunzipSync(model.record.mock.calls[0][0].files[0].bytes).toString());
+  expect(summary).toMatchObject({ ready: 0, physicalArchiveVerified: true, preparedScope: 1 });
+  expect(manifest.prepared[0]).toMatchObject({ status: "hold", holdReason: "candidate-set-empty" });
+  expect(Object.keys(manifest.qualification)).toEqual([fixture.latest[0].stockCode]);
+  expect(model.latest).toHaveBeenCalledTimes(2); expect(model.verify).toHaveBeenCalledOnce();
 });
 
 it("native長文has_moreを完全同値へ扱わず、archive前にSTOP", async () => {

@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { canonicalizeForHash } from "../../../../../src/shared/notion-archive/biztag-ledger.js";
 import type { SupplementRow } from "../../../../../src/shared/notion-archive/stock-supplement.js";
 import { TEXT_SECTIONS } from "../../services/edinet/text-sections.js";
-import { planWork, readInputReceipt, readTextSyncReceipt } from "../plan.js";
+import { hasUsableText, planWork, readInputReceipt, readTextSyncReceipt } from "../plan.js";
 import type { LatestDoc } from "../source.js";
 import { formatPeriodJa } from "../evidence.js";
 import { PREFILTER_SECTIONS } from "../prefilter.js";
@@ -16,32 +16,55 @@ export const preparedSha = (value: string | Uint8Array): string => createHash("s
 const hash = (value: unknown): string => preparedSha(preparedJson(value));
 const rowMetadata = ({ texts: _texts, ...row }: SupplementRow) => row;
 
-export function prepareCandidateInputs(rows: SupplementRow[], calibration: CompetitorCalibration, codes: string[]) {
+/** 選定前と選出後に同じ主体・最新annual文書の資格を使う。inactiveとは断定しない。 */
+function qualifyPreparedDocument(latest: LatestDoc | undefined, row: SupplementRow | undefined) {
+  const hold = (reason: string) => ({ status: "hold" as const, reason });
+  if (latest === undefined || latest.doc === null) return hold("active/latest-document-missing");
+  if (row === undefined) return hold("supplement-row-missing");
+  const doc = latest.doc;
+  if (row.stockCode !== latest.stockCode || row.companyName !== latest.companyName ||
+      row.sector33 !== latest.sector33 || row.docId !== doc.docId || row.periodEnd !== doc.periodEnd ||
+      row.docType !== (doc.docTypeCode === "120" ? "有報" : "訂正有報") ||
+      row.submittedAt === null || Date.parse(row.submittedAt) !== Date.parse(doc.submittedAt)) return hold("identity-or-document-generation-mismatch");
+  if (!hasUsableText(doc)) return hold("latest-annual-text-unusable");
+  return { status: "qualified" as const, doc };
+}
+
+export function prepareCandidateInputs(rows: SupplementRow[], calibration: CompetitorCalibration, codes: string[], latest: LatestDoc[]) {
   if (new Set(rows.map(r => r.stockCode)).size !== rows.length || new Set(rows.map(r => r.pageId)).size !== rows.length) {
     throw new Error("競合corpusの銘柄/ページが重複しています");
   }
-  // 既存と同じ集合で候補を計算する。資格不足のBを消して別の候補へ置き換えない。
-  const corpus: CompanyProfile[] = rows.filter(r => r.tagStatus === "判定済").map(r => ({ stockCode: r.stockCode,
+  if (latest.length === 0 || new Set(latest.map(r => r.stockCode)).size !== latest.length) throw new Error("選定前のactive/latest母集団が空・重複しています");
+  const snapshot = [...latest].sort((a,b) => a.stockCode.localeCompare(b.stockCode));
+  const byCode = new Map(snapshot.map(r => [r.stockCode, r]));
+  const excluded: Array<{ stockCode: string; reason: string }> = [];
+  // 新prepare入力世代の選定母集団。選出後の資格失敗で候補を消す処理ではない。
+  const eligible = rows.filter(row => {
+    const qualification = qualifyPreparedDocument(byCode.get(row.stockCode), row);
+    const reason = qualification.status === "hold" ? qualification.reason : row.tagStatus === "判定済" ? null : "tag-not-judged";
+    if (reason !== null) { excluded.push({ stockCode: row.stockCode, reason }); return false; }
+    return true;
+  });
+  const eligibility = { policy: "active-equity-current-annual-v1" as const, snapshot, snapshotSha256: hash(snapshot),
+    excluded: excluded.sort((a,b) => a.stockCode.localeCompare(b.stockCode)) };
+  const corpus: CompanyProfile[] = eligible.map(r => ({ stockCode: r.stockCode,
     companyName: r.companyName, pageId: r.pageId, sector33: r.sector33,
     tags: [...r.upstream, ...r.downstream, ...r.distribution], businessText: r.texts["事業の内容"], docId: r.docId }));
   const built = buildCandidates(corpus, { topK: calibration.candidateTopK, weights: calibration.candidateWeights,
     postingCaps: calibration.candidatePostingCaps, genericTagLabels: GENERIC_TAG_LABELS });
   const candidates = Object.fromEntries(codes.map(code => [code, built.get(code) ?? null]));
   const neededCodes = [...new Set([...codes, ...Object.values(candidates).flatMap(cs => cs === null ? [] : cs.map(c => c.stockCode))])].sort();
-  return { corpus, candidates, neededCodes };
+  return { corpus, candidates, neededCodes, eligibility };
 }
 
 /** 現在タグを使う資格と、歴史的な意味判定入力を検証できたかは分けて返す。 */
 export function qualifyPreparedCompany(latest: LatestDoc | undefined, corpusRow: SupplementRow | undefined,
   fullRow: SupplementRow | undefined, today: string) {
   const hold = (reason: string) => ({ status: "hold" as const, reason });
-  if (latest === undefined || latest.doc === null) return hold("active/latest-document-missing");
-  if (corpusRow === undefined || fullRow === undefined) return hold("supplement-row-missing");
-  const doc = latest.doc;
-  if (fullRow.stockCode !== latest.stockCode || fullRow.companyName !== latest.companyName ||
-      fullRow.sector33 !== latest.sector33 || fullRow.docId !== doc.docId || fullRow.periodEnd !== doc.periodEnd ||
-      fullRow.docType !== (doc.docTypeCode === "120" ? "有報" : "訂正有報") ||
-      fullRow.submittedAt === null || Date.parse(fullRow.submittedAt) !== Date.parse(doc.submittedAt)) return hold("identity-or-document-generation-mismatch");
+  const document = qualifyPreparedDocument(latest, fullRow);
+  if (document.status === "hold") return document;
+  if (corpusRow === undefined || fullRow === undefined || latest === undefined) return hold("supplement-row-missing");
+  const doc = document.doc;
   if (preparedJson(rowMetadata(corpusRow)) !== preparedJson(rowMetadata(fullRow)) ||
       corpusRow.texts["事業の内容"] !== fullRow.texts["事業の内容"]) return hold("corpus-input-changed-during-read");
   if (Object.keys(fullRow.texts).sort().join("\n") !== TEXT_SECTIONS.map(s => s.title).sort().join("\n") ||
@@ -82,8 +105,11 @@ export function buildPreparedCompetitorManifest(args: { rows: SupplementRow[]; f
   }
   const byCode = new Map(rows.map(r => [r.stockCode, r])), fullByCode = new Map(fullRows.map(r => [r.stockCode, r]));
   const latestByCode = new Map(latest.map(r => [r.stockCode, r])), profiles = new Map(plan.corpus.map(r => [r.stockCode, r]));
+  const beforeByCode = new Map(plan.eligibility.snapshot.map(r => [r.stockCode, r]));
   const qualification = Object.fromEntries(plan.neededCodes.map(code => [code,
-    qualifyPreparedCompany(latestByCode.get(code), byCode.get(code), fullByCode.get(code), today)]));
+    preparedJson(beforeByCode.get(code)) !== preparedJson(latestByCode.get(code))
+      ? { status: "hold" as const, reason: "selected-active/latest-changed-during-read" }
+      : qualifyPreparedCompany(latestByCode.get(code), byCode.get(code), fullByCode.get(code), today)]));
   const prepared = codes.map(code => {
     const a = profiles.get(code), candidates = plan.candidates[code];
     const heldCodes = [code, ...(candidates === null ? [] : candidates.map(c => c.stockCode))]
@@ -94,13 +120,14 @@ export function buildPreparedCompetitorManifest(args: { rows: SupplementRow[]; f
       return [questionIdForCandidate(c.stockCode), buildCompetitorQuestion(b)];
     }));
     const state = a === undefined ? null : buildCompetitorState(a);
-    return { stockCode: code, status: a !== undefined && candidates !== null && heldCodes.length === 0 ? "prepared" : "hold",
+    return { stockCode: code, status: a !== undefined && candidates !== null && candidates.length > 0 && heldCodes.length === 0 ? "prepared" : "hold",
+      holdReason: candidates !== null && candidates.length === 0 ? "candidate-set-empty" : null,
       heldCodes, state, stateSha256: state === null ? null : preparedSha(state), questions,
       qids: questions === null ? null : Object.keys(questions), questionsSha256: questions === null ? null : hash(questions), candidates };
   });
   return { version: "competitor-prepared-input-v1" as const, purpose: "input-preparation-only" as const,
     calibration, calibrationSha256: hash(calibration), decisionVersion: competitorDecisionVersion(calibration), sourceHashes,
-    targetCodes: codes, corpus: plan.corpus, corpusSha256: hash(plan.corpus),
+    targetCodes: codes, eligibility: plan.eligibility, eligibilitySha256: hash(plan.eligibility), corpus: plan.corpus, corpusSha256: hash(plan.corpus),
     latest: plan.neededCodes.map(code => latestByCode.get(code) ?? { stockCode: code, status: "latest-unobserved" }),
     fullRows: [...fullRows].sort((a,b) => a.stockCode.localeCompare(b.stockCode)), qualification, prepared,
     holds: prepared.filter(p => p.status === "hold").map(p => ({ stockCode: p.stockCode, heldCodes: p.heldCodes })),

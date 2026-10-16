@@ -48,7 +48,7 @@ export async function prepareCompetitors(opts: PrepareCompetitorsOptions) {
   const rows = await loadSupplementRows(dbId, propertyIds, { textColumns: ["事業の内容"], strictNative: true, beforeRequest: assertReadActive });
   assertReadActive();
   const db = createD1HttpDb({}), latestBefore = await loadLatestDocs(db);
-  const plan = prepareCandidateInputs(rows, calibration, codes);
+  const plan = prepareCandidateInputs(rows, calibration, codes, latestBefore);
   const fullRows: Awaited<ReturnType<typeof loadSupplementRows>> = [];
   // 既存OR filter。1社ごとの39列GETを作らず、対象A/選出Bだけ50コードずつ読む。
   for (let offset = 0; offset < plan.neededCodes.length; offset += 50) {
