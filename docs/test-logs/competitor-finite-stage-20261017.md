@@ -36,8 +36,9 @@ ACK/child/receiptはprotocol置換であり、外部原本を保管/照合した
 - 10分startup receipt後は20分でchild停止し、全体30分を延ばさない。startup30/31分ならchild0。
 - 第二child7分SIGTERM後はpendingが残り、次runの第一biztag終了後もprepare childを再起動しない。
 - 既存20/21時job、kernel writer、Linux writer停止の回帰も維持。
+- #440と同じ保存実2社の通常prepare出力/gzip/物理receiptをstage ACKへ直接渡し、全39入力の正例でもclosure/cursor前進を確認した（transport/物理ACKは置換、live0）。
 
-ローカルはNix/Node22/frozen依存で対象2 suites / 17 checks、全型検査、対象lintが成功した。mergeはexact CIの確認後とし、
+ローカルはNix/Node22/frozen依存で対象3 suites / 28 checks、全型検査、対象lintが成功した。mergeはexact CIの確認後とし、
 Mac runtimeのrollforwardは既存writer終了後に別受入する。
 
 ## 条件コストと未受入
