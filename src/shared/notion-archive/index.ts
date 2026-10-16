@@ -152,6 +152,8 @@ export {
   indicatorDefRowMatches,
   ensureObservationsDb,
   upsertObservation,
+  upsertObservationBatch,
+  matchUnchangedObservationRows,
   observationExists,
   observationRowMatches,
   observationKey,
