@@ -23,6 +23,7 @@
  * 実行: D1_DATABASE_ID=<id> pnpm backfill:overseas [--limit=N] [--offset=N] [--force]
  */
 import "dotenv/config";
+import { parseSavedOverseasOptions, runSavedOverseas } from "./lib/saved-overseas-backfill.js";
 import { eq, isNull } from "drizzle-orm";
 import {
   createD1HttpBatchSender,
@@ -60,6 +61,7 @@ function chunk<T>(a: T[], s: number): T[][] {
   return o;
 }
 
+async function runDownloadedBackfill(): Promise<void> {
 const db = createD1HttpDb(yuhoSchema);
 // D1 書込口の明示指定 (Node では必須)。sender は無状態なので run 全体で
 // 1 個を使い回す。backfill.ts の ingestDocument 経由と同一の窓口。
@@ -197,3 +199,10 @@ console.info("\n[oseas-backfill] 完了:");
 for (const [k, v] of Object.entries(tally).sort((a, b) => b[1] - a[1])) {
   console.info(`  ${k}: ${v}`);
 }
+
+}
+
+// Explicit finite saved mode shares normal parser/archive/atomic projection; no upstream download.
+const savedOptions = parseSavedOverseasOptions(process.argv.slice(2));
+if (savedOptions === null) await runDownloadedBackfill();
+else await runSavedOverseas(savedOptions, process.cwd());
