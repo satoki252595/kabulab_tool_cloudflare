@@ -24,6 +24,12 @@
 
 ローカルは `nix develop -c pnpm yuho:backfill:holdings ...`。同じNode CLIをActionsでも実行でき、追加依存はない。有限の過去補完を定時の全量成功とは数えず、原本確定件数・保留・残window・価格確定を分けて受け入れる。
 
+## 事業タグの機械処理だけを実行する
+
+通常CLIの`pnpm biztag run --mechanical-only --codes=<対象コード列> --limit=<件数> --budget-min=<分>`は、本番定期と同じ計画・本文同期・キーワード照合・共有publisherを使う。新規初回や実入力変更による再判定は明示HOLDとし、モデルの起動・原応答journal・較正の読込へ進めない。機械照合不能を別モデルで補わない。
+
+旧タグ・根拠・判定日・未知の旧入力SHAを保持し、書込前の最新文書照合・物理PRE・単発更新・全property読戻しを通常経路で行う。初回判定や再判定のHOLDは`qualificationHeld`と専用件数へ残し、`remaining=0`だけで全件完了と判断しない。既定の20時処理は従来どおり、必要な対象だけローカルClefを使う。依存・上流取得・毎日の実行回数は追加しない。ローカルは同じlockのNix環境で実行し、main反映とMac専用runtimeへの配備は別に確認する。
+
 ## 優待の定型処理
 
 通常入口は既存の`yutai:summary:local` / `run yutai-summary`。同じ`runLocalSummary`内で、全文が既知の優待種類と単一の円額面だけで構成される入力を`simple-face-value-v1`として処理する。表見出しに種類だけ、本文に額面だけがある形式も対象。金額は本文を既存`evaluateCompanyValue`で一意に認定したものだけを使う。
