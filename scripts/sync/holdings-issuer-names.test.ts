@@ -54,4 +54,28 @@ describe("通常priceの保存issuer英字名loader", () => {
     vi.mocked(selectLatestHoldingsDocuments).mockResolvedValueOnce({ rows: [{ ...latest, docId: "S100Z123" }], more: false });
     expect(await result.checkCurrent()).toMatchObject({ status: "held", reasonCode: "issuer_source_unavailable" });expect(readSavedHoldingsZip).toHaveBeenCalledTimes(1);
   });
+  it("実時間超過は各新latest/保存読取/書込前latestの開始前で止め、unknownを既知HOLDへ置換しない", async () => {
+    let stopped = true;
+    const shouldStop = () => stopped, loader = createHoldingOfficialNamesLoader(), limit = budget();
+    expect(await loader([target],limit,shouldStop)).toMatchObject({ status: "held", reasonCode: "budget_exhausted" });
+    expect(selectLatestHoldingsDocuments).not.toHaveBeenCalled(); expect(readSavedHoldingsZip).not.toHaveBeenCalled();
+    stopped = false;
+    vi.mocked(selectLatestHoldingsDocuments).mockImplementationOnce(async () => { stopped = true; return { rows: [latest], more: false }; });
+    expect(await loader([target],limit,shouldStop)).toMatchObject({ status: "held", reasonCode: "budget_exhausted" });
+    expect(selectLatestHoldingsDocuments).toHaveBeenCalledTimes(1); expect(readSavedHoldingsZip).not.toHaveBeenCalled();
+    stopped = false;
+    const ready = await loader([target],limit,shouldStop); if (ready.status !== "ready") throw new Error(ready.reason);
+    stopped = true;
+    expect(await ready.checkCurrent()).toMatchObject({ status: "held", reasonCode: "budget_exhausted" });
+    expect(selectLatestHoldingsDocuments).toHaveBeenCalledTimes(2); expect(readSavedHoldingsZip).toHaveBeenCalledTimes(1);
+    stopped = false;
+    vi.mocked(selectLatestHoldingsDocuments).mockImplementationOnce(async () => { stopped = true; return { rows: [latest], more: false }; });
+    expect(await ready.checkCurrent()).toMatchObject({ status: "held", reasonCode: "budget_exhausted" });
+    stopped = false;
+    vi.mocked(readSavedHoldingsZip).mockImplementationOnce(async () => { stopped = true; throw new Error("SOURCE_UNKNOWN"); });
+    const unknown = createHoldingOfficialNamesLoader();
+    await expect(unknown([target],limit,shouldStop)).rejects.toThrow("SOURCE_UNKNOWN");
+    await expect(unknown([target],limit,shouldStop)).rejects.toThrow("SOURCE_UNKNOWN");
+    expect(readSavedHoldingsZip).toHaveBeenCalledTimes(2);
+  });
 });

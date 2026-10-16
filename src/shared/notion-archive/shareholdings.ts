@@ -331,12 +331,12 @@ interface PublishHoldingsArgs {
   /** 旧cursor欠測HOLDの明示再資格だけ。全props/clockと全原表factsを物理PREへ固定する。 */
   sourceWindowPre?: ArchivedSource;
   /** publishVerifiedでは物理全文照合済みの原本だけ。保存入口は内部で照合する。 */
-  valuationSources?: { codeList: ArchivedSource; prices: readonly ArchivedSource[]; evidenceScope?: string; officialIssuerNames?: OfficialIssuerNames; priceIndex?: HoldingsPriceIndex; checkOfficialIssuerNames?: () => Promise<{ status: "verified" } | { status: "held"; reason: string }> };
+  valuationSources?: { codeList: ArchivedSource; prices: readonly ArchivedSource[]; evidenceScope?: string; officialIssuerNames?: OfficialIssuerNames; priceIndex?: HoldingsPriceIndex; checkOfficialIssuerNames?: () => Promise<{ status: "verified" } | { status: "held"; reason: string; reasonCode?: "budget_exhausted" | "issuer_source_unavailable" }> };
 }
 
 export interface HoldingPriceBudget { remainingChunks: number; remainingBytes: number }
-export type HoldingPriceSourceLoader = (holdings: readonly Shareholding[], budget: HoldingPriceBudget) => Promise<
-  { status: "ready"; snapshotId: string; evidenceScope: string; codeList: ArchivedSource; prices: ArchivedSource[]; officialIssuerNames?: OfficialIssuerNames; priceIndex?: HoldingsPriceIndex; checkOfficialIssuerNames?: () => Promise<{ status: "verified" } | { status: "held"; reason: string }> } |
+export type HoldingPriceSourceLoader = (holdings: readonly Shareholding[], budget: HoldingPriceBudget, shouldStop?: () => boolean) => Promise<
+  { status: "ready"; snapshotId: string; evidenceScope: string; codeList: ArchivedSource; prices: ArchivedSource[]; officialIssuerNames?: OfficialIssuerNames; priceIndex?: HoldingsPriceIndex; checkOfficialIssuerNames?: () => Promise<{ status: "verified" } | { status: "held"; reason: string; reasonCode?: "budget_exhausted" | "issuer_source_unavailable" }> } |
   { status: "held"; reason: string; reasonCode: "snapshot_unavailable" | "budget_exhausted" | "issuer_source_unavailable" }
 >;
 
@@ -361,7 +361,7 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
   const hold = async (reason: string, parsed: number, retry: boolean, pricePreflight = false): Promise<PublishHoldingsResult> => {
     if (pricePhase) await recordRecoveryInfo(args.archivePageId, pricePhase.info, retry ? "再開待ち" : "要確認", reason, true, undefined, undefined, pricePreflight);
     else await recordRecoveryMarker(args, retry ? "再開待ち" : "要確認", reason, parsed);
-    return { status: "held", parsed, reason };
+    return { status: "held", parsed, reason, ...(retry ? { pending: true } : {}) };
   };
   if (args.zip.length > HOLDINGS_ZIP_MAX_BYTES) return hold("1原本20MiBの解析予算を超えています", 0, false);
   const parsed = parseShareholdingsData(args.zip, args.source);
@@ -467,7 +467,7 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
     }
     if (args.valuationSources?.checkOfficialIssuerNames) {
       const current = await args.valuationSources.checkOfficialIssuerNames();
-      if (current.status === "held") return hold(current.reason, parsed.holdings.length, false, true);
+      if (current.status === "held") return hold(current.reason, parsed.holdings.length, current.reasonCode === "budget_exhausted", true);
     }
   } catch (error) {
     if (error instanceof HoldingPriceIssuerMismatch) return hold(error.message, parsed.holdings.length, false, true);
@@ -933,7 +933,7 @@ export async function resumePendingShareholdingsPrices(args: {
       assert.equal(parsed.holdings.length, info.parsed, "価格phaseで原表の明細集合が変更されています");
       assert.equal(holdingsFactsSha256(parsed.holdings), info.factsSha256, "価格phaseで全facts/orderが変化しています");
       const selected = parsed.holdings.slice(info.nextHoldingOffset, info.nextHoldingOffset! + args.maxRows - result.usedRows);
-      sources = await args.loadSources(selected, args.budget);
+      sources = await args.loadSources(selected, args.budget, args.shouldStop);
       if (sources.status === "held" || args.shouldStop()) {
         if (sources.status === "held") assert.ok(sources.reasonCode === "budget_exhausted" || sources.reasonCode === "snapshot_unavailable" || sources.reasonCode === "issuer_source_unavailable");
         const retry = sources.status !== "held" || sources.reasonCode === "budget_exhausted";
@@ -950,6 +950,7 @@ export async function resumePendingShareholdingsPrices(args: {
     const outcome = await publishHoldings({ source: info.source, ownerName: info.ownerName, zip: saved.bytes,
       archivePageId: page.id, maxRows: args.maxRows - result.usedRows, valuationSources: sources }, { snapshotId: sources.snapshotId, info });
     if (outcome.status === "published") { result.usedRows += outcome.parsed; result.resumed++; if (outcome.pending) result.pending = true; else if (outcome.unavailable! > 0) result.held++; }
+    else if (outcome.pending) result.pending = true;
     else result.held++;
   }
   return result;

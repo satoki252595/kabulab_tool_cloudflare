@@ -4,7 +4,7 @@ code listの原英字商号を変更せず、最新issuer有報の`FilerNameInEn
 
 通常Node price loaderは資格済みcode list・raw chartから必要主体を固定し、scoped latest selectorと既存`readSavedHoldingsZip`で現行type1を読む。公式DEI namespace、一意PublicDoc、EDINET/sec/FY、日本語DEI=最新提出者名=code list法定名、FilingDateInstantの実entity識別子/提出日、提出時点<=価格captureを検証する。ZIP/member SHA、doc、原取得時計・提出時計・contextを価格根拠へ保存する。原metadataや未知の旧manifestは変更しない。通常ingestが既に物理保存する同じZIPを再利用でき、新しい上流GET・有料API・モデル・DDL・依存追加はない。
 
-通常window全行の資格後、価格unknown markerより前にissuerの最新doc/主体を再照合する。変化・公式根拠の欠測は既知HOLD、SHA/transport等の不明は従来のunknown STOP。原本予約は既知の全文サイズ、未知サイズは20MiBとし、既存256MiB枠を使う。予算不足はhosted GET前にHOLD、未知結果は予約を返さず同runの原本再送0。必要主体のPromise/cacheをrun内で共有する。price indexも同じsource配列に束縛してpublisherへ渡し、chart展開/検証を重複させない。canonical一致だけなら追加D1/issuer原本GET0。
+通常window全行の資格後、価格unknown markerより前にissuerの最新doc/主体を再照合する。変化・公式根拠の欠測は既知HOLD、SHA/transport等の不明は従来のunknown STOP。通常resumeの`shouldStop`を同じloaderへ渡し、各新issuerのlatest開始前・保存ZIP開始前・writer直前latest開始前と完了後で実時間予算を検査する。既知の時間不足は価格cursorを進めず再開待ちを維持し、既に失敗した原本Promiseを時間HOLDへ置換しない。原本予約は既知の全文サイズ、未知サイズは20MiBとし、既存256MiB枠を使う。予算不足はhosted GET前にHOLD、未知結果は予約を返さず同runの原本再送0。必要主体のPromise/cacheをrun内で共有する。price indexも同じsource配列に束縛してpublisherへ渡し、chart展開/検証を重複させない。canonical一致だけなら追加D1/issuer原本GET0。
 
 ## 保存実原本の純local再計算
 
@@ -23,4 +23,4 @@ Nix Node22.22.2/pnpm9.15.9、単発の同じ289行/冷price index比較は、旧
 
 ## 検証
 
-最新main #440/#441を通常mergeで取り込み、Nixで全tsc・変更10ファイルlint・関連8suite160 testsを確認。公式context/entity/提出日/namespace再束縛・法定名/証券/EDINET違い、SHA/metadataサイズ不整合、価格capture不一致はSTOP。公式名の欠落/重複・最新doc変更は価格書込前HOLD。正常集合の根拠保持、既存canonical名の不変、価格/split/別日を緩和しないこと、index source配列の束縛、予算GET前停止、原本unknown同run再送0、canonical一致の追加D1/原本GET0を検証した。
+最新main #440/#441を通常mergeで取り込み、Nixで全tsc・変更10ファイルlint・関連9suite170 testsを確認。公式context/entity/提出日/namespace再束縛・法定名/証券/EDINET違い、SHA/metadataサイズ不整合、価格capture不一致はSTOP。公式名の欠落/重複・最新doc変更は価格書込前HOLD。正常集合の根拠保持、既存canonical名の不変、価格/split/別日を緩和しないこと、index source配列の束縛、予算GET前停止、原本unknown同run再送0、canonical一致の追加D1/原本GET0を検証した。

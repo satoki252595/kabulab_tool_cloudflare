@@ -68,9 +68,9 @@ describe("通常Nodeの保存価格loader", () => {
     const readNames = vi.fn(async () => ({ status: "ready" as const, names: new Map(), checkCurrent }));
     const factory = vi.spyOn(issuerNames,"createHoldingOfficialNamesLoader").mockReturnValue(readNames);
     try {
-      const limit = budget(), result = await createHoldingPriceSourceLoader()([holding],limit);
+      const limit = budget(), shouldStop = () => false, result = await createHoldingPriceSourceLoader()([holding],limit,shouldStop);
       expect(result.status).toBe("ready"); if (result.status !== "ready") throw new Error(result.reason);
-      expect(readNames).toHaveBeenCalledWith([{ identity: expect.objectContaining({ code: "7203" }), priceCapturedAt: member.receivedAt }],limit);
+      expect(readNames).toHaveBeenCalledWith([{ identity: expect.objectContaining({ code: "7203" }), priceCapturedAt: member.receivedAt }],limit,shouldStop);
       result.priceIndex.assertSources(result.prices); expect(result.checkOfficialIssuerNames).toBe(checkCurrent);
       expect(downloadArchivedFile).toHaveBeenCalledTimes(2);
       readNames.mockResolvedValueOnce({ status: "held", reasonCode: "issuer_source_unavailable", reason: "公式根拠なし" } as never);

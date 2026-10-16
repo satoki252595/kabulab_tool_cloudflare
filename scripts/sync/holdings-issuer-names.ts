@@ -18,18 +18,21 @@ export function createHoldingOfficialNamesLoader() {
     assert.ok(found.rows.length <= 1);
     return found.rows[0];
   };
-  return async (targets: readonly OfficialNameTarget[], budget: { remainingBytes: number }): Promise<
+  return async (targets: readonly OfficialNameTarget[], budget: { remainingBytes: number }, shouldStop?: () => boolean): Promise<
     { status: "ready"; names: Map<string, OfficialIssuerEnglishName>; checkCurrent: () => Promise<{ status: "verified" } | Held> } | Held
   > => {
+    const timeLimit = (): Held | undefined => shouldStop?.() ? { status: "held", reasonCode: "budget_exhausted", reason: "公式英字名の保存原本照合に使う実時間予算を使い切りました" } : undefined;
     const records: Array<{ evidence: OfficialIssuerEnglishName; latest: Latest; identity: ListedIdentity }> = [];
     for (const target of targets) {
       const key = `${target.identity.code}/${target.priceCapturedAt}`;
       let saved = cache.get(key);
       if (saved === undefined) {
+        const stopped = timeLimit(); if (stopped) return stopped;
         saved = (async () => {
           const row = await latest(target.identity);
           if (row === undefined || row.edinetCode !== target.identity.edinetCode || exactLegalName(row.ownerName) !== exactLegalName(target.identity.legalName)) return { status: "held" as const, reasonCode: "issuer_source_unavailable" as const, reason: "公式英字名の最新issuer/証券主体が一致しません" };
           const source = { docId: row.docId, stockCode: row.stockCode, edinetCode: row.edinetCode, fiscalYearEnd: row.fiscalYearEnd };
+          const stopped = timeLimit(); if (stopped) return stopped;
           const archived = await readSavedHoldingsZip(source, budget);
           if (archived.status === "held") return { status: "held" as const, reasonCode: archived.reasonCode === "budget_exhausted" ? "budget_exhausted" as const : "issuer_source_unavailable" as const, reason: archived.reason };
           const name = qualifyOfficialIssuerEnglishName({ identity: target.identity, source, ownerName: row.ownerName,
@@ -45,9 +48,11 @@ export function createHoldingOfficialNamesLoader() {
     }
     return { status: "ready", names: new Map(records.map(record => [record.identity.code, record.evidence])), checkCurrent: async () => {
       for (const record of records) {
+        const stopped = timeLimit(); if (stopped) return stopped;
         const current = await latest(record.identity);
         if (current === undefined || JSON.stringify(current) !== JSON.stringify(record.latest)) return { status: "held", reasonCode: "issuer_source_unavailable", reason: "公式英字名の最新issuer有報/主体が開始時から変化しました" };
       }
+      const stopped = timeLimit(); if (stopped) return stopped;
       return { status: "verified" };
     } };
   };
