@@ -32,6 +32,12 @@ const PARSE_STATUS_LABEL: Record<string, string> = {
 /** 海外売上高(積み上げ棒) + 海外売上高比率(折れ線・右軸) の SVG。 */
 function trendChart(points: OverseasYearPoint[]): string {
   if (points.length === 0) return "";
+  const comparable = (p: OverseasYearPoint): p is OverseasYearPoint & { totalYen: number; overseasYen: number } =>
+    p.totalYen !== null && p.overseasYen !== null && Number.isFinite(p.totalYen) && Number.isFinite(p.overseasYen) &&
+    p.totalYen >= 0 && p.overseasYen >= 0 && p.overseasYen <= p.totalYen &&
+    (p.ratioPct === null || (Number.isFinite(p.ratioPct) && p.ratioPct >= 0 && p.ratioPct <= 100));
+  const observed = points.filter(comparable);
+  if (observed.length === 0) return '<p class="muted">グラフに必要な売上合計と海外売上が未取得か、原典の確認が必要です。取得済みの値は下の表をご確認ください。</p>';
   const W = 720;
   const H = 320;
   const padL = 64;
@@ -41,10 +47,8 @@ function trendChart(points: OverseasYearPoint[]): string {
   const innerW = W - padL - padR;
   const innerH = H - padT - padB;
 
-  const maxYen = Math.max(
-    1,
-    ...points.map((p) => p.totalYen ?? p.overseasYen ?? 0)
-  );
+  // 全て実0円の場合も描画の分母は正にする。金融値は補完しない。
+  const maxYen = Math.max(1, ...observed.map((p) => p.totalYen));
   const maxOku = maxYen / 1e8;
   const groupW = innerW / points.length;
   const barW = Math.min(54, groupW * 0.5);
@@ -64,19 +68,21 @@ function trendChart(points: OverseasYearPoint[]): string {
       const cx = padL + groupW * i + groupW / 2;
       const fy = p.fiscalYearEnd.slice(0, 7);
       const label = `<text x="${cx}" y="${H - padB + 20}" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--text-secondary)">${h(fy)}</text>`;
-      pts.push({ x: cx, ratio: p.ratioPct });
-      if (p.overseasYen === null && p.totalYen === null) {
+      pts.push({ x: cx, ratio: comparable(p) ? p.ratioPct : null });
+      if (!comparable(p)) {
         const phW = barW + 6;
         const phY = padT + innerH * 0.6;
+        const missing = p.overseasYen === null && p.totalYen === null ? "データなし"
+          : p.overseasYen === null ? "海外売上未取得" : p.totalYen === null ? "売上合計未取得" : "原典要確認";
         return `<rect x="${cx - phW / 2}" y="${phY}" width="${phW}" height="${innerH * 0.4}" fill="none" stroke="var(--border-soft)" stroke-width="1.5" stroke-dasharray="4 3"/>
-<text x="${cx}" y="${phY + innerH * 0.2 + 4}" text-anchor="middle" font-family="var(--font-mono)" font-size="10" fill="var(--text-muted)">データなし</text>${label}`;
+<text x="${cx}" y="${phY + innerH * 0.2 + 4}" text-anchor="middle" font-family="var(--font-mono)" font-size="10" fill="var(--text-muted)">${missing}</text>${label}`;
       }
-      const total = p.totalYen ?? p.overseasYen ?? 0;
-      const ov = p.overseasYen ?? 0;
+      const total = p.totalYen;
+      const ov = p.overseasYen;
       const x = cx - barW / 2;
       const totalH = (total / maxYen) * innerH;
       const ovH = (ov / maxYen) * innerH;
-      const domH = Math.max(0, totalH - ovH);
+      const domH = totalH - ovH;
       const yTotalTop = padT + innerH - totalH;
       const ovRect = `<rect x="${x}" y="${padT + innerH - ovH}" width="${barW}" height="${ovH}" fill="var(--bg-invert)" stroke="var(--border)" stroke-width="1.5"><title>海外売上高 ${fy}: ${oku(p.overseasYen)} 億円</title></rect>`;
       const domRect =
@@ -87,7 +93,7 @@ function trendChart(points: OverseasYearPoint[]): string {
     })
     .join("");
 
-  const ratioY = (r: number) => padT + innerH * (1 - Math.min(100, r) / 100);
+  const ratioY = (r: number) => padT + innerH * (1 - r / 100);
   let path = "";
   let prev: { x: number; ratio: number } | null = null;
   const dots: string[] = [];

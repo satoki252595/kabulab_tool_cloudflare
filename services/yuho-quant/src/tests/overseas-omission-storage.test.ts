@@ -101,6 +101,27 @@ it("NULLは理由未保存のまま、非開示・内需・90%を作らない", 
   expect(html).not.toContain("売上の開示なし");
 });
 
+it("実372Aの片側金額欠測・矛盾・範囲外比率は、0円や100%のグラフへ補完しない", async () => {
+  const trend = await getOverseasTrendByCode(db, "372A");
+  const actual = trend!.points.find((p) => p.overseasYen !== null && p.totalYen !== null)!;
+  expect(actual).toBeDefined();
+  expect(overseasSection(trend)).toContain('fill="var(--bg-invert)"');
+  // 保存済み実値の一方だけをNULL・大小逆転にする明示的な負例。
+  for (const point of [
+    { ...actual, overseasYen: null },
+    { ...actual, totalYen: null },
+    { ...actual, overseasYen: actual.totalYen!, totalYen: actual.overseasYen! },
+    { ...actual, ratioPct: 101 },
+  ]) {
+    const html = overseasSection({ ...trend!, points: [point] });
+    expect(html).toContain("原典の確認が必要");
+    expect(html).not.toContain("<circle");
+    expect(html).not.toContain("<title>国内ほか");
+    expect(html).not.toContain("<title>海外売上高");
+    expect(html).toContain("YEARLY");
+  }
+});
+
 it("文書/FY不一致・無根拠理由・壊れたSHA・native期間不一致は受入しない", () => {
   const record = fixtures[0].record;
   const expected = identity(fixtures[0]);
