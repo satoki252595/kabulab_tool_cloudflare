@@ -2,6 +2,16 @@
 
 追跡は[#348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)。この記録は以下の対象の実測であり、全20機能・全空欄の完了を意味しない。
 
+## 10月17日07:35 JSTの追加確認
+
+受注の本番共通mapperと保存cohort CLI（#468）、保有不該当の通常CLI（#467）、保管来歴2ラベルの訂正（#469）はexact headの3 CI成功後にマージした。Cloudflareはmain `7d938e38`、07:32:04/version `30a5f745-0de7-4d77-9779-5c21e5716d76`まで実配信を確認。受注のroot独立813原本/海外20旧新SQL・expected再生もPASS、追加HTTP/モデル/適用0。Mac e4cと保有b8の進行中runtimeは変更していない。
+
+本文は先頭300/2,417社までrootの物理PRE・全POST・永続closure再生を受入（残2,117）。VWAP残1,556の32窓は通常CLIで実行開始し、最初50のfresh active/full PRE/ETag/実SDK metadataをrootで照合した。normal/独立POST未完の窓を完了へ加算しない。共通pace後の観測fsyncによる遅延も考慮し、実送信直前は残差だけ待つ。保存100再生と遅延・期限の負例を通信0で確認した。
+
+保有残17のrange04は22行・2文書を閉鎖し、累計824行・67文書を保持。range05は07:29:09に既存明細PATCHの応答が無い `fetch failed` で停止した。570 intent/569 response、143 mutation intent/142 ACK、業務87 admitted/86 ACKのうち1更新が結果不明。5文書55行のpublished receiptはあるがfresh full POSTが未完なので新受入0。親の全owned phaseは終端し、元STOP・pending・原本を保持。更新を再送せず、通常ツールのread-only照合で成否を調べる。回線/DNS等のcauseは未保存で根因を断定しない。
+
+受注177候補は海外残146と47社、保有protected299原本と18社が交差し、両者を同時更新しないwriter順序を固定した。交差を除く112候補の別有限案を準備中、fresh PRE/適用0。保有不該当4社も現在のprotected sourceなので、対応処理の閉鎖・新しい全PRE・通信枠の引継ぎを経る。処理枠が空いたことだけで書込を許可しない。全20機能、価格単位、原典欠測、次20/21時receiptは未完。
+
 ## 10月17日07:25 JSTまでの追加確認
 
 | 対象 | 追加の受入・実行 | 残件 |
