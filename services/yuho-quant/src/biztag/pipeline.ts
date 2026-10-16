@@ -390,7 +390,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     readStockTextRow,
     assertLatestDocCurrent: (code, doc) => assertLatestDocCurrent(db, code, doc),
     createSupplementRow: opts.dryRun ? async () => "dry-run"
-      : (input, evidence) => createSupplementRow(supplementDbId, input, evidence),
+      : (input, evidence) => createSupplementRow(supplementDbId, input, evidence, publicationJournal),
     updateSupplementRow: opts.dryRun ? async () => {} : updateSupplementRow,
     replaceEvidenceBlock: opts.dryRun ? async () => {} : (pageId, block, input, expected, beforeWrite) =>
       replaceEvidenceBlock(pageId, block, input, expected, beforeWrite, publicationJournal),

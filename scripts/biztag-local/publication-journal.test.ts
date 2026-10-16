@@ -26,6 +26,25 @@ function directory(root: string) { const path = join(root, "supplement-publicati
 afterEach(() => { failures.filename = ""; for (const root of temporary.splice(0)) rmSync(root, { recursive: true, force: true }); vi.unstubAllGlobals(); });
 
 describe("normal publisher durable journal", () => {
+  it("closed replace and create records retain their distinct source identities across startup", () => {
+    const root = state(), journal = createSupplementPublicationJournal(root); journal.reserve(input).complete(output);
+    const target = { dbId: native.provenance.textPageId, stockCode: native.provenance.stockCode, nextDocId: null };
+    const request = JSON.stringify({ parent: { database_id: target.dbId }, properties: buildSupplementProperties({ stockCode: target.stockCode, docId: null }) });
+    const creation = journal.reserveCreate!({ ...target, snapshot: request });
+    creation.complete({ pageId: native.provenance.textPageId, postPageSha256: sha(native.notionReadbackText) });
+    createSupplementPublicationJournal(root).assertReady(); expect(readdirSync(join(root, "supplement-publications"))).toHaveLength(2);
+  });
+  it.each(["request.json", "intent.json", "completed.json"])("create filesystem interruption at %s is sticky before another run", filename => {
+    const root = state(), journal = createSupplementPublicationJournal(root);
+    const target = { dbId: native.provenance.textPageId, stockCode: native.provenance.stockCode, nextDocId: native.provenance.docId };
+    const request = JSON.stringify({ parent: { database_id: target.dbId }, properties: buildSupplementProperties({ stockCode: target.stockCode, docId: target.nextDocId }) });
+    if (filename === "completed.json") {
+      const exchange = journal.reserveCreate!({ ...target, snapshot: request }); failures.filename = filename;
+      expect(() => exchange.complete({ pageId: native.provenance.textPageId, postPageSha256: sha(native.notionReadbackText) })).toThrow();
+    } else { failures.filename = filename; expect(() => journal.reserveCreate!({ ...target, snapshot: request })).toThrow(); }
+    failures.filename = ""; const network = vi.fn(); vi.stubGlobal("fetch", network);
+    expect(() => createSupplementPublicationJournal(root)).toThrow(); expect(network).not.toHaveBeenCalled();
+  });
   it("retains exact PRE/intent and verified closure with both identities and hashes", () => {
     const root = state(), journal = createSupplementPublicationJournal(root), exchange = journal.reserve(input), path = directory(root);
     expect(readFileSync(join(path, "pre.json"), "utf8")).toBe(snapshot);

@@ -653,36 +653,10 @@ describe("stock-supplement (Notion 通信)", () => {
   });
 
   describe("createSupplementRow / updateSupplementRow", () => {
-    it("小さい入力は POST 1 回だけで作成する", async () => {
-      route("POST", "/v1/pages", [{ id: "row-new" }]);
+    it("createSupplementRow: durable sink無しは最初のPOST前に停止する", async () => {
       const { createSupplementRow } = await load();
-      const id = await createSupplementRow("db-1", { companyName: "テスト" });
-      expect(id).toBe("row-new");
-      expect(calls).toHaveLength(1);
-    });
-
-    it("根拠 (evidence) は children として同時に作る", async () => {
-      route("POST", "/v1/pages", [{ id: "row-new" }]);
-      const { createSupplementRow } = await load();
-      const evidence = { object: "block", type: "heading_3" };
-      await createSupplementRow("db-1", { companyName: "テスト" }, evidence);
-      const body = JSON.parse(String(calls[0]?.init.body)) as { children?: unknown[] };
-      expect(body.children).toEqual([evidence]);
-    });
-
-    it("大きい入力は複数チャンクに分けて PATCH で追い足す", async () => {
-      route("POST", "/v1/pages", [{ id: "row-big" }]);
-      route("PATCH", "/v1/pages/row-big", [{}, {}, {}, {}, {}, {}, {}, {}]);
-      const { createSupplementRow } = await load();
-      const texts: Record<string, string> = {};
-      // 8 列 × 150,000字 (75 rich_text 要素/列。上限100以内) ≈ 1.2MB。
-      // 既定 maxBytes=400,000 では確実に複数チャンクへ分かれる。
-      for (let i = 0; i < 8; i++) texts[`col${i}`] = "x".repeat(150_000);
-      const id = await createSupplementRow("db-1", { texts });
-      expect(id).toBe("row-big");
-      expect(calls.length).toBeGreaterThan(1);
-      expect(calls[0]?.init.method).toBe("POST");
-      expect(calls.slice(1).every((c) => c.init.method === "PATCH")).toBe(true);
+      await expect(Reflect.apply(createSupplementRow, undefined, ["db-1", { companyName: "トヨタ自動車" }])).rejects.toThrow("durable journal");
+      expect(calls).toHaveLength(0);
     });
 
     it("updateSupplementRow: フィールドが無ければ PATCH しない", async () => {

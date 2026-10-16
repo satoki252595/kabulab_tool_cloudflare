@@ -88,3 +88,12 @@ Cloudflareはmain `c1ad90e2`（#430）の通常buildで23:44:59 JSTのdeployとv
 ローカルはプロジェクトのNixを使い、通常本番と同じソース・依存lock・入力契約を検証する。本番側にNixを必須とせず、必要なライブラリを配置する。OS/GPUバイナリまで同一とは扱わない。Mac停止・未ログイン・スリープ中の定時完了は保証しない。10/15の遅延起動とR2 DNS失敗、当時の未配備は[Mac運用記録](005-biztag-local-runtime.md)と受入台帳の過去観測として保持する。
 
 本番の成功は定時起動だけでなく、対象集合・原本・保存結果・欠測理由・完了receiptで確認する。原本未取得、429、期限切れ、同定不能、結果不明をLLMや別値で埋めず、理由と残件数を残す。単発の復旧成功を全量・通常定時の成功へ広げない。
+
+
+## 事業タグの新規作成と版更新の結果不明
+
+通常Node/Macの`runBiztag`は、既存行に加えて新規補足行も同じcanonical stateのpublication journalで保護する。新規作成はpage IDがまだ無いため、DB・銘柄・次文書・全プロパティ/根拠の実入力を最初のPOST前に保存する。POST/残りのPATCHはsingle attemptとし、同DB・全文プロパティ・全根拠childrenを読戻した後だけ閉鎖する。旧replace記録と共存し、不完全/不正記録は次runのmetadata/model/HTTP前に停止する。
+
+`version_bump`は既存`writeRowWithEvidence`を使い、最新文書guard・物理PRE・旧値CAS・全POST・永続journalを維持する。別文書への付替えはHOLD。現行normal plannerはこのkindを生成せず、既存の機械同期/意味判定の対象数は増えない。通常createにはページ/childrenの最小2 GETと長文property/根拠階層分の追加GETがある。追加取得元アクセス・モデル・依存・DDLは0だが、全量時間の改善や次定時成功は未受入である。
+
+未閉鎖publicationを実PRE/target/source/fullPOST/根拠と照合する正規read-only CLIはまだ無い。journalからcompletionを自動生成せず、原記録を保持してoperator調査で止める。手動`master-dedup-3681-7129.ts`の`updateSupplementRow`は独自の保存snapshot/guardを使う旧経路で、このjournalへ移行していない。汎用update APIは今回変更しない。[回帰と未受入の範囲](test-logs/biztag-create-publication-20261017.md)を参照。
