@@ -38,7 +38,7 @@ GitHubの[workflow dispatch仕様](https://docs.github.com/en/rest/actions/workf
 
 通常CLIの`pnpm biztag run --mechanical-only --codes=<対象コード列> --limit=<件数> --budget-min=<分>`は、本番定期と同じ計画・本文同期・キーワード照合・共有publisherを使う。新規初回や実入力変更による再判定は明示HOLDとし、モデルの起動・原応答journal・較正の読込へ進めない。機械照合不能を別モデルで補わない。
 
-通常Macの既存行publisherはcanonical `.env` と同じwriter stateへfull PRE・intent・完了receiptをimmutableに保存する。全POSTと旧根拠退役の確認前に止まった処理は、次runが別PRE/別文書でもmetadata・モデル・HTTPより前に停止する。NodeだけがFS sinkを供給し、共有publisherにNode FS依存と追加API要求を入れない。既存NotionのPRE原本保管は維持し、初回createと語彙版だけのupdateは別の未保護残件として[検証記録](test-logs/biztag-sticky-publication-20261017.md)へ残す。
+通常Macの既存行publisherはcanonical `.env` と同じwriter stateへfull PRE・intent・完了receiptをimmutableに保存する。全POSTと旧根拠退役の確認前に止まった処理は、次runが別PRE/別文書でもmetadata・モデル・HTTPより前に停止する。NodeだけがFS sinkを供給し、共有publisherにNode FS依存と追加API要求を入れない。既存NotionのPRE原本保管を維持する。初回createと語彙版だけのupdateも#464で同じjournal/共有publisherへ接続したが、進行中処理のMac runtimeはe4cを保持し、この追加経路のMac配備は終端後に別途受け入れる。[既存行](test-logs/biztag-sticky-publication-20261017.md)と[追加経路](test-logs/biztag-create-publication-20261017.md)の検証を分ける。
 
 同じ文書の保存本文pointer更新は、共通processorで既知4節の実SHAを先に比較する。同値なら旧判定receiptを変えず、通常publisherで本文だけ同期する。実差はprocessorのprefilter・較正・journal・モデルより前に機械modeの資格HOLDとなる。通常CLI全体の既存metadata/語彙/schema読取が0になるという意味ではない。未知・壊れた旧入力を同値へ昇格しない。
 
@@ -72,6 +72,12 @@ stageは10/17 04:16:47 JSTのMac runtime `65579f60`へ配備し、固定33社sco
 この変更に追加の依存、取得元アクセス、有料モデルAPIはない。未対応分があるときのモデル常駐は従来どおり最大1個で、全体の速度改善は実運用で測る。ローカルの電力・時間を無料とは呼ばない。
 
 ## 配備と完了の判定
+
+10/17にユーザーがWorkers Paid/D1有料枠の利用を確認した。[D1公式料金](https://developers.cloudflare.com/d1/platform/pricing/)（同日確認）の読取包含枠は月250億行、超過は百万行あたり$0.001。1.3億行は包含枠の0.52%で、他の利用を含む月間合計が枠内なら追加読取料はない。包含枠を使い切った仮定でもこの読取分は$0.13。書込・保存容量・Workers/R2等は別で、月間使用済み量は未確認。旧契約API403をPaid未確認のまま扱わず、既存の有限実行cap・索引利用・実rows_read記録は維持する。
+
+10/17 07:32:04 JSTのCloudflare配信はmain `7d938e38`、version `30a5f745-0de7-4d77-9779-5c21e5716d76`。受注は通常ingest/missingと同じ保存変換を共有する保存原本CLIを追加した。保有の不該当も通常CLI/共有publisherへ接続した。Mac e4c・保有b8等の稼働中sourceは固定し、Worker配備をMac配備や残cohortの適用完了と混同しない。通信の結果不明は再送せず保存済みintent/全値との照合へ進める。
+
+10/17 07:10:15 JSTのCloudflare mainは`faaf65ca`、version `752bb081-6088-4ccd-8774-745c73c3dea4`。#463/#466の明示的な分割前期末株数基準、#464のcreate/version journal、#465のYahoo報告日診断を通常sourceへ反映した。進行中の本文・保有・海外・VWAPはそれぞれ受入済みsource/lock/入力を固定し、途中でruntimeや.envを切り替えない。Mac e4cとWorker mainの版差・次定時未受入を[台帳](test-logs/recovery-acceptance-20261016.md)へ記録する。源欠測・unknownのHOLDや価格未資格を、配備成功で解除しない。
 
 10/17 06:02:20 JSTにMacをmain `e4c1a7e3`へ更新し、#461の既存補足publisherの未閉鎖intent停止を定期入口にも配備した。旧f3の1,560 source・旧.envと104社の保存観測source/依存を保全し、同calendar/kernel writer/state/依存lockを維持した。Cloudflareは同mainを06:01:27/version `4224e38d-a64e-47e5-8adc-7890de9322b9`へ通常配信。監視accepted revisionの更新ACKと次の20/21時の実receiptは別に受け入れる。本文2,417・意味再判定104・原本HOLD21と価格/権利等の未完は[受入台帳](test-logs/recovery-acceptance-20261016.md)で追跡する。
 
