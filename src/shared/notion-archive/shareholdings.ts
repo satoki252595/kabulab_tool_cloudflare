@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { AssertionError } from "node:assert";
 import { createHash } from "node:crypto";
-import { parseShareholdingsData, verifySavedHoldingsSource, verifyHoldingsSourceEntries, type Shareholding, type ShareholdingsSource, type ShareholdingsExtraction } from "../../../services/yuho-quant/src/services/edinet/shareholdings.js";
+import { parseShareholdingsData, verifySavedHoldingsSource, verifyHoldingsSourceEntries, type Shareholding, type ShareholdingsSource, type ShareholdingsExtraction, type ShareholdingsNotApplicable } from "../../../services/yuho-quant/src/services/edinet/shareholdings.js";
 import { observeIssuedShares, unobservedIssuedShares, type IssuedShareObservation } from "../../../services/yuho-quant/src/services/edinet/issued-shares.js";
 import type { OfficialIssuerNames } from "../../../services/yuho-quant/src/services/edinet/shareholdings-issuer-names.js";
 import { HoldingPriceIssuerMismatch, HoldingsPriceIndex, parseHoldingsCodeList, qualifyHoldingValuation, type ArchivedSource, type HoldingValuation } from "../../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js";
@@ -346,7 +346,8 @@ export type HoldingPriceSourceLoader = (holdings: readonly Shareholding[], budge
 
 export type PublishHoldingsResult = (
   | { status: "published"; parsed: number; created: number; updated: number; unchanged: number; unavailable?: number; pending?: boolean }
-  | { status: "held"; parsed: number; reason: string; usedRows?: number; pending?: boolean }) & { issuedSharesObservation?: IssuedShareObservation };
+  | { status: "held"; parsed: number; reason: string; usedRows?: number; pending?: boolean;
+      reasonCode?: "explicit_not_applicable"; notApplicable?: ShareholdingsNotApplicable }) & { issuedSharesObservation?: IssuedShareObservation };
 
 /**
  * recordEdinetZip(type1)の物理全文照合を終えた同一bytesだけを渡す。
@@ -364,10 +365,13 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
   assert.ok(args.ownerName.trim().length > 0);
   if (args.budget) assert.ok(Number.isSafeInteger(args.budget.remainingRows) && args.budget.remainingRows >= 0 && args.budget.remainingRows <= 100);
   const maxRows = Math.min(100, args.budget ? Math.min(args.maxRows, args.budget.remainingRows) : args.maxRows);
-  const hold = async (reason: string, parsed: number, retry: boolean, pricePreflight = false): Promise<PublishHoldingsResult> => {
+  const hold = async (reason: string, parsed: number, retry: boolean, pricePreflight = false,
+    notApplicable?: ShareholdingsNotApplicable): Promise<PublishHoldingsResult> => {
+    assert.ok(notApplicable === undefined || !pricePhase, "既存価格queueを明示不該当へ付け替えません");
     if (pricePhase) await recordRecoveryInfo(args.archivePageId, pricePhase.info, retry ? "再開待ち" : "要確認", reason, true, undefined, undefined, pricePreflight);
-    else await recordRecoveryMarker(args, retry ? "再開待ち" : "要確認", reason, parsed, undefined, diagnostic?.observation);
-    return { status: "held", parsed, reason, ...(retry ? { pending: true } : {}) };
+    else await recordRecoveryMarker(args, retry ? "再開待ち" : "要確認", reason, parsed, undefined, diagnostic?.observation, notApplicable);
+    return { status: "held", parsed, reason, ...(retry ? { pending: true } : {}),
+      ...(notApplicable === undefined ? {} : { reasonCode: "explicit_not_applicable", notApplicable }) };
   };
   if (args.zip.length > HOLDINGS_ZIP_MAX_BYTES) return hold("1原本20MiBの解析予算を超えています", 0, false);
   const parsed = parseShareholdingsData(args.zip, args.source, diagnostic === undefined ? undefined : { qualifySource: entries => {
@@ -383,6 +387,13 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
     const identity = diagnostic.observation.sourceQualification;
     return identity.status === "verified" ? { status: "verified" } : { status: "held", reason: identity.reason === null ? "提出者原本資格は未確認です" : identity.reason };
   } });
+  // 明示不該当は未対応表と区別するが、空配列成功や価格queueへ変換しない。
+  if (parsed.status === "explicit_not_applicable") {
+    assert.equal(parsed.holderScope, "filer_only"); assert.equal(parsed.holdings.length, 0);
+    assert.ok(parsed.notApplicable && parsed.reason);
+    assert.equal(parsed.notApplicable.zipSha256, createHash("sha256").update(args.zip).digest("hex"));
+    return hold(parsed.reason, 0, false, false, parsed.notApplicable);
+  }
   if (parsed.status !== "ok" || parsed.holderScope !== "filer_only") {
     return hold(parsed.reason ?? "提出会社の保有主体資格が未確認です", 0, false);
   }
@@ -803,17 +814,20 @@ interface RecoveryInfo {
   source: ShareholdingsSource; ownerName: string; zipBytes: number; zipSha256: string; parsed: number;
   factsSha256?: string;
   issuedSharesObservation?: IssuedShareObservation;
+  notApplicable?: ShareholdingsNotApplicable;
   sourceQueueVersion?: 1; sourceNextHoldingOffset?: number;
   /** 未確定時もPREのexact key/SHAを保持し、同じ旧行PATCHを自動再送しない。 */
   legacyMigration?: { offset: number; rowIds: string[]; pre: MigrationFile; post?: MigrationFile };
   priceQueueVersion?: 1; nextHoldingOffset?: number; unavailableRows?: number; snapshotId?: string;
 }
 
-async function recordRecoveryMarker(args: PublishHoldingsArgs, status: string, reason: string, parsed: number, factsSha256?: string, issuedSharesObservation?: IssuedShareObservation): Promise<void> {
+async function recordRecoveryMarker(args: PublishHoldingsArgs, status: string, reason: string, parsed: number, factsSha256?: string, issuedSharesObservation?: IssuedShareObservation,
+  notApplicable?: ShareholdingsNotApplicable): Promise<void> {
   const info: RecoveryInfo = { source: args.source, ownerName: args.ownerName, zipBytes: args.zip.length,
     zipSha256: createHash("sha256").update(args.zip).digest("hex"), parsed };
   if (factsSha256 !== undefined) info.factsSha256 = factsSha256;
   if (issuedSharesObservation !== undefined) info.issuedSharesObservation = issuedSharesObservation;
+  if (notApplicable !== undefined) info.notApplicable = notApplicable;
   await recordRecoveryInfo(args.archivePageId, info, status, reason, false);
 }
 
@@ -855,7 +869,15 @@ async function recordRecoveryInfo(archivePageId: string, info: RecoveryInfo, sta
     const saved = JSON.parse(richValue(before.properties["保有明細再開情報"])) as RecoveryInfo;
     assert.notEqual(before.properties["保有明細状態"]?.select?.name, "明細原本照合済", "確定sourceを解析保留で戻しません");
     for (const name of ["source", "ownerName", "zipBytes", "zipSha256"] as const) assert.deepEqual(saved[name], info[name]);
-    info = info.issuedSharesObservation === undefined ? saved : { ...saved, issuedSharesObservation: info.issuedSharesObservation }; // cursor/factsを消さず同ZIPの今回診断だけ追記。
+    if (info.notApplicable !== undefined) {
+      assert.equal(saved.parsed, 0, "旧非0明細を明示不該当へ付け替えません");
+      assert.equal(saved.sourceQueueVersion, undefined, "旧source cursorを明示不該当へ付け替えません");
+      assert.equal(saved.factsSha256, undefined, "旧factsを明示不該当へ付け替えません");
+      if (saved.notApplicable !== undefined) assert.deepEqual(saved.notApplicable, info.notApplicable);
+    }
+    // cursor/factsと未知の旧項目を消さず、同ZIPの今回診断だけ追記する。
+    info = { ...saved, ...(info.issuedSharesObservation === undefined ? {} : { issuedSharesObservation: info.issuedSharesObservation }),
+      ...(info.notApplicable === undefined ? {} : { notApplicable: info.notApplicable }) };
   }
   if (sourceExpected) {
     assert.equal(price, false);

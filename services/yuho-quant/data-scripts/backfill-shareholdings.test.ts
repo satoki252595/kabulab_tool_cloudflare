@@ -103,6 +103,20 @@ describe("保有明細backfillのlegacy適用境界", () => {
     fixture(status, rows); await applyLatestHoldings(dir, maxRows);
     expect(readSavedHoldingsZip).not.toHaveBeenCalled();expect(recordEdinetZip).not.toHaveBeenCalled();expect(publishVerifiedShareholdings).not.toHaveBeenCalled();
   });
+  it("明示不該当のtyped根拠をprepareへ保持し、applyでlegacy0件の移行や価格処理へ渡さない", async () => {
+    const notApplicable = { version: 1 as const, basis: "whole_section_not_applicable" as const, zipSha256: sha, filename: "structural.htm",
+      memberSha256: sha, blockHtmlSha256: sha, elementNamespace: "http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor",
+      inlineNamespace: "http://www.xbrl.org/2008/inlineXBRL", context: { contextRef: "FilingDateInstant", entity: `${source.edinetCode}-000`, instantDate: "2026-06-30" }, statement: "原本資格は別suite。ここはtyped結果の伝播だけ" };
+    vi.mocked(parseShareholdingsData).mockReturnValue({ status: "explicit_not_applicable", reason: "原本明示不該当", source,
+      filename: notApplicable.filename, elementId: "jpcrp_cor:ShareholdingsTextBlock", contextRef: "FilingDateInstant", holderScope: "filer_only", holdings: [], notApplicable });
+    await prepareLatestHoldings({ limit: 1, afterCode: null, dir, valuationPath: null });
+    const plan = JSON.parse(readFileSync(join(dir, "plan.json"), "utf8"));
+    expect(plan.items[0]).toMatchObject({ status: "held", parsedRows: 0, notApplicable, sourceFetchedAt: "2026-06-30T00:00:00Z" });
+    expect(readFileSync(plan.items[0].zipPath)).toEqual(bytes);
+    vi.mocked(readSavedHoldingsZip).mockClear(); await applyLatestHoldings(dir, 100);
+    expect(readSavedHoldingsZip).not.toHaveBeenCalled(); expect(recordEdinetZip).not.toHaveBeenCalled();
+    expect(publishVerifiedShareholdings).not.toHaveBeenCalled(); expect(qualifyHoldingValuation).not.toHaveBeenCalled();
+  });
   it("資格成立の非0件だけ同bytesを現行keyへ保存し、そのpageIdで公開する", async () => {
     fixture();await applyLatestHoldings(dir, 100);
     expect(recordEdinetZip).toHaveBeenCalledWith(expect.objectContaining({ docID: source.docId, type: 1, zip: bytes, force: false, fetchedAt: "2026-06-30T00:00:00Z" }));

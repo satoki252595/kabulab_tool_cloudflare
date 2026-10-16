@@ -1,0 +1,86 @@
+{
+  "description": "Three complete original PublicDoc members per saved real filing (instance, header, holdings HTML). This gzip fixture is a selected-members container, not the original physical EDINET ZIP; original ZIP SHA/bytes and each full member SHA are recorded separately.",
+  "sourcePlanSha256": "668c272b88866232d8df3fafaa97bb3bae77f0b069307bce458281c31bec5167",
+  "fixtureSha256": "e41b47118a8c54a52b770026916d0b88e1d9af99ca84ef485d0cbc8394df22a9",
+  "fixtureBytes": 768117,
+  "members": [
+    {
+      "source": {
+        "docId": "S100Z3TN",
+        "stockCode": "141A",
+        "edinetCode": "E38525",
+        "fiscalYearEnd": "2026-06-30"
+      },
+      "sourceFetchedAt": "2026-09-24T16:00:00.000+00:00",
+      "originalZipSha256": "02eba081905383ec4bcc9c88e854583e01104829dfe3b774b3c56305de123eaa",
+      "originalZipBytes": 1284171,
+      "members": [
+        {
+          "filename": "XBRL/PublicDoc/jpcrp030000-asr-001_E38525-000_2026-06-30_01_2026-09-24.xbrl",
+          "memberSha256": "c983486b010341f08d36a9b6e5829dd3b0817c9a81afdc98df8fe58acf3d3fe6"
+        },
+        {
+          "filename": "XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E38525-000_2026-06-30_01_2026-09-24_ixbrl.htm",
+          "memberSha256": "512afb1d1b7dc52e7b5f8c37e5e85c77e22cc908b67506fd935ebee7ccd3e83c"
+        },
+        {
+          "filename": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E38525-000_2026-06-30_01_2026-09-24_ixbrl.htm",
+          "memberSha256": "bede8d08f6da1ed8cfa59675399713aa08e9d45dd79119e363cbafbd8b22fc8a"
+        }
+      ],
+      "blockHtmlSha256": "dfe6a4b1a456e9d29e6b62d65eec9746ae7af49c10cff7e87c7736e8af344cf0"
+    },
+    {
+      "source": {
+        "docId": "S100YHUZ",
+        "stockCode": "142A",
+        "edinetCode": "E39367",
+        "fiscalYearEnd": "2026-03-31"
+      },
+      "sourceFetchedAt": "2026-06-23T15:41:00.000+00:00",
+      "originalZipSha256": "41706906146dee9bdccf9ee8f25228ceed2b9478dafe3be1960fc415ae7f1a06",
+      "originalZipBytes": 601092,
+      "members": [
+        {
+          "filename": "XBRL/PublicDoc/jpcrp030000-asr-001_E39367-000_2026-03-31_01_2026-06-23.xbrl",
+          "memberSha256": "5105646499e686dd4910a937e069bec20d2742d7b35a90f40e3c88c4c02cccc8"
+        },
+        {
+          "filename": "XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E39367-000_2026-03-31_01_2026-06-23_ixbrl.htm",
+          "memberSha256": "da87082e9debabaa054b8357ac1589c9a64cc48d00138a8ebb2b1b0f4ca5b181"
+        },
+        {
+          "filename": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E39367-000_2026-03-31_01_2026-06-23_ixbrl.htm",
+          "memberSha256": "800289d4c36fd95300e1632f5c094f2b8f237508ad28bd5d4944eb8ebb2e90f2"
+        }
+      ],
+      "blockHtmlSha256": "79df4cc29c75109489d0759b93a21995260f19486de000b4bde218cc62ed885b"
+    },
+    {
+      "source": {
+        "docId": "S100YHBL",
+        "stockCode": "143A",
+        "edinetCode": "E39406",
+        "fiscalYearEnd": "2026-03-31"
+      },
+      "sourceFetchedAt": "2026-06-23T14:05:00.000+00:00",
+      "originalZipSha256": "ccdea088cc1812d477073adf06cb25cdc0ffbc86a6ec6a581c071faffba4500d",
+      "originalZipBytes": 1155688,
+      "members": [
+        {
+          "filename": "XBRL/PublicDoc/jpcrp030000-asr-001_E39406-000_2026-03-31_01_2026-06-23.xbrl",
+          "memberSha256": "60cefd4febc5713117b9fd06d93f9ffd376ff76d282702f476a4c67f31e94e48"
+        },
+        {
+          "filename": "XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E39406-000_2026-03-31_01_2026-06-23_ixbrl.htm",
+          "memberSha256": "cbfbe1ddac103c7704a62266c613304a03e5cceb2519d604a6b1ec4e0c080b41"
+        },
+        {
+          "filename": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E39406-000_2026-03-31_01_2026-06-23_ixbrl.htm",
+          "memberSha256": "390abbc73a6c778657cf650925aa3f5997f05ae44818dc9eb6b4ff05588b1766"
+        }
+      ],
+      "blockHtmlSha256": "70e4749a27e59d470d86114255895f1f24d9a9006199cf47a866f61af2d0e171"
+    }
+  ]
+}
