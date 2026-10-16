@@ -145,7 +145,7 @@ describe("保有明細backfillのlegacy適用境界", () => {
     expect(receipt.result).toMatchObject({ status: "held", parsed: 0, reasonCode: "explicit_not_applicable", notApplicable: fixture.notApplicable });
     expect(existsSync(join(dir, `${fixture.source.stockCode}-${fixture.source.docId}.published.json`))).toBe(false);
     expect(qualifyHoldingValuation).not.toHaveBeenCalled(); expect(process.exitCode).toBe(1);
-  });
+  }, 15_000); // Complete saved ZIP parsing plus fsynced CLI receipts under parallel CI; no network.
   it("planだけに明示不該当を後付けしても原本再資格が失敗すればcustody/native前に停止", async () => {
     fixture("held", 0); const path = join(dir, "plan.json"), plan = JSON.parse(readFileSync(path, "utf8"));
     plan.items[0].notApplicable = { basis: "whole_section_not_applicable" }; writeFileSync(path, JSON.stringify(plan));
