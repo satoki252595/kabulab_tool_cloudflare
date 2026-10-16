@@ -149,6 +149,33 @@ it.each(["outside-snapshot", "annual-missing", "unusable", "old-document"])("新
   expect(model.client).not.toHaveBeenCalled(); expect(model.gate).not.toHaveBeenCalled(); expect(model.key).not.toHaveBeenCalled();
 });
 
+it("保存された8metadata列projectionと選定snapshotだけで資格/除外理由を再生できる", async () => {
+  model.latest.mockResolvedValue([structuredClone(fixture.latest[0])]);
+  await run();
+  const manifest = JSON.parse(gunzipSync(model.record.mock.calls[0][0].files[0].bytes).toString());
+  const { rows, snapshot, excluded } = manifest.eligibility;
+  expect(rows.map((r: { stockCode: string }) => r.stockCode)).toEqual([...options().codes].sort());
+  expect(rows.every((r: object) => Object.keys(r).sort().join(",") ===
+    ["stockCode", "companyName", "sector33", "docId", "periodEnd", "docType", "submittedAt", "tagStatus"].sort().join(","))).toBe(true);
+  // 独立replay。全文/補足DB/現在値を読まず、保存した選定入力だけを消費する。
+  const replay = rows.flatMap((r: { stockCode: string; companyName: string; sector33: string | null; docId: string | null;
+    periodEnd: string | null; docType: string | null; submittedAt: string | null; tagStatus: string | null }) => {
+    const l = (snapshot as LatestDoc[]).find(l => l.stockCode === r.stockCode);
+    if (l === undefined || l.doc === null) return [{ stockCode: r.stockCode, reason: "active/latest-document-missing" }];
+    const doc = l.doc;
+    const actual = [r.companyName, r.sector33, r.docId, r.periodEnd, r.docType, r.submittedAt === null ? null : Date.parse(r.submittedAt)];
+    const expected = [l.companyName, l.sector33, doc.docId, doc.periodEnd, doc.docTypeCode === "120" ? "有報" : "訂正有報", Date.parse(doc.submittedAt)];
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) return [{ stockCode: r.stockCode, reason: "identity-or-document-generation-mismatch" }];
+    if (typeof doc.notionDocPageId !== "string" || doc.notionDocPageId.length === 0 || doc.textParseStatus !== "ok") return [{ stockCode: r.stockCode, reason: "latest-annual-text-unusable" }];
+    return r.tagStatus === "判定済" ? [] : [{ stockCode: r.stockCode, reason: "tag-not-judged" }];
+  });
+  expect(replay).toEqual(excluded);
+  expect(rows.filter((r: { stockCode: string }) => !replay.some((e: { stockCode: string }) => e.stockCode === r.stockCode))
+    .map((r: { stockCode: string }) => r.stockCode)).toEqual(manifest.corpus.map((r: { stockCode: string }) => r.stockCode));
+  expect(replay).toEqual([{ stockCode: fixture.latest[1].stockCode, reason: "active/latest-document-missing" }]);
+  expect(model.client).not.toHaveBeenCalled();
+});
+
 it("選出BのAfter世代差は元候補/qidsを保持してA HOLD、別候補へ置換しない", async () => {
   const after = structuredClone(fixture.latest); after[1].doc!.notionDocPageId = fixture.dbId;
   model.latest.mockResolvedValueOnce(structuredClone(fixture.latest)).mockResolvedValueOnce(after);

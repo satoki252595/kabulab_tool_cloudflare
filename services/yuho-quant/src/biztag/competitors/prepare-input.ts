@@ -45,7 +45,10 @@ export function prepareCandidateInputs(rows: SupplementRow[], calibration: Compe
     if (reason !== null) { excluded.push({ stockCode: row.stockCode, reason }); return false; }
     return true;
   });
-  const eligibility = { policy: "active-equity-current-annual-v1" as const, snapshot, snapshotSha256: hash(snapshot),
+  const selectionRows = rows.map(({ stockCode, companyName, sector33, docId, periodEnd, docType, submittedAt, tagStatus }) =>
+    ({ stockCode, companyName, sector33, docId, periodEnd, docType, submittedAt, tagStatus }))
+    .sort((a,b) => a.stockCode.localeCompare(b.stockCode));
+  const eligibility = { policy: "active-equity-current-annual-v1" as const, rows: selectionRows, snapshot, snapshotSha256: hash(snapshot),
     excluded: excluded.sort((a,b) => a.stockCode.localeCompare(b.stockCode)) };
   const corpus: CompanyProfile[] = eligible.map(r => ({ stockCode: r.stockCode,
     companyName: r.companyName, pageId: r.pageId, sector33: r.sector33,

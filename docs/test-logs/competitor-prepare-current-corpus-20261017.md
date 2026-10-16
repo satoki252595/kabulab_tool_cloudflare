@@ -38,7 +38,9 @@ B13は1909/1948/2180/3480/3787/4800/7082/7183/7490/7709/7851/9508/9914。
 除外は理由付きで保存し、個別原因が不明な行を`inactive`と記載しない。
 
 この母集団には`active-equity-current-annual-v1`を明示し、選定時の全active/latest snapshotとSHA、
+消費した全補足行の8metadata列projection（コード・商号・業種・doc/FY・書類種別・提出日時・タグ状態）、
 除外理由、policy全体SHA、corpus SHAを既存manifest/gzip/input SHAへ束縛する。
+保存projectionとsnapshotだけで選定資格と除外理由集合を再生し、全文・現在値の追加読取なしに照合する。
 manifestの保管形式v1は維持するが、新policyを持つ新入力であり、旧確率を流用しない。
 較正済みK/重み/posting caps・モデル/しきい値の変更は0。
 母集団変更はIDFや順位を他社にも波及させるため、影響を候補に旧26を持つA27だけと保証しない。
@@ -63,7 +65,7 @@ fixtureは[既存の実2社/原本来歴](competitor-mechanical-prepare-20261017
 通常CLIのモデル/TypeSafe/API-key factoryを拒否する回帰、母集団外/annual欠測/本文未資格/旧文書、
 空候補HOLD、A自身の欠測、選出BのAfter driftとqids保持、空/重複snapshot STOP、無関係doc drift非停止、
 同入力skip物理確認、実manifest→stage ACKをNixで検証する。
-関連7 suites / 148 checks、TypeScript、対象lint、diff検査が成功した。
+関連7 suites / 149 checks、TypeScript、対象lint、diff検査が成功した。
 
 私有純監査は`tmp/feature-audit-20261017/biztag-remaining-classification-v1/audit.mts`
 （SHA `d602610453cdf9fcceed15f9255dcabc642a6b1b5a81a0e5d1638a3b9c519b90`）、
