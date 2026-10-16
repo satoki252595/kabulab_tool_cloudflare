@@ -1,0 +1,490 @@
+{
+  "provenance": {
+    "source": "saved D1 preimage; source text remains private",
+    "sourceSha256": "7ff595f9fdac5c32c8c14d0fed0f5b41d8d7d61e7059209baf367aeca9c01d18",
+    "qualificationProofSha256": "1768c081b5df13de1e452884b8cadafa015fb877bdb4d7c7fddcdd5c202b38a0",
+    "projection": "Only actual source hashes, issuer codes, recipients, ordinals and listed yen/notation; product labels and raw descriptions omitted. No inferred valuation or official date."
+  },
+  "groups": [
+    {
+      "code": "3148",
+      "taskId": "cc6eca8f1959780a",
+      "sourceSha256": "0389b1950d168a1418599fe00e9545df86b7ea29720464658939c020d6f088bf",
+      "rows": 1,
+      "recipients": [
+        {
+          "minShares": 3000,
+          "recordMonth": 5,
+          "recordDate": null
+        }
+      ],
+      "ast": {
+        "take": 1,
+        "options": [
+          {
+            "ordinal": 1,
+            "listedYen": 12000,
+            "notation": "相当"
+          },
+          {
+            "ordinal": 2,
+            "listedYen": 12000,
+            "notation": "相当"
+          }
+        ]
+      }
+    },
+    {
+      "code": "3148",
+      "taskId": "81801407069b902a",
+      "sourceSha256": "215a98f26d33fc3668192dbeff39bccc4760d1dde7465f6730224ff4ba238cb4",
+      "rows": 1,
+      "recipients": [
+        {
+          "minShares": 300,
+          "recordMonth": 5,
+          "recordDate": null
+        }
+      ],
+      "ast": {
+        "take": 1,
+        "options": [
+          {
+            "ordinal": 1,
+            "listedYen": 4000,
+            "notation": "相当"
+          },
+          {
+            "ordinal": 2,
+            "listedYen": 4000,
+            "notation": "相当"
+          }
+        ]
+      }
+    },
+    {
+      "code": "3148",
+      "taskId": "6305399c67165c48",
+      "sourceSha256": "2a17fa68b7ddf4c47ce2c2c003ea96396b4feedb4b22bf15702bd2496dde2da9",
+      "rows": 1,
+      "recipients": [
+        {
+          "minShares": 1500,
+          "recordMonth": 5,
+          "recordDate": null
+        }
+      ],
+      "ast": {
+        "take": 1,
+        "options": [
+          {
+            "ordinal": 1,
+            "listedYen": 8000,
+            "notation": "相当"
+          },
+          {
+            "ordinal": 2,
+            "listedYen": 8000,
+            "notation": "相当"
+          }
+        ]
+      }
+    },
+    {
+      "code": "7585",
+      "taskId": "2452fe750b62cad1",
+      "sourceSha256": "1d901c462f1876213a9952d3125af9ca125d4755eb50d808e48f1b2f46d9ee88",
+      "rows": 2,
+      "recipients": [
+        {
+          "minShares": 1000,
+          "recordMonth": 6,
+          "recordDate": null
+        },
+        {
+          "minShares": 1000,
+          "recordMonth": 12,
+          "recordDate": null
+        }
+      ],
+      "ast": {
+        "take": 1,
+        "options": [
+          {
+            "ordinal": 1,
+            "listedYen": 15000,
+            "notation": "相当"
+          },
+          {
+            "ordinal": 2,
+            "listedYen": 4000,
+            "notation": "相当"
+          }
+        ]
+      }
+    },
+    {
+      "code": "7585",
+      "taskId": "2b56fd16fd867fc9",
+      "sourceSha256": "99345cf9a7c644bf70b66b05ccec06f76fd68aa030a0b887ce11ba0fadef61f6",
+      "rows": 2,
+      "recipients": [
+        {
+          "minShares": 100,
+          "recordMonth": 6,
+          "recordDate": null
+        },
+        {
+          "minShares": 100,
+          "recordMonth": 12,
+          "recordDate": null
+        }
+      ],
+      "ast": {
+        "take": 1,
+        "options": [
+          {
+            "ordinal": 1,
+            "listedYen": 2000,
+            "notation": "相当"
+          },
+          {
+            "ordinal": 2,
+            "listedYen": 500,
+            "notation": "相当"
+          }
+        ]
+      }
+    },
+    {
+      "code": "7585",
+      "taskId": "a828c134359cb59e",
+      "sourceSha256": "7497c29e79a670fd9cd161363482bba52320d0f7bc77fb8f8e692ec48df5cb39",
+      "rows": 2,
+      "recipients": [
+        {
+          "minShares": 300,
+          "recordMonth": 6,
+          "recordDate": null
+        },
+        {
+          "minShares": 300,
+          "recordMonth": 12,
+          "recordDate": null
+        }
+      ],
+      "ast": {
+        "take": 1,
+        "options": [
+          {
+            "ordinal": 1,
+            "listedYen": 5000,
+            "notation": "相当"
+          },
+          {
+            "ordinal": 2,
+            "listedYen": 1000,
+            "notation": "相当"
+          }
+        ]
+      }
+    },
+    {
+      "code": "7585",
+      "taskId": "84df3cfadfe40b45",
+      "sourceSha256": "546bc3bd056684176a9834b70a6ba5a37b84e6a725150677094d8bc928ef8d3c",
+      "rows": 2,
+      "recipients": [
+        {
+          "minShares": 500,
+          "recordMonth": 6,
+          "recordDate": null
+        },
+        {
+          "minShares": 500,
+          "recordMonth": 12,
+          "recordDate": null
+        }
+      ],
+      "ast": {
+        "take": 1,
+        "options": [
+          {
+            "ordinal": 1,
+            "listedYen": 8000,
+            "notation": "相当"
+          },
+          {
+            "ordinal": 2,
+            "listedYen": 2000,
+            "notation": "相当"
+          }
+        ]
+      }
+    },
+    {
+      "code": "8278",
+      "taskId": "d45263f922520535",
+      "sourceSha256": "ca52b139b6c640a8c5e41f549551b1abca3c79785cf9fbe3b645cde98ed78427",
+      "rows": 1,
+      "recipients": [
+        {
+          "minShares": 400,
+          "recordMonth": 2,
+          "recordDate": null
+        }
+      ],
+      "ast": {
+        "take": 1,
+        "options": [
+          {
+            "ordinal": 1,
+            "listedYen": 10000,
+            "notation": "相当"
+          },
+          {
+            "ordinal": 2,
+            "listedYen": 3000,
+            "notation": "相当"
+          },
+          {
+            "ordinal": 3,
+            "listedYen": 3000,
+            "notation": "相当"
+          }
+        ]
+      }
+    },
+    {
+      "code": "8278",
+      "taskId": "3e2ccd1417444908",
+      "sourceSha256": "b04576984989e9a31a3ced385d97b18f15d34dadef7f858c93c2734323fb2a60",
+      "rows": 1,
+      "recipients": [
+        {
+          "minShares": 500,
+          "recordMonth": 2,
+          "recordDate": null
+        }
+      ],
+      "ast": {
+        "take": 1,
+        "options": [
+          {
+            "ordinal": 1,
+            "listedYen": 12000,
+            "notation": "相当"
+          },
+          {
+            "ordinal": 2,
+            "listedYen": 3000,
+            "notation": "相当"
+          },
+          {
+            "ordinal": 3,
+            "listedYen": 3000,
+            "notation": "相当"
+          }
+        ]
+      }
+    },
+    {
+      "code": "8278",
+      "taskId": "e6a435a1d50dc90b",
+      "sourceSha256": "468dcb3db749f8004043d6f30631462e12c8ab0d0c783271c081eb8bb36b3612",
+      "rows": 1,
+      "recipients": [
+        {
+          "minShares": 1000,
+          "recordMonth": 2,
+          "recordDate": null
+        }
+      ],
+      "ast": {
+        "take": 1,
+        "options": [
+          {
+            "ordinal": 1,
+            "listedYen": 20000,
+            "notation": "相当"
+          },
+          {
+            "ordinal": 2,
+            "listedYen": 10000,
+            "notation": "相当"
+          },
+          {
+            "ordinal": 3,
+            "listedYen": 10000,
+            "notation": "相当"
+          }
+        ]
+      }
+    },
+    {
+      "code": "8278",
+      "taskId": "41e929d011ce319e",
+      "sourceSha256": "ed94264a75146b8333438a01ae3c4fc03e66068b8e5834ddf5e0c277a81b62ce",
+      "rows": 1,
+      "recipients": [
+        {
+          "minShares": 2000,
+          "recordMonth": 2,
+          "recordDate": null
+        }
+      ],
+      "ast": {
+        "take": 1,
+        "options": [
+          {
+            "ordinal": 1,
+            "listedYen": 40000,
+            "notation": "相当"
+          },
+          {
+            "ordinal": 2,
+            "listedYen": 10000,
+            "notation": "相当"
+          },
+          {
+            "ordinal": 3,
+            "listedYen": 10000,
+            "notation": "相当"
+          }
+        ]
+      }
+    },
+    {
+      "code": "8278",
+      "taskId": "a77aa8aa1fb4032b",
+      "sourceSha256": "6b037bd7eb100623c516555979d4d6e789b12b12c83a9b71ed0a836fa245f5ae",
+      "rows": 1,
+      "recipients": [
+        {
+          "minShares": 100,
+          "recordMonth": 2,
+          "recordDate": null
+        }
+      ],
+      "ast": {
+        "take": 1,
+        "options": [
+          {
+            "ordinal": 1,
+            "listedYen": 6000,
+            "notation": "相当"
+          },
+          {
+            "ordinal": 2,
+            "listedYen": 3000,
+            "notation": "相当"
+          },
+          {
+            "ordinal": 3,
+            "listedYen": 3000,
+            "notation": "相当"
+          }
+        ]
+      }
+    },
+    {
+      "code": "8278",
+      "taskId": "af89623bdba0e6a0",
+      "sourceSha256": "fc0fc806f37cf22054126ad1c3eb647960c33fd46f89391356b53ee7a879479e",
+      "rows": 1,
+      "recipients": [
+        {
+          "minShares": 3000,
+          "recordMonth": 2,
+          "recordDate": null
+        }
+      ],
+      "ast": {
+        "take": 1,
+        "options": [
+          {
+            "ordinal": 1,
+            "listedYen": 60000,
+            "notation": "相当"
+          },
+          {
+            "ordinal": 2,
+            "listedYen": 10000,
+            "notation": "相当"
+          },
+          {
+            "ordinal": 3,
+            "listedYen": 10000,
+            "notation": "相当"
+          }
+        ]
+      }
+    },
+    {
+      "code": "8278",
+      "taskId": "9a68dc0933ef934f",
+      "sourceSha256": "34ec7a2d78f81cac035abb0cb090283cce85d44f5e6fef35a61065d570e3f5bc",
+      "rows": 1,
+      "recipients": [
+        {
+          "minShares": 300,
+          "recordMonth": 2,
+          "recordDate": null
+        }
+      ],
+      "ast": {
+        "take": 1,
+        "options": [
+          {
+            "ordinal": 1,
+            "listedYen": 8000,
+            "notation": "相当"
+          },
+          {
+            "ordinal": 2,
+            "listedYen": 3000,
+            "notation": "相当"
+          },
+          {
+            "ordinal": 3,
+            "listedYen": 3000,
+            "notation": "相当"
+          }
+        ]
+      }
+    },
+    {
+      "code": "8278",
+      "taskId": "264839f9622e9d28",
+      "sourceSha256": "8f3e461bbbb36439abd7dde5a2272a4126ca6e4dfe752a5f407d3c8f682f8938",
+      "rows": 1,
+      "recipients": [
+        {
+          "minShares": 4000,
+          "recordMonth": 2,
+          "recordDate": null
+        }
+      ],
+      "ast": {
+        "take": 1,
+        "options": [
+          {
+            "ordinal": 1,
+            "listedYen": 80000,
+            "notation": "相当"
+          },
+          {
+            "ordinal": 2,
+            "listedYen": 10000,
+            "notation": "相当"
+          },
+          {
+            "ordinal": 3,
+            "listedYen": 10000,
+            "notation": "相当"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -874,7 +874,11 @@ export function renderBenefitFacts(facts: PublicBenefitFacts | null, amount: num
   const combination = { allowed: "併用可の記載あり（対象未確認）", not_allowed: "併用不可の記載あり（対象未確認）", unverified: "併用可否は未確認" }[facts.combination];
   const reasons = facts.valueStatus === "source_amount_qualified" && amount === null
     ? "掲載額の反映は未確認" : facts.valueReasons.map(reason => VALUE_REASON_LABELS[reason]).join("・");
+  const structure = facts.version === 2 && facts.conditionStructure.status === "literal_parsed"
+    ? `掲載一覧の${facts.conditionStructure.ast.options.length}選択肢から${facts.conditionStructure.ast.take}点を選択（選択肢の掲載額は評価額・合計額ではありません）`
+    : "構造は未解析です（記載がないと確認したものではありません）";
   return `<details><summary>適用条件・金額の根拠・出典</summary>
+    <p>${termTip("選択の構造", "掲載文に一覧から選ぶ点数が明記され、全文を解析できた場合だけ表示します。会社の公式確認や、各選択肢の金額を合算できることを示しません。保有期間別・併用の構造は未解析です。")}: ${h(structure)}</p>
     <p>${termTip("期間・保有の記載", "掲載中の期間や保有条件の表記です。預金などの利用期間と、株を持ち続ける期間は異なります。対象は掲載元で確認してください。")}: ${h(holding)}</p>
     <p>選択: ${facts.choice ? "選択に関する記載あり（選択肢を合算しないでください）" : "掲載に記載なし"} / 抽選: ${facts.lottery ? "記載あり（対象は掲載元で確認）" : "掲載に記載なし"} / 申込・応募: ${facts.application ? "記載あり（必要性・対象は掲載元で確認）" : "掲載に記載なし"}</p>
     <p>${termTip("併用", "何を組み合わせられるかに関する条件です。券の利用時の併用と、複数の優待を同時に受け取ることは異なります。対象は掲載元で確認してください。")}: ${h(combination)}。銘柄全体の合計額は未確認です。</p>

@@ -29,6 +29,7 @@ import {
 } from "../../../src/shared/semif/client.js";
 import { semifEnv } from "../../../src/shared/semif/env.js";
 import { z } from "../../../src/shared/zod-mini.js";
+import { parseBenefitChoiceStructure } from "./choice-structure.js";
 import { benefitKey } from "./benefit-key.js";
 import { loadBenefitRows, openOtakaraD1 } from "./benefit-rows.js";
 import { evaluateCompanyValue } from "./public-facts.js";
@@ -119,10 +120,13 @@ export function companyValue(task: SummaryTask): {
   return evaluateCompanyValue(task.description, context);
 }
 
-export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-v1";
+export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-and-one-of-v2";
 
-/** 全文が単純な種類＋額面の場合だけ定型化する。未対応の注記・見出し・条件を削らない。 */
+/** 対応する種類＋額面か全文1点選択だけを定型化する。未対応の注記・見出し・条件を削らない。 */
 export function compileSimpleSummary(task: SummaryTask): SummaryResult | null {
+  const choice = parseBenefitChoiceStructure(task.description);
+  if (choice.status === "literal_parsed") return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion,
+    shortSummary: "優待を1点選択", estimatedValue: null });
   const source = splitHeadedDescription(task.description);
   if (source.malformed) return null;
   const grammar = /^(QUOカードPay|QUOカード|クオカード|図書カードNEXT|図書カード|商品券|ギフトカード|自社商品|カタログギフト)[ \t]*(?:([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)円(分|相当))(?:を贈呈|贈呈)?[。]?$/u;

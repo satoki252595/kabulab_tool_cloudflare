@@ -42,6 +42,22 @@ describe("内部面の優待時期", () => {
     expect(body.meta.licenses).toEqual(["personal-only"]);
   });
 
+  it("v2選択構造を内部面で再読し、旧v1と同じく合計不可・原文なしを保持する", async () => {
+    // 実3issuer保存投影。原文・商品ラベルは取り込まない。
+    const saved = (await import("../../otakara-yutai/src/tests/fixtures/choice-list-saved15.json")).default.groups[0];
+    if (saved === undefined) throw new Error("saved choice projection missing");
+    const facts = { ...yutaiFacts, version: 2, sourceGroup: saved.taskId, source: { ...yutaiFacts.source, listingUrl: `https://minkabu.jp/stock/${saved.code}/yutai`, fetchedAt: null }, holding: false, holdingPeriods: [], lottery: false, application: false,
+      choice: true, combination: "unverified", qualifiedAmount: null, valueStatus: "unresolved", valueReasons: ["choice"],
+      conditionStructure: { status: "literal_parsed", rule: "one-of-list-v1", sourceSha256: saved.sourceSha256, ast: saved.ast } };
+    const response = await app.request(`/v1/yutai/${saved.code}`, AUTH, env({ DB: stubD1(() => [
+      { genre_id: 1, min_shares: 100, record_month: 3, record_date: null, public_facts: JSON.stringify(facts) },
+    ]) }));
+    expect(response.status).toBe(200);
+    const body = await response.json() as { data: { public_facts: unknown; can_aggregate: boolean }[] };
+    expect(body.data[0]?.public_facts).toEqual(facts);
+    expect(body.data[0]?.can_aggregate).toBe(false);
+    expect(JSON.stringify(body)).not.toContain("description");
+  });
   it("実月・随時・単発日を区別し、内部0を暦月として返さない", async () => {
     const rows = [
       { genre_id: 1, min_shares: 100, record_month: 3, record_date: null, public_facts: null },
