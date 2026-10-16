@@ -54,6 +54,10 @@ on:
         description: "sector-turnover の as-of 日 (YYYY-MM-DD。空なら当日 UTC)"
         type: string
         default: ""
+      scheduled_date:
+        description: "CF独立起動の予定UTC日。実23:40期限と両summary照合専用"
+        type: string
+        default: ""
   workflow_call:
     inputs:
       trade_date:
@@ -106,32 +110,35 @@ permissions:
   contents: read
   issues: write # 失敗時に Issue を立てるため
 
+env:
+  NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+  NOTION_ARCHIVE_PAGE_ID: ${{ secrets.NOTION_ARCHIVE_PAGE_ID }}
+  NOTION_STOCK_INFO_PAGE_ID: ${{ secrets.NOTION_STOCK_INFO_PAGE_ID }}
+  WORKER_BASE_URL: ${{ secrets.WORKER_BASE_URL }}
+  CRON_SECRET: ${{ secrets.CRON_SECRET }}
+  YAHOO_PROXY_BASE: ${{ secrets.YAHOO_PROXY_BASE }}
+  COINGECKO_DEMO_API_KEY: ${{ secrets.COINGECKO_DEMO_API_KEY }}
+  # jpx-margin-sectorのみが使う既存credentials。他の取得元の必須にはしない。
+  # 選択時の欠落は既存の型付きアクセサが停止する。
+  R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+  R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  R2_BUCKET: ${{ secrets.R2_BUCKET }}
+  CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+  D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+  SOURCE_SELECTION: ${{ inputs.only }}
+  DRY_RUN: ${{ inputs.dry_run }}
+  TRADE_DATE: ${{ inputs.trade_date }}
+  SCHEDULED_DATE: ${{ inputs.scheduled_date }}
+
 jobs:
-  ingest:
-    # producerだけが保持し、stock-syncのreusable moneyflow呼出し前に解放する。
-    concurrency:
-      group: yahoo-source
-      cancel-in-progress: false
-      queue: max # pending同士の後着cancelを防ぐ。Yahoo取得は引き続き1 jobずつ。
+  ingest-non-yahoo:
+    # Yahooを呼ばない27sourceは、株式/VWAPの全量jobを待たない。
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-      NOTION_ARCHIVE_PAGE_ID: ${{ secrets.NOTION_ARCHIVE_PAGE_ID }}
-      NOTION_STOCK_INFO_PAGE_ID: ${{ secrets.NOTION_STOCK_INFO_PAGE_ID }}
-      WORKER_BASE_URL: ${{ secrets.WORKER_BASE_URL }}
-      CRON_SECRET: ${{ secrets.CRON_SECRET }}
-      YAHOO_PROXY_BASE: ${{ secrets.YAHOO_PROXY_BASE }}
-      COINGECKO_DEMO_API_KEY: ${{ secrets.COINGECKO_DEMO_API_KEY }}
-      # jpx-margin-sectorのみが使う既存credentials。他の取得元の必須にはしない。
-      # 選択時の欠落は既存の型付きアクセサが停止する。
-      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-      R2_BUCKET: ${{ secrets.R2_BUCKET }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+      NOTION_MAX_RPS: "0.7" # Yahoo専有側2.0＋このjob0.7＋背景予約0.3<=3。
     steps:
       - uses: actions/checkout@v4
 
@@ -144,20 +151,75 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: moneyflow ingest
+      - name: moneyflow ingest (non-yahoo)
         run: |
-          ARGS=""
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            ARGS="$ARGS --dry-run"
-          fi
-          if [ -n "${{ inputs.only }}" ]; then
-            ARGS="$ARGS --only=${{ inputs.only }}"
-          fi
-          if [ -n "${{ inputs.trade_date }}" ]; then
-            ARGS="$ARGS --as-of=${{ inputs.trade_date }}"
-          fi
-          pnpm ingest:moneyflow -- $ARGS
+          args=(--lane=non-yahoo --summary=.moneyflow-summaries/non-yahoo.json)
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          if [ -n "$SOURCE_SELECTION" ]; then args+=("--only=$SOURCE_SELECTION"); fi
+          if [ -n "$TRADE_DATE" ]; then args+=("--as-of=$TRADE_DATE"); fi
+          if [ -n "$SCHEDULED_DATE" ]; then args+=("--scheduled-date=$SCHEDULED_DATE"); fi
+          pnpm ingest:moneyflow -- "${args[@]}"
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: moneyflow-non-yahoo-${{ github.run_attempt }}
+          path: .moneyflow-summaries/non-yahoo.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: 失敗したら Issue を立てる
+        if: failure()
+        uses: ./.github/actions/notify-failure
+        with:
+          title: "[ジョブ失敗] ${{ github.workflow }}"
+          summary: "${{ github.workflow }} が失敗しました。"
+
+  ingest-yahoo:
+    needs: ingest-non-yahoo
+    # sector-turnover/非Yahoo subsetだけの呼出しはYahoo排他を取得しない。
+    concurrency:
+      group: ${{ (inputs.only == '' || inputs.only == 'independent' || contains(inputs.only, 'global-indices')) && 'yahoo-source' || 'moneyflow-non-yahoo-join' }}
+      cancel-in-progress: false
+      queue: max
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      NOTION_MAX_RPS: "2.0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          name: moneyflow-non-yahoo-${{ github.run_attempt }}
+          path: .moneyflow-summaries
+      - name: moneyflow ingest (yahoo)
+        run: |
+          args=(--lane=yahoo --summary=.moneyflow-summaries/yahoo.json)
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          if [ -n "$SOURCE_SELECTION" ]; then args+=("--only=$SOURCE_SELECTION"); fi
+          if [ -n "$TRADE_DATE" ]; then args+=("--as-of=$TRADE_DATE"); fi
+          if [ -n "$SCHEDULED_DATE" ]; then args+=("--scheduled-date=$SCHEDULED_DATE"); fi
+          pnpm ingest:moneyflow -- "${args[@]}"
+      - name: moneyflow source join
+        run: |
+          args=(--dir=.moneyflow-summaries)
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          if [ -n "$SOURCE_SELECTION" ]; then args+=("--only=$SOURCE_SELECTION"); fi
+          if [ -n "$SCHEDULED_DATE" ]; then args+=("--scheduled-date=$SCHEDULED_DATE"); fi
+          pnpm exec tsx scripts/moneyflow/join-summaries.ts "${args[@]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: moneyflow-joined-${{ github.run_attempt }}
+          path: .moneyflow-summaries/*.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
       - name: 失敗したら Issue を立てる
         if: failure()
         uses: ./.github/actions/notify-failure

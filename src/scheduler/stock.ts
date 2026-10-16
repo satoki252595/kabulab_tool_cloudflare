@@ -314,7 +314,7 @@ async function postDispatch(
   kind: SyncKind
 ): Promise<DispatchDetails> {
   const workflow = kind === "catchup" ? "catchup.yml" : kind === "moneyflow" ? "moneyflow.yml" : kind === "vwap" ? "vwap-ingest.yml" : WORKFLOW_FILE;
-  const inputs = kind === "moneyflow" ? { only: "independent" } : {
+  const inputs = kind === "moneyflow" ? { only: "independent", scheduled_date: scheduledDate } : {
     target: kind === "stocks" ? DISPATCH_TARGET : kind === "context" ? CONTEXT_DISPATCH_TARGET : kind === "vwap" ? "scheduled-daily-intra" : "scheduled-catchup",
     scheduled_date: scheduledDate,
     ...(kind === "vwap" ? { daily_session_source: "yahoo-direct" } : {}),
@@ -944,22 +944,40 @@ export async function runMoneyflowDeadlineReadcheck(deps: {
   if (obj === null) throw new Error(`moneyflow receipt がありません: ${key}`);
   const receipt = parseStoredReceipt(await obj.text(), key, deps.scheduledDate, MONEYFLOW_DISPATCH_CRON);
   const jobs = await fetchAllJobs(deps.fetchFn, deps.token, receipt.workflowRunId);
-  const ingest = jobs.filter((job) => job.name === "ingest");
-  if (jobs.length !== 1 || ingest.length !== 1 || ingest[0].status !== "completed" || ingest[0].conclusion !== "success") {
-    throw new Error("独立moneyflow ingest jobが一意の成功完了ではありません");
-  }
-  const steps = ingest[0].steps;
-  const producer = steps?.filter((step) => step.name === "moneyflow ingest");
-  if (!producer || producer.length !== 1 || producer[0].status !== "completed" || producer[0].conclusion !== "success") {
-    throw new Error("独立moneyflow ingest stepが一意の成功完了ではありません");
-  }
-  const done = stepCompletedAtMs(producer[0], "moneyflow ingest");
-  if (done < Date.parse(`${deps.scheduledDate}T09:15:00.000Z`) || done > Date.parse(`${deps.scheduledDate}T14:40:00.000Z`)) {
-    throw new Error("独立moneyflowの完了が同日09:15〜14:40 UTCの範囲外です");
-  }
-  const moneyflowCompletedAt = producer[0].completed_at as string;
+  const { moneyflowCompletedAt } = evaluateMoneyflowReadcheck(jobs, deps.scheduledDate);
   console.info(`[stock-scheduler] moneyflow readcheck OK: date=${deps.scheduledDate} run_id=${receipt.workflowRunId} completed_at=${moneyflowCompletedAt}`);
   return { moneyflowCompletedAt };
+}
+
+/** 両laneの実producerと実summary joinだけを受け入れる。片側skip/unknownを成功にしない。 */
+export function evaluateMoneyflowReadcheck(jobs: RunJob[], scheduledDate: string): MoneyflowReadcheckVerdict {
+  if (jobs.length !== 2) throw new Error("独立moneyflowの両producer jobがありません");
+  const floor = Date.parse(`${scheduledDate}T09:15:00.000Z`), cutoff = Date.parse(`${scheduledDate}T14:40:00.000Z`);
+  const completions: number[] = [];
+  let joinCompletedAt: string | undefined;
+  for (const lane of ["non-yahoo", "yahoo"]) {
+    const matches = jobs.filter(job => job.name === `ingest-${lane}`);
+    if (matches.length !== 1 || matches[0].status !== "completed" || matches[0].conclusion !== "success") {
+      throw new Error("独立moneyflow producer jobが一意の成功完了ではありません");
+    }
+    const required = [`moneyflow ingest (${lane})`, ...(lane === "yahoo" ? ["moneyflow source join"] : [])];
+    for (const name of required) {
+      const steps = matches[0].steps?.filter(step => step.name === name);
+      if (!steps || steps.length !== 1 || steps[0].status !== "completed" || steps[0].conclusion !== "success") {
+        throw new Error("独立moneyflow producer/join stepが一意の成功完了ではありません");
+      }
+      const started = typeof steps[0].started_at === "string" ? Date.parse(steps[0].started_at) : NaN;
+      const done = stepCompletedAtMs(steps[0], name);
+      if (!Number.isFinite(started) || started < floor || done < started || done > cutoff ||
+          (completions.length > 0 && started < completions[completions.length - 1])) {
+        throw new Error("独立moneyflowの開始/完了/順序が同日18:15〜23:40 JSTの範囲外です");
+      }
+      completions.push(done);
+      if (name === "moneyflow source join") joinCompletedAt = steps[0].completed_at as string;
+    }
+  }
+  if (joinCompletedAt === undefined) throw new Error("独立moneyflow全source joinがありません");
+  return { moneyflowCompletedAt: joinCompletedAt };
 }
 
 export interface VwapReadcheckVerdict { vwapCompletedAt: string }

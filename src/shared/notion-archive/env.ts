@@ -49,6 +49,13 @@ function optionalId(key: string): string | undefined {
 }
 
 export const notionEnv = {
+  /** 通常CLIのprocess上限。未指定は既存380ms、明示時は共有clientで開始前に検証。 */
+  NOTION_MAX_RPS: (): number | undefined => {
+    const value = process.env.NOTION_MAX_RPS;
+    if (value === undefined) return undefined;
+    if (!/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(value)) throw new NotionConfigError("NOTION_MAX_RPSは正の有限数を明示してください");
+    return Number(value);
+  },
   /** Notion Internal Integration トークン (ntn_ で始まる) */
   NOTION_TOKEN: () => required("NOTION_TOKEN"),
   /**

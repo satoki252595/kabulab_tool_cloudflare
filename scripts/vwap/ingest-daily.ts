@@ -15,6 +15,7 @@ import { archiveYahooRawBatch, type ArchivedYahooPart, type YahooRawAttempt, typ
 import { priceMetadata, readPriceReference, referenceFromArchivedParts, type PriceReference } from "../../src/shared/holdings/price-registry.js";
 import { publishDailyPriceSnapshot } from "./lib/holdings-price-registry.js";
 import { scheduledVwapGuard } from "./lib/scheduled-window.js";
+import { notionStats } from "../../src/shared/notion-archive/client.js";
 
 /**
  * 明示 10y range (run 起点の JST 暦日。repair保護上限/従来skip用)。先頭barからの導出は禁止
@@ -367,5 +368,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   } catch (e: unknown) {
     console.error(`ingest-daily fatal: ${sanitizeLogText(e instanceof Error ? `${e.name}: ${e.message}` : String(e)).slice(0, 300)}`);
     process.exitCode = 2;
+  } finally {
+    console.info(JSON.stringify({ notionStats: notionStats(), phase: "vwap-daily" }));
   }
 }

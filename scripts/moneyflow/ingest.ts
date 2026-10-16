@@ -29,6 +29,10 @@ import "dotenv/config";
  * しない。upsertObservation は「期間|指標キー|区分」で冪等なので再実行しても安全)。
  */
 import { fileURLToPath } from "node:url";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { moneyflowLaneSources, moneyflowScheduledWindow, type MoneyflowLane, type MoneyflowSummary } from "./lib/source-summary.js";
+import { notionStats } from "../../src/shared/notion-archive/client.js";
 import {
   ensureIndicatorDefsDb,
   ensureObservationsDb,
@@ -100,6 +104,7 @@ function isPhase1Source(name: string): name is Phase1Source {
  */
 export function parseOnlyArg(argv: readonly string[], sources: readonly string[]): string[] {
   const prefix = "--only=";
+  if (argv.filter(x => x.startsWith(prefix)).length > 1) throw new Error("--onlyを重複指定できません");
   const a = argv.find((x) => x.startsWith(prefix));
   if (!a) return [...sources];
   const requested = a.slice(prefix.length).split(",").map((s) => s.trim());
@@ -112,6 +117,7 @@ export function parseOnlyArg(argv: readonly string[], sources: readonly string[]
       throw new Error(`--only: 不明な取得元です: ${r} (使える値: ${sources.join(", ")})`);
     }
   }
+  if (new Set(requested).size !== requested.length) throw new Error("--onlyに重複取得元があります");
   return requested;
 }
 
@@ -182,7 +188,15 @@ export function sectorTurnoverRange(asOfYmd: string): { from: string; to: string
 }
 
 const DRY_RUN = process.argv.includes("--dry-run");
-const ONLY: readonly string[] = parseOnlyArg(process.argv, SOURCES);
+const REQUESTED: readonly string[] = parseOnlyArg(process.argv, SOURCES);
+function laneArg(): MoneyflowLane | undefined {
+  const args = process.argv.filter(x => x.startsWith("--lane="));
+  if (args.length === 0) return undefined;
+  if (args.length !== 1 || (args[0] !== "--lane=non-yahoo" && args[0] !== "--lane=yahoo")) throw new Error("moneyflow laneが不正です");
+  return args[0].slice(7) as MoneyflowLane;
+}
+const LANE = laneArg();
+const ONLY: readonly string[] = LANE === undefined ? REQUESTED : moneyflowLaneSources(REQUESTED, SOURCES, LANE);
 /** producer の実 tradingDate の固定入力 (--as-of)。未指定は当日 UTC (手動実行の既存挙動)。 */
 const AS_OF: string | null = parseAsOfArg(process.argv);
 
@@ -588,6 +602,28 @@ async function writeRunLog(
 }
 
 export async function main(): Promise<void> {
+  const startedAt = new Date().toISOString();
+  const scheduledArgs = process.argv.filter(x => x.startsWith("--scheduled-date="));
+  const scheduledDate = scheduledArgs[0]?.slice(17);
+  if (scheduledArgs.length > 1 || (scheduledDate !== undefined && (LANE === undefined || DRY_RUN || !process.argv.includes("--only=independent")))) {
+    throw new Error("moneyflow予定日は通常independent分割専用です");
+  }
+  if (scheduledDate !== undefined) moneyflowScheduledWindow(scheduledDate, Date.now());
+  const summaryArgs = process.argv.filter(x => x.startsWith("--summary="));
+  const summaryPath = summaryArgs[0]?.slice(10);
+  const runId = `${sharedEnv.GITHUB_RUN_ID()}.${sharedEnv.GITHUB_RUN_ATTEMPT()}`;
+  if (summaryArgs.length > 1 || (LANE === undefined) !== (summaryPath === undefined) ||
+      (LANE !== undefined && (!summaryPath || !/^[1-9]\d*\.[1-9]\d*$/.test(runId)))) {
+    throw new Error("分割moneyflowにはlane/summary/同Actions run IDが必要です");
+  }
+  const saveSummary = (outcomes: readonly RunOutcome[]) => {
+    if (summaryPath === undefined || LANE === undefined) return;
+    const summary: MoneyflowSummary = { version: 1, runId, lane: LANE, requestedSources: REQUESTED,
+      only: ONLY, dryRun: DRY_RUN, startedAt, finishedAt: new Date().toISOString(), outcomes, notion: notionStats() };
+    mkdirSync(dirname(summaryPath), { recursive: true });
+    writeFileSync(summaryPath, JSON.stringify(summary), { flag: "wx", mode: 0o600, flush: true });
+  };
+  if (ONLY.length === 0) { saveSummary([]); return; }
   if (!DRY_RUN) {
     try {
       await syncIndicatorCatalog(ONLY);
@@ -610,6 +646,7 @@ export async function main(): Promise<void> {
   const outcomes: RunOutcome[] = [];
   const failures: string[] = [];
   for (const source of ONLY) {
+    if (scheduledDate !== undefined) moneyflowScheduledWindow(scheduledDate, Date.now());
     try {
       outcomes.push(await runSource(source, now));
     } catch (error) {
@@ -625,11 +662,13 @@ export async function main(): Promise<void> {
   console.info(JSON.stringify({ dryRun: DRY_RUN, only: ONLY, outcomes }, null, 2));
 
   if (DRY_RUN) {
+    saveSummary(outcomes);
     if (failures.length > 0) process.exitCode = 1;
     return;
   }
 
   const failedCount = await writeRunLog(ONLY, outcomes, failures);
+  saveSummary(outcomes);
   if (failedCount > 0) process.exitCode = 1;
 }
 

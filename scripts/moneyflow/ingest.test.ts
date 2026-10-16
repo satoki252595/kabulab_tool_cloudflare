@@ -9,6 +9,9 @@
  * (src/shared/notion-archive/moneyflow.test.ts の env 差し替えパターンと同じ)。
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { SOURCES, classifyRunStatus, parseAsOfArg, parseOnlyArg, sectorMarketCapSkipDetail, sectorTurnoverRange, verifySectorTurnoverResult } from "./ingest.js";
 
 describe("parseOnlyArg", () => {
@@ -33,6 +36,54 @@ describe("parseOnlyArg", () => {
 
   it("使えない取得元名を指定すると throw する (推測でその場をしのがない)", () => {
     expect(() => parseOnlyArg(["--only=not-a-real-source"], SOURCES)).toThrow(/不明な取得元です: not-a-real-source/);
+  });
+  it("重複指定・重複sourceを取得前に拒否する", () => {
+    expect(() => parseOnlyArg(["--only=global-indices,global-indices"], SOURCES)).toThrow("重複");
+    expect(() => parseOnlyArg(["--only=global-indices", "--only=coingecko-global"], SOURCES)).toThrow("重複");
+  });
+});
+
+describe("normal mainのlane分離とqueue後の実期限", () => {
+  const originalArgv = [...process.argv];
+  const dir = mkdtempSync(join(tmpdir(), "moneyflow-lane-"));
+  afterEach(() => {
+    process.argv = [...originalArgv]; process.exitCode = undefined;
+    vi.doUnmock("../../src/shared/notion-archive/index.js"); vi.doUnmock("./lib/run-spec.js");
+    vi.unstubAllEnvs(); vi.useRealTimers(); vi.restoreAllMocks(); vi.resetModules();
+  });
+  it("非Yahoo mainは同じrunSpecで選択sourceだけを処理し、実summaryを残す", async () => {
+    vi.resetModules(); vi.stubEnv("GITHUB_RUN_ID", "38879272134"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
+    const path = join(dir, "non-yahoo.json");
+    process.argv = [...originalArgv, "--only=global-indices,coingecko-global", "--lane=non-yahoo", `--summary=${path}`];
+    const runSpec = vi.fn().mockResolvedValue("保存原本を全行確認");
+    vi.doMock("./lib/run-spec.js", () => ({ runSpec }));
+    vi.doMock("../../src/shared/notion-archive/index.js", async original => ({
+      ...await original<typeof import("../../src/shared/notion-archive/index.js")>(),
+      ensureIndicatorDefsDb: vi.fn(async () => ({ dbId: "defs" })),
+      upsertIndicatorDef: vi.fn(async () => ({ pageId: "def" })),
+      ensureRunLogDb: vi.fn(async () => ({ dbId: "logs" })), recordRunLog: vi.fn(async () => ({ pageId: "log" })),
+    }));
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const { main } = await import("./ingest.js"); await main();
+    expect(runSpec).toHaveBeenCalledTimes(1);
+    expect(runSpec.mock.calls[0][0].name).toBe("coingecko-global");
+    expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({ runId: "38879272134.1", lane: "non-yahoo",
+      requestedSources: ["global-indices", "coingecko-global"], only: ["coingecko-global"], notion: { requests: 0 } });
+    rmSync(path);
+  });
+  it("Yahoo jobのqueue待ちで23:40超ならcatalog/source/summaryを開始しない", async () => {
+    vi.resetModules(); vi.useFakeTimers(); vi.setSystemTime(new Date("2026-10-16T14:40:00.001Z"));
+    vi.stubEnv("GITHUB_RUN_ID", "38879272134"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
+    const path = join(dir, "late.json");
+    process.argv = [...originalArgv, "--only=independent", "--lane=yahoo", `--summary=${path}`, "--scheduled-date=2026-10-16"];
+    const runSpec = vi.fn(), catalog = vi.fn();
+    vi.doMock("./lib/run-spec.js", () => ({ runSpec }));
+    vi.doMock("../../src/shared/notion-archive/index.js", async original => ({
+      ...await original<typeof import("../../src/shared/notion-archive/index.js")>(), ensureIndicatorDefsDb: catalog,
+    }));
+    const { main } = await import("./ingest.js");
+    await expect(main()).rejects.toThrow("23:40");
+    expect(catalog).not.toHaveBeenCalled(); expect(runSpec).not.toHaveBeenCalled(); expect(existsSync(path)).toBe(false);
   });
 });
 
