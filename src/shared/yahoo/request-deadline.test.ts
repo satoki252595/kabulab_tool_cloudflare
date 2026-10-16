@@ -6,6 +6,22 @@ beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(10_000); vi.resetModules
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
 describe("request-local guardはnative発信直前、既開始本文は保持", () => {
+  it("producer待機なしでも認証・401再認証・再GETの実開始を各1秒離す", async () => {
+    vi.stubEnv("YAHOO_PROXY_BASE", ""); vi.stubEnv("CRON_SECRET", "");
+    const starts: number[] = [];
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      starts.push(Date.now());
+      return starts.length === 1 || starts.length === 4
+        ? new Response("auth page", { headers: { "set-cookie": "test-cookie=value" } })
+        : starts.length === 2 || starts.length === 5 ? new Response("test-crumb")
+        : new Response("protocol-only response", { status: starts.length === 3 ? 401 : 200 });
+    }));
+    const { yahooFetchDirect } = await import("./client.js");
+    const response = yahooFetchDirect("https://query1.finance.yahoo.com/v8/finance/chart/7203.T");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect((await response).status).toBe(200);
+    expect(starts).toEqual([10_000, 11_000, 12_000, 13_000, 14_000, 15_000]);
+  });
   it("既429/Retry-Afterの停止理由をguard例外で置き換えず再送0", async () => {
     vi.stubEnv("YAHOO_PROXY_BASE", "https://proxy.test.invalid"); vi.stubEnv("CRON_SECRET", "test-only");
     const native = vi.fn(async () => new Response("rate limited", { status: 429, headers: { "Retry-After": "60" } }));
