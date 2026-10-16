@@ -6,7 +6,8 @@
  * 同plan-idを再開する。別planへ逃げてunknown latchを消せないactive pointerを持つ。
  * 終端後の人間判断だけ: --mode=apply --limit=1 --cutoff=<固定実値>
  * --reconcile-sha256=<原本SHA> --reconcile-state-sha256=<旧state全bytes SHA>。
- * resolution intentが既存なら再送せず停止。旧active/state/cursorは一切更新しない。
+ * raw_inflightは原本の単発CAS、index_inflightは単一INSERT。旧active/state/cursorは更新しない。
+ * 既存intentは再送禁止。intent自体unknownは私有receipt/失敗runを保全しoperator再dispatch禁止。
  * --mode=inspect --limit=1|2 --cutoff=<固定実値>: 最大14request/64MiB/600秒の読取のみ。
  */
 import "dotenv/config";
@@ -19,7 +20,8 @@ import { z } from "../../src/shared/zod-mini.js";
 import { sharedEnv } from "../../src/shared/env.js";
 import { assertD1SingleQueryResponse, createD1HttpBatchSender, d1HttpQueryUrl } from "../../src/shared/db/d1-http-client.js";
 import { assertCanonicalRawMetadata, findCanonicalRawFileAttachments, listCanonicalRawFiles, type CanonicalRawAttachment } from "../../src/shared/notion-archive/raw-files.js";
-import { notionStats, setNotionMaxRps, paceNotionNativeRequest } from "../../src/shared/notion-archive/client.js";
+import { notionStats, setNotionMaxRps, paceNotionNativeRequest, type NotionRequestOptions } from "../../src/shared/notion-archive/client.js";
+import { NotionConfigError } from "../../src/shared/notion-archive/env.js";
 import { downloadArchivedFile, isRetryableTransportError, type ArchivedDownloadOptions } from "../../src/shared/notion-archive/archived-download.js";
 import { unzip } from "../../services/yuho-quant/src/services/edinet/zip.js";
 import { r2GetBytesVersion, r2PutBytes, type R2ReadOptions } from "../vwap/lib/r2.js";
@@ -63,9 +65,20 @@ const SAFE_RAW_ERRORS = new Set([
   "[raw-backfill] 引数不正/重複",
   "[raw-backfill] 全引数明示・LOCAL_OUT禁止",
   "[raw-backfill] 明示reconcileはapply/limit1/固定cutoff/両SHAが必須です",
+  "[raw-backfill] 明示reconcileはapply/limit1/固定cutoff/両SHA/64MiB/600秒以下が必須です",
   "[raw-backfill] reconcile時間予算到達。再送禁止",
   "[raw-backfill] reconcile固定receiptが欠落しています",
-  "[raw-backfill] reconcile対象/state全SHA/index_inflightが不一致です",
+  "[raw-backfill] reconcile対象/state全SHA/inflightが不一致です",
+  "[raw-backfill] reconcile rawが既存です。上書きせず停止",
+  "[raw-backfill] reconcile raw keyとmanifestが不一致です",
+  "[raw-backfill] reconcile hosted/raw全文転送の予算不足です",
+  "[raw-backfill] reconcile hosted実試行/bytes不一致です",
+  "[raw-backfill] reconcile Notion native予算到達。再送禁止",
+  "[raw-backfill] reconcile Notion pacingは0.25rps以下です",
+  "[raw-backfill] reconcileの65秒headroom不足。再送禁止",
+  "[raw-backfill] reconcile GET/bytes予算不足。再送禁止",
+  "[raw-backfill] reconcile全文読取のbytes予算超過。再送禁止",
+  "[raw-backfill] reconcile receipt PUT/全文読戻しのbytes予算不足。再送禁止",
   "[raw-backfill] reconcile原本全文GETの予算不足です",
   "[raw-backfill] reconcile intentが既存です。再送せず停止",
   "[raw-backfill] reconcile索引が既存です。上書きせず停止",
@@ -137,7 +150,7 @@ export interface RawBackfillOptions {
   mode: "dry" | "apply" | "inspect"; planId: string; limit: number; maxBytes: number; maxSeconds: number; expectedCount: number;
   /** dry/apply/再開で同じcreated_time集合を固定する明示UTC時刻。省略時は旧取得時計を維持。 */
   cutoff?: string;
-  /** 終端後の人間判断に限る単一索引回復。通常再開のunknown停止は変えない。 */
+  /** 終端後の人間判断に限る単一原本/索引回復。通常再開のunknown停止は変えない。 */
   reconcileSha256?: string;
   reconcileStateSha256?: string;
 }
@@ -151,12 +164,15 @@ export interface RawIndexReadOptions {
   /** Bulkだけが再読取を明示許可し、実attemptを送信前に計数・journalへ確定する。 */
   beforeRetry: () => void | Promise<void>;
 }
+export type RawDownloadOptions = Pick<ArchivedDownloadOptions, "signal" | "onAttempt"> & {
+  notionRequestOptions?: Pick<NotionRequestOptions, "singleAttempt" | "beforeRequest">;
+};
 export interface BackfillIo {
   rawBucket: string; receiptBucket: string;
   get: (key: string, bucket: string, options?: R2ReadOptions) => Promise<Version>;
   put: (key: string, bytes: Uint8Array, previous: string | null, bucket: string, contentType: string) => Promise<void>;
   list: typeof listCanonicalRawFiles;
-  download: (item: RawItem, cohort: readonly RawItem[], options?: Pick<ArchivedDownloadOptions, "signal" | "onAttempt">) => Promise<{ body: Uint8Array; wireBytes: number }>;
+  download: (item: RawItem, cohort: readonly RawItem[], options?: RawDownloadOptions) => Promise<{ body: Uint8Array; wireBytes: number }>;
   index: (sha: string, options?: RawIndexReadOptions) => Promise<RawIndexRow | null>;
   insert: (row: RawIndexRow) => Promise<void>;
   antiJoin: (items: readonly RawItem[]) => Promise<{ checked: number; missing: number }>;
@@ -339,8 +355,9 @@ function validateIndex(row: RawIndexRow, item: RawItem, bucket: string, expected
 export function createRawDownloader(find = findCanonicalRawFileAttachments, download = downloadArchivedFile): BackfillIo["download"] {
   let cache = new Map<string, CanonicalRawAttachment>();
   return async (item, cohort, options) => {
-    if (!cache.has(item.sha256)) {
-      cache = await find(cohort.map((row) => row.sha256));
+    if (!cache.has(item.sha256) || options?.notionRequestOptions !== undefined) {
+      const shas = cohort.map((row) => row.sha256);
+      cache = options?.notionRequestOptions === undefined ? await find(shas) : await find(shas, options.notionRequestOptions);
       if (cache.size !== cohort.length) throw new Error("[raw-backfill] ⑤原本のSHA batchが欠測しています");
       for (const row of cohort) {
         const current = cache.get(row.sha256);
@@ -427,7 +444,7 @@ export async function auditRawIndexMembership(items: readonly RawItem[], bucket:
   return { checked: items.length, missing };
 }
 
-/** 人間が旧送信有無unknownを承知した、一意INSERTだけの明示回復。旧latchは変更しない。 */
+/** 人間が旧送信unknownを承知した単発raw CAS/一意INSERTの明示回復。旧latchは変更しない。 */
 export async function reconcileRawIndex(opts: RawBackfillOptions, io: BackfillIo) {
   const started = io.now();
   validateRawOptions(opts, started);
@@ -437,12 +454,13 @@ export async function reconcileRawIndex(opts: RawBackfillOptions, io: BackfillIo
   const resolution = `${prefix}/resolutions/${opts.reconcileSha256}`;
   const deadline = started + opts.maxSeconds * 1000, signal = AbortSignal.timeout(opts.maxSeconds * 1000);
   let receiptGets = 0, receiptPuts = 0, r2Gets = 0, r2ReadBytes = 0, r2PutBytes = 0;
+  let getLimit = 14, hostedBytes = 0;
   const checkClock = () => { signal.throwIfAborted(); if (io.now() + 65_000 > deadline) throw new Error("[raw-backfill] reconcileの65秒headroom不足。再送禁止"); };
-  const remainingBytes = () => opts.maxBytes - r2ReadBytes - r2PutBytes;
+  const remainingBytes = () => opts.maxBytes - r2ReadBytes - r2PutBytes - hostedBytes;
   // 固定フローはreceipt13GET + raw1GET。manifestは1回だけ、D1の2SELECT/1INSERTは別計数。
   const get = async (key: string, bucket = io.receiptBucket, maxBytes = Math.min(256 * 1024, remainingBytes())) => {
     checkClock();
-    if (r2Gets >= 14 || maxBytes < 1 || maxBytes > remainingBytes()) throw new Error("[raw-backfill] reconcile GET/bytes予算不足。再送禁止");
+    if (r2Gets >= getLimit || maxBytes < 1 || maxBytes > remainingBytes()) throw new Error("[raw-backfill] reconcile GET/bytes予算不足。再送禁止");
     r2Gets++; if (bucket === io.receiptBucket) receiptGets++;
     await io.emit({ phase: "reconcile_get_inflight", key, bucket, reservedBytes: maxBytes, r2Gets });
     const got = await io.get(key, bucket, { singleAttempt: true, maxBytes, abortSignal: signal, beforeAttempt: checkClock,
@@ -471,19 +489,21 @@ export async function reconcileRawIndex(opts: RawBackfillOptions, io: BackfillIo
     throw new Error("[raw-backfill] active manifest SHA不一致");
   const stateVersion = await required(stateKey), state = State.parse(parse(stateVersion)), inflight = state.inflight;
   if (digest(stateVersion.body) !== opts.reconcileStateSha256 || state.manifestSha256 !== active.manifestSha256 ||
-      state.cursor >= manifest.items.length || inflight === null || inflight.phase !== "index_inflight" ||
+      state.cursor >= manifest.items.length || inflight === null ||
       inflight.sha256 !== opts.reconcileSha256 || manifest.items[state.cursor]!.sha256 !== opts.reconcileSha256 || !inflight.key.startsWith("raw/"))
-    throw new Error("[raw-backfill] reconcile対象/state全SHA/index_inflightが不一致です");
+    throw new Error("[raw-backfill] reconcile対象/state全SHA/inflightが不一致です");
   const item = manifest.items[state.cursor]!;
   if (item.sizeBytes > opts.maxBytes) throw new Error("[raw-backfill] reconcile原本全文GETの予算不足です");
-  // 成功後もunknown後も同じ明示操作を再送できない。通常runのread-only回収とは別。
+  // 既知保存intentがあれば再送禁止。intent自体unknownで不在の可能性はoperatorが保全停止する。
   if (await get(`${resolution}/intent.json`) !== null || await get(`${resolution}/complete.json`) !== null)
     throw new Error("[raw-backfill] reconcile intentが既存です。再送せず停止");
   checkClock();
   const raw = await get(inflight.key, io.rawBucket, item.sizeBytes);
-  if (raw === null) throw new Error("[raw-backfill] D1索引先原本が欠落。再作成せず停止");
-  validateBody(raw.body, item);
-  await io.emit({ phase: "raw_verified", sha256: item.sha256, bytes: raw.body.length });
+  if (inflight.phase === "index_inflight") {
+    if (raw === null) throw new Error("[raw-backfill] D1索引先原本が欠落。再作成せず停止");
+    validateBody(raw.body, item);
+    await io.emit({ phase: "raw_verified", sha256: item.sha256, bytes: raw.body.length });
+  } else if (raw !== null) throw new Error("[raw-backfill] reconcile rawが既存です。上書きせず停止");
   checkClock();
   if (await io.index(item.sha256) !== null) throw new Error("[raw-backfill] reconcile索引が既存です。上書きせず停止");
   const unchanged = async () => {
@@ -502,6 +522,70 @@ export async function reconcileRawIndex(opts: RawBackfillOptions, io: BackfillIo
     const read = await required(key);
     if (!Buffer.from(read.body).equals(Buffer.from(bytes))) throw new Error("[raw-backfill] receipt全文読戻し不一致。再送禁止");
   };
+  if (inflight.phase === "raw_inflight") {
+    getLimit = 16;
+    if (inflight.key !== canonicalRawKey({ ...item, sourceUrl: null }, item.docId)) throw new Error("[raw-backfill] reconcile raw keyとmanifestが不一致です");
+    const apiBefore = notionStats().requests;
+    let hostedAttempts = 0, d1Reads = 1;
+    const wrapperMax = item.sizeBytes + Math.ceil(item.sizeBytes * 0.001) + 4096;
+    if (wrapperMax * 2 + item.sizeBytes * 2 > remainingBytes()) throw new Error("[raw-backfill] reconcile hosted/raw全文転送の予算不足です");
+    const apiAttempts = () => notionStats().requests - apiBefore;
+    const nativeGuard = () => {
+      try { checkClock(); } catch (error) { throw new NotionConfigError(error instanceof Error ? error.message : String(error)); }
+      if (apiAttempts() >= 1 || apiAttempts() + hostedAttempts >= 3) throw new NotionConfigError("[raw-backfill] reconcile Notion native予算到達。再送禁止");
+    };
+    const saved = await io.download(item, [item], { signal, notionRequestOptions: { singleAttempt: true, beforeRequest: nativeGuard },
+      onAttempt: async event => {
+        if (event.phase === "start") {
+          checkClock();
+          if (hostedAttempts >= 2 || apiAttempts() + hostedAttempts >= 3) throw new NotionConfigError("[raw-backfill] reconcile Notion native予算到達。再送禁止");
+          hostedAttempts++;
+        } else hostedBytes += event.receivedBytes;
+        await io.emit({ phase: "hosted_read_attempt", sha256: item.sha256, attempt: event.attempt, attemptPhase: event.phase,
+          receivedBytes: event.receivedBytes, status: event.status, notionDownloadAttempts: hostedAttempts, notionDownloadBytes: hostedBytes });
+        if (remainingBytes() < 0 || hostedBytes > wrapperMax * 2) throw new Error("[raw-backfill] reconcile hosted/raw全文転送の予算不足です");
+        checkClock();
+      } });
+    checkClock(); validateBody(saved.body, item);
+    if (hostedAttempts < 1 || saved.wireBytes !== hostedBytes || apiAttempts() > 1) throw new Error("[raw-backfill] reconcile hosted実試行/bytes不一致です");
+    await unchanged();
+    const intent = { version: 1, kind: "manual-raw-reconciliation", planId: opts.planId, cutoff: manifest.cutoff,
+      expectedCount: manifest.expectedCount, manifestSha256: active.manifestSha256, stateSha256: opts.reconcileStateSha256,
+      cursor: state.cursor, sha256: item.sha256, rawBucket: io.rawBucket, rawKey: inflight.key, rawBytes: item.sizeBytes,
+      originalSendUnknown: true, maximumRawPutAttempts: 1, createdAt: new Date(io.now()).toISOString() };
+    await persist(`${resolution}/intent.json`, intent);
+    await unchanged();
+    if (await get(inflight.key, io.rawBucket, item.sizeBytes) !== null) throw new Error("[raw-backfill] reconcile rawが既存です。上書きせず停止");
+    checkClock(); d1Reads++;
+    if (await io.index(item.sha256) !== null) throw new Error("[raw-backfill] reconcile索引が既存です。上書きせず停止");
+    await io.emit({ phase: "raw_reconciliation_put_inflight", sha256: item.sha256, originalSendUnknown: true, reconciliationRawPutAttempts: 1 });
+    checkClock();
+    if (item.sizeBytes * 2 > remainingBytes()) throw new Error("[raw-backfill] reconcile hosted/raw全文転送の予算不足です");
+    r2PutBytes += saved.body.length;
+    await io.put(inflight.key, saved.body, null, io.rawBucket, "application/octet-stream");
+    const post = await get(inflight.key, io.rawBucket, item.sizeBytes);
+    if (post === null) throw new Error("[raw-backfill] PUT後の原本全文確認ができません。再送禁止");
+    validateBody(post.body, item);
+    await io.emit({ phase: "raw_verified", sha256: item.sha256, bytes: post.body.length });
+    checkClock(); d1Reads++;
+    if (await io.index(item.sha256) !== null) throw new Error("[raw-backfill] reconcile索引が既存です。上書きせず停止");
+    await unchanged();
+    const complete = { ...intent, status: "manual_raw_reconciliation_complete", completedAt: new Date(io.now()).toISOString(),
+      reconciliationRawPutAttempts: 1, rawFullShaVerified: true, indexStillMissing: true, oldLatchUnchanged: true,
+      d1Inserts: 0, stateResets: 0, upstreamGets: 0 };
+    await persist(`${resolution}/complete.json`, complete);
+    const result = { status: complete.status, sha256: item.sha256, originalSendUnknown: true, reconciliationRawPutAttempts: 1,
+      rawPuts: 1, rawGets: 3, d1Reads, d1Inserts: 0, receiptGets, receiptPuts, r2Gets, r2ReadBytes, r2PutBytes,
+      notionDownloadAttempts: hostedAttempts, notionDownloadBytes: hostedBytes, notionApiNativeRequests: apiAttempts(),
+      notionNativeRequests: apiAttempts() + hostedAttempts, notionNativeRequestLimit: 3,
+      notionNativeRequestCountKind: "api_actual_plus_hosted_admitted",
+      measuredPayloadBytes: r2ReadBytes + r2PutBytes + hostedBytes, measuredPayloadLimit: opts.maxBytes,
+      notionApiResponseBytesMeasured: false, d1ResponseBytesMeasured: false, sdkErrorResponseBytesMeasured: false, httpHeadersMeasured: false,
+      requests: r2Gets + receiptPuts + 1 + d1Reads + apiAttempts() + hostedAttempts,
+      requestLimit: 25, oldLatchUnchanged: true, cursor: state.cursor, stateResets: 0, upstreamGets: 0, elapsedMs: io.now() - started };
+    await io.emit({ phase: "resolution_complete", ...result }); return result;
+  }
+  if (raw === null) throw new Error("[raw-backfill] D1索引先原本が欠落。再作成せず停止");
   await unchanged();
   const expected = expectedRawIndex(item, io.rawBucket, inflight.key);
   const intent = { version: 1, kind: "manual-index-reconciliation", planId: opts.planId, cutoff: manifest.cutoff,
@@ -733,12 +817,17 @@ async function main() {
     ...(args.has("reconcile-sha256") ? { reconcileSha256: args.get("reconcile-sha256")! } : {}),
     ...(args.has("reconcile-state-sha256") ? { reconcileStateSha256: args.get("reconcile-state-sha256")! } : {}) };
   validateRawOptions(opts);
-  if (args.has("notion-max-rps")) setNotionMaxRps(Number(args.get("notion-max-rps")));
+  if (opts.reconcileSha256 !== undefined) {
+    const rps = args.has("notion-max-rps") ? Number(args.get("notion-max-rps")) : 0.25;
+    if (!Number.isFinite(rps) || rps <= 0 || rps > 0.25) throw new NotionConfigError("[raw-backfill] reconcile Notion pacingは0.25rps以下です");
+    setNotionMaxRps(rps);
+  } else if (args.has("notion-max-rps")) setNotionMaxRps(Number(args.get("notion-max-rps")));
   const receipt = await fs.open(args.get("out")!, "wx", 0o600), before = notionStats();
   const startedAt = Date.now();
   let lastPhase = "starting";
   let lastRawVerified: { sha256: string; bytes: number } | null = null;
   let reconciliationInsertAttempts = 0;
+  let reconciliationRawPutAttempts = 0;
   let hosted = { notionDownloadAttempts: 0, notionDownloadBytes: 0 };
   let lastProgressAt = 0;
   let inventory = { prefix: "", queries: 0, currentPartitionRows: 0, acceptedRows: 0, responseRows: 0 };
@@ -748,6 +837,7 @@ async function main() {
       lastRawVerified = { sha256, bytes };
     }
     if (phase === "index_reconciliation_insert_inflight") reconciliationInsertAttempts = 1;
+    if (phase === "raw_reconciliation_put_inflight") reconciliationRawPutAttempts = 1;
     if (phase === "hosted_read_attempt") {
       const observed = record as { notionDownloadAttempts: number; notionDownloadBytes: number };
       hosted = { notionDownloadAttempts: observed.notionDownloadAttempts, notionDownloadBytes: observed.notionDownloadBytes };
@@ -788,7 +878,7 @@ async function main() {
       notionRequests: after.requests - before.requests, notionRateLimited: after.rateLimited - before.rateLimited,
       notionTransientRetries: after.transientRetries - before.transientRetries, upstreamGets: 0, ...hosted,
       hostedBytesKind: "decoded_body_all_observed_attempts", httpHeadersAndErrorBodyBytesMeasured: false,
-      ...(opts.reconcileSha256 === undefined ? { resend: 0 } : { originalSendUnknown: true, reconciliationInsertAttempts }) };
+      ...(opts.reconcileSha256 === undefined ? { resend: 0 } : { originalSendUnknown: true, reconciliationInsertAttempts, reconciliationRawPutAttempts }) };
     await emit({ ...failure, phase: "stopped" });
     console.error(JSON.stringify(failure));
     process.exitCode = 1;
