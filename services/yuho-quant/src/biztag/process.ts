@@ -309,16 +309,18 @@ export async function processStock(item: WorkItem, deps: ProcessDeps): Promise<P
       if (item.row === null || item.doc === null) {
         throw new Error(`processStock: version_bump に必要な行/書類が無い (${item.stockCode})`);
       }
+      if (item.row.docId !== item.doc.docId) throw new SupplementWriteHeldError("版だけの更新で別有報へ付け替えません。旧タグを保持してHOLD");
       const tagIds = idsFromActiveLabels(deps.vocab, [
         ...item.row.upstream,
         ...item.row.downstream,
         ...item.row.distribution,
       ]);
       const themes = deriveThemes(deps.vocab, tagIds).map((t) => t.labelJa);
-      await deps.updateSupplementRow(item.row.pageId, {
+      await writeRowWithEvidence(item, deps, {
+        docId: item.doc.docId,
         themes,
         vocabVersion: deps.vocab.version,
-      });
+      }, undefined);
       return {
         stockCode: item.stockCode,
         kind: item.kind,

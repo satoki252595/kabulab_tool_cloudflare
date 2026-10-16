@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { createSupplementPublicationJournal } from "../../../scripts/biztag-local/publication-journal.js";
-import { buildEvidenceBlock, buildSupplementProperties, replaceEvidenceBlock, SupplementWriteHeldError } from "./stock-supplement.js";
+import { buildEvidenceBlock, buildSupplementProperties, createSupplementRow, replaceEvidenceBlock, SupplementWriteHeldError } from "./stock-supplement.js";
 import { NotionUnknownResultError } from "./client.js";
 import changedDocumentNative from "./fixtures/publisher-doc-change-actual-20261017.json";
 import zeroWidthNative from "./fixtures/9273-s100z2z6-notion-zero-width.json";
@@ -87,6 +87,35 @@ const privateStates: string[] = [];
 afterEach(() => { for (const state of privateStates.splice(0)) rmSync(state, { recursive: true, force: true }); });
 
 describe("supplement evidence two-phase replacement", () => {
+  it.each(["single-complete", "multi-complete", "null-doc-complete", "evidence-complete", "evidence-read-unknown", "unknown-POST", "unknown-PATCH", "readback-mismatch", "db-drift"])("実4502値のcreate意図をpageID取得前から閉鎖まで保持 (%s)", async fault => {
+    const fixture = JSON.parse(gunzipSync(readFileSync(new URL("./fixtures/publisher-partial-actual-20261017.json.gz", import.meta.url))).toString());
+    const state = realpathSync(mkdtempSync(join(tmpdir(), "supplement-create-"))); privateStates.push(state);
+    const durable = createSupplementPublicationJournal(state), dbId = fixture.before.parent.database_id;
+    const next = fault === "single-complete" ? { stockCode: fixture.stockCode, docId: fixture.docId } : { ...fixture.input, stockCode: fixture.stockCode };
+    if (fault === "null-doc-complete") next.docId = null;
+    const evidence = fault.startsWith("evidence-") ? fixture.children[0] : undefined;
+    const current = { id: fixture.before.id, parent: { database_id: dbId }, last_edited_time: fixture.postClock, properties: {} as Record<string, { id: string; rich_text?: unknown[] }> };
+    let posts = 0, patches = 0;
+    const apply = (properties: Record<string, unknown>) => { for (const [name, value] of Object.entries(properties)) current.properties[name] = { ...value as object, id: fixture.before.properties[name].id }; };
+    io.request.mockImplementation(async (method: string, path: string, body?: { properties?: Record<string, unknown> }, opts?: { singleAttempt?: boolean }) => {
+      if (method === "POST" && path === "/pages") { posts++; expect(opts?.singleAttempt).toBe(true); apply(body!.properties!); if (fault === "unknown-POST") throw new NotionUnknownResultError("actual first creation may be applied"); return { id: current.id }; }
+      if (method === "PATCH" && path === `/pages/${current.id}`) { patches++; expect(opts?.singleAttempt).toBe(true); apply(body!.properties!); if (fault === "unknown-PATCH") throw new NotionUnknownResultError("actual remaining chunk may be applied"); return {}; }
+      if (method === "GET" && path === `/pages/${current.id}`) { const page = structuredClone(current); if (fault === "readback-mismatch") Object.assign(page.properties, buildSupplementProperties({ docId: changedDocumentNative.oldDocId })); if (fault === "db-drift") page.parent.database_id = fixture.preArchivePageId; return page; }
+      if (method === "GET" && path.startsWith(`/pages/${current.id}/properties/`)) { const property = Object.values(current.properties).find(value => path.split("?")[0].endsWith(`/${encodeURIComponent(value.id)}`))!; return { results: property.rich_text!.map(value => ({ rich_text: value })), has_more: false, next_cursor: null }; }
+      if (method === "GET" && path.startsWith(`/blocks/${current.id}/children`)) { if (fault === "evidence-read-unknown") throw new Error("saved evidence read incomplete"); return { results: evidence === undefined ? [] : [structuredClone(evidence)], has_more: false, next_cursor: null }; }
+      if (method === "GET" && evidence !== undefined && path.startsWith(`/blocks/${evidence.id}/children`)) return { results: evidence[evidence.type].children, has_more: false, next_cursor: null };
+      throw new Error(`unexpected creation protocol ${method} ${path}`);
+    });
+    const run = createSupplementRow(dbId, next, evidence, durable), complete = fault.endsWith("complete");
+    if (complete) await expect(run).resolves.toBe(current.id); else await expect(run).rejects.toBeInstanceOf(NotionUnknownResultError);
+    expect(posts).toBe(1); if (fault === "single-complete" || fault === "unknown-POST") expect(patches).toBe(0); else expect(patches).toBeGreaterThan(0);
+    const root = join(state, "supplement-publications"), path = join(root, readdirSync(root)[0]), raw = readFileSync(join(path, "intent.json")), request = readFileSync(join(path, "request.json"));
+    expect(JSON.parse(raw.toString())).toMatchObject({ operation: "create", stockCode: fixture.stockCode, nextDocId: next.docId });
+    if (complete) { createSupplementPublicationJournal(state).assertReady(); expect(JSON.parse(readFileSync(join(path, "completed.json"), "utf8"))).toMatchObject({ operation: "create", pageId: current.id }); }
+    else { io.request.mockClear(); expect(() => createSupplementPublicationJournal(state)).toThrow(); expect(io.request).not.toHaveBeenCalled(); }
+    expect(readFileSync(join(path, "intent.json"))).toEqual(raw); expect(readFileSync(join(path, "request.json"))).toEqual(request); expect(io.archive).not.toHaveBeenCalled();
+  });
+
   it.each(["complete", "unknown"])("実1716旧文書→現文書を別identityとして保持 (%s)", async fault => {
     const saved = changedDocumentNative, state = realpathSync(mkdtempSync(join(tmpdir(), "publication-doc-change-"))); privateStates.push(state);
     const current = { id: saved.pageId, last_edited_time: saved.lastEditedTime, properties: buildSupplementProperties({ docId: saved.oldDocId }) };

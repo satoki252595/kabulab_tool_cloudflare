@@ -9,6 +9,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ## 2026-10-17
 
+- 事業タグの新規作成も最初のPOST前に同じ永続journalへ実入力を保存し、全文・根拠・DBの読戻し後だけ閉鎖する。版だけの更新は既存PRE/CAS経路へ統一し、結果不明の跨run再送を止める。[保存実入力の回帰と追加読戻し負荷](test-logs/biztag-create-publication-20261017.md)を記録する。
 - 事業タグの既存行publisherは、物理PRE保管前に同じMac stateへ未閉鎖intentを永続保存する。途中PATCHや保管の結果不明は、別文書・変更後PREで次runへ進めず、全読戻し後だけ閉鎖する。追加通信0と[保存実入力の回帰・容量上限・未保護範囲](test-logs/biztag-sticky-publication-20261017.md)を記録する。
 - 海外売上の通常CLIに保存原本の有限cohort処理を追加。typed-first原本・最新本文・全6表を再資格化し、共通serializer/L2投影と全旧値CAS、物理PRE/POSTを一つの入口へ集約する。新源取得・モデル・DDLは増やさず、[保存実データと本番未受入の境界](test-logs/overseas-saved-cohort-20261017.md)を残す。
 

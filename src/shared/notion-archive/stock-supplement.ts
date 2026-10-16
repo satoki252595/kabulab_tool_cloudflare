@@ -870,8 +870,14 @@ export function chunkPropertiesByBytes(
 export async function createSupplementRow(
   dbId: string,
   input: SupplementRowInput,
-  evidence?: unknown | null
+  evidence: unknown | null | undefined,
+  journal: SupplementPublicationJournal
 ): Promise<string> {
+  if (!journal || typeof journal.assertReady !== "function" || typeof journal.reserveCreate !== "function") throw new NotionConfigError("補足createのdurable journalがありません");
+  journal.assertReady();
+  if (typeof dbId !== "string" || dbId.length === 0 || typeof input.stockCode !== "string" || input.stockCode.length === 0 ||
+      !(input.docId === null || typeof input.docId === "string" && input.docId.length > 0)) throw new NotionConfigError("補足createのDB/銘柄/原文書資格がありません");
+  if (evidence !== undefined && evidence !== null) evidenceValue(evidence);
   const props = buildSupplementProperties(input);
   const [first, ...rest] = chunkPropertiesByBytes(props);
   const body: Record<string, unknown> = {
@@ -881,11 +887,24 @@ export async function createSupplementRow(
   if (evidence !== undefined && evidence !== null) {
     body.children = [evidence];
   }
-  const created = await notionRequest<{ id: string }>("POST", "/pages", body);
-  for (const part of rest) {
-    await notionRequest("PATCH", `/pages/${created.id}`, { properties: part });
+  const target = { ...body, properties: props };
+  const publication = journal.reserveCreate({ dbId, stockCode: input.stockCode, nextDocId: input.docId,
+    snapshot: JSON.stringify(canonicalizeForHash(target)) });
+  try {
+    const created = await notionRequest<{ id: string }>("POST", "/pages", body, { singleAttempt: true });
+    if (typeof created.id !== "string" || created.id.length === 0) throw new Error("補足create ACKのIDがありません");
+    for (const part of rest) await notionRequest("PATCH", `/pages/${created.id}`, { properties: part }, { singleAttempt: true });
+    const after = await evidencePage(created.id);
+    const parent = (after as unknown as { parent?: { database_id?: string } }).parent;
+    if (typeof parent?.database_id !== "string" || parent.database_id.replaceAll("-", "").toLowerCase() !== dbId.replaceAll("-", "").toLowerCase()) throw new Error("補足createのDB読戻し不一致");
+    for (const [name, expected] of Object.entries(props)) if (JSON.stringify(propertyValue(after.properties[name])) !== JSON.stringify(propertyValue(expected))) throw new Error(`補足createの全文読戻し不一致: ${name}`);
+    const children = await evidenceChildren(created.id);
+    if (children.length !== (evidence === null || evidence === undefined ? 0 : 1) || children.some(child => JSON.stringify(evidenceValue(child)) !== JSON.stringify(evidenceValue(evidence)))) throw new Error("補足createの根拠読戻し不一致");
+    publication.complete({ pageId: created.id, postPageSha256: await sha256Hex(JSON.stringify(canonicalizeForHash(after))) });
+    return created.id;
+  } catch (cause) {
+    throw new NotionUnknownResultError("補足createの結果確認が未完。別PRE/新runで再作成せずintentと現値を照合してください", { cause });
   }
-  return created.id;
 }
 
 /** 既存行を更新する。プロパティが無ければ何もしない。 */
@@ -1076,6 +1095,10 @@ export class SupplementWriteHeldError extends Error {
 /** Node production supplies the same durable sink for every normal publisher call. */
 export interface SupplementPublicationJournal {
   assertReady(): void;
+  /** Creation has no previous page ID; bind the actual target before the first POST. */
+  reserveCreate?(input: { dbId: string; stockCode: string; nextDocId: string | null; snapshot: string }): {
+    complete(output: { pageId: string; postPageSha256: string }): void;
+  };
   reserve(input: { pageId: string; nextDocId: string; archiveKey: string; snapshot: string }): {
     complete(output: { archivePageId: string; postPageSha256: string }): void;
   };

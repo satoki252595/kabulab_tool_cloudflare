@@ -432,7 +432,8 @@ describe("processStock", () => {
 
   it("version_bump: 版とテーマ列だけ更新し jev は呼ばない", async () => {
     const jevClient: JevClient = { askNoul: () => Promise.reject(new Error("version_bump では jev を呼ばない")) };
-    const { deps, updated } = makeDeps({ jevClient });
+    const { deps, updated, evidenceCalls, callOrder } = makeDeps({ jevClient });
+    const currentGuard = vi.fn(async () => {}); deps.assertLatestDocCurrent = currentGuard;
     const row = rowOf({
       docId: "S100YFQC",
       tagStatus: "判定済",
@@ -441,7 +442,17 @@ describe("processStock", () => {
     });
     const outcome = await processStock(itemOf({ kind: "version_bump", row }), deps);
     expect(outcome.outcome).toBe("updated");
-    expect(updated[0]?.input).toEqual({ themes: ["工作機械・産業用ロボット"], vocabVersion: MINI_VOCAB.version });
+    expect(updated[0]?.input).toEqual({ docId: "S100YFQC", themes: ["工作機械・産業用ロボット"], vocabVersion: MINI_VOCAB.version });
+    expect(evidenceCalls).toEqual([{ pageId: row.pageId, block: undefined }]);
+    expect(callOrder).toEqual(["replaceEvidenceBlock", "updateSupplementRow"]);
+    expect(currentGuard).toHaveBeenCalledOnce();
+  });
+
+  it("version_bump cannot bind old tags to a different source document", async () => {
+    const { deps, updated, evidenceCalls } = makeDeps();
+    const row = rowOf({ docId: "S100OLD" });
+    await expect(processStock(itemOf({ kind: "version_bump", row }), deps)).rejects.toThrow(/別有報/);
+    expect(updated).toEqual([]); expect(evidenceCalls).toEqual([]);
   });
 
   it("version_bump: 今の単語帳に無いラベルなら不変条件違反として throw する", async () => {
