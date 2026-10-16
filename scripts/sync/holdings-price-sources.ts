@@ -50,13 +50,13 @@ export type HoldingPriceSources = { status: "ready"; snapshotId: string; evidenc
   { status: "held"; reasonCode: "snapshot_unavailable" | "budget_exhausted" | "issuer_source_unavailable"; reason: string };
 
 /** A single scheduled run owns this cache and its mutable download budget. Failed reads are not resent. */
-export function createHoldingPriceSourceLoader(): (holdings: readonly Shareholding[], budget: HoldingPriceBudget, shouldStop?: () => boolean) => Promise<HoldingPriceSources> {
+export function createHoldingPriceSourceLoader(): (holdings: readonly Shareholding[], budget: HoldingPriceBudget, shouldStop?: () => boolean, fiscalYearEnd?: string) => Promise<HoldingPriceSources> {
   let snapshot: Promise<PriceSnapshot | null> | undefined;
   let codeList: Promise<ArchivedSource> | undefined;
   let catalog: ReturnType<typeof parseHoldingsCodeList> | undefined;
   const chunks = new Map<string, Promise<ArchivedSource>>();
   const officialNames = createHoldingOfficialNamesLoader();
-  return async (holdings, budget, shouldStop) => {
+  return async (holdings, budget, shouldStop, fiscalYearEnd) => {
     assert.ok(Number.isSafeInteger(budget.remainingChunks) && budget.remainingChunks >= 0 && Number.isSafeInteger(budget.remainingBytes) && budget.remainingBytes >= 0, "価格取得予算が不正です");
     snapshot ??= readActivatedPriceSnapshot();
     const active = await snapshot;
@@ -108,7 +108,11 @@ export function createHoldingPriceSourceLoader(): (holdings: readonly Shareholdi
       if (candidates.length !== 1) continue;
       const chart = await priceIndex.verifiedChart(candidates[0], symbol);
       assert.equal(chart.raw.meta.currency, "JPY"); assert.equal(chart.raw.meta.exchangeTimezoneName, "Asia/Tokyo");
-      if (exactEnglishName(chart.raw.meta.longName) !== exactEnglishName(identity.englishName)) targets.set(identity.code, { identity, priceCapturedAt: candidates[0].member.receivedAt });
+      // Alias reads retain their existing path. Canonical splits reuse verified run-cache only:
+      // market ex dates do not prove legal effectiveness, but missing basis is already unavailable.
+      const inspectSplitBasis = chart.parsed.splits.length > 0 && (fiscalYearEnd === undefined || chart.parsed.splits.every(split => split.date <= fiscalYearEnd));
+      const alias = exactEnglishName(chart.raw.meta.longName) !== exactEnglishName(identity.englishName);
+      if (inspectSplitBasis || alias) targets.set(identity.code, { identity, priceCapturedAt: candidates[0].member.receivedAt, ...(alias ? {} : { cacheOnly: true }) });
     }
     const names = await officialNames([...targets.values()], budget, shouldStop);
     if (names.status === "held") return names;

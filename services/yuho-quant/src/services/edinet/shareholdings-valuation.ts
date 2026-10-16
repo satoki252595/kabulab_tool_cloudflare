@@ -9,6 +9,7 @@ import { parseDailyChart } from "../../../../../src/shared/yahoo/client.js";
 import { jstDateSec } from "../../../../../src/shared/vwap/proof.js";
 import type { Shareholding } from "./shareholdings.js";
 import type { OfficialIssuerEnglishName, OfficialIssuerNames } from "./shareholdings-issuer-names.js";
+import type { PreSplitFiscalYearBasis } from "./shareholdings-split-basis.js";
 
 export interface ArchivedSource { archivePageId: string; filename: string; bytes: Buffer; sha256: string;
   /** Explicit activated members only; full gzip bytes/SHA remain unchanged. Omitted for legacy callers. */
@@ -30,6 +31,15 @@ export class HoldingPriceIssuerMismatch extends Error {
     archivePageId: string; filename: string; gzipSha256: string; bodySha256: string }) {
     super(`価格原本の発行体英字商号が一致しません。${JSON.stringify(proof)}`);
     this.name = "HoldingPriceIssuerMismatch";
+  }
+}
+
+/** Source-qualified pre-split FY shares and already observed market ex price. No price write was sent. */
+export class HoldingPriceShareBasisMismatch extends Error {
+  constructor(readonly proof: { symbol: string; fiscalYearEnd: string; marketExDate: string; priceCapturedAt: string;
+    priceBodySha256: string; issuer: OfficialIssuerEnglishName; basis: PreSplitFiscalYearBasis }) {
+    super(`期末株数は法的分割前、価格原本は市場権利落ちを観測済みで、単位一致を確認できません。${JSON.stringify(proof)}`);
+    this.name = "HoldingPriceShareBasisMismatch";
   }
 }
 
@@ -201,6 +211,24 @@ export async function qualifyHoldingValuation(args: {
       jstDateSec(parsed.proof.lastTs) < args.fiscalYearEnd ||
       parsed.splits.some(split => split.date > args.fiscalYearEnd)) {
     return { status: "unavailable", identity, reason: "当期末からcaptureまでの株数・価格単位の一致を確認できません" };
+  }
+  if (parsed.splits.length > 0) {
+    const basis = officialName?.preSplitFiscalYearBasis;
+    if (basis !== undefined) {
+      assert.ok(officialName);
+      assert.deepEqual(basis.source, officialName.source, "分割前株数のissuer sourceが不一致です");
+      assert.equal(basis.memberSha256, officialName.memberSha256); assert.equal(basis.filename, officialName.filename);
+      assert.equal(basis.context.entity, `${identity.edinetCode}-000`); assert.equal(basis.context.endDate, basis.source.fiscalYearEnd);
+      assert.ok(basis.legalEffectiveDate <= officialName.filingDate, "予定段階の法的分割日を実施済みへ変換しません");
+      const latest = [...parsed.splits].sort((a, b) => b.date.localeCompare(a.date))[0];
+      if (basis.source.fiscalYearEnd === args.fiscalYearEnd && basis.legalEffectiveDate > args.fiscalYearEnd &&
+        latest.ratio === basis.numerator / basis.denominator && latest.date < basis.legalEffectiveDate) {
+        throw new HoldingPriceShareBasisMismatch({ symbol, fiscalYearEnd: args.fiscalYearEnd, marketExDate: latest.date,
+          priceCapturedAt: member.receivedAt, priceBodySha256: member.sha256, issuer: officialName, basis });
+      }
+    }
+    // Absence/unsupported Notes cannot establish price/share units, even in the local CLI.
+    return { status: "unavailable", identity, reason: "市場権利落日の観測だけでは法的分割日と期末株数の単位を確認できません" };
   }
   // raw closeを採用する。既存dailyの2桁丸め値やadjcloseで置き換えない。
   const price = raw.indicators.quote[0].close[indexes[0]];
