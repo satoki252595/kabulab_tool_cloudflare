@@ -2,6 +2,14 @@
 
 追跡は[#348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)。この記録は以下の対象の実測であり、全20機能・全空欄の完了を意味しない。
 
+## 10月17日00:36 JSTの追加確認
+
+211Aの有報がS100WW30からS100Z7YEへ変わった1社だけを、配備済みmain `43d563a3`の通常writer/pipelineとローカル`Cloudflare/clef-flash`で00:32:39〜00:34:40に再判定した。公式重み・processor・較正と同じ入力7,395 tokens／6問に束縛し、spawn1・Noul1・実forward1、既存1行のPATCH1・判定済。native138（Notion128・hosted3・D1読取7）、121.829秒。外部LLM・上流API・D1書込・再forwardは0。
+
+全67propsと本文39項目・旧根拠の退役・source原文と時計を確認し、外側PRE/POSTおよび通常publisher PREの3ファイルを実体読戻しした。00:35:45にrootが全native要求/応答のSHA、6 journal原本、通常replayと別の`processStock`による保存応答再計算を追加通信・forward・業務書込0で検証した。peak RSSは20,674,904,064 bytes、swap増分の表示上限は約0.31MiBで、32GiB／1GiBの実行予算内。ローカル電力・金額は未計測。この1社は本文同期776件に含めず、105受入・残671件を維持する。未知の旧判定入力SHAは後付けしていない。
+
+実行前のcontroller v2は.env取得順で停止し、native・model・業務書込・新journalすべて0を確認した。通常writerのpreflight後にD1を構築するv3で単発実行し、元停止記録を保持する。私有証跡は`211A-clef-normal-once-v3/{SUCCESS,independent-acceptance,root-independent-acceptance}.json`。これは固定1社の受入であり、全20機能の完了ではない。
+
 ## 10月17日00:32 JSTの追加確認
 
 | 対象 | 追加で受け入れた範囲 | 残件 |
