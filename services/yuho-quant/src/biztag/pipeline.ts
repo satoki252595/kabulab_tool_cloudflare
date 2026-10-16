@@ -12,6 +12,8 @@
  * D1 は読むだけ (§0 運営決定)。Node から D1 へは HTTP (`createD1HttpDb`) で読む。
  */
 import { inArray } from "drizzle-orm";
+import { createSupplementPublicationJournal } from "../../../../scripts/biztag-local/publication-journal.js";
+import type { SupplementPublicationJournal } from "../../../../src/shared/notion-archive/stock-supplement.js";
 import { parseStockCode } from "../../../../src/shared/jpx/stock-code.js";
 import type { ClefJournalInput } from "../../../../scripts/biztag-local/clef-journal.js";
 import type { LocalDecisionExchange } from "../../../../src/shared/semif/client.js";
@@ -58,6 +60,8 @@ import type { Vocabulary } from "./vocabulary/schema.js";
 import { TEXT_SECTIONS } from "../services/edinet/text-sections.js";
 
 export interface RunBiztagOptions {
+  /** Tests can supply an isolated real state; normal CLI always uses canonical .env state. */
+  publicationJournal?: SupplementPublicationJournal;
   /** 通常Mac CLIだけが接続するdurable raw-output sink。 */
   localJournal?: (input: ClefJournalInput) => LocalDecisionExchange;
   /** 処理に充てる時間予算 (ミリ秒)。超えたら新規銘柄の着手を止める。 */
@@ -250,6 +254,8 @@ function makeDryRunLedgerWrites(): {
 }
 
 export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
+  const publicationJournal = opts.publicationJournal ?? createSupplementPublicationJournal();
+  publicationJournal.assertReady(); // Cross-run unknown stops before metadata HTTP or model initialization.
   if (opts.refreshTextReceipt && (!opts.mechanicalOnly || opts.codes === undefined || opts.codes.length === 0 || opts.codes.length > 100 ||
       new Set(opts.codes).size !== opts.codes.length || opts.codes.some(code => parseStockCode(code) !== code) ||
       !Number.isSafeInteger(opts.limit) || opts.limit! <= 0 || opts.limit! > opts.codes.length ||
@@ -386,7 +392,8 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     createSupplementRow: opts.dryRun ? async () => "dry-run"
       : (input, evidence) => createSupplementRow(supplementDbId, input, evidence),
     updateSupplementRow: opts.dryRun ? async () => {} : updateSupplementRow,
-    replaceEvidenceBlock: opts.dryRun ? async () => {} : replaceEvidenceBlock,
+    replaceEvidenceBlock: opts.dryRun ? async () => {} : (pageId, block, input, expected, beforeWrite) =>
+      replaceEvidenceBlock(pageId, block, input, expected, beforeWrite, publicationJournal),
   };
 
   const countsByKind: Record<string, number> = {};
@@ -400,6 +407,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
   let workBudgetLeft = opts.limit ?? Infinity;
 
   for (let i = 0; i < items.length; i++) {
+    publicationJournal.assertReady();
     const item: WorkItem = items[i];
     currentItem = item; currentInput = undefined; currentDecisionAt = undefined; batchIndex = 0;
     if (item.kind !== "skip") {
@@ -445,6 +453,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
   }
 
   // 7. 見直し材料 (review packet) を台帳へ反映 (内容が変わったときだけ)。
+  publicationJournal.assertReady();
   const packet = buildReviewPacket(rows, vocab, new Date(start).toISOString());
   await refreshReviewPacketLedger({
     dbId: ledgerDbId,

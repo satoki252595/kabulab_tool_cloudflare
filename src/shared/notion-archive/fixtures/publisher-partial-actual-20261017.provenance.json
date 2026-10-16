@@ -1,0 +1,12 @@
+{
+  "source": "Saved accepted normal B135 batch02 real multi-PATCH publication; protocol faults only in tests",
+  "stockCode": "4502",
+  "docId": "S100YB5L",
+  "originalPostSha256": "b4bf9a0db1ee186eca9fbb319712ccde8bd4094fa7c74bf5dbf86d9d93dfa1b0",
+  "originalNormalPhysicalPreSha256": "4b4ad71187f4724e152a5feb5e25e29f39fad3795aada1261a80615c5cbd4277",
+  "projectedJsonSha256": "aad2d1c9f717253b0d7f827f6559d72baac512a9a77813b6c59f89f9e14edee2",
+  "gzipSha256": "6a764699f39ea6031b34707cd153641ac74ad1e8c8ac8e11bac7ff5f629a59f1",
+  "gzipBytes": 245721,
+  "normalPatchChunks": 2,
+  "projection": "Opaque UUIDs, including embedded receipt pointers, deterministically hashed; actor/metadata URL/request IDs removed. All filing text, raw old properties, original clocks and actual new property values preserved. No invented probabilities."
+}

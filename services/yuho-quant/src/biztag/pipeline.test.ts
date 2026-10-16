@@ -19,7 +19,9 @@ import { readInputReceipt, readTextSyncReceipt, withInputReceipt, withTextSyncRe
 import { PREFILTER_SECTIONS } from "./prefilter.js";
 import { TEXT_SECTIONS } from "../services/edinet/text-sections.js";
 import { NotionUnknownResultError } from "../../../../src/shared/notion-archive/client.js";
+import { createSupplementPublicationJournal } from "../../../../scripts/biztag-local/publication-journal.js";
 
+vi.mock("../../../../scripts/biztag-local/publication-journal.js", () => ({ createSupplementPublicationJournal: vi.fn(() => ({ assertReady: vi.fn(), reserve: vi.fn() })) }));
 const notionMocks = vi.hoisted(() => ({
   createLedgerEntry: vi.fn(),
   updateLedgerEntry: vi.fn(),
@@ -160,6 +162,12 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("runBiztag dry-run スコープ", () => {
+  it("prior publisher unknown stops before all metadata and model factories", async () => {
+    vi.mocked(createSupplementPublicationJournal).mockImplementationOnce(() => { throw new NotionUnknownResultError("saved publisher intent incomplete"); });
+    await expect(runBiztag({ budgetMs: 10_000, thresholds: { yesMin: 0.8, noMax: 0.2 }, model: CLEF_MODEL })).rejects.toThrow("publisher intent incomplete");
+    expect(loadNewStockEligibility).not.toHaveBeenCalled(); expect(loadLatestDocs).not.toHaveBeenCalled();
+    expect(notionMocks.ensureLedgerDb).not.toHaveBeenCalled(); expect(createClefClient).not.toHaveBeenCalled();
+  });
   it("dryRun: true では台帳への書込 (通知・見直し材料) を一切行わない", async () => {
     const summary = await runBiztag({
       budgetMs: 10_000,
