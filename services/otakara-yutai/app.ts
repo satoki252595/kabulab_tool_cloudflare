@@ -875,7 +875,7 @@ export function renderBenefitFacts(facts: PublicBenefitFacts | null, amount: num
   const reasons = facts.valueStatus === "source_amount_qualified" && amount === null
     ? "掲載額の反映は未確認" : facts.valueReasons.map(reason => VALUE_REASON_LABELS[reason]).join("・");
   return `<details><summary>適用条件・金額の根拠・出典</summary>
-    <p>${termTip("継続保有", "一定の期間、株を持ち続ける条件です。株数だけでなく対象の期間も確認してください。")}: ${h(holding)}</p>
+    <p>${termTip("期間・保有の記載", "掲載中の期間や保有条件の表記です。預金などの利用期間と、株を持ち続ける期間は異なります。対象は掲載元で確認してください。")}: ${h(holding)}</p>
     <p>選択: ${facts.choice ? "選択に関する記載あり（選択肢を合算しないでください）" : "掲載に記載なし"} / 抽選: ${facts.lottery ? "記載あり（対象は掲載元で確認）" : "掲載に記載なし"} / 申込・応募: ${facts.application ? "記載あり（必要性・対象は掲載元で確認）" : "掲載に記載なし"}</p>
     <p>${termTip("併用", "何を組み合わせられるかに関する条件です。券の利用時の併用と、複数の優待を同時に受け取ることは異なります。対象は掲載元で確認してください。")}: ${h(combination)}。銘柄全体の合計額は未確認です。</p>
     <p>金額: ${h(reasons)}</p>

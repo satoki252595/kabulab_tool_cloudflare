@@ -100,6 +100,9 @@ describe("公開優待条件DTO", () => {
     expect(html).toContain("併用可の記載あり（対象未確認）");
     expect(html).toContain("券の利用時の併用と、複数の優待を同時に受け取ることは異なります");
     expect(html).toContain("掲載の期間表記 1年以上（保有条件・株数との対応は掲載元で確認）");
+    expect(html).toContain("期間・保有の記載");
+    expect(html).toContain("預金などの利用期間と、株を持ち続ける期間は異なります");
+    expect(html).not.toContain("継続保有");
     expect(html).not.toContain("/ 申込・応募: 必要");
     expect(html).not.toContain("複数の優待を同時に受け取れるかという条件です");
   });
@@ -123,6 +126,8 @@ describe("公開優待条件DTO", () => {
       if (facts.application) expect(html).toContain("記載あり（必要性・対象は掲載元で確認）");
       if (facts.combination !== "unverified") expect(html).toContain("対象未確認");
       if (facts.holdingPeriods.length > 0) expect(html).toContain("掲載の期間表記");
+      expect(html).toContain("期間・保有の記載");
+      expect(html).not.toContain("継続保有");
       expect(html).not.toContain("/ 申込・応募: 必要");
       expect(html).not.toContain(row.description);
       expect(facts.source.officialStatus).toBe("not_verified");
