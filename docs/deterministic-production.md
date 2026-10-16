@@ -43,7 +43,11 @@
 新規読取はqueue/ペーシング/再試行待機後にも期限を検査し、取得済み入力の物理保管/照合は別に閉じる。
 固定2社の保存実入力でモデル0を検証したが、現在本番の全量入力・定時stageは未受入。
 保存3689社corpusの条件計算では5社準備だけでも0.3rpsの読取間隔143.33秒＋候補計算21.07秒を要し、
-5件/2分は採用しない。Mac定時への接続は予算/実読取を確認してから別に行う。
+5件/2分は採用しない。任意の固定scopeを指定した場合だけ、20時biztag正常終了後に最大5件の同じ通常CLIを
+新規読取6分/child7分/最大0.3rpsで実行する。after-codeは同入力skipでも進み、末尾後は巡回する。
+stage-level pendingをchild前に固定し、unknownは別入力へも再送しない。実物理ACK/本文SHA/対象/保留を
+照合後だけcursorを進める。startup receiptを含む既存全体30分・20/21時calendar/readcheckを維持する。
+stageのruntime配備・現在入力の実受入は未実施。親processのgzip検証費用も未測定として[記録](test-logs/competitor-finite-stage-20261017.md)へ残す。
 
 ## 優待の定型処理
 
