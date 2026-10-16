@@ -10,9 +10,10 @@
  * 追随させる (利回りだけ直すとスコアが置き去りになる)。
  *
  * 計算式は月次 rebuild (`src/cron/monthly.ts` の `calcYutaiYield` と
- * `src/shared/scoring.ts` の `scoreStock`) と同一関数で、株価などの入力は
- * 行の現値 (月次で写した core 値) のまま使う。`data_date` は月次で作り
- * 直した日に据え置く (この再計算は利回り・スコア列だけを現入力に合わせる
+ * `src/shared/scoring.ts` のファンダメンタル/総合計算) と同一関数で、株価などの入力は
+ * 行の現値 (月次で写した core 値) のまま使う。技術入力は変わらないため技術点を保持し、
+ * raw株価と調整済みMAを再比較しない。`data_date` は月次が写した
+ * 元core日付に据え置く (この再計算は利回り・スコア列だけを現入力に合わせる
  * もので、行全体の作り直しではないため、日付を進めると株価の鮮度を偽る)。
  * 値が変わらない銘柄には UPDATE を打たない (再実行で 0 件・冪等)。
  */
@@ -21,7 +22,7 @@ import { and, inArray } from "drizzle-orm";
 import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
 import type { D1BatchStatement } from "../../../src/shared/db/d1-http-client.js";
 import { calcYutaiYield } from "../../../src/cron/monthly.js";
-import { scoreStock, type ScoringInput } from "../../../src/shared/scoring.js";
+import { calculateFundamentalScore, calculateTotalScore, type ScoringInput } from "../../../src/shared/scoring.js";
 import { trustedCompanyYieldValue } from "./estimated-value-guard.js";
 import { activeEquityCondition } from "../../../src/shared/db/active-equity.js";
 import { stocks as coreStocks } from "../../../src/shared/db/core-schema.js";
@@ -248,12 +249,16 @@ export function computeYieldEntries(
     const scorePrev = inputs.scores.get(stockId) ?? null;
     const scoreInput = inputs.scoreInputs.get(stockId);
     let scoreNext: ScoreTriple | null = null;
-    if (scoreInput) {
-      const s = scoreStock({ ...scoreInput, yutaiYield: next });
+    if (scoreInput && scorePrev !== null) {
+      // 利回りだけが変わる。月次で資格化済みの技術点をraw価格/MAで再計算しない。
+      if (!Number.isFinite(scorePrev.technicalScore) || scorePrev.technicalScore < 0 || scorePrev.technicalScore > 100) {
+        throw new Error(`${stockId}: 保存済みテクニカルスコアが不正です。月次の再構築が必要です`);
+      }
+      const fundamental = calculateFundamentalScore({ ...scoreInput, yutaiYield: next });
       scoreNext = {
-        fundamentalScore: s.fundamentalScore,
-        technicalScore: s.technicalScore,
-        totalScore: s.totalScore,
+        fundamentalScore: fundamental.score,
+        technicalScore: scorePrev.technicalScore,
+        totalScore: calculateTotalScore(fundamental.score, scorePrev.technicalScore),
       };
     }
     if (!scorePrev) skippedNoScore.push(stockId);

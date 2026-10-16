@@ -10,8 +10,8 @@
  *   - 新規・更新が 1 行でもある書込バッチは、書込後 `verifyObservedBatch()` で
  *     全行を read-only 再検証する (全行 unchanged の再実行は upsert 照合済み)。
  *   - 保管済みのキー: 取得元へは取りに行かず、Notion の保管ファイルから再解析し、
- *     全 draft を upsert し直す。`upsertObservation` が同値行は書かず
- *     (unchanged)、途中欠落・値・relation の不一致だけ修復する。
+ *     全 draft を共通batchで照合する。完全同値行は書かず
+ *     (unchanged)、途中欠落・値・relation の不一致はfresh個別upsertで修復する。
  *     最後の 1 行の有無で全バッチを skip しない (最後だけある途中欠落を
  *     見落とすため)。
  */
@@ -19,7 +19,7 @@ import {
   ensureObservationsDb,
   isArchived,
   recordPrimaryData,
-  upsertObservation,
+  upsertObservationBatch,
   verifyObservedBatch,
   type ObservationInput,
   type VerifiedObservationRow,
@@ -73,15 +73,13 @@ async function writeObservations(
   const { dbId } = await ensureObservationsDb();
   const counts: WriteCounts = { created: 0, updated: 0, unchanged: 0 };
   const rows: VerifiedObservationRow[] = [];
-  // 配列順に 1 行ずつ書く。最後の行の存在を「このバッチの取込完了」の印に使うため、
-  // 並列化して順序を崩さない。
-  for (const d of drafts) {
-    const input: ObservationInput = {
-      ...d,
-      indicatorPageId: ctx.indicatorPageId(d.indicatorKey),
-      primaryDataPageId,
-    };
-    const r = await upsertObservation(dbId, input);
+  const inputs: ObservationInput[] = drafts.map((d) => ({
+    ...d, indicatorPageId: ctx.indicatorPageId(d.indicatorKey), primaryDataPageId,
+  }));
+  // 同値だけ一括確認し、変更/欠落のfresh upsertと戻り値は入力順を保持する。
+  const results = await upsertObservationBatch(dbId, inputs);
+  for (const [i, input] of inputs.entries()) {
+    const r = results[i];
     counts[r.outcome] += 1;
     rows.push({ input, pageId: r.pageId });
   }

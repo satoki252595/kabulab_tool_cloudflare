@@ -466,6 +466,11 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
   const schema = await readHoldingsSchema();
   assert.equal(Object.keys(buildHoldingsSchemaPatch(schema).properties).length, 0, "保有明細schemaの受入が未完了です");
   const periodRows = await readHoldingPeriodRows(dbId, args.source);
+  if (!pricePhase && offset > 0) {
+    const prefix = verifyCompletedHoldingsSource(args.source, args.ownerName,
+      { ...parsed, holdings: parsed.holdings.slice(0, offset) }, zipSha256, periodRows);
+    if (prefix.status === "held") return hold(`既完windowの原本列が不一致です。${prefix.reason}`, parsed.holdings.length, false);
+  }
   const resolved = resolveHoldingRows(args.source, args.ownerName, parsed.holdings, selected, periodRows);
   if (resolved.status === "held") return hold(resolved.reason, parsed.holdings.length, false);
   // 既照合行はfile/contextを含む全原本列を確認してからwrite0とする。
@@ -562,6 +567,11 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
   }
   if (!pricePhase) {
     const nextOffset = offset + selected.length, pending = nextOffset < parsed.holdings.length;
+    if (!pending) {
+      const final = verifyCompletedHoldingsSource(args.source, args.ownerName, parsed, zipSha256,
+        await readHoldingPeriodRows(dbId, args.source));
+      if (final.status === "held") throw new Error(`全原表の最終読戻しが未成立です。${final.reason}`);
+    }
     await recordRecoveryInfo(args.archivePageId, { ...sourceInfo!, sourceNextHoldingOffset: nextOffset },
       pending ? "再開待ち" : "明細原本照合済", pending ? `原本${nextOffset}/${parsed.holdings.length}明細の読戻し済み。次windowへ再開待ち` : "全明細の保存値・原典キー・旧値保全を読戻し済み",
       false, undefined, sourceBefore);

@@ -175,7 +175,7 @@ describe("保存原本と通常定時取得の共通計算", () => {
       return { rows: [] };
     }) as Parameters<typeof writeStockSnapshot>[0];
     await writeStockSnapshot(db, trend, undefined, { runStartedSec: 1 });
-    expect(savedIndicators).toMatchObject({ trend_short: 1, trend_ok_short: 1, latest_close: 1478.5 });
+    expect(savedIndicators).toMatchObject({ trend_short: 1, trend_ok_short: 1, latest_close: 1478.5, latest_adjclose: 1435 });
     for (const adj of [undefined, null, 0, -1, NaN, Infinity]) {
       const missing = structuredClone(saved.ohlcv);
       missing.at(-1)!.adj = adj;
