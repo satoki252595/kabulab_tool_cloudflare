@@ -344,6 +344,21 @@ function stockRaw(bars: number, lastDate: string) {
   };
 }
 
+function saved8303Source(projectionBodies: Record<string, string>) {
+  return Object.fromEntries((["chart", "quote-summary"] as const).map((api) => {
+      const bytes = new TextEncoder().encode(projectionBodies[`8303-${api}`]);
+      const expectedSha256 = api === "chart"
+        ? "713a310eae4050629ad65572ff79e6afcd694cd7aecac5b3e9ecbdb889cd6b9f"
+        : "fa010a5432d415c9b25303ccc15862df647a48ec4acaf9ff57df961cad0488a0";
+      return [api === "chart" ? "chart" : "summary", { expectedSha256, expectedByteLength: bytes.byteLength,
+        capture: { symbol: "8303", status: 200, bytes, headers: {},
+          url: api === "chart"
+            ? "https://query1.finance.yahoo.com/v8/finance/chart/8303.T?range=5y&interval=1d&events=split%2Cdiv"
+            : "https://query1.finance.yahoo.com/v10/finance/quoteSummary/8303.T?modules=financialData,defaultKeyStatistics,summaryDetail,incomeStatementHistory",
+          receivedAt: api === "chart" ? "2026-10-14T10:15:47.400Z" : "2026-10-14T10:15:48.285Z" } }];
+    })) as Parameters<typeof parseSavedStockRawData>[1];
+}
+
 describe("runDailySync 配線: 保管してから return/throw", () => {
   afterEach(() => {
     sqlite?.close();
@@ -460,22 +475,12 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
     expect(body.failures).toEqual([]);
   });
 
-  it.each([false, true])("8303の旧RSI全列/時計保持・原SHA付きHOLDを保存し、当日書込失敗=%sを二重計数しない", async (saveFails) => {
-    vi.mocked(Date.now).mockReturnValue(Date.parse("2026-10-14T10:16:00Z"));
-    vi.mocked(fetchChart).mockImplementation(chartWithRaw(sessionChart("2026-10-14")));
+  it.each([[false, false], [true, false], [false, true]])("8303の旧RSI/原SHA保持、当日書込失敗=%s・fresh HOLD=%sを二重計数しない", async (saveFails, freshHold) => {
+    const targetDate = freshHold ? "2026-10-15" : "2026-10-14";
+    vi.mocked(Date.now).mockReturnValue(Date.parse(`${targetDate}T10:16:00Z`));
+    vi.mocked(fetchChart).mockImplementation(chartWithRaw(sessionChart(targetDate)));
     const projectionBodies = JSON.parse(gunzipSync(readFileSync(new URL("../shared/yahoo/fixtures/stock-daily-scopes-20261014.json.gz", import.meta.url))).toString()) as Record<string, string>;
-    const source = Object.fromEntries((["chart", "quote-summary"] as const).map((api) => {
-      const bytes = new TextEncoder().encode(projectionBodies[`8303-${api}`]);
-      const expectedSha256 = api === "chart"
-        ? "713a310eae4050629ad65572ff79e6afcd694cd7aecac5b3e9ecbdb889cd6b9f"
-        : "fa010a5432d415c9b25303ccc15862df647a48ec4acaf9ff57df961cad0488a0";
-      return [api === "chart" ? "chart" : "summary", { expectedSha256, expectedByteLength: bytes.byteLength,
-        capture: { symbol: "8303", status: 200, bytes, headers: {},
-          url: api === "chart"
-            ? "https://query1.finance.yahoo.com/v8/finance/chart/8303.T?range=5y&interval=1d&events=split%2Cdiv"
-            : "https://query1.finance.yahoo.com/v10/finance/quoteSummary/8303.T?modules=financialData,defaultKeyStatistics,summaryDetail,incomeStatementHistory",
-          receivedAt: api === "chart" ? "2026-10-14T10:15:47.400Z" : "2026-10-14T10:15:48.285Z" } }];
-    })) as Parameters<typeof parseSavedStockRawData>[1];
+    const source = saved8303Source(projectionBodies);
     // 正常定時入口も同じpure builderへ接続。保存済みprojectionは原clockで解析しtransport0。
     const value = await parseSavedStockRawData("8303", source);
     const hold = value.rsiHistoryHold!;
@@ -499,17 +504,23 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
     const result = await runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect,
       sendOverlayBatch: makeTxBatchSender(sqlite, { sends: 0 }) });
     expect(result).toMatchObject({ totalStocks: 1, successStocks: 0, failedStocks: 1,
-      currentUpdatedStocks: saveFails ? 0 : 1, historyHeldStocks: 1 });
+      currentUpdatedStocks: saveFails || freshHold ? 0 : 1, historyHeldStocks: freshHold ? 0 : 1 });
     expect(fetchStockRawData).toHaveBeenCalledTimes(1);
     expect(vi.mocked(fetchStockRawData).mock.calls[0][2]).toMatchObject({ stockDailyScopes: true });
     expect(sqlite.prepare("SELECT * FROM rsi_percentile").get()).toEqual(pre);
     const input = vi.mocked(recordPrimaryData).mock.calls.at(-1)![0];
     const batch = JSON.parse(new TextDecoder().decode(input.files![0].bytes));
     expect(batch.stats).toEqual({ totalStocks: 1, successStocks: 0, failedStocks: 1 });
-    expect(batch.currentUpdatedStocks).toBe(saveFails ? 0 : 1);
-    expect(batch.rsiHistoryHolds).toEqual([{ code: "8303", ...hold }]);
-    expect(batch.failures[0].error).toContain(hold.sourceSha256);
+    expect(batch.currentUpdatedStocks).toBe(saveFails || freshHold ? 0 : 1);
+    expect(batch.rsiHistoryHolds).toEqual(freshHold ? [] : [{ code: "8303", ...hold }]);
+    expect(batch.corporateDiagnostics).toEqual([{ code: "8303", attempt: 0, expectedDate: targetDate, diagnostic: value.corporateDiagnostics }]);
+    expect(batch.failures[0].error).toContain(freshHold ? "実日足が未取得" : hold.sourceSha256);
     expect(isDailySyncIncomplete(result)).toBe(true);
+    if (freshHold) {
+      expect(sqlite.prepare("SELECT COUNT(*) AS n FROM core_stock_financials").get()).toEqual({ n: 0 });
+      expect(sqlite.prepare("SELECT COUNT(*) AS n FROM swing_stock_indicators").get()).toEqual({ n: 0 });
+      return;
+    }
     if (saveFails) {
       expect(batch.failures).toHaveLength(1);
       // 通常producerはretry:false。回収対象になり得る503でもcallbackへ入らず原本再取得0。
@@ -598,6 +609,27 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
     expect(first.captures).toEqual([]);
     expect(first.missing!.map((m) => m.api).sort()).toEqual(["chart", "quote-summary"]);
     expect(fetchStockRawData).toHaveBeenCalledTimes(1);
+  });
+
+  it("後続429でrun中断しても取得済みChartの権利診断をaborted batchへ残す", async () => {
+    vi.mocked(Date.now).mockReturnValue(Date.parse("2026-10-14T10:16:00Z"));
+    vi.mocked(fetchChart).mockImplementation(chartWithRaw(sessionChart("2026-10-14")));
+    const bodies = JSON.parse(gunzipSync(readFileSync(new URL("../shared/yahoo/fixtures/stock-daily-scopes-20261014.json.gz", import.meta.url))).toString()) as Record<string, string>;
+    const source = saved8303Source(bodies), value = await parseSavedStockRawData("8303", source);
+    vi.mocked(fetchStockRawData).mockImplementationOnce(async (_code, _range, options) => {
+      await options?.onChartRaw?.(source.chart.capture);
+      await options?.onSummaryRaw?.(source.summary.capture);
+      return value;
+    }).mockRejectedValueOnce(new Error("Chart API HTTP エラー [1332]: 429 Too Many Requests"));
+    const db = freshDb(); seedTarget(1, "8303"); seedTarget(2, "1332");
+    await expect(runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect,
+      sendOverlayBatch: makeTxBatchSender(sqlite, { sends: 0 }) })).rejects.toThrow("429");
+    expect(fetchStockRawData).toHaveBeenCalledTimes(2);
+    expect(sqlite.prepare("SELECT count(*) AS n FROM swing_stock_indicators").get()).toEqual({ n: 0 });
+    const input = vi.mocked(recordPrimaryData).mock.calls.at(-1)![0];
+    const batch = JSON.parse(new TextDecoder().decode(input.files![0].bytes));
+    expect(batch.failureCollection).toBe("aborted");
+    expect(batch.corporateDiagnostics).toEqual([{ code: "8303", attempt: 0, expectedDate: "2026-10-14", diagnostic: value.corporateDiagnostics }]);
   });
 
   it("単一原文超過は新source GET停止/株式write0、実未取得診断を保管", async () => {
