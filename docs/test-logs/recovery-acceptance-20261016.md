@@ -2,6 +2,17 @@
 
 追跡は[#348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)。この記録は以下の対象の実測であり、全20機能・全空欄の完了を意味しない。
 
+## 10月17日00:06 JSTの追加確認
+
+- 本文は追加50社を23:47:54〜00:05:03に共通`withBiztagWriter`/`runBiztag`で反映し、先行5社と合わせて固定776件中55件を受入、残721件。追加50社は全1,300 native応答・198,853,194 bytes、39列・他props・根拠・最新sourceと物理PRE/POSTの全SHAを00:05:34に通信0で独立再検証した。全工程はNotion上限1.2rps、通常pipelineは694要求・653.853秒、モデル/上流API0。次の50社は現在の実source原文とメタデータから検証する有限実行中で、55件へ加えていない。
+- #433をmain `241f06ed`へ統合。生成SQL `0031_stock_adjusted_point.sql`を23:49:22に1回だけ適用し、旧3,767行の全38列・全索引を保持、新39列目は全行NULLと確認した。物理PRE/POSTとnative8読取/1DDLの全文SHAを独立照合、再送・指標値更新・取得元・モデル0。保存済み8303の同一Chart/Summaryから、通常parser→snapshot→indicatorの同一adjclose/SMA→月次MA比較/scoreをacceptedmainで純local確認した。列追加を過去値の充填や次回定時/月次全量の成功に数えない。
+- #432のCron分精度修正はmain `c983d7b1`の通常build `cfe5e679`で23:57:15に実deploy、version `2a60e9c6-f885-45f0-b908-21a302d79176`を確認した。予定17:00:52を同じ17:00分として扱い、実受付17:10と新規開始23:30の期限を保持する。元の17時失敗と次回定時全量未受入は変更しない。
+- RAWの同一pool run38914482437は23:56:10に終了。500検証（新規484・既存16）、cursor12,182/78,832・残66,650、上流GET0、Notion10要求、38分弱。次run38919797532が進行中。元manifest・起点・上限・結果不明は保持する。
+
+残権利の追加確認では、保存済み7203/8303の各1,221本を通信0で読み、双方の直近130本中119本でcloseとadjcloseが異なり、配当原イベントを確認した。差だけから通常OHLC/ATRを無効化したり、価格へ係数を再適用したりしていない。8303の2023年9月28日の併合原値は直近窓外。現Chart OHLC/volumeの株数基準、直近の分割をまたぐ原本、増資・新株予約権・会社分割の効力日/株数履歴との連結は未証明で[#343](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/343)を継続する。参照: [Yahooの調整済み終値の説明](https://in.help.yahoo.com/kb/adjusted-close-sln28256.html)、[JPXの権利処理](https://www.jpx.co.jp/equities/trading/margin/rights/02.html)（確認日2026-10-17）。
+
+追加の私有証跡は`A50-normal-mechanical-common-v1/{SUCCESS,independent-acceptance}.json`、`continuation/cf-main-c983-logs.txt`、`continuation/job-117018352250.log`。0031は`.runtime/yutai-ma-basis/source-v1/tmp/yutai-ma-basis/{pre-schema-v1,apply-schema-v1,final-main-replay.json}`に全原本と元の監査停止を保持する。全20機能・全欠測の最終受入は未完。
+
 ## 23:50 JSTの追加確認
 
 | 対象 | 追加の受入 | 残件・制限 |
