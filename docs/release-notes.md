@@ -9,6 +9,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ## 2026-10-17
 
+- RAW原本の通常Actions継続は、初回の実行commit SHAをcheckoutと次dispatchへ引き継ぎ、mainが進んでも同じrawコード・依存lockで処理する。不正revision・checkout不一致は依存準備前に停止し、固定集合・元run予算・CAS/unknown境界を保持する。
 - 通常競合の機械prepareは、既存active/latest読取で証明した最新有報の母集団から候補を選び、policy・選定snapshot・除外理由を新入力SHAへ束縛する。選出後の資格不足や空候補はHOLDとし、旧確率・競合relation・固定scopeを変更しない。[保存断面と通常回帰](test-logs/competitor-prepare-current-corpus-20261017.md)を記録する。
 - 保有明細の共通parserは、提出会社の原本節全体の明示不該当を原表未対応と区別して根拠を保持する。通常publisher/prepareではHOLDを維持し、子会社や一部区分を保有無しとせず、株数0・空配列成功・新価格queueへ変換しない。[実原本と境界の検証](test-logs/holdings-explicit-not-applicable-20261017.md)を記録する。
 - RAW原本の結果不明は通常再送せず、固定state全SHAと実欠測を確認した単一原本だけ明示CASで解決できる。既知intent後の未知は永続停止し、intent自体の未知も失敗runを保全して再dispatchしない。原本・索引の全量回復とは分けて受け入れる。
