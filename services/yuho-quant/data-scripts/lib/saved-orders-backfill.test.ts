@@ -126,6 +126,7 @@ describe("normal finite orders repair", () => {
       parsed,
       clock,
     );
+    expect(built.expected.p_yuho_growth).toHaveLength(1);
     const db = openActualSnapshot(process.cwd(), before);
     try {
       db.exec("BEGIN");
@@ -181,6 +182,106 @@ describe("normal finite orders repair", () => {
         expect(readSnapshot(db, item.stockId)).toEqual(raced);
       } finally {
         db.close();
+      }
+    }
+  });
+  it("saves actual subtotal-only 1768 orders without inventing a total or growth row, preserving six-table CAS and repeat", async () => {
+    const dir = fileURLToPath(
+      new URL("../../src/tests/fixtures/order-saved-1768/", import.meta.url),
+    );
+    const proof = JSON.parse(
+      readFileSync(join(dir, "provenance.json"), "utf8"),
+    );
+    const raw = readFileSync(join(dir, "S100YEJU.zip"));
+    const original = JSON.parse(
+      readFileSync(join(dir, "snapshot.json"), "utf8"),
+    ) as Snapshot;
+    expect(sha(raw)).toBe(proof.zipSha256);
+    expect(sha(readFileSync(join(dir, "snapshot.json")))).toBe(
+      proof.snapshotSha256,
+    );
+    const facts = parseOrderData(raw, proof.item.periodEnd);
+    expect(facts.status).toBe("ok_pattern_b");
+    expect(facts.facts).toHaveLength(6);
+    expect(new Set(facts.facts.map((f) => f.fiscalYearEnd))).toEqual(
+      new Set(["2025-03-31", "2026-03-31"]),
+    );
+    expect(new Set(facts.facts.map((f) => f.segmentKind))).toEqual(
+      new Set(["segment", "subtotal"]),
+    );
+    expect(new Set(facts.facts.map((f) => f.isConsolidated))).toEqual(
+      new Set([true]),
+    );
+    validateOrderRepairSet(facts, proof.item.periodEnd);
+    const target = {
+      stockId: proof.item.stockId,
+      documentId: proof.item.documentId,
+      docId: proof.item.docId,
+      periodEnd: proof.item.periodEnd,
+    };
+    const built = await buildOrdersAtomicWithCommonProjection(
+      process.cwd(),
+      original,
+      target,
+      facts,
+      clock,
+    );
+    expect(built.expected.p_yuho_growth).toEqual([]);
+    expect(built.projectionStatements).toBe(1); // The unchanged normal scoped sweep remains in the batch.
+    const db = openActualSnapshot(process.cwd(), original);
+    try {
+      db.exec("BEGIN");
+      for (const statement of built.statements)
+        db.prepare(statement.sql).all(
+          ...(statement.params as (string | number | null)[]),
+        );
+      db.exec("COMMIT");
+      const actual = readSnapshot(db, target.stockId);
+      assertTargetPost(actual, built.expected, target, "orders");
+      expect(
+        actual.yuho_order_facts
+          .filter((row) => row.document_id === target.documentId)
+          .map((row) => row.segment_kind),
+      ).toEqual(facts.facts.map((row) => row.segmentKind));
+      expect(actual.yuho_overseas_facts).toEqual(original.yuho_overseas_facts);
+      expect(actual.yuho_text_sections).toEqual(original.yuho_text_sections);
+      expect(actual.core_stocks).toEqual(original.core_stocks);
+      const repeated = await buildOrdersAtomicWithCommonProjection(
+        process.cwd(),
+        actual,
+        target,
+        facts,
+        clock + 1,
+      );
+      expect(savedBusinessView(repeated.expected, "orders")).toEqual(
+        savedBusinessView(actual, "orders"),
+      );
+    } finally {
+      db.close();
+    }
+    for (let index = 0; index < tables.length; index++) {
+      // Deliberately wrong expected PRE, never seeded as financial source or persisted business data.
+      const statements = built.statements.map((statement) => ({
+        ...statement,
+        params: [...statement.params],
+      }));
+      const expected = JSON.parse(String(statements[index].params[0]));
+      statements[index].params[0] = JSON.stringify(
+        expected.length > 0 ? expected.slice(1) : [{}],
+      );
+      const raced = openActualSnapshot(process.cwd(), original);
+      try {
+        raced.exec("BEGIN");
+        expect(() => {
+          for (const statement of statements)
+            raced
+              .prepare(statement.sql)
+              .all(...(statement.params as (string | number | null)[]));
+        }).toThrow();
+        raced.exec("ROLLBACK");
+        expect(readSnapshot(raced, target.stockId)).toEqual(original);
+      } finally {
+        raced.close();
       }
     }
   });
