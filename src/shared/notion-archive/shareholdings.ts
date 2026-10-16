@@ -1050,7 +1050,7 @@ export interface UnknownHoldingsSource {
 function qualifyUnknownHoldingsSource(page: HoldingPage, dbId: string): UnknownHoldingsSource {
   assert.ok(page.properties?.["保有明細再開情報"], "結果未確定sourceの再開情報が欠けています");
   const info = JSON.parse(richValue(page.properties["保有明細再開情報"])) as RecoveryInfo;
-  assert.match(info.source.docId, /^S[0-9A-Z]+$/); assert.match(info.source.stockCode, /^[0-9A-Z]{4}$/);
+  assert.match(info.source.docId, /^S[0-9A-Z]{7}$/); assert.match(info.source.stockCode, /^[0-9]{3}[0-9A-Z]$/);
   assert.ok(typeof info.source.edinetCode === "string"); assert.match(info.source.edinetCode, /^E[0-9]{5}$/);
   assert.match(info.source.fiscalYearEnd, /^\d{4}-\d{2}-\d{2}$/); assert.ok(Number.isFinite(Date.parse(info.source.fiscalYearEnd)));
   assert.equal(new Date(info.source.fiscalYearEnd).toISOString().slice(0, 10), info.source.fiscalYearEnd);

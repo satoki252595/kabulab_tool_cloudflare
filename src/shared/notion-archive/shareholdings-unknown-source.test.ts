@@ -87,9 +87,15 @@ describe("normal unknown source isolation", () => {
     expect(await resumePendingShareholdings(options)).toMatchObject({ usedRows: 0, resumed: 0, held: 1, pending: true, unknownSources: [{ reasonCode: "unknown_source_isolated" }] });
     expect(unknownGets).toBe(2); expect(listPageFiles).not.toHaveBeenCalled(); expect(mutations).toEqual([]);
   });
-  it.each(["missing-info", "unbound-issuer", "wrong-manifest", "missing-facts", "wrong-key", "overflow", "too-many", "duplicate", "collision", "network"])("%s stops before any other writer", async change => {
+  it.each(["missing-info", "invalid-doc", "invalid-code", "unbound-issuer", "wrong-manifest", "missing-facts", "wrong-key", "overflow", "too-many", "duplicate", "collision", "network"])("%s stops before any other writer", async change => {
     fault = change;
     if (change === "missing-info") delete unknown.properties["保有明細再開情報"];
+    if (change === "invalid-doc" || change === "invalid-code") {
+      const value = info(unknown);
+      if (change === "invalid-doc") value.source.docId += "A";
+      else value.source.stockCode = "A911";
+      unknown.properties["保有明細再開情報"].rich_text = rt(JSON.stringify(value));
+    }
     if (["unbound-issuer", "wrong-manifest"].includes(change)) {
       const metadata = JSON.parse(unknown.properties.Metadata.rich_text.map((p: { plain_text: string }) => p.plain_text).join(""));
       if (change === "unbound-issuer") metadata.edinetCode = "E00133";
@@ -101,7 +107,8 @@ describe("normal unknown source isolation", () => {
     if (change === "duplicate") unknownPages.push(structuredClone(unknown));
     if (change === "too-many") unknownPages = Array.from({ length: 6 }, () => structuredClone(unknown));
     if (change === "collision") { const value = info(healthy); value.source = info(unknown).source; healthy.properties["保有明細再開情報"].rich_text = rt(JSON.stringify(value)); }
-    await expect(resumePendingShareholdings(options)).rejects.toThrow();
+    if (change === "invalid-doc" || change === "invalid-code") await expect(resumePendingShareholdings(options)).rejects.toThrow("regular expression");
+    else await expect(resumePendingShareholdings(options)).rejects.toThrow();
     expect(mutations).toEqual([]); expect(listPageFiles).not.toHaveBeenCalled(); expect(recordPrimaryData).not.toHaveBeenCalled();
     if (change === "network") expect(unknownGets).toBe(1);
   });
@@ -117,14 +124,14 @@ describe("normal unknown source isolation", () => {
   });
   it("a revised document and different archive cannot bypass the same-issuer/FY guard", async () => {
     const original = info(unknown);
-    await expect(publishVerifiedShareholdings({ source: { ...original.source, docId: `${original.source.docId}A` }, ownerName: original.ownerName,
+    await expect(publishVerifiedShareholdings({ source: { ...original.source, docId: `${original.source.docId.slice(0, -1)}Q` }, ownerName: original.ownerName,
       zip: readFileSync(new URL("../../../services/yuho-quant/src/tests/fixtures/holdings-pending1911/1911-S100Y1XP.zip", import.meta.url)), archivePageId: healthy.id, maxRows: 1 })).rejects.toThrow("同じ提出会社・期末");
     expect(mutations).toEqual([]); expect(unknownGets).toBe(0); expect(listPageFiles).not.toHaveBeenCalled();
   });
   it("a different FY reaches its own source-identity gate, rather than colliding with1911's period", async () => {
     const original = info(unknown);
     // Declared input mutation, not a fabricated historical filing. Its mismatched actual archive must still STOP.
-    await expect(publishVerifiedShareholdings({ source: { ...original.source, docId: `${original.source.docId}A`, fiscalYearEnd: "2024-12-31" }, ownerName: original.ownerName,
+    await expect(publishVerifiedShareholdings({ source: { ...original.source, docId: `${original.source.docId.slice(0, -1)}Q`, fiscalYearEnd: "2024-12-31" }, ownerName: original.ownerName,
       zip: readFileSync(new URL("../../../services/yuho-quant/src/tests/fixtures/holdings-pending1911/1911-S100Y1XP.zip", import.meta.url)), archivePageId: healthy.id, maxRows: 1 })).rejects.toThrow("S100XT0W");
     expect(vi.mocked(notionRequest).mock.calls.some(([method, path]) => method === "GET" && path === `/pages/${healthy.id}`)).toBe(true);
     expect(mutations).toEqual([]);

@@ -12,6 +12,6 @@ cronの通常結果に`holdings:unknown_source_isolated`件数と`requires_revie
 
 追加通信はsource publisher1呼出あたりNotion query1（未知0件でも必須）、隔離source1件あたり前後GET2（最大10）。例えばpublisher呼出数を`p`、隔離件数を`u`とすると追加読取は`p+2u`で、通常cronの取込上限60文書・再開上限5文書なら最大75読取となる。D1、新原典GET、ZIP download、モデル、DDLは追加0。元の300秒と件数上限は増やさず、Notion rate次第で当該runの処理件数が減り得る。現行の凍結済み本番backfillへ適用しておらず、追加通信の実本番時間は未受入である。
 
-Nixで保存実1911の未知source全props、同じ原本の45明細、別1897の全ZIP/8明細・source snapshotを使って検証する。1897の元snapshotは完了状態である。テストでは再開可能checkpointを作るため状態とoffsetだけを明示的に変え、原本/業務値を変えない。FilesのSigV4 query/expiryだけの除去をprovenanceへ列挙し、未加工のprivate nativeは保持する。同じ期末の訂正文書、別期末の原本資格不足、malformed/未束縛/overflow/重複/衝突/全props drift、単発GET失敗を負例とした。新HTTP、業務書込、モデルは全て0。
+Nixで保存実1911の未知source全props、同じ原本の45明細、別1897の全ZIP/8明細・source snapshotを使って検証する。1897の元snapshotは完了状態である。テストでは再開可能checkpointを作るため状態とoffsetだけを明示的に変え、原本/業務値を変えない。FilesのSigV4 query/expiryだけの除去をprovenanceへ列挙し、未加工のprivate nativeは保持する。同じ期末の訂正文書、別期末の原本資格不足、既存の正準ID形式に反するdoc/code、malformed/未束縛/overflow/重複/衝突/全props drift、単発GET失敗を負例とした。新HTTP、業務書込、モデルは全て0。
 
-関連6 suite173 tests、全TypeScript型検査、変更対象lintがPASS。CIおよび本番適用は別受入とする。
+関連6 suite175 tests、全TypeScript型検査、変更対象lintがPASS。CIおよび本番適用は別受入とする。
