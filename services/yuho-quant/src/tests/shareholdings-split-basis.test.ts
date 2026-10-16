@@ -30,6 +30,29 @@ const args = { holding, fiscalYearEnd: provenance.owner.source.fiscalYearEnd, ca
 afterEach(() => vi.restoreAllMocks());
 
 describe("期末株数の法的分割日前後と市場日付の区別", () => {
+  it("実1723の別明示文型も同じissuer/FY/普通株資格で法的日付を観測し、市場日と混同しない", () => {
+    const actual = (name: string) => readFileSync(new URL(`./fixtures/holdings-split-1723/${name}`, import.meta.url));
+    const source = JSON.parse(actual("provenance.json").toString());
+    const zip = actual("S100YH9O.zip"), files = zipReader.unzip(zip);
+    expect(hash(zip)).toBe(source.zipSha256); expect(zip.length).toBe(source.zipBytes);
+    expect(hash(files.get(source.filename)!)).toBe(source.memberSha256);
+    expect(verifySavedHoldingsSource(zip, source.source).status).toBe("verified");
+    const unzip = vi.spyOn(zipReader, "unzip");
+    const observed = observePreSplitFiscalYearBasis(zip, source.source, source.filename, files);
+    expect(unzip).not.toHaveBeenCalled();
+    expect(observed).toMatchObject({ source: source.source, legalEffectiveDate: "2026-04-01", numerator: 4, denominator: 1,
+      fiscalYearShares: "16395000", context: { entity: "E00313-000", endDate: "2026-03-31" } });
+    expect(observed?.statement).toContain("上記の事項 は、当該株式分割前の株式数を基準としております");
+    expect(source.derivedPriceReference.reportedSplitDate).toBe("2026-03-30");
+    expect(observed?.legalEffectiveDate).not.toBe(source.derivedPriceReference.reportedSplitDate);
+    const native = files.get(source.filename)!.toString();
+    for (const changed of [native.replaceAll("当社は、2026年", "子会社は、2026年"),
+      native.replaceAll("上記の事項", "上記の事項の一部"), native.replaceAll("株式分割を行っております", "株式分割を予定しております")]) {
+      const input = new Map(files); input.set(source.filename, Buffer.from(changed));
+      expect(observePreSplitFiscalYearBasis(zip, source.source, source.filename, input)).toBeUndefined();
+    }
+    expect(hash(zip)).toBe(source.zipSha256);
+  });
   it("全原本SHA/DEI/普通株期末fact/当期durationを固定し、原注記の明示法的4/1を観測する", () => {
     expect(hash(issuerZip)).toBe(provenance.issuer.zipSha256); expect(hash(ownerZip)).toBe(provenance.owner.zipSha256);
     expect(hash(priceZip)).toBe(provenance.price.gzipSha256); expect(hash(codes)).toBe(provenance.codeList.sha256);

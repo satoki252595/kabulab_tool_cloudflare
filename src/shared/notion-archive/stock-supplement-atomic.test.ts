@@ -1,4 +1,4 @@
-/** Structural Notion responses only; no production data or network. */
+/** Saved source values with structural Notion responses; no network or production writes. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
