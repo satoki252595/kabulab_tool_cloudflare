@@ -2,6 +2,27 @@
 
 追跡は[#348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)。この記録は以下の対象の実測であり、全20機能・全空欄の完了を意味しない。
 
+## 10月17日08:25 JSTの受入と進行
+
+#471の通常read-only inspect、#472の受注投影0の正資格保存、#473の分割前株数の明示文型はexact headの3 CI成功後に通常マージした。Cloudflareはmain `7bf3f67c`、08:22:11/version `117f2a31-dfe1-4e28-a7a5-0cdb42a9bbf2`まで実配信確認。以下の保存件数・実行中・配備待ちを分ける。
+
+| 対象 | root別再生まで受入 | 進行・未完 |
+|---|---|---|
+| 事業タグ本文 | 固定2,417社の先頭500社。通常機械処理・物理PRE/全POST・永続closureを照合、モデル0 | 残1,917社を同じsource e4cで実行中。意味判定104社の公開は0、本文全chainの閉鎖後に現入力を再資格化する |
+| 保有原本列 | 累計879行・72文書。range05先行5文書55行をfresh full POSTと旧15物理全SHA/新file identityで照合 | 1911は31 ACK＋未知1＋未着手13のまま。fresh inspectは未知行のPRE一致を観測したが、旧pending/unknown/source latchを解除せず再送0。株価・時価の確定には数えない |
+| 保有の未着手範囲 | 今回のREADは47要求（Notion41/D1 SELECT6）、312 rows_read、応答1,116,688B、書込/モデル0 | 1911全体と既完5文書を除く16通常plan/152候補文書2,096行を開始。既消費1,444要求/349 mutation intent（未知1含む）を元capから控除、元14:52:14.476 JST期限を保持。速度は0.5固定、途中増枠0 |
+| 海外売上 | 先行20文書105数値＋次20文書123数値＝40文書228数値。通常applyと別inspectの全6表/原本/本文/claim/物理PRE/POSTを照合 | 残126文書765数値を元の有限chainで継続中。stage02 applyだけでは追加受入にしない。主体HOLD10は別 |
+| VWAP 5分足 | 固定suffixは計600/1,856銘柄。今回32窓の先頭6窓/300銘柄はfresh全R2 PRE/POST・ETag/実SDK metadata・物理summary・UTC開始間隔25秒以上まで別再生 | 残1,256銘柄を通常CLIで実行中。以前のmetadata未保存の限界・長い過去穴は保持し、通常5d完了と全履歴の解消を混同しない |
+| RAW索引 | run38973223993は500検証（新485/既完15）、位置15,412/78,832・残63,420。固定manifest/実checkout9cdf/全log/通常continuationを別再生 | 次run38978149098は同pool51/continue149の通常継続。mainのCLI scripts追加によるpackage差を、checkout後の固定9cdf実行sourceと分けて観測する。遠隔private payload・最終anti-join・旧46 ACK不明は未解消 |
+| 受注 | 旧accepted7dの通常read-only PRE20文書124明細を全202 nativeと全6表から再生、新builderの全20成功/120 CAS rollback/20 repeatを確認。旧成功11の全SQLと海外20は同値 | 分離した112候補の最初20をaccepted acc175b0で通常apply中。旧PRE producer7dと新sourceを別bindingし、直前に現在の全6表/最新doc/原本/本文を再照合する。完了後も独立inspectの前には加算しない |
+| 株数単位 | 735保存ZIPの共有helper旧新再生で差は7322/8142だけ、733社の全値同じ。明示的な分割前期末株数基準は6→8社 | 同FYの追加照合候補28行で、価格受入0。法的日と市場権利落日、増資/併合/配当等の未証明は保持する |
+
+Notion予約は本文1.7＋保有0.5＋RAW0.25＋海外0.25＋受注0.25＋VWAP0.04＝2.99 req/s。各通常CLIの単発intent/結果不明STOP・有限HTTP/byte/time capは維持し、Paid確認を理由に実行中のcap/期限を増やしていない。追加モデルは使用しない。
+
+Macは稼働中のe4c/旧.env/依存とwriter stateを保持する。新create/version journal等のMac配備、次20/21時の終了receipt、全20機能、原典欠測・単位HOLD・重要な優待条件は未完。優待条件の現在の語句検出は適用tierの確定ではなく、保存原文と通常契約を先に照合する。
+
+私有root最終証跡は本文batch10 `a90c7b45…a8bab0`、保有freshREAD/55 `90e45479…53ccf3`、海外stage01 `a0afccfd…1bffa2`、VWAP32 batch06、RAW50 `3d1b0fbc…810d75`、各PRの`continuation/pr471〜473-root-final-review.json`。省略SHAは案内用で、実JSONにfullSHAと全入力pinsを保持する。
+
 ## 10月17日07:47 JSTの契約確認
 
 ユーザーがWorkers Paid/D1有料枠の利用を確認した。D1の月250億行の読取包含枠に対して1.3億行は0.52%。以前の全量読取見積りを理由にFreeの日次500万行制限で扱う必要はない。月間残量は未確認で、旧有限capや期限を実行中に拡張せず、索引/固定scope/実読取量を維持する。費用の一次出典と他料金との区別は[本番運用](../deterministic-production.md)へ記録した。
