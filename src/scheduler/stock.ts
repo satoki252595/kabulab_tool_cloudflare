@@ -190,7 +190,8 @@ export function resolveRunDate(
   if (route === "vwap-dispatch" || route === "vwap-readcheck") {
     const window = scheduledVwapWindow(scheduledDate); // 月水金だけ。休場は後段で明示skip。
     if (route === "vwap-dispatch") {
-      if (scheduledTimeMs !== window.start) throw new Error("VWAP予定時刻が17:00 JSTではありません");
+      // Cronは分の契約。scheduledTimeには本番で17:00:52のような秒も含まれる。
+      if (Math.floor(scheduledTimeMs / 60_000) !== window.start / 60_000) throw new Error("VWAP予定時刻が17:00 JSTの分ではありません");
       assertVwapAdmission(scheduledDate, nowMs);
     }
   }
