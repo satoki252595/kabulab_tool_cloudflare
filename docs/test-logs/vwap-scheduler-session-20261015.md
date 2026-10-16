@@ -32,5 +32,15 @@ Nixプロジェクト環境 (Node 22.22.2 / pnpm 9.15.9、既存lockと依存clo
 - 最終関連15suite: 293 PASS / 3既存optional skip。実spacing/clientとfetch置換を使い、全6取得入口・page/crumb/401認証各境界の発信停止、既429理由維持、既開始本文の原clock capture、registry新規3PUT前と既知active受領記録、最終summary後の期限検査を確認する。全体の最終版確認はPR CIでも実施する。
 - main `a61a2fd3` (#409一覧境界/#410 UTC保存session) 統合後の関連16suite: 304 PASS / 3既存optional skip。両release notesと保存readerを保持し、同fileのoptional guardを統合した。
 - 23:30ちょうどの新規開始拒否と、既知active ACK/readback後のcomplete受領保全を補強した6suite: 166 PASS / 3既存optional skip。完了記録後のCLI期限失敗を維持する。
+
+## 2026-10-16: 本番17時Cronの秒ゼロ前提を修正
+
+Issue #348。本日17時の`stock-scheduler/vwap-receipt-2026-10-16.json`は正規R2 bucketの単発GETでnative `NoSuchKey`/404だった。これだけから未発火とは判定しない。Cloudflare ObservabilityのAND条件でservice=`kabulab-cf`・cron=`0 8 * * MON,WED,FRI`に束縛すると、scheduledイベント1件・outcome=`exception`・`$workers.event.scheduledTime=1792137652`を確認できた。同serviceとエラー完全一致の別クエリは、同じclock・Worker version `d3d109ef-ae39-4c5d-ad8e-c48dfcd74c7c`に「VWAP予定時刻が17:00 JSTではありません」を結び付けた。
+
+このObservability表示値はepoch秒で2026-10-16 17:00:52 JSTに対応する。[Scheduled Handlerの公式仕様](https://developers.cloudflare.com/workers/runtime-apis/handlers/scheduled/)はcontroller入力をepochミリ秒と定義するが、秒・ミリ秒がゼロである保証はない。controllerの生ミリ秒値自体は未採取であり、回帰では公式入力単位へ変換した`1792137652000`を用いた。[Cron式は分を指定する](https://developers.cloudflare.com/workers/configuration/cron-triggers/)ため、通常の共有`resolveRunDate()`で予定17:00分への所属を確認する。予定日・曜日・未来・日跨ぎ・実時計17:10:00.000までの受付と23:30の新規開始拒否は既存どおり。52秒を受付延長へ加算せず、実時計や保存原本を17:00:00へ書き換えない。
+
+通常handlerを通す回帰で、17:00:52のcontroller→単一claim→同日`scheduled_date`のGitHub payload→同じActions受付guard、duplicateのPOST0、unknown時のclaimed保持/再送0を確認する。17:00:00.001/17:00:59.999は受入、16:59:59.999/17:01:00は拒否、実17:10:00.001以降は拒否する。兄弟の株式・マクロ・開示・資金フロールートに同じミリ秒完全一致前提はなかった。
+
+私有証跡は`tmp/feature-audit-20261016/vwap-scheduled-receipt-readonly-v1/`のnative R2エラーと`observability-bound-cron-native.json`/`observability-bound-failure-native-v2.json`。直接schedules APIの読取は.env tokenの権限403で、現在の一覧を取得できたとは扱わない。raw events表示もMCP側のscheduled event schemaで失敗したため、ヘッダーを出さない集計とログfieldだけを使用した。取得/dispatch/本番writeはこの修正で0。本日の17時処理を成功へ変えず、別の有限通常CLIで受入済みの200件・残1,656件と分けて記録する。実デプロイと次の定時起動・全量完走は別途確認する。
 - `nix develop -c pnpm exec tsc --noEmit`、変更TS15filesのeslint、`git diff --check`: PASS。
 - installed Wrangler 4.101.0 `deploy --dry-run`: Worker compile/config検査 PASS。実upload/deploy/traffic変更0。

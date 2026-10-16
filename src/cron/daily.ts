@@ -381,7 +381,7 @@ const FLUSH_ROWS_PER_STATEMENT = {
   rsi: 8,
   /** OHLCV: 8 列 × 12 = 96 (旧 OHLCV_CHUNK) */
   ohlcv: 12,
-  /** 指標 (+L-52 の畳み 6 列で 37 列): 37 × 2 = 74。3 行は 111 で上限超え */
+  /** 指標 (同一snapshotのadjcloseを含む38列): 38 × 2 = 76。3行は114で上限超え */
   indicators: 2,
   /** シグナル (run 刻み込みで 11 列): 11 × 9 = 99 */
   signals: 9,
@@ -601,8 +601,7 @@ export async function recoverTransientDailyFailures<T>(
  * 毎回ほぼ全銘柄が15分後に失敗した。存在列を SELECT することで同種の適用漏れを
  * 即時かつ具体的に検出する。
  *
- * ここで見ている列は `swing_daily_ohlcv.adj` と
- * `rsi_percentile.percentile_sample_bars` の 2 本だけで、どちらも
+ * ここで検証する価格/投影列は全て
  * `WriteStockSnapshotOptions` のフラグとは無関係に毎回書かれる。②断面
  * (`core_stock_financials`) を止めてもこの検証の前提は変わらない。逆に、
  * フラグで止まりうる列をここへ足すと「書かないのに検証だけ落ちる」になるので、
@@ -611,13 +610,14 @@ export async function recoverTransientDailyFailures<T>(
 export async function assertDailySchema(db: Db): Promise<void> {
   try {
     await db
-      .select({ adj: swingSchema.dailyOhlcv.adj })
+      .select({ adj: swingSchema.dailyOhlcv.adj, latestAdjustedClose: swingSchema.stockIndicators.latestAdjustedClose })
       .from(swingSchema.dailyOhlcv)
+      .leftJoin(swingSchema.stockIndicators, eq(swingSchema.stockIndicators.stockId, swingSchema.dailyOhlcv.stockId))
       .limit(1);
   } catch (error) {
     throw new Error(
-      "D1 スキーマ不整合: swing_daily_ohlcv.adj を確認できません。" +
-        " drizzle/d1/0008_young_ben_urich.sql の本番適用状態を確認してください。",
+      "D1 スキーマ不整合: swing_daily_ohlcv.adj または swing_stock_indicators.latest_adjclose を確認できません。" +
+        " drizzle/d1/0008_young_ben_urich.sql と0031_stock_adjusted_point.sqlの本番適用状態を確認してください。",
       { cause: error }
     );
   }
@@ -2332,6 +2332,7 @@ function buildIndicatorRows(
         fib500: snap.fib500,
         fib618: snap.fib618,
         latestClose: snap.latestClose,
+        latestAdjustedClose: latestBar === undefined ? null : requiredAdjustedClose(latestBar),
         latestVolume: snap.latestVolume,
         latestDate: snap.latestDate,
         pctChange1d: snap.pctChange1d,
@@ -2587,6 +2588,7 @@ export async function flushSnapshots<T>(
               fib500: sql`excluded.fib_500`,
               fib618: sql`excluded.fib_618`,
               latestClose: sql`excluded.latest_close`,
+              latestAdjustedClose: sql`excluded.latest_adjclose`,
               latestVolume: sql`excluded.latest_volume`,
               latestDate: sql`excluded.latest_date`,
               pctChange1d: sql`excluded.pct_change_1d`,
