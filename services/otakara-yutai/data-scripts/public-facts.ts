@@ -1,3 +1,4 @@
+import { parseBenefitChoiceStructure } from "./choice-structure.js";
 import { benefitKey } from "./benefit-key.js";
 import { extractYenAmounts, qualifyCompanyPerGrantValue } from "./estimated-value-guard.js";
 import { sourceSummaryConditions } from "./summary-contract.js";
@@ -32,7 +33,8 @@ export function buildPublicBenefitFacts(input: {
   const allowed = /併用(?:は|が)?(?:可|可能|できます|できる)(?=$|[。、,;；)）]|\r?\n)/m.test(source);
   const evaluation = evaluateCompanyValue(input.description, input.context);
   const facts = parsePublicBenefitFacts({
-    version: 1,
+    version: 2,
+    conditionStructure: parseBenefitChoiceStructure(input.description),
     sourceGroup: benefitKey(input.code, input.description),
     ...conditions,
     combination: allowed === forbidden ? "unverified" : forbidden ? "not_allowed" : "allowed",

@@ -21,8 +21,14 @@ export const VALUE_REASON_LABELS = {
   unsupported_yen_notation: "金額表記を確実に解析できない",
 } as const;
 
-export type PublicBenefitFacts = {
-  version: 1;
+export type BenefitConditionStructure = {
+  rule: "one-of-list-v1";
+  /** 正規化前の保存description全文SHA。公開DTOに商品ラベルや原文は含めない。 */
+  sourceSha256: string;
+} & ({ status: "literal_parsed"; ast: { take: 1; options: { ordinal: number; listedYen: number; notation: "相当" | "分" }[] } }
+  | { status: "unparsed"; ast: null; reason: "malformed_heading" | "additional_condition" | "unsupported_grammar" });
+
+export type PublicBenefitFacts = ({ version: 1 } | { version: 2; conditionStructure: BenefitConditionStructure }) & {
   sourceGroup: string;
   /** 掲載表記の検出。必要条件・適用対象を確認済みという意味ではない。 */
   holding: boolean;
@@ -70,10 +76,12 @@ const https = (v: unknown): boolean => {
 /** strict DTOだけを返し、未知キーや壊れたJSONを公開しない。掲載文は一切含めない。 */
 export function parsePublicBenefitFacts(value: unknown, code?: string): PublicBenefitFacts | null {
   if (value === null) return null;
-  const facts = record(typeof value === "string" ? JSON.parse(value) : value,
-    ["version", "sourceGroup", "holding", "holdingPeriods", "choice", "lottery", "application", "combination", "valueStatus", "qualifiedAmount", "valueReasons", "source"]);
+  const raw: unknown = typeof value === "string" ? JSON.parse(value) : value;
+  const version = typeof raw === "object" && raw !== null && "version" in raw ? raw.version : undefined;
+  const facts = record(raw,
+    ["version", "sourceGroup", "holding", "holdingPeriods", "choice", "lottery", "application", "combination", "valueStatus", "qualifiedAmount", "valueReasons", "source", ...(version === 2 ? ["conditionStructure"] : [])]);
   const source = record(facts.source, ["listingUrl", "fetchedAt", "batchFetchedAt", "officialStatus", "officialUrl", "verifiedAt"]);
-  if (facts.version !== 1 || typeof facts.sourceGroup !== "string" || !/^[0-9a-f]{16}$/.test(facts.sourceGroup) ||
+  if ((facts.version !== 1 && facts.version !== 2) || typeof facts.sourceGroup !== "string" || !/^[0-9a-f]{16}$/.test(facts.sourceGroup) ||
       [facts.holding, facts.choice, facts.lottery, facts.application].some(v => typeof v !== "boolean") ||
       !Array.isArray(facts.holdingPeriods) || facts.holdingPeriods.some(v => typeof v !== "string" || !/^(?:[0-9]+|半)(?:年|か月)(?:以上|未満|以下|超)$/.test(v)) ||
       (facts.holding === false && facts.holdingPeriods.length > 0) ||
@@ -90,6 +98,24 @@ export function parsePublicBenefitFacts(value: unknown, code?: string): PublicBe
       (source.officialStatus === "verified" ? !https(source.officialUrl) || source.verifiedAt === null
         : source.officialStatus !== "not_verified" || source.officialUrl !== null || source.verifiedAt !== null)) {
     throw new Error("公開条件DTOの値が不正です");
+  }
+  if (facts.version === 2) {
+    const structure = record(facts.conditionStructure, ["status", "rule", "sourceSha256", "ast", ...(
+      typeof facts.conditionStructure === "object" && facts.conditionStructure !== null && "status" in facts.conditionStructure && facts.conditionStructure.status === "unparsed" ? ["reason"] : [])]);
+    if (structure.rule !== "one-of-list-v1" || typeof structure.sourceSha256 !== "string" || !/^[0-9a-f]{64}$/.test(structure.sourceSha256)) throw new Error("条件構造の根拠が不正です");
+    if (structure.status === "unparsed") {
+      if (structure.ast !== null || !["malformed_heading", "additional_condition", "unsupported_grammar"].includes(structure.reason as string)) throw new Error("未解析条件の理由が不正です");
+    } else if (structure.status === "literal_parsed") {
+      const ast = record(structure.ast, ["take", "options"]);
+      if (ast.take !== 1 || !Array.isArray(ast.options) || ast.options.length < 2 || ast.options.length > 8 ||
+          facts.choice !== true || facts.holding !== false || facts.lottery !== false || facts.application !== false ||
+          facts.combination !== "unverified" || facts.valueStatus !== "unresolved" || facts.qualifiedAmount !== null) throw new Error("選択条件の適用範囲が不正です");
+      for (const [index, value] of ast.options.entries()) {
+        const option = record(value, ["ordinal", "listedYen", "notation"]);
+        if (option.ordinal !== index + 1 || typeof option.listedYen !== "number" || !Number.isSafeInteger(option.listedYen) || option.listedYen <= 0 ||
+            !["相当", "分"].includes(option.notation as string)) throw new Error("掲載選択肢の値が不正です");
+      }
+    } else throw new Error("条件構造の状態が不正です");
   }
   if (code !== undefined && source.listingUrl !== `https://minkabu.jp/stock/${code}/yutai`) {
     throw new Error("公開条件の銘柄と掲載出典が一致しません");
