@@ -36,3 +36,20 @@ Nix・既存lockで関連4 suites **35 PASS**、型検査/対象lintを実施。
 - 原本: [4116/7609 provenance](../../services/yuho-quant/src/tests/fixtures/holdings-split-explicit-before/provenance.json)、[既存743社の監査](holdings-split-legal-basis-20261017.md)、[Yahoo日付契約](yahoo-event-date-basis-20261017.md)。
 
 OHLCVのprovider調整基準、配当の株数基準、全増資/新株予約権/会社分割の価格適用は依然未証明。法的日付と期末株数の根拠を増やしても、Yahoo歴史価格の単位まで確定したことにはならない。全価格の受入・次回定時・#343の完了は別に残る。
+
+## 「分割前の株式数を記載」の明示文型
+
+同じshared helperの既存「当社は＋実年月日＋普通株式＋正整数比率」を保ち、末尾に「行っておりますが、上記の事項は、当該株式分割前の株式数を記載しております。」を追加した。「は」の直後の読点だけは7322の原文に存在しないため任意とする。主体・namespace・単一PublicDoc・当期durationの実定義・単一statement・普通株FY fact・unit/decimals/dimension・法的日付の条件は変更しない。別の「上記は」文型、銀行名の読み替え、重複注記、子会社・予定・一部・分割後は新たに採用しない。
+
+- 7322/S100YD2K/E33693はFY2026-03-31、明示法的日2026-04-01、1株につき4株。旧影響29行中、保有者FYが一致する候補は28行で、3439/FY2026-06-30の1行は別期末のまま。
+- 8142/S100Y0S6/E02665はFY2026-01-31、明示法的日2026-02-01、1株につき3株。旧影響12行の保有者FYはいずれも2026-03-31なので、同FY候補は0行。
+
+実2ZIP計1,700,343Bを既存fixture群へ追加した。期待basisは変更前に独立監査した全ZIP/member/fact/text SHA、CurrentYearDuration、普通株FY fact、原文日付・比率から固定しており、新helperの出力を期待値へ流用していない。`FilingDateInstant`のnative日付と経済FYを別々に保存する。元取得時計は既存metadata値であり、新しい原典取得の証明には格上げしない。
+
+callerは `qualifyOfficialIssuerEnglishName` → `createHoldingOfficialNamesLoader` → `createHoldingPriceSourceLoader` →通常保有publisherの価格資格。existing ZIP Mapを再用し、canonical splitのcold-cacheは新issuer読取0、既存alias読取・最新source再照合・rejected promise停止は維持する。後段の `qualifyHoldingValuation` はFY/法的日/市場日/比率が揃っても既知単位不一致HOLDにする既存経路であり、価格・株数の補正や倍率適用は追加していない。28行は追加証拠を照合できる候補数で、価格受入件数ではない。稼働中Mac/有限producerへの切替は0。
+
+全735の同一保存ZIPを旧新helperへ再生し、結果差は7322/8142の2社だけ、残733社は全値同じ。basisは既存6社から8社へ増えた。旧missing/unqualified8社は保持し、8012の複数注記HOLDも変えていない。Nix関連6 suites60 tests、全TypeScript/対象lint PASS。新しい文型でも主体・普通株・当期・単一文・予定・一部・分割後・不正日付/比率・別FY/unit/dimension/namespaceを拒否する。
+
+純再生33.191秒、peak RSS610,928KiB、helper累計は旧10.737秒/新10.436秒。1回の旧→新順序・同Mapの比較であり、短縮や本番完走の保証ではない。追加ZIP展開/GET/Notion要求/モデル/依存/DDL/価格更新は0。旧5,362行は固定した過去の影響集合であり、現在の全体残数や一括解除とは扱わない。
+
+私有paired結果 `.runtime/holdings-recorded-before/source-v1/tmp/recorded-before-pure-v1/result.json` SHA `99756f16892d0e26837a43e7d70a6ee4295e3aeb4aca54b0175ce4d136609db9`。同dir `replay.mts` SHA `48646f174603f06bd8afe4bb45a38abbe190097d70a64c02693a44794ed9333a` は、そのWTのNixから `env -u NODE_PATH node --import tsx tmp/recorded-before-pure-v1/replay.mts <同dirの未使用絶対JSON>` でHTTP0の独立再生ができる。期待値の元になった2原本監査は root `tmp/feature-audit-20261017/unit-hold-saved-cluster-audit-v1/two-source-proof.json` SHA `711783864adace4450b70a26008cfa02e7e05c38176c6e3f7243730c64ec79a5` を保全した。

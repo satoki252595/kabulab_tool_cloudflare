@@ -1,4 +1,4 @@
-/** Real saved 4116/7609 issuer notes and ordinary-share facts. No fetched or synthesized prices. */
+/** Real saved issuer notes and ordinary-share facts. No fetched or synthesized prices. */
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -81,5 +81,46 @@ describe("明示された普通株の分割前期末単位だけを読む", () =
     expect(other.source.fiscalYearEnd).toBe("2025-12-31");
     expect(other.derivedPriceReference.ownerFiscalYearEnd).toBe("2026-03-31");
     expect(other.source.fiscalYearEnd).not.toBe(other.derivedPriceReference.ownerFiscalYearEnd);
+  });
+  it("実7322/8142の記載文型でも主体/普通株/当期/単一文/法的日/割合/unitの条件を保つ", () => {
+    const items = provenance.items.filter((item: { code: string }) => ["7322", "8142"].includes(item.code));
+    expect(items).toHaveLength(2);
+    for (const item of items) {
+      const zip = read(item.filename), entries = zipReader.unzip(zip), original = entries.get(item.basis.filename)!.toString();
+      const fact = /<jpcrp_cor:NotesRegardingIssuedSharesAndTreasurySharesTextBlock contextRef="CurrentYearDuration">[\s\S]*?<\/jpcrp_cor:NotesRegardingIssuedSharesAndTreasurySharesTextBlock>/.exec(original)![0];
+      const display = stripHtml(stripHtml(fact.slice(fact.indexOf(">") + 1, fact.lastIndexOf("</")))).normalize("NFKC");
+      const plain = `<jpcrp_cor:NotesRegardingIssuedSharesAndTreasurySharesTextBlock contextRef="CurrentYearDuration">${display}</jpcrp_cor:NotesRegardingIssuedSharesAndTreasurySharesTextBlock>`;
+      const projected = original.replace(fact, plain), projectedEntries = new Map(entries);
+      projectedEntries.set(item.basis.filename, Buffer.from(projected));
+      expect(observePreSplitFiscalYearBasis(zip, item.source, item.basis.filename, projectedEntries)?.statement).toBe(item.basis.statement);
+      const changedNotes = [plain + plain,
+        plain.replace(item.basis.statement, item.basis.statement + item.basis.statement),
+        plain.replace("当社は、", "子会社は、"), plain.replaceAll("普通株式", "株式"),
+        plain.replace("行っておりますが", "予定しておりますが"),
+        plain.replace("上記の事項は", "上記の事項の一部は"),
+        plain.replace("分割前の株式数", "分割後の株式数"),
+        plain.replace('contextRef="CurrentYearDuration"', 'contextRef="Prior1YearDuration"'),
+        plain.replace("1株につき", "0株につき"),
+        plain.replace(`${item.basis.numerator}株の割合`, `${item.basis.numerator}.5株の割合`),
+        plain.replace(`${item.basis.numerator}株の割合`, "1株の割合"),
+        plain.replace(item.code === "7322" ? "2026年4月1日" : "2026年2月1日", "2026年2月30日")];
+      for (const note of changedNotes) {
+        expect(note).not.toBe(plain);
+        const changed = new Map(entries); changed.set(item.basis.filename, Buffer.from(projected.replace(plain, note)));
+        expect(observePreSplitFiscalYearBasis(zip, item.source, item.basis.filename, changed)).toBeUndefined();
+      }
+      const ordinaryFact = [...original.matchAll(/<jpcrp_cor:NumberOfIssuedSharesAsOfFiscalYearEndIssuedSharesTotalNumberOfSharesEtc\b[^>]*>[\s\S]*?<\/jpcrp_cor:NumberOfIssuedSharesAsOfFiscalYearEndIssuedSharesTotalNumberOfSharesEtc>/g)]
+        .find(value => sha(value[0]) === item.basis.issuedSharesFactSha256)![0];
+      for (const xml of [original.replaceAll("jpcrp_cor:OrdinaryShareMember", "jpcrp_cor:ClassAShareMember"),
+        original.replace(ordinaryFact, ordinaryFact.replace(/\bunitRef="[^"]+"/, 'unitRef="JPY"')),
+        original.replace(fact, fact.replace('contextRef="CurrentYearDuration"', 'contextRef="CurrentYearDuration" xmlns:jpcrp_cor="http://untrusted.invalid"'))]) {
+        const changed = new Map(entries); changed.set(item.basis.filename, Buffer.from(xml));
+        expect(observePreSplitFiscalYearBasis(zip, item.source, item.basis.filename, changed)).toBeUndefined();
+      }
+      expect(observePreSplitFiscalYearBasis(zip, { ...item.source, fiscalYearEnd: "2025-03-31" }, item.basis.filename, entries)).toBeUndefined();
+      expect(sha(zip)).toBe(item.zipSha256);
+      expect(item.candidateAProvenance.priceAccepted).toBe(false);
+    }
+    expect(items.map((item: { candidateAProvenance: { sameFiscalYearImpactRows: number } }) => item.candidateAProvenance.sameFiscalYearImpactRows)).toEqual([28, 0]);
   });
 });
