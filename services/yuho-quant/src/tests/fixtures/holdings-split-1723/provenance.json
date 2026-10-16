@@ -1,0 +1,25 @@
+{
+  "source": {
+    "docId": "S100YH9O",
+    "stockCode": "1723",
+    "edinetCode": "E00313",
+    "fiscalYearEnd": "2026-03-31"
+  },
+  "archivePageId": "3e2d74ff-84cd-8150-8b87-e41c0e6f66f9",
+  "zipSha256": "49926b2b4fe590a0561573b211ff5583b397568086c0864ef23e61823cc398c1",
+  "zipBytes": 683618,
+  "filename": "XBRL/PublicDoc/jpcrp030000-asr-001_E00313-000_2026-03-31_01_2026-06-25.xbrl",
+  "memberSha256": "9f8e0c1c94dc4721de84dc59456306e6c07ab9957c472e7fb3bc2070d513cf69",
+  "manifestSha256": "5fa05d6ce0245679af3ed0d22dba1a371420eb700ba0a4f494dd19a025af87aa",
+  "manifestRelativePath": "tmp/feature-audit-20261013/holdings-latest-all/source-all3666-kind20-20261014-v4/source-manifest.json",
+  "sourceQualification": "same saved actual issuer source; current common DEI verified",
+  "rawSourceRetrievalClock": "not-qualified-by-this-fixture",
+  "derivedPriceReference": {
+    "scope": "reference to existing saved impact projection only; original Yahoo body is not included in this fixture",
+    "impactSha256": "5b9d18d75c53d21987682f5c5cbde2986c5e064380193d2fc6b2aab65f7f3745",
+    "bodySha256": "13732612f8d9ba93182e9ae6a8ba7162fd4b4d830722a9112f9dcfe846d55ead",
+    "receivedAt": "2026-10-04T12:30:17.482Z",
+    "reportedSplitDate": "2026-03-30",
+    "reportedRatio": 4
+  }
+}
