@@ -1,0 +1,14 @@
+{
+  "source": { "docId": "S100X7D0", "stockCode": "9252", "edinetCode": "E37098", "fiscalYearEnd": "2025-08-31" },
+  "description": "既保管EDINET API type1の原ZIP。本文・数値・XML・ZIP bytesを変更していない。新規源GETなし。",
+  "zipBytes": 808793,
+  "zipSha256": "4b4f1d9fbe5cb6efd836c339020c2de0110ccc0368f23847d1a9f335a02472fc",
+  "sourceManifestSha256": "5fa05d6ce0245679af3ed0d22dba1a371420eb700ba0a4f494dd19a025af87aa",
+  "instance": "XBRL/PublicDoc/jpcrp030000-asr-001_E37098-000_2025-08-31_01_2025-11-28.xbrl",
+  "expectedOrdinaryShares": { "fiscalYearEnd": "2762891", "filingDate": "2774926" },
+  "economicFiscalYearEnd": "2025-08-31",
+  "nativeFilingDateInstant": "2025-11-28",
+  "legacyRecordedFetchedAt": "2025-11-28T10:39:00.000+00:00",
+  "clockQualification": "旧保管メタデータの値を保持する。実HTTP受信時計が検証済みという意味ではない。",
+  "scope": "限定2elementの観測回帰用。権利原因・係数・価格補正の期待値を含まない。"
+}

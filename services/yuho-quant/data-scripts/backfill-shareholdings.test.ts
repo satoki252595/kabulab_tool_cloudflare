@@ -11,13 +11,14 @@ import { selectLatestHoldingsDocuments } from "./lib/shareholdings-backfill.js";
 import { readSavedHoldingsZip, publishVerifiedShareholdings } from "../../../src/shared/notion-archive/shareholdings.js";
 import { recordEdinetZip } from "../src/services/edinet/archive.js";
 import { verifyArchivedAttachments } from "../../../src/shared/notion-archive/readback.js";
+import { observeIssuedShares } from "../src/services/edinet/issued-shares.js";
 vi.mock("../../../src/shared/db/d1-http-client.js", () => ({ createD1HttpDb: vi.fn(() => ({})) }));
 vi.mock("./lib/shareholdings-backfill.js", () => ({ selectLatestHoldingsDocuments: vi.fn() }));
 vi.mock("../../../src/shared/notion-archive/shareholdings.js", () => ({ readSavedHoldingsZip: vi.fn(), publishVerifiedShareholdings: vi.fn() }));
 vi.mock("../../../src/shared/notion-archive/readback.js", () => ({ verifyArchivedAttachments: vi.fn() }));
 vi.mock("../src/services/edinet/archive.js", () => ({ recordEdinetZip: vi.fn(), edinetArchiveFilename: (doc: string) => `${doc}_xbrl.zip` }));
 vi.mock("../../../scripts/notion/shareholdings.js", async original => ({ ...await original<typeof import("../../../scripts/notion/shareholdings.js")>(), guardedHoldingsMutation: async (_path: string, _label: string, execute: () => Promise<unknown>) => execute() }));
-vi.mock("../src/services/edinet/shareholdings.js", () => ({ parseShareholdingsData: vi.fn() }));
+vi.mock("../src/services/edinet/shareholdings.js", async original => ({ ...await original<typeof import("../src/services/edinet/shareholdings.js")>(), parseShareholdingsData: vi.fn() }));
 vi.mock("../src/services/edinet/shareholdings-valuation.js", () => ({
   HoldingsPriceIndex: vi.fn(function () {}), parseHoldingsCodeList: vi.fn(() => ({ asOf: "2026-06-30", byLegalName: new Map() })),
   qualifyHoldingValuation: vi.fn(),
@@ -44,6 +45,24 @@ beforeEach(() => { vi.clearAllMocks(); process.exitCode = 0; dir = mkdtempSync(j
 });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); process.exitCode = 0; });
 describe("保有明細backfillのlegacy適用境界", () => {
+  it("保存prepareの実ZIPは通常archiveと同じ純observerへ渡し、書込/再取得を足さない", async () => {
+    const nativeSource = { docId: "S100X7D0", stockCode: "9252", edinetCode: "E37098", fiscalYearEnd: "2025-08-31" };
+    const nativeBytes = readFileSync(new URL("../src/tests/fixtures/issued-shares-9252-S100X7D0.zip", import.meta.url));
+    const nativeSha = createHash("sha256").update(nativeBytes).digest("hex");
+    vi.mocked(selectLatestHoldingsDocuments).mockResolvedValue({ rows: [{ stockId: 1, ...nativeSource, ownerName: "株式会社ラストワンマイル", submittedAt: new Date("2025-11-28T00:00:00Z") }], more: false });
+    vi.mocked(readSavedHoldingsZip).mockResolvedValue({ status: "ready", archivePageId: "a".repeat(32), bytes: nativeBytes, sha256: nativeSha,
+      originalManifest: "unknown", sourceCustody: "legacy", metadata: {}, fetchedAt: "2025-11-28T10:39:00.000+00:00", metadataMissing: [],
+      issuedSharesObservation: observeIssuedShares(nativeBytes, nativeSource, { rawSubmitDateTime: "2025-11-28 10:39", provenance: "saved-archive-metadata" }) });
+    vi.mocked(parseShareholdingsData).mockReturnValue({ status: "no_detail_table", source: nativeSource, filename: null, elementId: "jpcrp_cor:ShareholdingsTextBlock",
+      contextRef: null, reason: "保有明細とは独立の観測回帰", holderScope: "unqualified", holdings: [] });
+    await prepareLatestHoldings({ limit: 1, afterCode: null, dir, valuationPath: null });
+    const item = JSON.parse(readFileSync(join(dir, "9252-S100X7D0.item.json"), "utf8"));
+    expect(item.issuedSharesObservation).toEqual(observeIssuedShares(nativeBytes, nativeSource, { rawSubmitDateTime: "2025-11-28 10:39", provenance: "saved-archive-metadata" }));
+    expect(item.issuedSharesSourceSha256).toBe(createHash("sha256").update(readFileSync(new URL("../src/services/edinet/issued-shares.ts", import.meta.url))).digest("hex"));
+    expect(item.zipSha256).toBe(nativeSha); expect(item.status).toBe("held");
+    expect(readSavedHoldingsZip).toHaveBeenCalledTimes(1); expect(recordEdinetZip).not.toHaveBeenCalled(); expect(publishVerifiedShareholdings).not.toHaveBeenCalled();
+    expect(readSavedHoldingsZip).toHaveBeenCalledWith(nativeSource, undefined, { observeIssuedShares: true });
+  });
   it.each([undefined, "0".repeat(64)])("旧parser/別parserのplanはfreshD1前に拒否して旧計画を適用しない", async pin => {
     fixture();
     const path = join(dir, "plan.json"), plan = JSON.parse(readFileSync(path, "utf8"));

@@ -13,6 +13,7 @@ import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import * as schema from "../src/db/schema.js";
 import { selectLatestHoldingsDocuments } from "./lib/shareholdings-backfill.js";
 import { parseShareholdingsData, type ShareholdingsSource } from "../src/services/edinet/shareholdings.js";
+import type { IssuedShareObservation } from "../src/services/edinet/issued-shares.js";
 import { HoldingsPriceIndex, parseHoldingsCodeList, qualifyHoldingValuation, type ArchivedSource } from "../src/services/edinet/shareholdings-valuation.js";
 import { readSavedHoldingsZip, publishVerifiedShareholdings } from "../../../src/shared/notion-archive/shareholdings.js";
 import { verifyArchivedAttachments } from "../../../src/shared/notion-archive/readback.js";
@@ -22,8 +23,11 @@ import { guardedHoldingsMutation, saveHoldingsReceipt, writeHoldingsArtifact } f
 // ESM module start: never label a running old parser with a SHA read after long preparation.
 const PARSER_SOURCE_PATH = fileURLToPath(new URL("../src/services/edinet/shareholdings.ts", import.meta.url));
 const PARSER_SOURCE_SHA256 = createHash("sha256").update(readFileSync(PARSER_SOURCE_PATH)).digest("hex");
+const ISSUED_SOURCE_PATH = fileURLToPath(new URL("../src/services/edinet/issued-shares.ts", import.meta.url));
+const ISSUED_SOURCE_SHA256 = createHash("sha256").update(readFileSync(ISSUED_SOURCE_PATH)).digest("hex");
 function assertParserSourceUnchanged(): void {
   assert.equal(createHash("sha256").update(readFileSync(PARSER_SOURCE_PATH)).digest("hex"), PARSER_SOURCE_SHA256, "parser source changed after process startup; stop before accepting a plan");
+  assert.equal(createHash("sha256").update(readFileSync(ISSUED_SOURCE_PATH)).digest("hex"), ISSUED_SOURCE_SHA256, "issued-share observer changed after process startup; stop before accepting a plan");
 }
 
 const read = (path: string) => JSON.parse(readFileSync(path, "utf8"));
@@ -31,6 +35,7 @@ const save = saveHoldingsReceipt;
 const hash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 interface SourcePath { path: string; archivePageId: string; filename: string; sha256: string }
 interface Item { parserSourceSha256?: string; source: ShareholdingsSource; ownerName: string; status: string; reason: string | null; parsedRows: number;
+  issuedSharesSourceSha256?: string; issuedSharesObservation?: IssuedShareObservation;
   archivePageId?: string; zipPath?: string; zipSha256?: string; originalManifest?: string; projectionPath?: string; sourceCustody?: "typed" | "legacy"; sourceMetadata?: Record<string, unknown>; sourceFetchedAt?: string; sourceMetadataMissing?: string[] }
 
 function valuationSources(path: string | null): { codeList: ArchivedSource; prices: ArchivedSource[] } | undefined {
@@ -53,8 +58,8 @@ export async function prepareLatestHoldings(args: { limit: number; afterCode: st
   for (const row of selected.rows) {
     const source: ShareholdingsSource = { docId: row.docId, stockCode: row.stockCode, edinetCode: row.edinetCode, fiscalYearEnd: row.fiscalYearEnd };
     const path = join(args.dir, `${row.stockCode}-${row.docId}.item.json`);
-    if (existsSync(path)) { const item = read(path) as Item; assert.deepEqual(item.source, source); assert.equal(item.parserSourceSha256, PARSER_SOURCE_SHA256, "旧parserのitemは未受入です。保存ZIPから別planへ再解析してください"); items.push(item); continue; }
-    const saved = await readSavedHoldingsZip(source);
+    if (existsSync(path)) { const item = read(path) as Item; assert.deepEqual(item.source, source); assert.equal(item.parserSourceSha256, PARSER_SOURCE_SHA256, "旧parserのitemは未受入です。保存ZIPから別planへ再解析してください"); assert.equal(item.issuedSharesSourceSha256, ISSUED_SOURCE_SHA256, "旧observerのitemは別planへ再準備してください"); items.push(item); continue; }
+    const saved = await readSavedHoldingsZip(source, undefined, { observeIssuedShares: true });
     let item: Item;
     if (saved.status === "held") item = { source, ownerName: row.ownerName, status: "held", reason: saved.reason, parsedRows: 0 };
     else {
@@ -68,16 +73,18 @@ export async function prepareLatestHoldings(args: { limit: number; afterCode: st
       const projectionPath = join(args.dir, `${row.stockCode}-${row.docId}.current.jsonl`);
       writeHoldingsArtifact(projectionPath, records.map(record => JSON.stringify(record)).join("\n") + (records.length ? "\n" : ""));
       item = { source, ownerName: row.ownerName, status: parsed.status === "ok" ? "ready" : "held", reason: parsed.reason,
+        ...(saved.issuedSharesObservation === undefined ? {} : { issuedSharesObservation: saved.issuedSharesObservation }),
         parsedRows: parsed.holdings.length, archivePageId: saved.archivePageId, zipPath, zipSha256: saved.sha256,
         originalManifest: saved.originalManifest, projectionPath, sourceCustody: saved.sourceCustody, sourceMetadata: saved.metadata, sourceFetchedAt: saved.fetchedAt, sourceMetadataMissing: saved.metadataMissing };
     }
     item.parserSourceSha256 = PARSER_SOURCE_SHA256;
+    item.issuedSharesSourceSha256 = ISSUED_SOURCE_SHA256;
     assertParserSourceUnchanged();
     save(path, item); items.push(item);
     console.info(JSON.stringify({ docId: source.docId, status: item.status, rows: item.parsedRows }));
   }
   assertParserSourceUnchanged();
-  save(join(args.dir, "plan.json"), { version: 1, parserSourceSha256: PARSER_SOURCE_SHA256, observedAt: new Date().toISOString(), selection: { afterCode: args.afterCode, limit: args.limit },
+  save(join(args.dir, "plan.json"), { version: 1, parserSourceSha256: PARSER_SOURCE_SHA256, issuedSharesSourceSha256: ISSUED_SOURCE_SHA256, observedAt: new Date().toISOString(), selection: { afterCode: args.afterCode, limit: args.limit },
     nextAfterCode: selected.rows.length ? selected.rows[selected.rows.length - 1].stockCode : args.afterCode, more: selected.more,
     valuationPath: args.valuationPath, items, upstreamRequests: 0, productionWrites: 0 });
   console.info(JSON.stringify({ ready: items.filter(item => item.status === "ready").length, held: items.filter(item => item.status === "held").length,
@@ -156,6 +163,8 @@ export async function applyLatestHoldings(dir: string, maxRows: number): Promise
       await assertLatest();
       const windowRows = Math.min(100, maxRows - usedRows);
       const result = await publishVerifiedShareholdings({ source: item.source, ownerName: item.ownerName, zip,
+        observeIssuedShares: true, issuedSharesFilingDateEvidence: typeof item.sourceMetadata?.submitDateTime === "string"
+          ? { rawSubmitDateTime: item.sourceMetadata.submitDateTime, provenance: "saved-archive-metadata" } : null,
         archivePageId, maxRows: windowRows, valuationSources: evidence });
       const proof = { observedAt: new Date().toISOString(), source: item.source, zipSha256: item.zipSha256, result };
       if (result.status === "held") {

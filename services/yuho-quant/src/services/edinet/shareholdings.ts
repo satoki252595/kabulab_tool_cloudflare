@@ -1,7 +1,7 @@
 /** 株式保有の当期明細。平文化CSV・株価・会社名から株数や上場区分を推定しない。 */
 import assert from "node:assert/strict";
 import { isUnassignedEdinetSecCode } from "./types.js";
-import { unzip } from "./zip.js";
+import { unzip, type ZipEntries } from "./zip.js";
 import { extractTables, tableToGridExpanded, unitToYenFactor } from "./html-table.js";
 import { stripHtml } from "./text-sections.js";
 
@@ -41,10 +41,19 @@ export interface ShareholdingsExtraction {
 }
 
 /** 保存type1のDEIを公式namespace・単一PublicDoc・提出者/証券コード/期末で照合する。 */
-export function verifySavedHoldingsSource(zip: Buffer, source: ShareholdingsSource): { status: "verified"; filename: string } | { status: "held"; reason: string } {
+export function verifySavedHoldingsSource(zip: Buffer, source: ShareholdingsSource,
+  opts?: { onVerifiedEntries: (entries: ZipEntries) => void }): { status: "verified"; filename: string } | { status: "held"; reason: string } {
   if (source.edinetCode === null) return { status: "held", reason: "提出者EDINETコードが未確定です" };
-  const entries = [...unzip(zip, { maxEntries: 5000, maxExpandedBytes: 64 * 1024 * 1024 })]
-    .filter(([filename]) => /\/PublicDoc\/[^/]+\.xbrl$/.test(filename));
+  const entries = unzip(zip, { maxEntries: 5000, maxExpandedBytes: 64 * 1024 * 1024 });
+  const result = verifyHoldingsSourceEntries(entries, source);
+  if (result.status === "verified") opts?.onVerifiedEntries(entries);
+  return result;
+}
+
+/** 同じbounded ZIP展開を使うproducer用。DEI資格を複製せず、二重展開を避ける。 */
+export function verifyHoldingsSourceEntries(zipEntries: ZipEntries, source: ShareholdingsSource): { status: "verified"; filename: string } | { status: "held"; reason: string } {
+  if (source.edinetCode === null) return { status: "held", reason: "提出者EDINETコードが未確定です" };
+  const entries = [...zipEntries].filter(([filename]) => /\/PublicDoc\/[^/]+\.xbrl$/.test(filename));
   if (entries.length !== 1) return { status: "held", reason: "保存type1のPublicDoc XBRLを一意に特定できません" };
   const [filename, bytes] = entries[0];
   assert.ok(filename.includes(`_${source.edinetCode}-`) && filename.includes(`_${source.fiscalYearEnd}_`), "保存type1のmember名と提出者/期末が不一致です");
@@ -105,7 +114,8 @@ function numberCell(text: string): number | null | undefined {
   return Number.isFinite(number) && number >= 0 ? number : undefined;
 }
 
-export function parseShareholdingsData(zip: Buffer, source: ShareholdingsSource): ShareholdingsExtraction {
+export function parseShareholdingsData(zip: Buffer, source: ShareholdingsSource,
+  opts?: { qualifySource: (entries: ZipEntries) => { status: "verified" } | { status: "held"; reason: string } }): ShareholdingsExtraction {
   if (!/^S[0-9A-Z]+$/.test(source.docId) || !/^[0-9A-Z]{4}$/.test(source.stockCode) ||
       (source.edinetCode !== null && !/^E\d{5}$/.test(source.edinetCode)) || !/^\d{4}-\d{2}-\d{2}$/.test(source.fiscalYearEnd) ||
       new Date(`${source.fiscalYearEnd}T00:00:00Z`).toISOString().slice(0, 10) !== source.fiscalYearEnd) {
@@ -114,8 +124,13 @@ export function parseShareholdingsData(zip: Buffer, source: ShareholdingsSource)
   const result: ShareholdingsExtraction = { status: "no_detail_table", reason: "株数・単位・当期を確認できる明細表がありません", source,
     filename: null, elementId: "jpcrp_cor:ShareholdingsTextBlock", contextRef: null, holdings: [], holderScope: "unqualified" };
   if (source.edinetCode === null) return { ...result, status: "unsupported", reason: "提出者EDINETコードが未確定です" };
+  const entries = unzip(zip);
+  if (opts !== undefined) {
+    const qualified = opts.qualifySource(entries);
+    if (qualified.status === "held") return { ...result, status: "unsupported", reason: qualified.reason };
+  }
   const candidates = [];
-  for (const [filename, bytes] of unzip(zip)) {
+  for (const [filename, bytes] of entries) {
     if (!/\/PublicDoc\//.test(filename) || !/\.html?$/.test(filename)) continue;
     for (const block of shareholdingsBlocks(bytes.toString("utf8"))) candidates.push({ filename, ...block });
   }
