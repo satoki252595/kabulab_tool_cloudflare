@@ -282,9 +282,9 @@ describe("writeStockSnapshot の entry_signals INSERT-only (L-52)", () => {
 
 describe("writeStockSnapshot の p_momentum upsert", () => {
   const BARS = [
-    { date: "2026-09-09", open: null, high: null, low: null, close: 100, volume: null },
-    { date: "2026-09-10", open: null, high: null, low: null, close: 110, volume: null },
-    { date: "2026-09-11", open: null, high: null, low: null, close: 121, volume: null },
+    { date: "2026-09-09", open: null, high: null, low: null, close: 100, volume: null, adj: 100 },
+    { date: "2026-09-10", open: null, high: null, low: null, close: 110, volume: null, adj: 110 },
+    { date: "2026-09-11", open: null, high: null, low: null, close: 121, volume: null, adj: 121 },
   ];
 
   it("6mo スライスから 1 文 upsert する (L-47)", async () => {

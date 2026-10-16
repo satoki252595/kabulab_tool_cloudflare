@@ -130,6 +130,62 @@ function savedSource() {
 }
 
 describe("保存原本と通常定時取得の共通計算", () => {
+  it("実8303の投影は同一応答のadjcloseを使い、通常取得/replay同値・通常終値/clock保持", async () => {
+    const { buildMomentumRow, buildStockSnapshot, writeStockSnapshot } = await import("../../cron/daily.js");
+    const { drizzle } = await import("drizzle-orm/sqlite-proxy");
+    const { decodeCloses } = await import("../indicators/momentum-series.js");
+    const { calcMomentum } = await import("../../../services/financial-math/src/services/emh.js");
+    serve("8303");
+    const normal = await client.fetchStockRawData("8303", "5y", {
+      stockDailyScopes: true, onChartRaw: () => undefined, onSummaryRaw: () => undefined,
+    });
+    const source = savedSource();
+    const beforeSource = structuredClone(source);
+    const fetch = vi.fn(() => { throw new Error("保存原本の再取得は禁止"); });
+    vi.stubGlobal("fetch", fetch);
+    const saved = await client.parseSavedStockRawData("8303", source);
+    const beforeRaw = structuredClone(saved);
+    const row = buildMomentumRow(saved.ohlcv);
+    const expected = saved.ohlcv.slice(-90).map(b => b.adj as number);
+    expect(row).toEqual(buildMomentumRow(normal.ohlcv));
+    expect(decodeCloses(row!.closes)).toEqual(expected);
+    expect(expected).not.toEqual(saved.ohlcv.slice(-90).map(b => b.close));
+    expect(calcMomentum(decodeCloses(row!.closes), 60)).toEqual(calcMomentum(expected, 60));
+    expect(row).toMatchObject({ bars: 90, asOf: "2026-10-14" });
+    const snapshot = buildStockSnapshot(1, "8303", null, "2026-10-14", saved);
+    expect(snapshot).toEqual(buildStockSnapshot(1, "8303", null, "2026-10-14", normal));
+    expect(snapshot.latestClose).toBe(1478.5);
+    // 明示fault injection: 元原典の別日の調整終値を末尾へ置き、raw closeとの差を作る。
+    const changed = structuredClone(saved);
+    changed.ohlcv.at(-1)!.adj = changed.ohlcv.at(-3)!.adj;
+    const trend = buildStockSnapshot(1, "8303", null, "2026-10-14", changed);
+    expect(trend.sma5).toBeLessThan(trend.latestClose!);
+    expect(trend.sma5).toBeGreaterThan(changed.ohlcv.at(-1)!.adj!);
+    expect(trend.sma5).toBeLessThan(trend.sma20!);
+    expect(trend.trendShort).toBe(true);
+    expect(trend.latestClose).toBe(snapshot.latestClose);
+    expect(trend.ohlcv6mo.at(-1)!.close).toBe(snapshot.ohlcv6mo.at(-1)!.close);
+    // 同じsnapshotのスクリーニング保存もadj/SMAで判定し、価格列は受領closeを保持する。
+    const savedIndicators: Record<string, unknown> = {};
+    const db = drizzle(async (sql, params) => {
+      const insert = sql.match(/insert into "swing_stock_indicators" \(([^)]+)\)/);
+      if (insert !== null) {
+        insert[1].split(", ").forEach((column, i) => { savedIndicators[column.replaceAll('"', "")] = params[i]; });
+      }
+      return { rows: [] };
+    }) as Parameters<typeof writeStockSnapshot>[0];
+    await writeStockSnapshot(db, trend, undefined, { runStartedSec: 1 });
+    expect(savedIndicators).toMatchObject({ trend_short: 1, trend_ok_short: 1, latest_close: 1478.5 });
+    for (const adj of [undefined, null, 0, -1, NaN, Infinity]) {
+      const missing = structuredClone(saved.ohlcv);
+      missing.at(-1)!.adj = adj;
+      expect(() => buildMomentumRow(missing)).toThrow(/調整済み終値.*通常終値で補完しません/);
+    }
+    expect(saved).toEqual(beforeRaw);
+    expect(source).toEqual(beforeSource);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("実projectionの結果が通常取得と全列同値で、原clock/bytesを変更せずtransport0", async () => {
     serve("8303");
     const normal = await client.fetchStockRawData("8303", "5y", {

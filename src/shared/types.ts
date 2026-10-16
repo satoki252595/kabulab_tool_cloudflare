@@ -13,7 +13,7 @@ export interface DailyOhlcv {
   low: number | null;
   close: number | null;
   volume: number | null;
-  /** 分割調整済み終値 (Yahoo adjclose)。分割がない日は close と同値 */
+  /** 分割・配当調整済み終値 (Yahoo adjclose)。受領closeとは別系列。欠測は補完しない。 */
   adj?: number | null;
 }
 
