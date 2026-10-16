@@ -131,7 +131,7 @@ export interface WorkItem {
 type Doc = NonNullable<LatestDoc["doc"]>;
 
 /** 最新有報の本文が実際に読める状態か (D1 のポインタと抽出状態から判定)。 */
-function hasUsableText(doc: LatestDoc["doc"]): doc is Doc & { notionDocPageId: string } {
+export function hasUsableText(doc: LatestDoc["doc"]): doc is Doc & { notionDocPageId: string } {
   return doc !== null && doc.notionDocPageId !== null && doc.notionDocPageId.length > 0 && doc.textParseStatus === "ok";
 }
 
