@@ -1,0 +1,151 @@
+{
+  "description": "Saved public EDINET1911 source plus actual successful31st and unknown32nd legacy holding PATCH evidence. Stable whole business properties are retained; only the listed page transport keys are omitted. Private original full native bodies remain unchanged outside Git. Tests relocate pending.journal into a temporary directory explicitly; no historical business value is replaced.",
+  "source": {
+    "docId": "S100Y1XP",
+    "stockCode": "1911",
+    "edinetCode": "E00011",
+    "fiscalYearEnd": "2025-12-31"
+  },
+  "ownerName": "住友林業株式会社",
+  "zipSha256": "b48cc39e9ce1061d5d946335c891b57bd2ffa433839cffef9adfe9caceaaa3bf",
+  "originalUnknownAttempt": 143,
+  "originalUnknownNativeSequence": 570,
+  "sourceMutationUnknownRetained": true,
+  "files": [
+    {
+      "fixture": "known-before.json",
+      "nativeSequence": 566,
+      "originalResponseSha256": "a0ff28b5b260fe33dc068c900a80137caa4ef923f747dd1783de9ddc8fe4b24f",
+      "fixtureSha256": "8d003a5d5cfd415eb9b794807ee27a3292173970b644318f8f91f5bd3034f9b7",
+      "projectionRetainedKeys": [
+        "object",
+        "id",
+        "parent",
+        "archived",
+        "in_trash",
+        "created_time",
+        "last_edited_time",
+        "properties"
+      ],
+      "removedTransportKeys": [
+        "cover",
+        "created_by",
+        "icon",
+        "is_archived",
+        "is_locked",
+        "last_edited_by",
+        "public_url",
+        "request_id",
+        "url"
+      ]
+    },
+    {
+      "fixture": "known-after.json",
+      "nativeSequence": 568,
+      "originalResponseSha256": "bb72a5e5341088f8145bed308a08821005dd14f49306311ffdba59a3357de4e4",
+      "fixtureSha256": "ee0f2bfb3ac9a228054b3aca8fd53fbb25e54a51e52b261a680594129087098d",
+      "projectionRetainedKeys": [
+        "object",
+        "id",
+        "parent",
+        "archived",
+        "in_trash",
+        "created_time",
+        "last_edited_time",
+        "properties"
+      ],
+      "removedTransportKeys": [
+        "cover",
+        "created_by",
+        "icon",
+        "is_archived",
+        "is_locked",
+        "last_edited_by",
+        "public_url",
+        "request_id",
+        "url"
+      ]
+    },
+    {
+      "fixture": "unknown-before.json",
+      "nativeSequence": 569,
+      "originalResponseSha256": "f2f63ce444dc8607aa7ae8525cdfd4253192d1134a00b1cf9d803f21fbae49d6",
+      "fixtureSha256": "8ab60e18948ed8ecb0b1c458b89df4c8872bdcc309e07359f2b791288d47c5d1",
+      "projectionRetainedKeys": [
+        "object",
+        "id",
+        "parent",
+        "archived",
+        "in_trash",
+        "created_time",
+        "last_edited_time",
+        "properties"
+      ],
+      "removedTransportKeys": [
+        "cover",
+        "created_by",
+        "icon",
+        "is_archived",
+        "is_locked",
+        "last_edited_by",
+        "public_url",
+        "request_id",
+        "url"
+      ]
+    },
+    {
+      "fixture": "schema.json",
+      "nativeSequence": 467,
+      "originalResponseSha256": "e7e7750c5a7d294ab8677bc3d81909ad26694f8c3d47db8f3606a81586047a15",
+      "fixtureSha256": "ec95b712815d7da918bce37fc18d04be5563fce9951f4b2392bd5d897ff1f316",
+      "projectionRetainedKeys": [
+        "id",
+        "description",
+        "properties"
+      ],
+      "removedTransportKeys": [
+        "archived",
+        "cover",
+        "created_by",
+        "created_time",
+        "database_type",
+        "icon",
+        "in_trash",
+        "is_inline",
+        "last_edited_by",
+        "last_edited_time",
+        "object",
+        "parent",
+        "public_url",
+        "request_id",
+        "title",
+        "url"
+      ]
+    },
+    {
+      "fixture": "known-request.json",
+      "fixtureSha256": "1d337cdc950afd0b051902c0a8bdf047992d6e1266e8b31ce74f741d9d16a905",
+      "originalBytesUnchanged": true
+    },
+    {
+      "fixture": "unknown-request.json",
+      "fixtureSha256": "871e75b5a26c486d10665adff581936cf9ca56081ca92c8db7c43c266ae7c5d7",
+      "originalBytesUnchanged": true
+    },
+    {
+      "fixture": "unknown-intent.json",
+      "fixtureSha256": "ded057c7131590be036c77fec9d5e23757e182086cfc6aa1894224301bfe79a9",
+      "originalBytesUnchanged": true
+    },
+    {
+      "fixture": "journal.jsonl",
+      "fixtureSha256": "4c090a6f25e0e1b1435fc4570df5ef4760436d2d7df2be11d0e36009b41b37fe",
+      "originalBytesUnchanged": true
+    },
+    {
+      "fixture": "1911-S100Y1XP.zip",
+      "fixtureSha256": "b48cc39e9ce1061d5d946335c891b57bd2ffa433839cffef9adfe9caceaaa3bf",
+      "originalBytesUnchanged": true
+    }
+  ]
+}

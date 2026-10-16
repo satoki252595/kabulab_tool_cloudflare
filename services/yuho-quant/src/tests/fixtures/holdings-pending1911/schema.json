@@ -1,0 +1,325 @@
+{
+  "id": "5ad4d311-b06f-42b4-b78a-b3801cd509e2",
+  "description": [
+    {
+      "type": "text",
+      "text": {
+        "content": "有報の保有株式明細。原本照合済の列だけ確定値として扱い、旧取込の値は未検証列に保持する。期末参考時価は同日期末株数×終値で、価格・通貨・単位・分割を照合できない場合は欠測理由を示す。",
+        "link": null
+      },
+      "annotations": {
+        "bold": false,
+        "italic": false,
+        "strikethrough": false,
+        "underline": false,
+        "code": false,
+        "color": "default"
+      },
+      "plain_text": "有報の保有株式明細。原本照合済の列だけ確定値として扱い、旧取込の値は未検証列に保持する。期末参考時価は同日期末株数×終値で、価格・通貨・単位・分割を照合できない場合は欠測理由を示す。",
+      "href": null
+    }
+  ],
+  "properties": {
+    "出典文書ID": {
+      "id": "%3BQm%3F",
+      "name": "出典文書ID",
+      "description": null,
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "欠測理由": {
+      "id": "%3CEpO",
+      "name": "欠測理由",
+      "description": null,
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "保有株数": {
+      "id": "%3D_fn",
+      "name": "保有株数",
+      "description": null,
+      "type": "number",
+      "number": {
+        "format": "number"
+      }
+    },
+    "旧試算時価（未検証）": {
+      "id": "%40IA_",
+      "name": "旧試算時価（未検証）",
+      "description": null,
+      "type": "number",
+      "number": {
+        "format": "number"
+      }
+    },
+    "価格照合根拠": {
+      "id": "Bj%3Dg",
+      "name": "価格照合根拠",
+      "description": null,
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "旧分類（未検証）": {
+      "id": "DGfn",
+      "name": "旧分類（未検証）",
+      "description": null,
+      "type": "select",
+      "select": {
+        "options": [
+          {
+            "id": "6cbdc909-12b5-4d08-b8e0-13bec96563a1",
+            "name": "上場",
+            "color": "blue",
+            "description": null
+          },
+          {
+            "id": "b76e879c-b475-44a9-83e1-091e82df300d",
+            "name": "非上場",
+            "color": "gray",
+            "description": null
+          }
+        ]
+      }
+    },
+    "確定銘柄コード": {
+      "id": "DdCb",
+      "name": "確定銘柄コード",
+      "description": null,
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "保有時価": {
+      "id": "GbBc",
+      "name": "保有時価",
+      "description": null,
+      "type": "number",
+      "number": {
+        "format": "number"
+      }
+    },
+    "旧処理基準日（観測日未確認）": {
+      "id": "K%60%3Dj",
+      "name": "旧処理基準日（観測日未確認）",
+      "description": null,
+      "type": "date",
+      "date": {}
+    },
+    "価格状態": {
+      "id": "QE%3AD",
+      "name": "価格状態",
+      "description": null,
+      "type": "formula",
+      "formula": {
+        "expression": "if(prop(\"価格照合済\"), \"期末参考時価（同日期末株数×終値）\", \"未取得（価格・通貨・株数単位の照合未成立）\")"
+      }
+    },
+    "出典要素ID": {
+      "id": "QEf%3E",
+      "name": "出典要素ID",
+      "description": null,
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "保有会社": {
+      "id": "Q%7BEH",
+      "name": "保有会社",
+      "description": null,
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "株価": {
+      "id": "Txw%3B",
+      "name": "株価",
+      "description": null,
+      "type": "number",
+      "number": {
+        "format": "number"
+      }
+    },
+    "価格照合済": {
+      "id": "U%3Fw%5C",
+      "name": "価格照合済",
+      "description": null,
+      "type": "checkbox",
+      "checkbox": {}
+    },
+    "検証状態": {
+      "id": "UCyH",
+      "name": "検証状態",
+      "description": null,
+      "type": "formula",
+      "formula": {
+        "expression": "if(prop(\"原本照合済\"), \"明細原本照合済\", \"未検証（旧取込）\")"
+      }
+    },
+    "帳簿価額（円）": {
+      "id": "UbUr",
+      "name": "帳簿価額（円）",
+      "description": null,
+      "type": "number",
+      "number": {
+        "format": "number"
+      }
+    },
+    "株数単位": {
+      "id": "%5DPr%7B",
+      "name": "株数単位",
+      "description": null,
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "銘柄名": {
+      "id": "%5EPJG",
+      "name": "銘柄名",
+      "description": null,
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "銘柄コード": {
+      "id": "%5EWgM",
+      "name": "銘柄コード",
+      "description": null,
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "旧株価（通貨・観測日未確認）": {
+      "id": "%5Ezbz",
+      "name": "旧株価（通貨・観測日未確認）",
+      "description": null,
+      "type": "number",
+      "number": {
+        "format": "number"
+      }
+    },
+    "通貨": {
+      "id": "eMOW",
+      "name": "通貨",
+      "description": null,
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "原本照合済": {
+      "id": "eePV",
+      "name": "原本照合済",
+      "description": null,
+      "type": "checkbox",
+      "checkbox": {}
+    },
+    "区分": {
+      "id": "gXtr",
+      "name": "区分",
+      "description": null,
+      "type": "select",
+      "select": {
+        "options": [
+          {
+            "id": "04895bf5-ab00-4102-91aa-e6bc22125dad",
+            "name": "未確認",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "9a7c3425-6dba-476e-8d67-a828119539e6",
+            "name": "上場（コードリスト基準日）",
+            "color": "blue",
+            "description": null
+          }
+        ]
+      }
+    },
+    "期末": {
+      "id": "ggrt",
+      "name": "期末",
+      "description": null,
+      "type": "date",
+      "date": {}
+    },
+    "銘柄照合根拠": {
+      "id": "kA%5Bi",
+      "name": "銘柄照合根拠",
+      "description": null,
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "保有会社コード": {
+      "id": "lABv",
+      "name": "保有会社コード",
+      "description": null,
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "出典原本SHA256": {
+      "id": "lJC%7D",
+      "name": "出典原本SHA256",
+      "description": null,
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "旧抽出株数（単位未確認）": {
+      "id": "lTPG",
+      "name": "旧抽出株数（単位未確認）",
+      "description": null,
+      "type": "number",
+      "number": {
+        "format": "number"
+      }
+    },
+    "出典明細行": {
+      "id": "tQbj",
+      "name": "出典明細行",
+      "description": null,
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "基準日": {
+      "id": "tdWc",
+      "name": "基準日",
+      "description": null,
+      "type": "date",
+      "date": {}
+    },
+    "出典Context": {
+      "id": "ubZV",
+      "name": "出典Context",
+      "description": null,
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "保有種別": {
+      "id": "ujZY",
+      "name": "保有種別",
+      "description": null,
+      "type": "select",
+      "select": {
+        "options": [
+          {
+            "id": "283b5186-568c-45d3-aeab-3335d7ae3bc6",
+            "name": "特定投資株式",
+            "color": "blue",
+            "description": null
+          },
+          {
+            "id": "5dd2b5bd-6aa9-44f3-9a62-f59064a6db26",
+            "name": "みなし保有株式",
+            "color": "purple",
+            "description": null
+          }
+        ]
+      }
+    },
+    "出典ファイル": {
+      "id": "x%3B%3D%3A",
+      "name": "出典ファイル",
+      "description": null,
+      "type": "rich_text",
+      "rich_text": {}
+    },
+    "Name": {
+      "id": "title",
+      "name": "Name",
+      "description": null,
+      "type": "title",
+      "title": {}
+    }
+  }
+}
