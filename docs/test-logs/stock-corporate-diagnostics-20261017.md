@@ -24,7 +24,9 @@
 
 同じ原本の111件ではclose前後比0.940〜1.167、配当同日の60件を除く51件の`(adj/close)後÷前`は0.99999994〜1.00000006。quote closeが既に調整されていることと整合する観測だが、全OHLC・出来高の株数単位の証明にはならない。7203の配当50円によるclose/adj差も保持する。Yahoo公式の[調整済み終値の説明](https://in.help.yahoo.com/kb/finance/adjusted-close-sln28256.html)はsplit・配当反映を説明するが、Chart API全OHLCVの基準や全法的権利の網羅性までは保証していない。
 
-Nix Node22.22.2/pnpm9.15.9。比較監査は18.33秒、peak RSS669,663,232B（新旧双方の解析・全監査原イベント・結果を保持したプロセス全体）。parse累計は旧4.662秒、新5.333秒、差0.671秒/3,686銘柄。単発のローカル比較で本番保証ではない。診断8,094,422B、既存batch合計8,095,168Bで20MiB内。追加取得元GET・モデル・依存・DDL・D1要求・Notion要求は0。既存1ファイルのbytesは約8.1MB増える（同runのraw gzip118.2MBに対して約6.8%）；全量本番の実所要・保存量は次回受入で測る。
+Nix Node22.22.2/pnpm9.15.9。latest main統合後の比較監査は18.87秒、peak RSS677,396,480B（新旧双方の解析・全監査原イベント・結果を保持したプロセス全体）。parse累計は旧4.785秒、新5.519秒、差0.734秒/3,686銘柄。単発のローカル比較で本番保証ではない。診断8,094,422B、既存batch合計8,095,168Bで20MiB内。追加取得元GET・モデル・依存・DDL・D1要求・Notion要求は0。既存1ファイルのbytesは約8.1MB増える（同runのraw gzip118.2MBに対して約6.8%）；全量本番の実所要・保存量は次回受入で測る。
+
+機能HEAD `481b876be9054cd5a89145b4c83924586f1a097b`、監査結果SHA `cc9d438db76e8dc9449fce3df480f9a0664dbcff16cac2a401e1f9a455c549a2`、全診断SHA `453494292cbf1fbe82dddaad301bd0071d8c02a88fe20e45e7815357c5099175`。共通診断コードSHA `cce6eb173d806af7b3aedde2d8b4180841ffc68343808271c94f2791caa12400`、日次コードSHA `82ade138c66cf9d30542a6a32112bad11e62838c25b0bab38d37a83bb8824821`。関連3 suite/46 PASS、TypeScript・対象ESLint PASS。fresh HOLD時の診断保管、後続429中断時の診断保持とD1 write0も通常pipelineで回帰した。
 
 公開fixtureは実4374/7203/9252原本からmetadata・不変events・直近130行だけを投影し、原SHA/投影SHA/実clockをprovenanceへ残す。原本・署名付きURL・私有receiptはGitに含めない。
 
