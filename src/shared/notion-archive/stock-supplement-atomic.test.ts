@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildEvidenceBlock, buildSupplementProperties, replaceEvidenceBlock } from "./stock-supplement.js";
 import { NotionUnknownResultError } from "./client.js";
+import zeroWidthNative from "./fixtures/9273-s100z2z6-notion-zero-width.json";
 
 const io = vi.hoisted(() => ({ request: vi.fn(), archive: vi.fn(), verify: vi.fn() }));
 vi.mock("./client.js", async (original) => ({ ...await original<typeof import("./client.js")>(), notionRequest: io.request }));
@@ -76,6 +77,24 @@ const reverseKeys = (value: unknown): unknown => Array.isArray(value) ? value.ma
   ? Object.fromEntries(Object.entries(value).reverse().map(([key, entry]) => [key, reverseKeys(entry)])) : value;
 
 describe("supplement evidence two-phase replacement", () => {
+  it.each([false, true])("9273実native表現を照合し、可視1文字の差はunknown STOPのまま (visibleDiff=%s)", async (visibleDiff) => {
+    const { provenance, rawText, notionReadbackText, oldJudgeInput, writtenJudgeInput } = zeroWidthNative;
+    const oldProps = buildSupplementProperties({ docId: provenance.docId, judgeInput: oldJudgeInput, tagStatus: "判定済", tagDoc: provenance.docId });
+    const next = { docId: provenance.docId, texts: { [provenance.property]: rawText }, judgeInput: writtenJudgeInput };
+    const nativeProps = buildSupplementProperties({ texts: { [provenance.property]: notionReadbackText + (visibleDiff ? "X" : "") }, judgeInput: writtenJudgeInput });
+    let patched = false;
+    io.request.mockImplementation(async (method: string, path: string, body?: { properties?: Record<string, unknown> }) => {
+      if (method === "GET" && path === "/pages/row") return { id: "row", last_edited_time: "2026-10-16T17:43:00Z", properties: structuredClone(patched ? { ...oldProps, ...nativeProps } : oldProps) };
+      if (method === "GET" && path.startsWith("/blocks/row/children")) return { results: [old], has_more: false, next_cursor: null };
+      if (method === "PATCH" && path === "/pages/row") { expect(body?.properties).toEqual(buildSupplementProperties(next)); patched = true; return {}; }
+      throw new Error(`unexpected ${method} ${path}`);
+    });
+    const run = replaceEvidenceBlock("row", undefined, next, oldProps, guard);
+    if (visibleDiff) await expect(run).rejects.toBeInstanceOf(NotionUnknownResultError);
+    else await expect(run).resolves.toBeUndefined();
+    expect(mutations()).toEqual(["PATCH /pages/row"]);
+    expect(io.archive).toHaveBeenCalledTimes(1); expect(io.verify).toHaveBeenCalledTimes(1);
+  });
   it("physically verifies PRE and new full evidence before properties, then verifies properties before retiring old evidence", async () => {
     setup();
     await replaceEvidenceBlock("row", block, input, expected, guard);

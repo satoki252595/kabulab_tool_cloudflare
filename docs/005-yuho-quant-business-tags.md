@@ -108,6 +108,7 @@ Cursor Automation（年 1 回・8 月）
 | （39 本文列） | rich_text | `TEXT_SECTIONS` の項目名そのまま（例「事業の内容」「事業等のリスク」…）。原文全文。 |
 
 - 本文列は `TEXT_SECTIONS`（`services/yuho-quant/src/services/edinet/text-sections.ts`）が正本。
+- Notion表示用の本文列だけ、Notion保存時に除去されるU+200B（ゼロ幅スペース）を送信前に除く。原文・一次データの物理保管・39本文同期receiptと判定入力のSHAは原文のまま保持する。判定入力、根拠文、タグ、数値や他の不可視文字は正規化せず、可視文字の読戻し不一致は従来どおり結果不明として停止する。9273実原本とnative応答による[回帰記録](test-logs/biztag-notion-zero-width-20261017.md)を参照。
   列名 = `title`。その書類に無い項目は空（＝非開示。捏造しない）。
 - 「事業タグの根拠文」は 2,000字/要素 の rich_text（`splitRichText` で分割。コードポイント
   境界＝サロゲートペアを割らない）。行全体で 190,000字（安全マージンを見た Notion の

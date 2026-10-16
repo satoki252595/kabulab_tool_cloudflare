@@ -605,7 +605,7 @@ export interface SupplementRowInput {
   periodEnd?: string | null;
   submittedAt?: string | null;
   textStatus?: TextStatus;
-  /** 列名(開示テキスト項目名) → 全文。null または "" はクリア */
+  /** 列名(開示テキスト項目名) → 原文全文。Notion本文表示だけU+200Bを除く。null/""はクリア */
   texts?: Record<string, string | null>;
   upstream?: string[];
   downstream?: string[];
@@ -737,7 +737,10 @@ export function buildSupplementProperties(
   }
   if (input.texts !== undefined) {
     for (const [col, value] of Object.entries(input.texts)) {
-      props[col] = clearableRichText(value, col);
+      // Notionは本文rich_textのU+200Bを保存時に除去する（9273/S100Z2Z6実native）。
+      // 表示本文だけ同じ送信表現へ揃える。raw/source物理・入力map・同期/判定SHAと
+      // judgeInput/根拠/他metadataは変更せず、可視文字の読戻し照合も緩めない。
+      props[col] = clearableRichText(typeof value === "string" ? value.replaceAll("\u200B", "") : value, col);
     }
   }
   if (input.upstream !== undefined) {
