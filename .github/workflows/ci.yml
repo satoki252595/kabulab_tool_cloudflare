@@ -37,7 +37,7 @@ jobs:
       - name: lint
         run: pnpm lint
       - name: test
-        run: pnpm test
+        run: pnpm run test --reporter=default --reporter=json --outputFile.json=/tmp/vitest.json
       # 監査レポートの正準数値は results.json からの生成物。内訳不一致・
       # 隔離/保留の混入・SHA省略・生成ブロックの手編集を落とす (Issue #151)。
       - name: audit report check
@@ -73,17 +73,21 @@ jobs:
       - name: skip されたテストを報告
         if: always()
         run: |
-          pnpm exec vitest run --reporter=json --outputFile=/tmp/vitest.json > /dev/null 2>&1 || true
           if [ -f /tmp/vitest.json ]; then
             node -e '
               const r = require("/tmp/vitest.json");
-              const skipped = (r.testResults ?? []).flatMap(f =>
-                (f.assertionResults ?? []).filter(a => a.status === "pending" || a.status === "skipped")
-                  .map(a => `${f.name.replace(process.cwd()+"/","")} > ${a.fullName}`));
+              if (!Array.isArray(r.testResults)) throw new Error("テスト結果JSONの構造が不正です");
+              const skipped = r.testResults.flatMap(f => {
+                if (typeof f.name !== "string" || !Array.isArray(f.assertionResults)) throw new Error("テスト結果のsuiteが不正です");
+                return f.assertionResults.filter(a => a.status === "pending" || a.status === "skipped")
+                  .map(a => `${f.name.replace(process.cwd()+"/","")} > ${a.fullName}`);
+              });
               if (skipped.length === 0) { console.log("skip されたテストはありません"); process.exit(0); }
               console.log(`::warning::skip されたテストが ${skipped.length} 件あります`);
               for (const s of skipped) console.log("  " + s);
             '
+          else
+            echo "::warning::テスト結果JSONが未生成です。テストは再実行せず、先行stepの結果を確認してください。"
           fi
 
   # 収集パイプライン (pipeline/) と配信 Worker (services/jss-api/) の検査。
