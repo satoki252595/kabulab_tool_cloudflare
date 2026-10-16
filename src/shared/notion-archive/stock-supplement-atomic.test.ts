@@ -172,7 +172,8 @@ describe("supplement evidence two-phase replacement", () => {
     if (fault === "normal-complete") await first;
     else await expect(first).rejects.toBeInstanceOf(NotionUnknownResultError);
     const journalRoot = join(state, "supplement-publications"), operation = join(journalRoot, readdirSync(journalRoot)[0]), pre = readFileSync(join(operation, "pre.json")), intent = readFileSync(join(operation, "intent.json"));
-    expect(pre).toEqual(Buffer.from(io.archive.mock.calls[0][0].files[0].bytes));
+    // Native byte comparison avoids millions of assertion-library element comparisons for the full 1.3 MB PRE.
+    expect(pre.equals(Buffer.from(io.archive.mock.calls[0][0].files[0].bytes))).toBe(true);
     if (fault === "normal-complete") {
       expect(patches).toBe(2); createSupplementPublicationJournal(state).assertReady();
       const completed = JSON.parse(readFileSync(join(operation, "completed.json"), "utf8"));
@@ -185,7 +186,7 @@ describe("supplement evidence two-phase replacement", () => {
       // The current PRE would differ after chunk1; global durable intent rejects before any native reader/archiver.
       await expect((async () => { const resumed = createSupplementPublicationJournal(state); await replaceEvidenceBlock(current.id, undefined, fixture.input, current.properties, guard, resumed); })()).rejects.toBeInstanceOf(NotionUnknownResultError);
       expect(io.request).not.toHaveBeenCalled(); expect(io.archive).not.toHaveBeenCalled();
-      expect(readFileSync(join(operation, "pre.json"))).toEqual(pre); expect(readFileSync(join(operation, "intent.json"))).toEqual(intent);
+      expect(readFileSync(join(operation, "pre.json")).equals(pre)).toBe(true); expect(readFileSync(join(operation, "intent.json")).equals(intent)).toBe(true);
     }
   });
   it.each(["same", "visible-diff", "unknown"])("9273実送信表現を事前guardし、receiptだけ再資格化する (%s)", async fault => {
