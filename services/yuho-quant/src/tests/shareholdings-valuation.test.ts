@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
-import { exactLegalName, HoldingsPriceIndex, parseHoldingsCodeList, qualifyHoldingValuation, type ArchivedSource } from "../services/edinet/shareholdings-valuation.js";
+import { exactLegalName, HoldingPriceIssuerMismatch, HoldingsPriceIndex, parseHoldingsCodeList, qualifyHoldingValuation, type ArchivedSource } from "../services/edinet/shareholdings-valuation.js";
 import type { Shareholding } from "../services/edinet/shareholdings.js";
 
 const hash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
@@ -80,7 +80,7 @@ describe("保有明細の期末参考時価", () => {
     const target = [...catalog.byLegalName.values()].flat().find(row => row.code === code)!;
     expect(target.englishName).toBe(fsaName);
     await expect(qualifyHoldingValuation({ holding: { ...holding, name: target.legalName }, fiscalYearEnd: "2026-06-30", catalog,
-      prices: [source({ symbol: `${code}.T`, issuerName: priceName })] })).rejects.toThrow("英字商号");
+      prices: [source({ symbol: `${code}.T`, issuerName: priceName })] })).rejects.toBeInstanceOf(HoldingPriceIssuerMismatch);
   });
   it("原本商号/code/JPY/同日期末株数/同日raw close/分割0を検証し、日付と出典SHAを保つ", async () => {
     const result = await qualify(source());

@@ -23,6 +23,15 @@ export type HoldingValuation =
       priceSource: { archivePageId: string; gzipSha256: string; bodySha256: string; filename: string; symbol: string;
         capturedAt: string; sourceTimestamp: number; range: string; priceBasis: string; splitObservation: string } };
 
+/** 原本/SHA/chart検証後に確定した主体不一致だけ。通信・破損・ACK不明とは区別する。 */
+export class HoldingPriceIssuerMismatch extends Error {
+  constructor(readonly proof: { symbol: string; expectedEnglishName: string; observedEnglishName: string;
+    archivePageId: string; filename: string; gzipSha256: string; bodySha256: string }) {
+    super(`価格原本の発行体英字商号が一致しません。${JSON.stringify(proof)}`);
+    this.name = "HoldingPriceIssuerMismatch";
+  }
+}
+
 const sha = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 /** (株)/㈱は株式会社の同義表記。法人格の削除・位置変更・近似/略称照合はしない。 */
 export const exactLegalName = (value: string): string => value.normalize("NFKC").replace(/\s/g, "").replaceAll("(株)", "株式会社");
@@ -165,7 +174,10 @@ export async function qualifyHoldingValuation(args: {
   const { source, member } = matches[0];
   const { range, parsed, raw } = await index.verifiedChart(matches[0], symbol);
   assert.equal(raw.meta.currency, "JPY"); assert.equal(raw.meta.exchangeTimezoneName, "Asia/Tokyo");
-  assert.equal(englishName(raw.meta.longName), englishName(identity.englishName), "価格原本の発行体英字商号が一致しません");
+  if (englishName(raw.meta.longName) !== englishName(identity.englishName)) throw new HoldingPriceIssuerMismatch({
+    symbol, expectedEnglishName: identity.englishName, observedEnglishName: raw.meta.longName,
+    archivePageId: source.archivePageId, filename: source.filename, gzipSha256: source.sha256, bodySha256: member.sha256,
+  });
   const dates: string[] = raw.timestamp.map(jstDateSec);
   const indexes = dates.map((date: string, index: number) => date === args.fiscalYearEnd ? index : -1).filter((index: number) => index >= 0);
   if (indexes.length !== 1) return { status: "unavailable", identity, reason: "当期末当日の価格バーを一意に観測していません" };
