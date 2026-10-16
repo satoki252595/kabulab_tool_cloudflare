@@ -928,6 +928,14 @@ async function recordRecoveryInfo(archivePageId: string, info: RecoveryInfo, sta
   assert.equal(actual.archived, false);
   assert.equal(actual.in_trash, false);
   assertProperties(actual.properties, properties);
+  if (info.notApplicable !== undefined) {
+    // Typed absence changes only the source diagnostic. Keep every other property, including prices and original files.
+    assert.equal(actual.created_time, before.created_time);
+    assert.deepEqual(Object.keys(actual.properties).sort(), [...new Set([...Object.keys(before.properties), ...Object.keys(properties)])].sort());
+    for (const [name, value] of Object.entries(before.properties)) if (!Object.hasOwn(properties, name)) {
+      assert.deepEqual(stableProperty(actual.properties[name]), stableProperty(value), "明示不該当で他の原本propsを変更しません");
+    }
+  }
   if (price) for (const name of ["保有明細状態", "保有明細理由", "保有明細再開情報"]) assert.deepEqual(actual.properties[name], before.properties[name], "価格phaseで原本完了を変更しません");
   if (!price && !Object.hasOwn(properties, "保有価格状態")) for (const name of ["保有価格状態", "保有価格理由", "保有価格再開情報"]) assert.deepEqual(actual.properties[name], before.properties[name], "既存価格queueを変更しません");
   return actual;

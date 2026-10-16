@@ -1,0 +1,130 @@
+{
+  "description": "Four complete saved original EDINET type1 ZIPs; no rewriting, source API calls or fabricated absence. Parser DEI/filer/context qualification is replayed by normal prepare and publisher tests.",
+  "sourceManifestSha256": "5fa05d6ce0245679af3ed0d22dba1a371420eb700ba0a4f494dd19a025af87aa",
+  "items": [
+    {
+      "source": {
+        "docId": "S100XCIN",
+        "stockCode": "206A",
+        "edinetCode": "E39751",
+        "fiscalYearEnd": "2025-09-30"
+      },
+      "ownerName": "株式会社ＰＲＩＳＭ　ＢｉｏＬａｂ",
+      "fixture": "206A-S100XCIN.zip",
+      "originalZipSha256": "e22fa6f054e136ae325ea5c26b86bcf3ffbc3d04222f106dd7884b7471fabe95",
+      "originalZipBytes": 1686808,
+      "sourceFetchedAt": "2026-10-03T09:29:00.000+00:00",
+      "notApplicable": {
+        "version": 1,
+        "basis": "whole_section_not_applicable",
+        "zipSha256": "e22fa6f054e136ae325ea5c26b86bcf3ffbc3d04222f106dd7884b7471fabe95",
+        "filename": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E39751-000_2025-09-30_01_2025-12-24_ixbrl.htm",
+        "memberSha256": "1f13f02161313acc560a45efe74c7877e59a34e7f18bf249aef64dc9f856c22b",
+        "blockHtmlSha256": "277aca9e8789de422704b17d856e030798974a28fc62fd107ab0938a4d0664c7",
+        "elementNamespace": "http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2024-11-01/jpcrp_cor",
+        "inlineNamespace": "http://www.xbrl.org/2008/inlineXBRL",
+        "context": {
+          "contextRef": "FilingDateInstant",
+          "entity": "E39751-000",
+          "instantDate": "2025-12-24"
+        },
+        "statement": "(5) 【株式の保有状況】 該当事項はありません。"
+      },
+      "submitDateTime": null,
+      "originalSourceCustody": "legacy"
+    },
+    {
+      "source": {
+        "docId": "S100YKKS",
+        "stockCode": "2326",
+        "edinetCode": "E05303",
+        "fiscalYearEnd": "2026-03-31"
+      },
+      "ownerName": "デジタルアーツ株式会社",
+      "fixture": "2326-S100YKKS.zip",
+      "originalZipSha256": "46d08ee23113ccc140530ff1e1f4b55fea3aeda7afaa54e2777206f7a11172a8",
+      "originalZipBytes": 1116233,
+      "sourceFetchedAt": "2026-06-25T15:59:00.000+00:00",
+      "notApplicable": {
+        "version": 1,
+        "basis": "whole_section_not_applicable",
+        "zipSha256": "46d08ee23113ccc140530ff1e1f4b55fea3aeda7afaa54e2777206f7a11172a8",
+        "filename": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E05303-000_2026-03-31_01_2026-06-25_ixbrl.htm",
+        "memberSha256": "052bd0b92b45a44a1d90507d641b3f9e60e24e6e8cfcad4953688a532b5ed6b3",
+        "blockHtmlSha256": "b3f672c5b13de7f01bec6efb6e3cd383fb6cd61d411f36354d0c02453f9d621a",
+        "elementNamespace": "http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor",
+        "inlineNamespace": "http://www.xbrl.org/2008/inlineXBRL",
+        "context": {
+          "contextRef": "FilingDateInstant",
+          "entity": "E05303-000",
+          "instantDate": "2026-06-25"
+        },
+        "statement": "(5) 【株式の保有状況】 該当事項はありません。"
+      },
+      "submitDateTime": "2026-06-25 15:59",
+      "originalSourceCustody": "legacy"
+    },
+    {
+      "source": {
+        "docId": "S100YF75",
+        "stockCode": "2749",
+        "edinetCode": "E05306",
+        "fiscalYearEnd": "2026-03-31"
+      },
+      "ownerName": "株式会社ＪＰホールディングス",
+      "fixture": "2749-S100YF75.zip",
+      "originalZipSha256": "d612beeaa8f00f7c62a8a7ced7ec75c95793b8770847de77aea2e858cc5284fe",
+      "originalZipBytes": 674281,
+      "sourceFetchedAt": "2026-06-22T15:56:00.000+00:00",
+      "notApplicable": {
+        "version": 1,
+        "basis": "whole_section_not_applicable",
+        "zipSha256": "d612beeaa8f00f7c62a8a7ced7ec75c95793b8770847de77aea2e858cc5284fe",
+        "filename": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E05306-000_2026-03-31_01_2026-06-22_ixbrl.htm",
+        "memberSha256": "7fa1bdb3321b219c02936bd5bf19de403a8e4198d7cc351520b9ca950162dac8",
+        "blockHtmlSha256": "de3ccd8188606b6df2cca6c756d9c36606a8e9d07bb1e06a90f1487df8d9f661",
+        "elementNamespace": "http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor",
+        "inlineNamespace": "http://www.xbrl.org/2008/inlineXBRL",
+        "context": {
+          "contextRef": "FilingDateInstant",
+          "entity": "E05306-000",
+          "instantDate": "2026-06-22"
+        },
+        "statement": "(5) 【株式の保有状況】 該当事項はありません。"
+      },
+      "submitDateTime": "2026-06-22 15:56",
+      "originalSourceCustody": "legacy"
+    },
+    {
+      "source": {
+        "docId": "S100X6P1",
+        "stockCode": "276A",
+        "edinetCode": "E40130",
+        "fiscalYearEnd": "2025-08-31"
+      },
+      "ownerName": "ククレブ・アドバイザーズ株式会社",
+      "fixture": "276A-S100X6P1.zip",
+      "originalZipSha256": "d1dfdddf55990352b6bc5ce34e82c166e12c645389f6058bcec7dea7ef999579",
+      "originalZipBytes": 889460,
+      "sourceFetchedAt": "2026-10-03T09:28:00.000+00:00",
+      "notApplicable": {
+        "version": 1,
+        "basis": "whole_section_not_applicable",
+        "zipSha256": "d1dfdddf55990352b6bc5ce34e82c166e12c645389f6058bcec7dea7ef999579",
+        "filename": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E40130-000_2025-08-31_01_2025-11-26_ixbrl.htm",
+        "memberSha256": "8f7f6ddf88b8742e971711cf2529c446dbfd2154e542008f909931690da78374",
+        "blockHtmlSha256": "29979c1711b9c8025179c3f2eb238ea819a82d8b4e23de8387d43acbcc1636e5",
+        "elementNamespace": "http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2024-11-01/jpcrp_cor",
+        "inlineNamespace": "http://www.xbrl.org/2008/inlineXBRL",
+        "context": {
+          "contextRef": "FilingDateInstant",
+          "entity": "E40130-000",
+          "instantDate": "2025-11-26"
+        },
+        "statement": "(5) 【株式の保有状況】 該当事項はありません。"
+      },
+      "submitDateTime": null,
+      "originalSourceCustody": "legacy"
+    }
+  ]
+}
