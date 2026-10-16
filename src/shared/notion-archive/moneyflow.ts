@@ -40,7 +40,7 @@ import {
 } from "./archive.js";
 import { NotionUnknownResultError, assertCursorProgress, notionRequest } from "./client.js";
 import type { NotionSelectColor } from "./dataset.js";
-import { notionEnv } from "./env.js";
+import { NotionConfigError, notionEnv } from "./env.js";
 import { splitRichText } from "./rich-text.js";
 
 export const MONEYFLOW_DEFS_DB_TITLE = "資金フロー｜指標定義";
@@ -799,6 +799,7 @@ function obsPropHasShape(value: unknown, shape: ObsPropShape): boolean {
       return textElements(v.rich_text);
     case "relation":
       return (
+        (!Object.hasOwn(v, "has_more") || v.has_more === false) &&
         Array.isArray(v.relation) &&
         v.relation.every(
           (el) =>
@@ -866,6 +867,72 @@ export function observationRowMatches(
 export interface UpsertObservationResult {
   pageId: string;
   outcome: "created" | "updated" | "unchanged";
+}
+
+const OBSERVATION_PRECHECK_BATCH_SIZE = 50;
+
+/** 完全な保存page群にも使う純比較。欠落/変更はmap不在で、fresh upsertへ渡す。 */
+export function matchUnchangedObservationRows(
+  dbId: string,
+  inputs: readonly ObservationInput[],
+  nativeRows: readonly unknown[]
+): Map<string, string> {
+  const fail = (why: string): never => { throw new NotionConfigError(`moneyflow 観測の一括同値照合を保全停止: ${why}`); };
+  if (inputs.length > OBSERVATION_PRECHECK_BATCH_SIZE || nativeRows.length > 100) return fail("件数上限超過");
+  const expected = new Map<string, ObservationInput>();
+  for (const input of inputs) {
+    const key = observationKey(input);
+    if (expected.has(key)) return fail("入力キー重複");
+    expected.set(key, input);
+  }
+  const seenKeys = new Set<string>(), seenIds = new Set<string>(), unchanged = new Map<string, string>();
+  for (const value of nativeRows) {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) return fail("page形状不正");
+    const row = value as Record<string, unknown>, parent = row.parent as Record<string, unknown> | undefined;
+    if (row.object !== "page" || typeof row.id !== "string" || row.id.trim() === "" ||
+        row.archived !== false || row.in_trash !== false || parent?.type !== "database_id" ||
+        typeof parent.database_id !== "string" || normalizeId(parent.database_id) !== normalizeId(dbId)) return fail("非active/別DB/不正page");
+    const properties = row.properties as Record<string, NotionPagePropertyValue> | undefined;
+    if (!properties || !obsPropHasShape(properties[MONEYFLOW_OBS_PROPS.key], "title")) return fail("キー形状不正");
+    const key = plainOf(properties[MONEYFLOW_OBS_PROPS.key]?.title);
+    if (typeof key !== "string" || !expected.has(key) || seenKeys.has(key) || seenIds.has(normalizeId(row.id))) return fail("未知/重複行");
+    seenKeys.add(key); seenIds.add(normalizeId(row.id));
+    if (observationRowMatches(properties, expected.get(key)!)) unchanged.set(key, row.id);
+  }
+  return unchanged;
+}
+
+/**
+ * 通常取得/保存原本の共通upsert。50自然キーずつ19全値を比較し、同値だけqueryを省く。
+ * 変更/欠落は古いquery結果でPATCH/POSTせず既存のfresh per-key upsertへ渡す。
+ */
+export async function upsertObservationBatch(
+  dbId: string,
+  inputs: readonly ObservationInput[]
+): Promise<UpsertObservationResult[]> {
+  const keys = new Set<string>();
+  for (const input of inputs) {
+    const key = observationKey(input);
+    if (keys.has(key)) throw new NotionConfigError("moneyflow 観測の一括同値照合を保全停止: 入力キー重複");
+    keys.add(key);
+    buildObsRowProperties(input); // 同値でも既存upsertの入力検査を省かない。
+  }
+  const results: UpsertObservationResult[] = [];
+  for (let offset = 0; offset < inputs.length; offset += OBSERVATION_PRECHECK_BATCH_SIZE) {
+    const batch = inputs.slice(offset, offset + OBSERVATION_PRECHECK_BATCH_SIZE);
+    const response = await notionRequest<ObsBatchQueryResponse>("POST", `/databases/${dbId}/query`, {
+      filter: { or: batch.map((input) => ({ property: MONEYFLOW_OBS_PROPS.key, title: { equals: observationKey(input) } })) },
+      page_size: 100,
+    });
+    // 50一意キーの完全一致だけ採用する。未完ページを無視して同値にしない。
+    if (response.has_more !== false) throw new NotionConfigError("moneyflow 観測の一括同値照合を保全停止: query未完");
+    const unchanged = matchUnchangedObservationRows(dbId, batch, response.results);
+    for (const input of batch) {
+      const pageId = unchanged.get(observationKey(input));
+      results.push(pageId === undefined ? await upsertObservation(dbId, input) : { pageId, outcome: "unchanged" });
+    }
+  }
+  return results;
 }
 
 /** POST/PATCH 応答 (Notion page) の ack 検証に使う最小面。 */

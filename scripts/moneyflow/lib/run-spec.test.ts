@@ -8,18 +8,25 @@ import { MoneyflowFetchError, type MoneyflowSourceSpec, type ObservationDraft } 
 
 // source-spec.ts が observationKey を同モジュールから import しているため、
 // 実物に被せる形で mock する (被せないと validateDrafts の呼び出しで落ちる)。
-const notion = vi.hoisted(() => ({
+const notion = vi.hoisted(() => {
+  const upsertObservation = vi.fn(
+    async (_db: string, _i: unknown): Promise<{ pageId: string; outcome: "created" | "updated" | "unchanged" }> => ({
+      pageId: "row", outcome: "created",
+    })
+  );
+  return {
   ensureObservationsDb: vi.fn(async () => ({ dbId: "obs-db" })),
   isArchived: vi.fn(async (_s: string, _k: string, _p?: string) => false),
   recordPrimaryData: vi.fn(async (_i: unknown) => ({ pageId: "primary-1", outcome: "recorded", fileTooLarge: false })),
-  upsertObservation: vi.fn(
-    async (_db: string, _i: unknown): Promise<{ pageId: string; outcome: "created" | "updated" | "unchanged" }> => ({
-      pageId: "row",
-      outcome: "created",
-    })
-  ),
+  upsertObservation,
+  upsertObservationBatch: vi.fn(async (db: string, inputs: readonly unknown[]) => {
+    const results = [];
+    for (const input of inputs) results.push(await upsertObservation(db, input));
+    return results;
+  }),
   verifyObservedBatch: vi.fn(async (_db: string, _c: string, _rows: unknown) => undefined),
-}));
+  };
+});
 const archived = {
   verifyArchivedAttachments: vi.fn(async (_p: string, _c: string, _k: string, _f: unknown) => undefined),
   requirePrimaryDataDbId: vi.fn(async () => "primary-db"),
@@ -115,6 +122,8 @@ describe("runSpec", () => {
       expect.objectContaining({ service: "moneyflow", key: "src-2026-08" })
     );
     expect(notion.recordPrimaryData.mock.calls[0]?.[0]).not.toHaveProperty("parentPageId");
+    expect(notion.upsertObservationBatch).toHaveBeenCalledTimes(1);
+    expect(notion.upsertObservationBatch.mock.calls[0]?.[1]).toHaveLength(2);
     const written = notion.upsertObservation.mock.calls.map((c) => (c[1] as { category: string; primaryDataPageId: string }));
     expect(written.map((w) => w.category)).toEqual(["fresh-A", "fresh-B"]);
     expect(written.every((w) => w.primaryDataPageId === "primary-1")).toBe(true);
@@ -131,6 +140,7 @@ describe("runSpec", () => {
     const detail = await runSpec(spec, ctx());
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(notion.recordPrimaryData).not.toHaveBeenCalled();
+    expect(notion.upsertObservationBatch).toHaveBeenCalledTimes(1);
     // 全 draft を upsert にかける (同値確認のため照会はする)。
     expect(notion.upsertObservation).toHaveBeenCalledTimes(2);
     // 全行 unchanged なら readback 検証は呼ばない (upsert 照合済み)。
