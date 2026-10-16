@@ -137,6 +137,159 @@
         },
         "ownerFiscalYearEnd": "2026-03-31"
       }
+    },
+    {
+      "code": "7322",
+      "filename": "7322-S100YD2K.zip",
+      "source": {
+        "docId": "S100YD2K",
+        "stockCode": "7322",
+        "edinetCode": "E33693",
+        "fiscalYearEnd": "2026-03-31"
+      },
+      "ownerName": "株式会社三十三フィナンシャルグループ",
+      "archivePageId": "3e1d74ff-84cd-8177-bcad-fe873e849e36",
+      "zipSha256": "7757dbdeeef48090152eed0e9ea5dc50ef43af272d3fd86b22b9078fcd4ab4e7",
+      "zipBytes": 833365,
+      "sourceFetchedAt": "2026-06-18T10:07:00.000+00:00",
+      "sourceClockStatus": "retained metadata value; native source API retrieval time not independently upgraded",
+      "sourceMetadata": {
+        "docID": "S100YD2K",
+        "edinetCode": "E33693",
+        "secCode": "73220",
+        "filerName": "株式会社三十三フィナンシャルグループ",
+        "docTypeCode": "120",
+        "docDescription": "有価証券報告書－第8期(2025/04/01－2026/03/31)",
+        "periodStart": "2025-04-01",
+        "periodEnd": "2026-03-31",
+        "submitDateTime": "2026-06-18 10:07",
+        "parseStatus": "no_order_table",
+        "honbunFile": null,
+        "factCount": 0,
+        "overseasParseStatus": "no_overseas_table",
+        "overseasHonbunFile": "XBRL/PublicDoc/0105010_honbun_jpcrp030000-asr-001_E33693-000_2026-03-31_01_2026-06-18_ixbrl.htm",
+        "overseasFactCount": 0,
+        "textParseStatus": "ok",
+        "textSectionCount": 35,
+        "xbrlUnavailable": false
+      },
+      "basis": {
+        "source": {
+          "docId": "S100YD2K",
+          "stockCode": "7322",
+          "edinetCode": "E33693",
+          "fiscalYearEnd": "2026-03-31"
+        },
+        "memberSha256": "aba2987800f40e3848b405cf353953e01521ee718148cc5c96dad27769e646b3",
+        "factSha256": "c9f979a3fa3748ccd8b1abf543580ca5b69a03fd9776604b6722b93ae1a30721",
+        "context": {
+          "contextRef": "CurrentYearDuration",
+          "entity": "E33693-000",
+          "startDate": "2025-04-01",
+          "endDate": "2026-03-31"
+        },
+        "statement": "当社は、2026年4月1日付で普通株式1株につき4株の割合で株式分割を行っておりますが、上記の事項は当該株式分割前の株式数を記載しております。",
+        "filename": "XBRL/PublicDoc/jpcrp030000-asr-001_E33693-000_2026-03-31_01_2026-06-18.xbrl",
+        "element": "jpcrp_cor:NotesRegardingIssuedSharesAndTreasurySharesTextBlock",
+        "legalEffectiveDate": "2026-04-01",
+        "numerator": 4,
+        "denominator": 1,
+        "fiscalYearShares": "26167585",
+        "issuedSharesFactSha256": "7d4c51a68b08f2a9e9959e97ca7c69fdccd885113f0f2cf5d85309f6d75cfe94"
+      },
+      "derivedPriceReference": {
+        "status": "previous unavailable result projection, not a native price response",
+        "bodySha256": "83469ca7bc2c789fb398eea151ebeef412f25eb39e25aa0813a83409a5d57752",
+        "receivedAt": "2026-10-04T13:33:28.809Z",
+        "reportedSplit": {
+          "date": "2026-03-30",
+          "ratio": 4
+        },
+        "ownerFiscalYearEnd": "2026-03-31"
+      },
+      "candidateAProvenance": {
+        "savedSourceProofSha256": "711783864adace4450b70a26008cfa02e7e05c38176c6e3f7243730c64ec79a5",
+        "sourceItemSha256": "4bf7d533cb3ed915726314b38bc81db66575246497bc164bbe12de31cbefc33c",
+        "sameFiscalYearImpactRows": 28,
+        "nativeContextDate": "2026-06-18",
+        "economicFiscalYearDate": "2026-03-31",
+        "normalQualifierPreviouslyNotObserved": true,
+        "priceAccepted": false
+      }
+    },
+    {
+      "code": "8142",
+      "filename": "8142-S100Y0S6.zip",
+      "source": {
+        "docId": "S100Y0S6",
+        "stockCode": "8142",
+        "edinetCode": "E02665",
+        "fiscalYearEnd": "2026-01-31"
+      },
+      "ownerName": "株式会社トーホー",
+      "archivePageId": "364d74ff-84cd-81e6-b452-f2dd0f54a4f7",
+      "zipSha256": "6b8039c34472a4a7092ea60522773f8ed2b3c0a1171618db4ae9b279a3c0c0cb",
+      "zipBytes": 866978,
+      "sourceFetchedAt": "2026-04-27T13:09:00.000+00:00",
+      "sourceClockStatus": "retained metadata value; native source API retrieval time not independently upgraded",
+      "sourceMetadata": {
+        "docID": "S100Y0S6",
+        "edinetCode": "E02665",
+        "secCode": "81420",
+        "filerName": "株式会社トーホー",
+        "docTypeCode": "120",
+        "docDescription": "有価証券報告書－第73期(2025/02/01－2026/01/31)",
+        "periodStart": "2025-02-01",
+        "periodEnd": "2026-01-31",
+        "submitDateTime": "2026-04-27 13:09",
+        "parseStatus": "no_order_table",
+        "honbunFile": null,
+        "factCount": 0,
+        "xbrlUnavailable": false
+      },
+      "basis": {
+        "source": {
+          "docId": "S100Y0S6",
+          "stockCode": "8142",
+          "edinetCode": "E02665",
+          "fiscalYearEnd": "2026-01-31"
+        },
+        "memberSha256": "e61ad2c57bf809493786f5a9eddaa4dc10d954c84324f1ca347f0a9ff5332866",
+        "factSha256": "6086d4e0bb867a069ffaf827f35122703906e35f457cff2cc863638facc81e48",
+        "context": {
+          "contextRef": "CurrentYearDuration",
+          "entity": "E02665-000",
+          "startDate": "2025-02-01",
+          "endDate": "2026-01-31"
+        },
+        "statement": "当社は、2026年2月1日付で普通株式1株につき3株の割合で株式分割を行っておりますが、上記の事項は、当該株式分割前の株式数を記載しております。",
+        "filename": "XBRL/PublicDoc/jpcrp030000-asr-001_E02665-000_2026-01-31_01_2026-04-27.xbrl",
+        "element": "jpcrp_cor:NotesRegardingIssuedSharesAndTreasurySharesTextBlock",
+        "legalEffectiveDate": "2026-02-01",
+        "numerator": 3,
+        "denominator": 1,
+        "fiscalYearShares": "11012166",
+        "issuedSharesFactSha256": "406fd1978b51267770597e4f26bcedf1b052412dc2c00f28ef331b72283e0946"
+      },
+      "derivedPriceReference": {
+        "status": "previous unavailable result projection, not a native price response",
+        "bodySha256": "2193d971c8704c07b0289f8a241b92ceeb9d6a9eaff5236480bac5512cbac792",
+        "receivedAt": "2026-10-04T13:43:34.742Z",
+        "reportedSplit": {
+          "date": "2026-01-29",
+          "ratio": 3
+        },
+        "ownerFiscalYearEnd": "2026-03-31"
+      },
+      "candidateAProvenance": {
+        "savedSourceProofSha256": "711783864adace4450b70a26008cfa02e7e05c38176c6e3f7243730c64ec79a5",
+        "sourceItemSha256": "673ff9944500149443833aa558988c360204af73391d18fdce9bcab7e3a63c0e",
+        "sameFiscalYearImpactRows": 0,
+        "nativeContextDate": "2026-04-27",
+        "economicFiscalYearDate": "2026-01-31",
+        "normalQualifierPreviouslyNotObserved": true,
+        "priceAccepted": false
+      }
     }
   ],
   "limits": "Explicit issuer/FY pre-split unit evidence only. No OHLCV/provider basis proof, no coefficient/share/price correction, no price acceptance."
