@@ -6,8 +6,11 @@ import re
 import sys
 
 
-def continuation(event: dict, records: list[dict]) -> dict | None:
+def continuation(event: dict, records: list[dict], execution_revision: str) -> dict | None:
     inputs = event["inputs"]
+    assert re.fullmatch(r"[0-9a-f]{40}", execution_revision)
+    # 初回空欄だけworkflowのgithub.sha。以後は実checkoutと指定SHAの完全一致が必須。
+    assert inputs["execution_revision"] in ("", execution_revision)
     runs = int(inputs["continue_runs"])
     assert event["ref"] in ("main", "refs/heads/main") and 1 <= runs <= 200
     assert inputs["mode"] == "apply"
@@ -55,11 +58,13 @@ def continuation(event: dict, records: list[dict]) -> dict | None:
         )
     }
     next_inputs["continue_runs"] = str(runs - 1)
+    next_inputs["execution_revision"] = execution_revision
     return {"ref": "main", "inputs": next_inputs}
 
 
 if __name__ == "__main__":
-    event_path, receipt_path, output_path = map(Path, sys.argv[1:])
+    event_path, receipt_path, output_path = map(Path, sys.argv[1:4])
+    execution_revision, = sys.argv[4:]
     selected, last = [], None
     with receipt_path.open() as receipt:
         for line in receipt:
@@ -71,7 +76,7 @@ if __name__ == "__main__":
         "incomplete/STOP receipt; no dispatch"
     )
     assert len(selected) == 2
-    result = continuation(json.loads(event_path.read_text()), selected)
+    result = continuation(json.loads(event_path.read_text()), selected, execution_revision)
     if result is not None:
         with output_path.open("x") as output:
             json.dump(result, output)

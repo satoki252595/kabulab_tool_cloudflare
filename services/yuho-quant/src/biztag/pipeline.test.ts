@@ -5,6 +5,8 @@ import { createClefClient, CLEF_MODEL } from "../../../../src/shared/clef/client
  * 既存は保存済みマスタをコード参照し、未設定・失敗だけ機械判定する。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { gunzipSync } from "node:zlib";
 import { createJevClient, jevEnv } from "../../../../src/shared/jev/index.js";
 import { assertLatestDocCurrent, loadLatestDocs, loadNewStockEligibility, type LatestDoc } from "./source.js";
 import type { LedgerEntry, SupplementRow, SupplementRowInput } from "../../../../src/shared/notion-archive/index.js";
@@ -13,6 +15,7 @@ import { makeBudgetedVerifySources } from "./sources-verify.js";
 import { MINI_VOCAB } from "./vocabulary/__fixtures__/mini-vocab.js";
 import { composeRunNotify, isBillingBlockedError, runBiztag, type RunSummary } from "./pipeline.js";
 import { withTextSyncReceipt } from "./plan.js";
+import { TEXT_SECTIONS } from "../services/edinet/text-sections.js";
 import { NotionUnknownResultError } from "../../../../src/shared/notion-archive/client.js";
 
 const notionMocks = vi.hoisted(() => ({
@@ -277,6 +280,39 @@ describe("runBiztag 新規と既存の外部判定境界", () => {
     expect(notionMocks.replaceEvidenceBlock.mock.calls[0][2].upstream).toBeUndefined();
     expect(createClefClient).not.toHaveBeenCalled();
     expect(createJevClient).not.toHaveBeenCalled();
+  });
+
+  it("実保存215Aの旧receiptは既定skip、固定finite refreshだけ通常planner→同producer/publisherへ進む", async () => {
+    const actual = JSON.parse(gunzipSync(readFileSync(new URL("./competitors/fixtures/prepare-actual-20261017.json.gz", import.meta.url))).toString());
+    const latest = actual.latest[0] as LatestDoc, page = actual.pages[0];
+    const rich = (name: string) => page.properties[name].rich_text.map((t: { plain_text: string }) => t.plain_text).join("");
+    const row = minimalRow({ stockCode: latest.stockCode, companyName: latest.companyName, sector33: latest.sector33,
+      docId: latest.doc!.docId, docType: latest.doc!.docTypeCode === "120" ? "有報" : "訂正有報", periodEnd: latest.doc!.periodEnd,
+      submittedAt: latest.doc!.submittedAt, tagStatus: "判定済", tagDoc: rich("事業タグの根拠書類"),
+      vocabVersion: page.properties["単語帳の版"].select.name, judgeInput: rich("判定入力") });
+    // その他の保存tag/根拠は判断し直さず、既存fixtureのlegacy入力を保持する。
+    vi.mocked(loadLatestDocs).mockResolvedValue([latest]); notionMocks.loadSupplementRows.mockResolvedValue([row]);
+    notionMocks.readStockTextRow.mockResolvedValue(TEXT_SECTIONS.flatMap(s => rich(s.title) === "" ? [] : [{ sectionKey: s.key, itemName: s.title, text: rich(s.title) }]));
+    const finite = { ...opts, codes: [latest.stockCode], limit: 1, mechanicalOnly: true };
+    expect((await runBiztag(finite)).countsByKind.skip).toBe(1);
+    expect(notionMocks.readStockTextRow).not.toHaveBeenCalled(); expect(notionMocks.replaceEvidenceBlock).not.toHaveBeenCalled();
+    const summary = await runBiztag({ ...finite, refreshTextReceipt: true });
+    expect(summary).toMatchObject({ refreshTextReceipt: true, countsByKind: { sync_text: 1 }, failures: [] });
+    expect(notionMocks.readStockTextRow).toHaveBeenCalledOnce(); expect(notionMocks.replaceEvidenceBlock).toHaveBeenCalledOnce();
+    expect(notionMocks.replaceEvidenceBlock.mock.calls[0][2].judgeInput).toContain("notionTextsSha256");
+    expect(createClefClient).not.toHaveBeenCalled(); expect(createJevClient).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { mechanicalOnly: false, codes: ["215A"], limit: 1, budgetMs: 1000 },
+    { mechanicalOnly: true, codes: undefined, limit: 1, budgetMs: 1000 },
+    { mechanicalOnly: true, codes: ["215A"], limit: undefined, budgetMs: 1000 },
+    { mechanicalOnly: true, codes: ["215A"], limit: 1, budgetMs: Infinity },
+    { mechanicalOnly: true, codes: ["215A", "215A"], limit: 1, budgetMs: 1000 },
+  ])("非finite refreshを全native/モデル前に停止: %o", async invalid => {
+    await expect(runBiztag({ ...opts, ...invalid, refreshTextReceipt: true })).rejects.toThrow("mechanical-only");
+    expect(loadLatestDocs).not.toHaveBeenCalled(); expect(loadNewStockEligibility).not.toHaveBeenCalled();
+    expect(notionMocks.ensureSupplementDb).not.toHaveBeenCalled(); expect(createClefClient).not.toHaveBeenCalled();
   });
 });
 

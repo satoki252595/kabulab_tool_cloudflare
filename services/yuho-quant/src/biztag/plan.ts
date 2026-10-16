@@ -23,6 +23,11 @@ const TEXT_SYNC_RECEIPT_PREFIX = "\n[biztag-text-sync-v1] ";
 /** 現在の39本文同期の証拠。歴史的なタグ判定入力の証拠とは分ける。 */
 export interface TextSyncReceipt {
   docId: string; textPageId: string; textsSha256: string;
+  /** 同じ実原文から作るNotion送信表現。原39/旧判定SHAと混同しない。 */
+  notionTextsSha256?: string;
+  notionSectionsSha256?: string;
+  notionBusinessSha256?: string;
+  equivalentJudgmentBusinessSha256?: string;
   /** 既存4SHAと実照合した場合のみ。歴史的に未知の判定入力へ生成しない。 */
   equivalentJudgmentInputSha256?: string;
 }
@@ -38,6 +43,8 @@ export function readTextSyncReceipt(value: string | null | undefined): TextSyncR
   if (typeof p.docId !== "string" || p.docId.trim() === "" ||
       typeof p.textPageId !== "string" || p.textPageId.trim() === "" ||
       typeof p.textsSha256 !== "string" || !/^[a-f0-9]{64}$/.test(p.textsSha256) ||
+      [p.notionTextsSha256, p.notionSectionsSha256, p.notionBusinessSha256, p.equivalentJudgmentBusinessSha256]
+        .some(v => v !== undefined && (typeof v !== "string" || !/^[a-f0-9]{64}$/.test(v))) ||
       (p.equivalentJudgmentInputSha256 !== undefined && (typeof p.equivalentJudgmentInputSha256 !== "string" || !/^[a-f0-9]{64}$/.test(p.equivalentJudgmentInputSha256)))) {
     throw new Error("補足39本文の同期来歴が不正です");
   }
@@ -125,6 +132,8 @@ export interface WorkItem {
   checkSourceInput?: boolean;
   /** 入力資格/本文/保存済み結果が未確定。skip でも完了扱いにしないための明示。 */
   qualificationHeld?: boolean;
+  /** 明示finite CLIだけが指定。既存raw39同値を確かめ、表現receiptだけ再資格化する。 */
+  refreshTextReceipt?: boolean;
 }
 
 

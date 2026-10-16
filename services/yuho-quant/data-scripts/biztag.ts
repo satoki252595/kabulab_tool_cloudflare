@@ -100,6 +100,10 @@ function writeGithubStepSummary(markdown: string): void {
 }
 
 async function runCommand(): Promise<void> {
+  if (hasFlag("refresh-text-receipt") && (arg("codes") === undefined || arg("limit") === undefined ||
+      arg("budget-min") === undefined || !hasFlag("mechanical-only"))) {
+    throw new Error("--refresh-text-receiptには明示codes/limit/budget-minとmechanical-onlyが必要です");
+  }
   let journal: ReturnType<typeof createClefJournal> | undefined;
   let calibration: ReturnType<typeof loadCalibration> | undefined;
   const budgetMin = arg("budget-min") ? Number(arg("budget-min")) : 20;
@@ -124,6 +128,7 @@ async function runCommand(): Promise<void> {
     codes,
     dryRun,
     mechanicalOnly: hasFlag("mechanical-only"),
+    refreshTextReceipt: hasFlag("refresh-text-receipt"),
     // 本文同期・機械照合は較正不要。実際のAI判定直前だけ固定モデルと閾値を検証する。
     get thresholds() {
       calibration ??= loadCalibration("clef");

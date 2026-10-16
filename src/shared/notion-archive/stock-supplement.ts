@@ -712,6 +712,11 @@ function relationValue(pageId: string | null | undefined): { relation: Array<{ i
  * まとめて **最後** に書く。中断が起きても「書類の入れ替わりだけが先に見える」
  * 状態を作らない (中断前の状態のまま = 次回の `planWork` が正しく再処理する)。
  */
+/** 本文列の送信表現だけを揃える。原文mapや他metadataへは適用しない。 */
+export function normalizeSupplementText(value: string | null): string | null {
+  return typeof value === "string" ? value.replaceAll("\u200B", "") : value;
+}
+
 export function buildSupplementProperties(
   input: SupplementRowInput
 ): Record<string, unknown> {
@@ -740,7 +745,7 @@ export function buildSupplementProperties(
       // Notionは本文rich_textのU+200Bを保存時に除去する（9273/S100Z2Z6実native）。
       // 表示本文だけ同じ送信表現へ揃える。raw/source物理・入力map・同期/判定SHAと
       // judgeInput/根拠/他metadataは変更せず、可視文字の読戻し照合も緩めない。
-      props[col] = clearableRichText(typeof value === "string" ? value.replaceAll("\u200B", "") : value, col);
+      props[col] = clearableRichText(normalizeSupplementText(value), col);
     }
   }
   if (input.upstream !== undefined) {

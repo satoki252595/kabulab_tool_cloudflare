@@ -16,6 +16,14 @@
 
 ツール化とWorkers単独での実行は同義ではない。Workersの[Node API対応範囲](https://developers.cloudflare.com/workers/runtime-apis/nodejs/)や[実行制限](https://developers.cloudflare.com/workers/platform/limits/)を踏まえ、Node/Python・大きなファイル・長時間処理はActionsへ置く。Mac専用のMPS/MLXをWorkersや通常Linux runnerで実行できるとは扱わない。
 
+## RAW原本の有限継続
+
+`raw_index_backfill.yml`の`execution_revision`は実行する完全40桁commit SHAを指定する。初回の空欄だけそのrunの`github.sha`を採用し、checkout前の形式検査とcheckout後のHEAD一致を依存準備・データ処理より先に行う。通常continuationは実HEADと明示入力の一致を確認し、同SHAを次dispatchへ渡す。これによりrawコード・依存lock・Nix定義を同じcommitから使う。
+
+GitHubの[workflow dispatch仕様](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event)が保証するrefはbranch/tagなので、dispatchは従来の`main`を使い、[checkoutのSHA指定](https://github.com/actions/checkout/tree/v4#usage)で実行ソースを固定する。次runのworkflow YAMLやGitHub action自体、runner OS、Secretsはcommit固定の対象ではない。workflowが互換性を壊して変更される場合は別途止めて再受入する。
+
+固定manifest・元run pool・残run数・原本CAS/state・unknown停止・一度だけのdispatchは従来のまま。revision指定だけで別poolや古いunknownを回避できず、コード修正の受入を原本全量・最終anti-joinの完了と数えない。
+
 ## 保有株式の保存原本バックフィル
 
 `yuho:backfill:holdings prepare <1..50> <afterCode|START> <privateDir> [valuation.json]` は最新有報の保存type1を原本照合し、株数・単位・当期・提出会社を共有parserで検査する。価格原本を指定しない準備と公開は原本列だけの段階で、価格を新たに確定しない。既存の照合済み価格も消さない。
