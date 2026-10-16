@@ -14,6 +14,8 @@ function runEntry(kind: string, mainBody: string) {
     import { fileURLToPath } from "node:url";
     process.argv[1] = fileURLToPath(import.meta.url);
     const sanitizeLogText = (s: string) => s;
+    // This isolated entry performs no native requests. Supply its telemetry dependency.
+    const notionStats = () => ({ requests: 0, rateLimited: 0, transientRetries: 0 });
     async function main() { ${mainBody} }
     ${entry}
   `, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
@@ -39,7 +41,10 @@ describe.each(["daily", "intra", "margin"])("%s CLI completion", (kind) => {
 
 describe.each(["daily", "intra"])("%s completion accounting", (kind) => {
   it.each([1, 2])("preserves completed partial/fatal exit %i", (exit) => {
-    expect(runEntry(kind, `process.exitCode = ${exit};`).status).toBe(exit);
+    const child = runEntry(kind, `process.exitCode = ${exit};`);
+    expect(child.status).toBe(exit);
+    expect(child.stderr).not.toContain("ReferenceError");
+    expect(child.stdout).toContain('"notionStats":{"requests":0,"rateLimited":0,"transientRetries":0}');
   });
 });
 

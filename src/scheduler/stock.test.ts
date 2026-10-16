@@ -24,6 +24,7 @@ import {
   runCatchupDeadlineReadcheck,
   moneyflowReceiptKey,
   runMoneyflowDeadlineReadcheck,
+  evaluateMoneyflowReadcheck,
   contextReceiptKey,
   evaluateContextReadcheck,
   runContextDispatch,
@@ -1172,10 +1173,18 @@ describe("claimReceipt/saveDispatchResult", () => {
 describe("資金フロー独立取得元のCF起動", () => {
   const date = "2026-10-12"; // JPX休場でも独立取得元は止めない。
   const start = Date.parse(`${date}T09:15:00Z`);
-  const jobs = (conclusion = "success", completed = `${date}T14:00:00Z`): RunJob[] => [{
-    name: "ingest", run_id: 101, status: "completed", conclusion,
-    steps: [{ name: "moneyflow ingest", status: "completed", conclusion, completed_at: completed }],
-  }];
+  const jobs = (conclusion = "success", completed = `${date}T14:00:00Z`): RunJob[] => [
+    { name: "ingest-non-yahoo", run_id: 101, status: "completed", conclusion,
+      steps: [{ name: "moneyflow ingest (non-yahoo)", status: "completed", conclusion,
+        started_at: `${date}T09:15:30Z`, completed_at: `${date}T10:30:00Z` }] },
+    { name: "ingest-yahoo", run_id: 101, status: "completed", conclusion,
+      steps: [
+        { name: "moneyflow ingest (yahoo)", status: "completed", conclusion,
+          started_at: `${date}T13:30:00Z`, completed_at: `${date}T13:31:00Z` },
+        { name: "moneyflow source join", status: "completed", conclusion,
+          started_at: `${date}T13:31:00Z`, completed_at: completed },
+      ] },
+  ];
   const receipt = () => ({ ...dispatchedBody(), scheduledDate: date, cron: MONEYFLOW_DISPATCH_CRON,
     claimedAt: `${date}T09:15:00Z`, dispatchedAt: `${date}T09:15:01Z` });
 
@@ -1196,7 +1205,7 @@ describe("資金フロー独立取得元のCF起動", () => {
     } finally { vi.useRealTimers(); }
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toContain("/moneyflow.yml/dispatches");
-    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ ref: "main", inputs: { only: "independent" } });
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ ref: "main", inputs: { only: "independent", scheduled_date: date } });
     const check = Date.parse(`${date}T14:45:00Z`);
     expect(await handleStockScheduled({ cron: MONEYFLOW_READCHECK_CRON, scheduledTime: check }, env,
       { fetchFn, nowMs: check + 30_000 })).toEqual({ moneyflowCompletedAt: `${date}T14:00:00Z` });
@@ -1216,5 +1225,21 @@ describe("資金フロー独立取得元のCF起動", () => {
 
   it("開始60分超過をPOST前に拒否する", () => {
     expect(() => resolveRunDate("moneyflow-dispatch", start, start + 60 * 60_000 + 1)).toThrow("開始期限");
+  });
+
+  it("片側欠落/重複/skipとjoin欠落・実queue遅配を成功にしない", () => {
+    for (const mutate of [
+      (j: RunJob[]) => j.splice(0, 1),
+      (j: RunJob[]) => { j[1] = j[0]; },
+      (j: RunJob[]) => { j[0].conclusion = "skipped"; },
+      (j: RunJob[]) => { j[1].steps?.pop(); },
+      (j: RunJob[]) => { j[1].steps![0].started_at = `${date}T14:40:01Z`; },
+      (j: RunJob[]) => { j[0].steps![0].started_at = `${date}T09:14:59Z`; },
+    ]) {
+      const j = jobs(); mutate(j);
+      expect(() => evaluateMoneyflowReadcheck(j, date)).toThrow();
+    }
+    expect(evaluateMoneyflowReadcheck(jobs("success", `${date}T14:40:00Z`), date))
+      .toEqual({ moneyflowCompletedAt: `${date}T14:40:00Z` });
   });
 });

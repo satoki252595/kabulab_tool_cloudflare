@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const tokenBefore = process.env.NOTION_TOKEN;
+const rpsBefore = process.env.NOTION_MAX_RPS;
 const originalFetch = globalThis.fetch;
 let starts: number[];
 let statuses: number[];
@@ -9,6 +10,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
   vi.setSystemTime(1_000_000);
   process.env.NOTION_TOKEN = "protocol-test-token";
+  delete process.env.NOTION_MAX_RPS;
   starts = []; statuses = [];
   globalThis.fetch = async () => {
     starts.push(performance.now());
@@ -20,9 +22,35 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
   if (tokenBefore === undefined) delete process.env.NOTION_TOKEN;
   else process.env.NOTION_TOKEN = tokenBefore;
+  if (rpsBefore === undefined) delete process.env.NOTION_MAX_RPS;
+  else process.env.NOTION_MAX_RPS = rpsBefore;
   vi.useRealTimers(); vi.resetModules();
 });
 const load = () => import("./client.js");
+it.each([2.0, 0.7, 1.6, 1.0])("通常CLIはtyped envだけでnative retryと次queueを%srpsへ抑える", async rps => {
+  process.env.NOTION_MAX_RPS = String(rps);
+  const { notionRequest } = await load();
+  statuses = [429, 200, 200];
+  const calls = Promise.all([notionRequest("GET", "/a"), notionRequest("GET", "/b")]);
+  await vi.runAllTimersAsync(); await calls;
+  const interval = Math.ceil(1000 / rps);
+  expect(starts).toEqual([0, interval, interval * 2]);
+});
+it("通常CLIのtyped env上限をretry/queueへ適用し、明示bulkの狭い予算を緩めない", async () => {
+  process.env.NOTION_MAX_RPS = "2.0";
+  const { notionRequest, setNotionMaxRps } = await load();
+  setNotionMaxRps(0.7);
+  statuses = [429, 200, 200];
+  const calls = Promise.all([notionRequest("GET", "/a"), notionRequest("GET", "/b")]);
+  await vi.runAllTimersAsync(); await calls;
+  expect(starts).toEqual([0, 1429, 2858]);
+});
+it.each(["0", "-1", "NaN", "Infinity", "2.7", "", " " ])("不正なtyped env rate %jはnative0で拒否する", async value => {
+  process.env.NOTION_MAX_RPS = value;
+  const { notionRequest } = await load();
+  await expect(notionRequest("GET", "/a")).rejects.toThrow();
+  expect(starts).toEqual([]);
+});
 it("設定なしの通常queueは380msと順番を維持する", async () => {
   const { notionRequest } = await load();
   const calls = Promise.all([notionRequest("GET", "/a"), notionRequest("GET", "/b")]);
