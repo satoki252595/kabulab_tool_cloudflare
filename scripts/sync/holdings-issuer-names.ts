@@ -6,7 +6,9 @@ import { selectLatestHoldingsDocuments } from "../../services/yuho-quant/data-sc
 import { readSavedHoldingsZip } from "../../src/shared/notion-archive/shareholdings.js";
 import { qualifyOfficialIssuerEnglishName, type OfficialIssuerEnglishName } from "../../services/yuho-quant/src/services/edinet/shareholdings-issuer-names.js";
 import { exactLegalName, type ListedIdentity } from "../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js";
-export interface OfficialNameTarget { identity: ListedIdentity; priceCapturedAt: string }
+export interface OfficialNameTarget { identity: ListedIdentity; priceCapturedAt: string;
+  /** Canonical split diagnostics may reuse a verified run-cache entry, never start issuer reads. */
+  cacheOnly?: true }
 type Latest = Awaited<ReturnType<typeof selectLatestHoldingsDocuments>>["rows"][number];
 type Held = { status: "held"; reasonCode: "budget_exhausted" | "issuer_source_unavailable"; reason: string };
 export function createHoldingOfficialNamesLoader() {
@@ -26,6 +28,7 @@ export function createHoldingOfficialNamesLoader() {
     for (const target of targets) {
       const key = `${target.identity.code}/${target.priceCapturedAt}`;
       let saved = cache.get(key);
+      if (target.cacheOnly && saved === undefined) continue;
       if (saved === undefined) {
         const stopped = timeLimit(); if (stopped) return stopped;
         saved = (async () => {
@@ -43,6 +46,7 @@ export function createHoldingOfficialNamesLoader() {
         cache.set(key, saved);
       }
       const value = await saved;
+      if (target.cacheOnly && value.status === "held") continue; // No verified evidence; retain unknown basis without a new read.
       if (value.status === "held") { if (value.reasonCode === "budget_exhausted") cache.delete(key); return value; }
       records.push({ ...value, identity: target.identity });
     }

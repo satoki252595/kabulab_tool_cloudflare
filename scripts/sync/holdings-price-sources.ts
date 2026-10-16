@@ -108,10 +108,11 @@ export function createHoldingPriceSourceLoader(): (holdings: readonly Shareholdi
       if (candidates.length !== 1) continue;
       const chart = await priceIndex.verifiedChart(candidates[0], symbol);
       assert.equal(chart.raw.meta.currency, "JPY"); assert.equal(chart.raw.meta.exchangeTimezoneName, "Asia/Tokyo");
-      // Only alias candidates or actually observed splits need the saved issuer ZIP.
-      // A market ex date <= FY is not proof that legal effectiveness is <= FY.
+      // Alias reads retain their existing path. Canonical splits reuse verified run-cache only:
+      // market ex dates do not prove legal effectiveness, but missing basis is already unavailable.
       const inspectSplitBasis = chart.parsed.splits.length > 0 && (fiscalYearEnd === undefined || chart.parsed.splits.every(split => split.date <= fiscalYearEnd));
-      if (inspectSplitBasis || exactEnglishName(chart.raw.meta.longName) !== exactEnglishName(identity.englishName)) targets.set(identity.code, { identity, priceCapturedAt: candidates[0].member.receivedAt });
+      const alias = exactEnglishName(chart.raw.meta.longName) !== exactEnglishName(identity.englishName);
+      if (inspectSplitBasis || alias) targets.set(identity.code, { identity, priceCapturedAt: candidates[0].member.receivedAt, ...(alias ? {} : { cacheOnly: true }) });
     }
     const names = await officialNames([...targets.values()], budget, shouldStop);
     if (names.status === "held") return names;

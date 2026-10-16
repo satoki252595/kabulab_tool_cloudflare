@@ -77,7 +77,7 @@ describe("通常Nodeの保存価格loader", () => {
       expect(await createHoldingPriceSourceLoader()([holding],budget())).toMatchObject({ status: "held", reasonCode: "issuer_source_unavailable" });
     } finally { factory.mockRestore(); }
   });
-  it("canonical一致でもsplit観測だけ既存issuer loaderを使い、期末後splitの既知保留には追加issuer GET0", async () => {
+  it("canonical splitはcache-only、期末後splitの既知保留はtarget0とし、追加issuer GETを要求しない", async () => {
     const changed = JSON.parse(raw.toString());
     changed.chart.result[0].events = { splits: { split: { date: Date.parse("2026-10-01T00:00:00Z") / 1000, numerator: 5, denominator: 1 } } };
     const body = Buffer.from(JSON.stringify(changed)), observed = { ...member, bodyBase64: body.toString("base64"), sha256: hash(body), byteLength: body.length };
@@ -91,7 +91,7 @@ describe("通常Nodeの保存価格loader", () => {
     try {
       const loader = createHoldingPriceSourceLoader(), limit = budget(), shouldStop = () => false;
       expect((await loader([holding], limit, shouldStop, "2026-10-01")).status).toBe("ready");
-      expect(readNames).toHaveBeenLastCalledWith([{ identity: expect.objectContaining({ code: "7203" }), priceCapturedAt: member.receivedAt }], limit, shouldStop);
+      expect(readNames).toHaveBeenLastCalledWith([{ identity: expect.objectContaining({ code: "7203" }), priceCapturedAt: member.receivedAt, cacheOnly: true }], limit, shouldStop);
       expect((await loader([holding], limit, shouldStop, "2026-09-30")).status).toBe("ready");
       expect(readNames).toHaveBeenLastCalledWith([], limit, shouldStop);
       expect(downloadArchivedFile).toHaveBeenCalledTimes(2);
