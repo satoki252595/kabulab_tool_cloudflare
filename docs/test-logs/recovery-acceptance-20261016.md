@@ -2,6 +2,20 @@
 
 追跡は[#348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)。この記録は以下の対象の実測であり、全20機能・全空欄の完了を意味しない。
 
+## 10月17日01:10 JSTの追加確認
+
+本文は固定776社中155社を独立受入、残621社。追加50社は通常機械処理で更新・全POST確認後、見直し台帳の送信日時がNotionで分単位になったため検証側が停止した。業務更新は再送せず、現在の全文・最新source・全39値/他props/根拠を読取確認し、01:05:29に物理POSTを閉じ、01:05:58にrootが全SHAと通常builderで独立受入した。残621社は別の固定13組で開始し、停止したrunnerの名前空間は再開していない。
+
+追加50社の初回は1,297 native応答、業務PATCH50、194,558,826 response bytes。追加読取専用は401要求/書込0（監査のDB ID表記差で停止）と410要求/証跡保存3操作・業務書込0。合計2,108要求・Notion1,702要求の今回限りの復旧費用であり、通常定時へ同じ再読取を追加した設定ではない。モデル・上流APIは全0。独立監査では全50の通常publisher PRE、元全native、最終全nativeと物理PRE/POSTを照合した。生データと元停止記録を保持し、旧判定入力SHAの不明は変更しない。
+
+通常処理の#436は00:40:20にmain `c75be568`、version `65cd3ec5-5bb7-42bd-a7ec-ce6b99e21deb`を配信。非Yahoo27取得元を先行させ、同runの両summary・全source成功を結合する。#438は00:49:58にmain `8dfe0e05`、version `57896b13-29fa-43b3-bfd0-f6bbb3826067`を配信。追加300ms待機を省き、実Yahooの共通1秒制御と10年取得・権利原値・期限を保持する。通信削減と待機条件は[容量監査](yahoo-shared-capacity-20261016.md)へ記録し、次回定時全量の完走・実料金は未受入。
+
+#439の保有株価格の事前主体資格もmain `080cf156`へ統合し、01:09:15にversion `67e59d11-4dda-482f-bc99-63fbae6104a5`を配信した。有限windowを価格書込前に資格化し、確定する商号不一致を既知HOLDとして残す。ACK不明・原本破損は従来の停止を維持する。[実原本2例と検証](holdings-price-preflight-20261017.md)を参照。これを価格公開の完了に数えない。
+
+RAW同一poolは00:39:23にrun38919797532が成功。500検証（新483・既存17）、cursor12,682/78,832・残66,150、上流GET0、Notion10要求、elapsed2,501,889ms。次の同一pool run38925685573へ継続した。全範囲anti-join・全20機能の最終受入は未完。
+
+私有証跡は`A671-mechanical-remaining-v1/batch-01`、`A671-batch01-post-readonly-v2/{SUCCESS,root-independent-acceptance}.json`、`A621-finite-runner-v1`、`continuation/cf-main-{436,438,439}-logs.txt`、`continuation/job-117036506509.log`。最終POST gzip SHAは`310faa940044cffd6371d8450c204e92cf3211fa4c19f6ff4c61fe857755f0d7`。
+
 ## 10月17日00:36 JSTの追加確認
 
 211Aの有報がS100WW30からS100Z7YEへ変わった1社だけを、配備済みmain `43d563a3`の通常writer/pipelineとローカル`Cloudflare/clef-flash`で00:32:39〜00:34:40に再判定した。公式重み・processor・較正と同じ入力7,395 tokens／6問に束縛し、spawn1・Noul1・実forward1、既存1行のPATCH1・判定済。native138（Notion128・hosted3・D1読取7）、121.829秒。外部LLM・上流API・D1書込・再forwardは0。
