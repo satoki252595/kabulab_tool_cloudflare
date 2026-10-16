@@ -5,14 +5,43 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { guardedHoldingsMutation, writeHoldingsArtifact } from "./shareholdings.js";
+import { guardedHoldingsMutation, inspectPendingHoldingPatch, writeHoldingsArtifact } from "./shareholdings.js";
 import { parseShareholdingsData } from "../../services/yuho-quant/src/services/edinet/shareholdings.js";
 import { unzip } from "../../services/yuho-quant/src/services/edinet/zip.js";
-import { holdingProperties } from "../../src/shared/notion-archive/shareholdings.js";
+import { holdingProperties, inspectHoldingPatch } from "../../src/shared/notion-archive/shareholdings.js";
+
+vi.mock("../../src/shared/notion-archive/shareholdings.js", async original => ({ ...await original<typeof import("../../src/shared/notion-archive/shareholdings.js")>(), inspectHoldingPatch: vi.fn() }));
 
 vi.mock("node:fs", async original => {
   const real = await original<typeof import("node:fs")>();
   return { ...real, fsyncSync: vi.fn(real.fsyncSync), writeFileSync: vi.fn(real.writeFileSync) };
+});
+
+describe("normal pending-patch read-only CLI", () => {
+  const fixture = new URL("../../services/yuho-quant/src/tests/fixtures/holdings-pending1911/", import.meta.url);
+  function inputs() {
+    const paths = { pending: pending(), intent: join(dir, "intent.json"), request: join(dir, "request.json"), before: join(dir, "before.json"), schema: join(dir, "schema.json"), out: join(dir, "inspection.json") };
+    for (const [key, file] of [["intent", "unknown-intent.json"], ["request", "unknown-request.json"], ["before", "unknown-before.json"], ["schema", "schema.json"]] as const) fs.copyFileSync(new URL(file, fixture), paths[key]);
+    fs.copyFileSync(new URL("journal.jsonl", fixture), journal());
+    // Only temporary journal routing is changed; original143 event bytes stay exact.
+    fs.writeFileSync(pending(), JSON.stringify({ version: 2, mode: "latest-saved-holdings", journal: journal(), noAutomaticReplay: true }));
+    return paths;
+  }
+  it("実143unknownの全journal/意図SHAを照合してGET観測だけを別receiptへ残す", async () => {
+    const paths = inputs(), pendingBytes = fs.readFileSync(pending()), journalBytes = fs.readFileSync(journal());
+    const current = JSON.parse(fs.readFileSync(paths.before, "utf8"));
+    vi.mocked(inspectHoldingPatch).mockResolvedValue({ status: "observed_pre", current, replayAuthorized: false });
+    await inspectPendingHoldingPatch(paths);
+    expect(inspectHoldingPatch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(fs.readFileSync(paths.out, "utf8"))).toMatchObject({ attempt: 143, observation: { status: "observed_pre" }, GET: 1, mutations: 0, pendingCleared: false, sourceComplete: false, replayAuthorized: false });
+    expect(fs.readFileSync(pending()).equals(pendingBytes)).toBe(true); expect(fs.readFileSync(journal()).equals(journalBytes)).toBe(true);
+    expect(fs.statSync(paths.out).mode & 0o777).toBe(0o600);
+  });
+  it("実意図bodyが1文字でも変わるとGET前STOP/元pending保持", async () => {
+    const paths = inputs(), pendingBytes = fs.readFileSync(pending()); fs.appendFileSync(paths.request, " ");
+    await expect(inspectPendingHoldingPatch(paths)).rejects.toThrow(); expect(inspectHoldingPatch).not.toHaveBeenCalled();
+    expect(fs.readFileSync(pending()).equals(pendingBytes)).toBe(true); expect(fs.existsSync(paths.out)).toBe(false);
+  });
 });
 vi.mock("../../services/yuho-quant/src/services/edinet/zip.js", () => ({ unzip: vi.fn() }));
 const realFs = await vi.importActual<typeof import("node:fs")>("node:fs");
