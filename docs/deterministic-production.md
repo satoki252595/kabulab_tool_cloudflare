@@ -16,6 +16,14 @@
 
 ツール化とWorkers単独での実行は同義ではない。Workersの[Node API対応範囲](https://developers.cloudflare.com/workers/runtime-apis/nodejs/)や[実行制限](https://developers.cloudflare.com/workers/platform/limits/)を踏まえ、Node/Python・大きなファイル・長時間処理はActionsへ置く。Mac専用のMPS/MLXをWorkersや通常Linux runnerで実行できるとは扱わない。
 
+## 保有株式の保存原本バックフィル
+
+`yuho:backfill:holdings prepare <1..50> <afterCode|START> <privateDir> [valuation.json]` は最新有報の保存type1を原本照合し、株数・単位・当期・提出会社を共有parserで検査する。価格原本を指定しない準備と公開は原本列だけの段階で、価格を新たに確定しない。既存の照合済み価格も消さない。
+
+`yuho:backfill:holdings apply <privateDir> <maxRows1..1000>` は通常定期取込と同じpublisherを使う。文書ごとに最大100行のwindowを進め、書込前に最新文書ID・発行体・期末・提出会社名を照合する。残windowは定期処理と共通の保存cursorから再開する。既知の資格HOLDはreceiptへ固定し、自動で再送しない。通信や書込の結果不明はpending journalを残し、別通の送信と自動再実行を止める。旧未検証行は共有publisherの物理PRE/POSTと全props照合を通す。
+
+ローカルは `nix develop -c pnpm yuho:backfill:holdings ...`。同じNode CLIをActionsでも実行でき、追加依存はない。有限の過去補完を定時の全量成功とは数えず、原本確定件数・保留・残window・価格確定を分けて受け入れる。
+
 ## 事業タグの機械処理だけを実行する
 
 通常CLIの`pnpm biztag run --mechanical-only --codes=<対象コード列> --limit=<件数> --budget-min=<分>`は、本番定期と同じ計画・本文同期・キーワード照合・共有publisherを使う。新規初回や実入力変更による再判定は明示HOLDとし、モデルの起動・原応答journal・較正の読込へ進めない。機械照合不能を別モデルで補わない。

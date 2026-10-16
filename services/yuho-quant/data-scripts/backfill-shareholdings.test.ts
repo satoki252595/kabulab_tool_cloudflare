@@ -55,7 +55,7 @@ describe("保有明細backfillのlegacy適用境界", () => {
     expect(publishVerifiedShareholdings).not.toHaveBeenCalled();
   });
 
-  it.each([["held", 0, 100], ["ready", 2, 1]] as const)("HOLDまたは予算外は原本二重保存も業務書込もしない", async (status, rows, maxRows) => {
+  it.each([["held", 0, 100]] as const)("原表HOLDは原本二重保存も業務書込もしない", async (status, rows, maxRows) => {
     fixture(status, rows); await applyLatestHoldings(dir, maxRows);
     expect(readSavedHoldingsZip).not.toHaveBeenCalled();expect(recordEdinetZip).not.toHaveBeenCalled();expect(publishVerifiedShareholdings).not.toHaveBeenCalled();
   });
@@ -74,6 +74,73 @@ describe("保有明細backfillのlegacy適用境界", () => {
     fixture();writeFileSync(join(dir, `${source.stockCode}-${source.docId}.modern-custody.json`), JSON.stringify({ zipSha256: sha, result: { pageId: "b".repeat(32) } }));
     await applyLatestHoldings(dir, 100);expect(recordEdinetZip).not.toHaveBeenCalled();expect(readSavedHoldingsZip).not.toHaveBeenCalled();
     expect(verifyArchivedAttachments).toHaveBeenCalledWith("b".repeat(32), expect.any(Array), expect.any(String));
+  });
+
+  it("小予算でも確定windowを記録し、次回は通常publisherのsource cursorから続ける", async () => {
+    fixture();
+    vi.mocked(publishVerifiedShareholdings).mockResolvedValueOnce({ status: "held", parsed: 2, reason: "次windowへ再開待ち", usedRows: 1, pending: true })
+      .mockResolvedValueOnce({ status: "published", parsed: 1, created: 1, updated: 0, unchanged: 0 });
+    await applyLatestHoldings(dir, 1);
+    expect(publishVerifiedShareholdings).toHaveBeenLastCalledWith(expect.objectContaining({ maxRows: 1 }));
+    expect(existsSync(join(dir, `${source.stockCode}-${source.docId}.published.json`))).toBe(false);
+    expect(existsSync(join(dir, `${source.stockCode}-${source.docId}.held.json`))).toBe(false);
+    await applyLatestHoldings(dir, 1);
+    expect(recordEdinetZip).toHaveBeenCalledTimes(1);
+    expect(publishVerifiedShareholdings).toHaveBeenCalledTimes(2);
+    expect(existsSync(join(dir, `${source.stockCode}-${source.docId}.published.json`))).toBe(true);
+  });
+
+  it("100行を超える原表も1windowだけ公開し、正常pendingをunknownにしない", async () => {
+    fixture("ready", 150);
+    vi.mocked(publishVerifiedShareholdings).mockResolvedValueOnce({ status: "held", parsed: 150, reason: "残50行", usedRows: 100, pending: true });
+    await applyLatestHoldings(dir, 1000);
+    expect(publishVerifiedShareholdings).toHaveBeenCalledWith(expect.objectContaining({ maxRows: 100 }));
+    expect(existsSync(join(dir, `${source.stockCode}-${source.docId}.published.json`))).toBe(false);
+  });
+
+  it("価格windowのpublished/pendingも通全体の完了receiptにはしない", async () => {
+    fixture();
+    vi.mocked(publishVerifiedShareholdings).mockResolvedValueOnce({ status: "published", parsed: 1, created: 0, updated: 1, unchanged: 0, unavailable: 0, pending: true });
+    await applyLatestHoldings(dir, 1);
+    expect(existsSync(join(dir, `${source.stockCode}-${source.docId}.published.json`))).toBe(false);
+    expect(existsSync(join(dir, `${source.stockCode}-${source.docId}.held.json`))).toBe(false);
+  });
+
+  it("旧CLIが完了扱いした価格pending receiptを完了として再利用しない", async () => {
+    fixture();
+    writeFileSync(join(dir, `${source.stockCode}-${source.docId}.published.json`), JSON.stringify({ source, zipSha256: sha,
+      result: { status: "published", parsed: 1, created: 0, updated: 1, unchanged: 0, pending: true } }));
+    await expect(applyLatestHoldings(dir, 100)).rejects.toThrow("旧完了receiptに未完window");
+    expect(publishVerifiedShareholdings).not.toHaveBeenCalled();
+  });
+
+  it("既存行の資格HOLDは既知結果として固定し、自動で再送しない", async () => {
+    fixture();
+    vi.mocked(publishVerifiedShareholdings).mockResolvedValueOnce({ status: "held", parsed: 2, reason: "旧行の保有主体名が一致しません" });
+    await applyLatestHoldings(dir, 100);
+    await applyLatestHoldings(dir, 100);
+    expect(publishVerifiedShareholdings).toHaveBeenCalledTimes(1);
+    expect(existsSync(join(dir, `${source.stockCode}-${source.docId}.held.json`))).toBe(true);
+    expect(existsSync(join(dir, `${source.stockCode}-${source.docId}.published.json`))).toBe(false);
+  });
+
+  it.each(["edinetCode", "fiscalYearEnd", "ownerName"] as const)("同じdocIDでもfresh %s変更なら公開しない", async field => {
+    fixture();
+    const fresh = await selectLatestHoldingsDocuments({} as never, { afterCode: null, limit: 50 });
+    vi.mocked(selectLatestHoldingsDocuments).mockResolvedValueOnce({ ...fresh, rows: [{ ...fresh.rows[0], [field]: "changed" }] });
+    await expect(applyLatestHoldings(dir, 100)).rejects.toThrow();
+    expect(recordEdinetZip).not.toHaveBeenCalled();
+    expect(publishVerifiedShareholdings).not.toHaveBeenCalled();
+  });
+
+  it("原本custody照合後にも最新文書を再確認する", async () => {
+    fixture();
+    const fresh = await selectLatestHoldingsDocuments({} as never, { afterCode: null, limit: 50 });
+    vi.mocked(selectLatestHoldingsDocuments).mockResolvedValueOnce(fresh)
+      .mockResolvedValueOnce({ ...fresh, rows: [{ ...fresh.rows[0], docId: "S100CHANGED" }] });
+    await expect(applyLatestHoldings(dir, 100)).rejects.toThrow("最新有報・発行体・期末");
+    expect(recordEdinetZip).toHaveBeenCalledTimes(1);
+    expect(publishVerifiedShareholdings).not.toHaveBeenCalled();
   });
 
   it("準備の全明細で一つの価格indexを共有し、欠測理由を個別に維持する", async () => {
