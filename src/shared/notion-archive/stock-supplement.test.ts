@@ -6,6 +6,8 @@
  * stock-text.test.ts と同じ router+queue+Date.now fast-forward の方式。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
+import zeroWidthNative from "./fixtures/9273-s100z2z6-notion-zero-width.json";
 import {
   buildEvidenceBlock,
   buildSupplementProperties,
@@ -49,6 +51,25 @@ describe("stock-supplement (純粋関数)", () => {
       });
       expect(props["対処すべき課題"]).toEqual({ rich_text: [] });
       expect(props["研究開発活動"]).toEqual({ rich_text: [] });
+    });
+
+    it("9273実原本の本文表示だけU+200BをNotion表現へ揃え、原文・判定入力SHAを保持する", () => {
+      const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+      const { provenance, rawText, notionReadbackText, writtenJudgeInput } = zeroWidthNative;
+      expect(hash(rawText)).toBe(provenance.rawTextSha256);
+      expect(hash(notionReadbackText)).toBe(provenance.notionReadbackTextSha256);
+      expect(rawText.length).toBe(3106); expect(notionReadbackText.length).toBe(3105);
+      const texts = { [provenance.property]: rawText };
+      const props = buildSupplementProperties({ texts, judgeInput: writtenJudgeInput });
+      const plain = (property: unknown) => (property as { rich_text: Array<{ text: { content: string } }> }).rich_text.map(v => v.text.content).join("");
+      expect(plain(props[provenance.property])).toBe(notionReadbackText);
+      expect(texts[provenance.property]).toBe(rawText);
+      expect(hash(plain(props["判定入力"]))).toBe(provenance.writtenJudgeInputSha256);
+      const representation = "\u200B\u200C\u200D\uFEFF";
+      const scoped = buildSupplementProperties({ texts: { 本文: representation }, evidenceText: representation, judgeInput: representation });
+      expect(plain(scoped["本文"])).toBe("\u200C\u200D\uFEFF");
+      expect(plain(scoped["事業タグの根拠文"])).toBe(representation);
+      expect(plain(scoped["判定入力"])).toBe(representation);
     });
 
     it("multi_select は名前配列に変換する", () => {
