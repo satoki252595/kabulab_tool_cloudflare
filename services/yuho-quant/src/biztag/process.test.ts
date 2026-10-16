@@ -559,14 +559,17 @@ describe("input-change local rejudgment", () => {
     await expect(processStock(itemOf({ kind: "retag", row: saved(), sourceChangedLocalJudge: true }), deps)).rejects.toThrow("応答が無い");
     expect(updated).toEqual([]); expect(evidenceCalls).toEqual([]);
   });
-  it("same-doc reparsing with identical known four-section SHA only synchronizes texts, preserving judgment source/version/date", async () => {
+  it.each([false, true])("same-doc known four-section SHA synchronizes without semantic dependencies (mechanicalOnly=%s)", async (mechanicalOnly) => {
     const first = makeDeps({ readStockTextRow: async () => sections });
     await processStock(itemOf({ row: rowOf() }), first.deps);
     const previousInput = first.updated[0].input.judgeInput as string;
     const row = saved(); row.docId = docOf().docId; row.tagDoc = "S100YFQC 2026年3月期";
     row.judgeInput = previousInput.replaceAll("notion-page-okuma", "old-pointer");
     const ask = vi.fn();
-    const { deps, updated, evidenceCalls } = makeDeps({ readStockTextRow: async () => sections, jevClient: { askNoul: ask } });
+    const { deps, updated, evidenceCalls } = makeDeps({ mechanicalOnly, readStockTextRow: async () => sections, jevClient: { askNoul: ask } });
+    for (const key of ["vocab", "thresholds", "localJudgeInput", "localJudgeDate"] as const) {
+      Object.defineProperty(deps, key, { get: () => { throw new Error(`same input must not read ${key}`); } });
+    }
     await processStock(itemOf({ kind: "retag", row, sourceChangedLocalJudge: true, checkSourceInput: true }), deps);
     expect(ask).not.toHaveBeenCalled(); expect(evidenceCalls).toEqual([{ pageId: row.pageId, block: undefined }]);
     expect(updated[0].input.upstream).toBeUndefined(); expect(updated[0].input.tagDoc).toBeUndefined();
@@ -575,6 +578,24 @@ describe("input-change local rejudgment", () => {
     expect(updated[0].input.judgeInput).toContain('"textPageId":"notion-page-okuma"');
     expect(updated[0].input.judgeInput!.split(INPUT_RECEIPT_PREFIX)[1]).toBe(row.judgeInput.split(INPUT_RECEIPT_PREFIX)[1]);
     expect(readTextSyncReceipt(updated[0].input.judgeInput)?.equivalentJudgmentInputSha256).toBe(readInputReceipt(row.judgeInput)?.sectionsSha256);
+  });
+  it("mechanical-only holds actual four-section differences before vocabulary, calibration, journal or model and preserves all old props", async () => {
+    const first = makeDeps({ readStockTextRow: async () => sections });
+    await processStock(itemOf({ row: rowOf() }), first.deps);
+    const row = { ...saved(), docId: docOf().docId, tagDoc: "S100YFQC 2026年3月期",
+      judgeInput: first.updated[0].input.judgeInput!.replaceAll("notion-page-okuma", "old-pointer") };
+    const before = structuredClone(row), ask = vi.fn();
+    // 実在する別社の本文を差分プロトコルとして渡す。実有報の訂正とは扱わない。
+    const { deps, updated, created, evidenceCalls } = makeDeps({ mechanicalOnly: true, jevClient: { askNoul: ask },
+      readStockTextRow: async () => [{ ...sections[0], text: KYOKUYO_BUSINESS_TEXT }] });
+    for (const key of ["vocab", "thresholds", "localJudgeInput", "localJudgeDate"] as const) {
+      Object.defineProperty(deps, key, { get: () => { throw new Error(`HOLD must not read ${key}`); } });
+    }
+    expect(await processStock(itemOf({ kind: "retag", row, sourceChangedLocalJudge: true, checkSourceInput: true }), deps))
+      .toMatchObject({ outcome: "skipped", qualificationHeld: true, tagStatus: row.tagStatus, candidateCount: row.candidateCount,
+        jevCalls: 0, jevInputTokens: 0, jevOutputTokens: 0 });
+    expect(row).toEqual(before); expect(updated).toEqual([]); expect(created).toEqual([]); expect(evidenceCalls).toEqual([]);
+    expect(ask).not.toHaveBeenCalled();
   });
   it("same-doc changed known input calls SemIf instead of silently reusing old tags", async () => {
     const first = makeDeps({ readStockTextRow: async () => sections });
@@ -589,9 +610,13 @@ describe("input-change local rejudgment", () => {
     expect(ask).toHaveBeenCalledTimes(1); expect(updated[0].input.tagStatus).toBe("判定済");
     expect(updated[0].input.judgeInput).toContain("SemIf入力変更の再判定");
   });
-  it("unknown historical SHA cannot certify identical input or overwrite the old judgment", async () => {
-    const { deps, updated, evidenceCalls } = makeDeps({ readStockTextRow: async () => sections });
-    await expect(processStock(itemOf({ kind: "retag", row: saved(), sourceChangedLocalJudge: true, checkSourceInput: true }), deps)).rejects.toThrow("旧SHAがありません");
+  it.each(["旧入力SHA未記録", `old${INPUT_RECEIPT_PREFIX}{}`])("mechanical-only unknown/malformed old SHA stops without semantic dependencies (%s)", async judgeInput => {
+    const { deps, updated, evidenceCalls } = makeDeps({ mechanicalOnly: true, readStockTextRow: async () => sections });
+    for (const key of ["vocab", "thresholds", "localJudgeInput", "jevClient"] as const) {
+      Object.defineProperty(deps, key, { get: () => { throw new Error(`invalid receipt must not read ${key}`); } });
+    }
+    await expect(processStock(itemOf({ kind: "retag", row: { ...saved(), judgeInput }, sourceChangedLocalJudge: true, checkSourceInput: true }), deps))
+      .rejects.toThrow(judgeInput.includes(INPUT_RECEIPT_PREFIX) ? "入力来歴が不正" : "旧SHAがありません");
     expect(updated).toEqual([]); expect(evidenceCalls).toEqual([]);
   });
 });
