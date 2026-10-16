@@ -356,7 +356,7 @@ export async function rebuildYuhoGrowthProjection(
   const sourceMaxDate = new Date((maxDoc?.maxSubmittedAt ?? 0) * 1000)
     .toISOString()
     .slice(0, 10);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = new Date(runStartedSec * 1000).toISOString().slice(0, 10);
 
   const orderByStock = new Map<number, OrderFactPoint[]>();
   for (const r of orderRows) {
