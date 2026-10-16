@@ -113,7 +113,7 @@ describe("supplement evidence two-phase replacement", () => {
     expect(JSON.parse(raw.toString())).toMatchObject({ operation: "create", stockCode: fixture.stockCode, nextDocId: next.docId });
     if (complete) { createSupplementPublicationJournal(state).assertReady(); expect(JSON.parse(readFileSync(join(path, "completed.json"), "utf8"))).toMatchObject({ operation: "create", pageId: current.id }); }
     else { io.request.mockClear(); expect(() => createSupplementPublicationJournal(state)).toThrow(); expect(io.request).not.toHaveBeenCalled(); }
-    expect(readFileSync(join(path, "intent.json"))).toEqual(raw); expect(readFileSync(join(path, "request.json"))).toEqual(request); expect(io.archive).not.toHaveBeenCalled();
+    expect(readFileSync(join(path, "intent.json")).equals(raw)).toBe(true); expect(readFileSync(join(path, "request.json")).equals(request)).toBe(true); expect(io.archive).not.toHaveBeenCalled();
   });
 
   it.each(["complete", "unknown"])("実1716旧文書→現文書を別identityとして保持 (%s)", async fault => {
