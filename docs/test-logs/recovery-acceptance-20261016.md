@@ -2,6 +2,58 @@
 
 追跡は[#348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)。この記録は以下の対象の実測であり、全20機能・全空欄の完了を意味しない。
 
+## 10月17日00:36 JSTの追加確認
+
+211Aの有報がS100WW30からS100Z7YEへ変わった1社だけを、配備済みmain `43d563a3`の通常writer/pipelineとローカル`Cloudflare/clef-flash`で00:32:39〜00:34:40に再判定した。公式重み・processor・較正と同じ入力7,395 tokens／6問に束縛し、spawn1・Noul1・実forward1、既存1行のPATCH1・判定済。native138（Notion128・hosted3・D1読取7）、121.829秒。外部LLM・上流API・D1書込・再forwardは0。
+
+全67propsと本文39項目・旧根拠の退役・source原文と時計を確認し、外側PRE/POSTおよび通常publisher PREの3ファイルを実体読戻しした。00:35:45にrootが全native要求/応答のSHA、6 journal原本、通常replayと別の`processStock`による保存応答再計算を追加通信・forward・業務書込0で検証した。peak RSSは20,674,904,064 bytes、swap増分の表示上限は約0.31MiBで、32GiB／1GiBの実行予算内。ローカル電力・金額は未計測。この1社は本文同期776件に含めず、105受入・残671件を維持する。未知の旧判定入力SHAは後付けしていない。
+
+実行前のcontroller v2は.env取得順で停止し、native・model・業務書込・新journalすべて0を確認した。通常writerのpreflight後にD1を構築するv3で単発実行し、元停止記録を保持する。私有証跡は`211A-clef-normal-once-v3/{SUCCESS,independent-acceptance,root-independent-acceptance}.json`。これは固定1社の受入であり、全20機能の完了ではない。
+
+## 10月17日00:32 JSTの追加確認
+
+| 対象 | 追加で受け入れた範囲 | 残件 |
+|---|---|---|
+| 事業タグ本文 | 現在の原文から追加50社を00:05:53〜00:17:34に通常機械処理で同期。固定776件中105件を受入 | 残671件は固定14組の計画のみ。211Aの入力変更再判定と旧skip99の判定入力検証は別 |
+| 保有株式の原本列 | 通常CLIで残46行を00:10:06〜00:17:11に反映し、先行100行と合わせて固定7文書146行を検証 | 価格7文書は未受入、原表不在3文書をHOLD。原本と未照合の旧16行は全値・時計を保持し、146行へ含めない。全市場の公開完了ではない |
+| 通常処理の負荷 | #435で銘柄指定を最新文書照合SQLの内部へ渡し、済みprefix・全完了時の原本再照合を追加。#437で資金フローの同一値確認を50キーずつに集約 | 資金フローPhase1への接続・Yahoo共有排他の範囲調整は#436で確認中。次の定時全量の成功は未受入 |
+
+本文の追加50社は2.0rpsでnative1,324応答・184,537,573 bytes、業務PATCH50、上流API・モデル0。00:18:25に全応答のSHA、39列・他props・根拠・source版と物理PRE/POSTを通信0で独立照合した。保有明細46行は旧37・新9、native277（Notion254・hosted10・D1読取13）、425.240秒、要求1,334,832／応答7,721,633 bytes、実mutation73。全7文書146行の最終照合、物理3組、未照合旧16行の不変を00:20:55に独立確認した。価格・上流取得・モデル・D1書込は0。
+
+銘柄指定7件の最新文書照合は同じ結果のままD1 rows_readが1,199,527から330へ、durationが2,193.21から7.3868msへ減った。資金フローは保存済み実669行を通常比較関数で純ローカル確認し、同値の週次448行の論理照合を448回から9回へ削減した。過去221行のうち異なる187行は通常の個別再確認へ戻す。これは通信回数の計算であり、実HTTP成功や当日の全量受入を作っていない。新依存・追加モデル・有料APIは0。
+
+Cloudflareの通常main配信も確認した。#433は00:05:12にversion `cc832d6f-fd99-46fb-9df8-5284d297d0f3`、#435は00:11:25に`d7c9b3a5-9e4f-419c-9de9-34a02c501a34`、#437は00:24:51に`411d6c88-b2ab-4767-a0e4-aa15dd1d0443`。CI成功と実deployを区別し、新しい定時全量の受入は継続する。
+
+私有証跡は`A50-current-source-mechanical-common-v1/{SUCCESS,independent-acceptance}.json`、保有明細の`apply46-v1/{independent-acceptance,root-independent-acceptance}.json`、`continuation/cf-main-{433,435,437}-logs.txt`。全20機能の最終受入は未完。
+
+## 10月17日00:06 JSTの追加確認
+
+- 本文は追加50社を23:47:54〜00:05:03に共通`withBiztagWriter`/`runBiztag`で反映し、先行5社と合わせて固定776件中55件を受入、残721件。追加50社は全1,300 native応答・198,853,194 bytes、39列・他props・根拠・最新sourceと物理PRE/POSTの全SHAを00:05:34に通信0で独立再検証した。全工程はNotion上限1.2rps、通常pipelineは694要求・653.853秒、モデル/上流API0。次の50社は現在の実source原文とメタデータから検証する有限実行中で、55件へ加えていない。
+- #433をmain `241f06ed`へ統合。生成SQL `0031_stock_adjusted_point.sql`を23:49:22に1回だけ適用し、旧3,767行の全38列・全索引を保持、新39列目は全行NULLと確認した。物理PRE/POSTとnative8読取/1DDLの全文SHAを独立照合、再送・指標値更新・取得元・モデル0。保存済み8303の同一Chart/Summaryから、通常parser→snapshot→indicatorの同一adjclose/SMA→月次MA比較/scoreをacceptedmainで純local確認した。列追加を過去値の充填や次回定時/月次全量の成功に数えない。
+- #432のCron分精度修正はmain `c983d7b1`の通常build `cfe5e679`で23:57:15に実deploy、version `2a60e9c6-f885-45f0-b908-21a302d79176`を確認した。予定17:00:52を同じ17:00分として扱い、実受付17:10と新規開始23:30の期限を保持する。元の17時失敗と次回定時全量未受入は変更しない。
+- RAWの同一pool run38914482437は23:56:10に終了。500検証（新規484・既存16）、cursor12,182/78,832・残66,650、上流GET0、Notion10要求、38分弱。次run38919797532が進行中。元manifest・起点・上限・結果不明は保持する。
+
+残権利の追加確認では、保存済み7203/8303の各1,221本を通信0で読み、双方の直近130本中119本でcloseとadjcloseが異なり、配当原イベントを確認した。差だけから通常OHLC/ATRを無効化したり、価格へ係数を再適用したりしていない。8303の2023年9月28日の併合原値は直近窓外。現Chart OHLC/volumeの株数基準、直近の分割をまたぐ原本、増資・新株予約権・会社分割の効力日/株数履歴との連結は未証明で[#343](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/343)を継続する。参照: [Yahooの調整済み終値の説明](https://in.help.yahoo.com/kb/adjusted-close-sln28256.html)、[JPXの権利処理](https://www.jpx.co.jp/equities/trading/margin/rights/02.html)（確認日2026-10-17）。
+
+追加の私有証跡は`A50-normal-mechanical-common-v1/{SUCCESS,independent-acceptance}.json`、`continuation/cf-main-c983-logs.txt`、`continuation/job-117018352250.log`。0031は`.runtime/yutai-ma-basis/source-v1/tmp/yutai-ma-basis/{pre-schema-v1,apply-schema-v1,final-main-replay.json}`に全原本と元の監査停止を保持する。全20機能・全欠測の最終受入は未完。
+
+## 23:50 JSTの追加確認
+
+| 対象 | 追加の受入 | 残件・制限 |
+|---|---|---|
+| 保有株式の原本列 | main `59dd527e`の通常CLI/publisherで先行100行を23:33:32〜23:45:56に反映。旧59行と新規41行、全467 native応答・要求のSHA、全POST、旧5列・他props保持、4組の物理PRE/POSTを検証 | 固定10銘柄の準備範囲は原本HOLD3・残46行。価格は未確定で、全市場の公開完了ではない |
+| 事業タグ本文 | main `43d563a3`の通常`--mechanical-only`で先行5社の39項目を同期。旧タグ・根拠・判定日・未知の旧入力SHAを保持し、全233 native応答と物理PRE/POSTの全SHAを確認 | 固定776件の残771件。続く50件は実行中で、完了数へ加えない。旧skip99は旧判定入力の検証完了ではなく、211Aの実入力変更判定も別途必要 |
+| VWAP 5分足 | [有限通常CLIの200件](vwap-finite-start-budget-20261015.md)で原本・旧履歴・全R2 POSTを独立照合 | 固定残1,656件と日足3件のHOLD。次30件はPREのみで、期限後のsource/PUTは0。定時全量の受入は未完 |
+| 共通株価計算 | #430をmain `c1ad90e2`へ統合し、Cloudflareの通常deploy/versionを確認。移動平均とトレンド・モメンタムの比較を同じ受領調整済み終値へ統一 | 次回定時の再生成は未受入。月次優待MA成分の同一snapshot対応と権利処理全体は別途追跡 |
+| Mac配備 | 23:27:12にmain `43d563a3`へ切替え。既存calendar・共通排他・同一依存lockと旧049/277原本を保持 | 新runtimeでの次回20時・21時の実receiptは未受入 |
+| 歴史RAW索引 | run38906853023が23:16:47に500件検証（新規486・既存14）、cursor11,682/78,832・残67,150。次の同一pool run38914482437が進行中 | 全範囲anti-joinは未完。元pool起点・最大200run・結果不明記録は保持 |
+
+保有株式100行の実測は743.05秒、Notion440要求・hosted17GET・D1 SELECT10、要求9,019,320 bytes／応答21,357,935 bytes、実mutation146。内部guardのwrites148には検索POST2件も含むため、業務mutation数と区別する。原本取得API・モデル呼出しは0。文書ごとの全母集団走査を、銘柄コードを内部CTEへ渡す最小修正で軽くし、残windowの済みprefixと全完了時の再照合を補強してから次へ広げる。
+
+本文5件は通常CLIの成功サマリ後に`process.exit(0)`が親controllerも終了させたため、保存を再送せず別の読取専用処理で全39値・旧props・根拠・最新sourceを照合し、23:46:45に物理POSTの全文読戻しを閉じた。元200応答と追加33応答の全bytes/SHAを通信0で再検証した。続く有限補完は同じCLI option契約・`withBiztagWriter`・`runBiztag`を直接使い、終了後の独立検証を行う。別の取得・抽出・更新ロジックは作らない。
+
+私有証跡は`tmp/feature-audit-20261016/A5-normal-mechanical-pilot-v1`、`A5-normal-mechanical-post-readonly-v1/{SUCCESS,independent-acceptance}.json`、`continuation/mac-mechanical-rollout-v1/SUCCESS.json`、`continuation/cf-main-c1ad-{build,logs}.txt`。保有明細は`.runtime/holdings-production-finish/source-v1/tmp/holdings-pilot-20261016/apply100-v1/{SUCCESS,independent-acceptance,root-independent-acceptance}.json`。秘密値・原文・署名URLはGitへ入れない。全20機能の最終受入は引き続き未完。
+
 ## 22:55 JSTの追加確認
 
 | 対象 | 確認結果 | 残件・制限 |
