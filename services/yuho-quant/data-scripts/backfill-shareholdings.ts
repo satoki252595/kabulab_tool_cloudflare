@@ -127,10 +127,18 @@ export async function applyLatestHoldings(dir: string, maxRows: number): Promise
         assert.equal(previous.result.status, "held"); assert.notEqual(previous.result.pending, true);
         held++; continue;
       }
-      if (item.status !== "ready") { held++; continue; }
-      if (usedRows === maxRows) { pending++; continue; }
+      const explicitAbsence = item.status === "held" && item.notApplicable !== undefined;
+      if (item.status !== "ready" && !explicitAbsence) { held++; continue; }
+      if (usedRows === maxRows && !explicitAbsence) { pending++; continue; }
       assert.ok(item.zipPath && item.zipSha256 && item.archivePageId);
       const zip = readFileSync(item.zipPath); assert.equal(hash(zip), item.zipSha256);
+      if (explicitAbsence) {
+        // A typed plan is not authority: requalify the same saved ZIP/DEI/filer/context before any custody write.
+        const parsed = parseShareholdingsData(zip, item.source);
+        assert.equal(parsed.status, "explicit_not_applicable"); assert.equal(parsed.holderScope, "filer_only");
+        assert.equal(parsed.holdings.length, 0); assert.equal(item.parsedRows, 0);
+        assert.deepEqual(parsed.notApplicable, item.notApplicable);
+      }
       const assertLatest = async () => {
         const fresh = await selectLatestHoldingsDocuments(db, { ...plan.selection, onlyCode: item.source.stockCode });
         const latest = fresh.rows.find(row => row.stockCode === item.source.stockCode);
@@ -142,8 +150,8 @@ export async function applyLatestHoldings(dir: string, maxRows: number): Promise
       await assertLatest();
       let archivePageId = item.archivePageId;
       if (item.sourceCustody === "legacy") {
-        // 非0件の適格通だけを現行keyへ移す。HOLD/0件は上で除外し、一次データを二重化しない。
-        assert.ok(item.parsedRows > 0 && item.sourceMetadata && item.sourceFetchedAt);
+        // 非0明細または原本資格済み明示不該当だけ。未対応/主体不明の0件は上で除外する。
+        assert.ok((item.parsedRows > 0 || explicitAbsence) && item.sourceMetadata && item.sourceFetchedAt);
         const custodyReceipt = join(dir, `${item.source.stockCode}-${item.source.docId}.modern-custody.json`);
         if (existsSync(custodyReceipt)) {
           const recorded = read(custodyReceipt); assert.equal(recorded.zipSha256, item.zipSha256);
@@ -157,7 +165,8 @@ export async function applyLatestHoldings(dir: string, maxRows: number): Promise
           assert.equal(saved.sha256, item.zipSha256); assert.ok(saved.bytes.equals(zip));
           assert.deepEqual(saved.metadata, item.sourceMetadata); assert.equal(saved.fetchedAt, item.sourceFetchedAt);
           const recorded = await recordEdinetZip({ service: "yuho-quant", docID: item.source.docId, type: 1, zip,
-            source: "Saved Notion legacy type1; holdings-qualified nonzero custody migration; upstream GET 0",
+            source: explicitAbsence ? "Saved Notion legacy type1; filer-qualified explicit absence custody migration; upstream GET 0"
+              : "Saved Notion legacy type1; holdings-qualified nonzero custody migration; upstream GET 0",
             fetchedAt: saved.fetchedAt, metadata: { ...saved.metadata, sourceLegacyPageId: saved.archivePageId, sourceSha256: saved.sha256 }, force: false });
           archivePageId = recorded.pageId;
           save(custodyReceipt, { observedAt: new Date().toISOString(), zipSha256: item.zipSha256, result: recorded });
@@ -165,12 +174,18 @@ export async function applyLatestHoldings(dir: string, maxRows: number): Promise
       } else await verifyArchivedAttachments(archivePageId, [{ filename: edinetArchiveFilename(item.source.docId, 1), bytes: zip }], "保有明細backfillの保存type1");
       // 原本の物理読戻し中に新有報へ切り替わった場合も、公開前に止める。
       await assertLatest();
-      const windowRows = Math.min(100, maxRows - usedRows);
+      const windowRows = explicitAbsence ? 0 : Math.min(100, maxRows - usedRows);
       const result = await publishVerifiedShareholdings({ source: item.source, ownerName: item.ownerName, zip,
         observeIssuedShares: true, issuedSharesFilingDateEvidence: typeof item.sourceMetadata?.submitDateTime === "string"
           ? { rawSubmitDateTime: item.sourceMetadata.submitDateTime, provenance: "saved-archive-metadata" } : null,
         archivePageId, maxRows: windowRows, valuationSources: evidence });
       const proof = { observedAt: new Date().toISOString(), source: item.source, zipSha256: item.zipSha256, result };
+      if (explicitAbsence) {
+        assert.equal(result.status, "held");
+        if (result.status !== "held") throw new Error("明示不該当を空配列成功へ変換しません");
+        assert.equal(result.reasonCode, "explicit_not_applicable"); assert.equal(result.parsed, 0);
+        assert.notEqual(result.pending, true); assert.deepEqual(result.notApplicable, item.notApplicable);
+      }
       if (result.status === "held") {
         if (result.pending === true) {
           assert.ok(Number.isSafeInteger(result.usedRows) && result.usedRows! > 0 && result.usedRows! <= windowRows);

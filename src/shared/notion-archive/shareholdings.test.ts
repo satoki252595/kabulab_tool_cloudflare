@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import type { ShareholdingsExtraction, ShareholdingsNotApplicable } from "../../../services/yuho-quant/src/services/edinet/shareholdings.js";
+import type { ShareholdingsExtraction, ShareholdingsNotApplicable, ShareholdingsSource } from "../../../services/yuho-quant/src/services/edinet/shareholdings.js";
 import { parseShareholdingsData, verifySavedHoldingsSource } from "../../../services/yuho-quant/src/services/edinet/shareholdings.js";
 import { HoldingPriceIssuerMismatch, HoldingPriceShareBasisMismatch, HoldingsPriceIndex, qualifyHoldingValuation } from "../../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js";
 import { queryUniqueRow, recordPrimaryData } from "./archive.js";
@@ -11,7 +11,10 @@ import { verifyArchivedAttachments } from "./readback.js";
 import { listPageFiles } from "./page-file.js";
 import { applyHoldingsSchema, buildHoldingsSchemaPatch, HOLDINGS_DESCRIPTION, LEGACY_HOLDINGS_COLUMNS, publishSavedShareholdings, publishVerifiedShareholdings, resumePendingShareholdings, resumePendingShareholdingsPrices, readSavedHoldingsZip, holdingProperties, holdingsFactsSha256, resolveHoldingRows, verifyCompletedHoldingsSource, type HoldingsSchema, type HoldingPriceSourceLoader } from "./shareholdings.js";
 
-vi.mock("../../../services/yuho-quant/src/services/edinet/shareholdings.js", () => ({ parseShareholdingsData: vi.fn(), verifySavedHoldingsSource: vi.fn(() => ({ status: "verified", filename: "structural.xbrl" })) }));
+vi.mock("../../../services/yuho-quant/src/services/edinet/shareholdings.js", async original => ({
+  ...await original<typeof import("../../../services/yuho-quant/src/services/edinet/shareholdings.js")>(),
+  parseShareholdingsData: vi.fn(), verifySavedHoldingsSource: vi.fn(() => ({ status: "verified", filename: "structural.xbrl" })),
+}));
 vi.mock("../../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js", async importOriginal => ({
   HoldingPriceIssuerMismatch: (await importOriginal<typeof import("../../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js")>()).HoldingPriceIssuerMismatch,
   HoldingPriceShareBasisMismatch: (await importOriginal<typeof import("../../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js")>()).HoldingPriceShareBasisMismatch,
@@ -266,6 +269,46 @@ describe("株式保有の原典限定writer", () => {
     const before = structuredClone(saved);
     await expect(publishVerifiedShareholdings(args)).rejects.toThrow(); expect(saved).toEqual(before);
     expect(vi.mocked(notionRequest).mock.calls.filter(([method]) => method === "PATCH" || method === "POST")).toHaveLength(0);
+  });
+  const actualAbsences: Array<{ source: ShareholdingsSource; ownerName: string; fixture: string; originalZipSha256: string;
+    notApplicable: ShareholdingsNotApplicable }> = JSON.parse(readFileSync(new URL("../../../services/yuho-quant/src/tests/fixtures/holdings-absence-cli/provenance.json", import.meta.url), "utf8")).items;
+  async function realAbsence(fixture: typeof actualAbsences[number], drift = false) {
+    const actual = await vi.importActual<typeof import("../../../services/yuho-quant/src/services/edinet/shareholdings.js")>("../../../services/yuho-quant/src/services/edinet/shareholdings.js");
+    vi.mocked(parseShareholdingsData).mockImplementation(actual.parseShareholdingsData);
+    const zip = readFileSync(new URL(`../../../services/yuho-quant/src/tests/fixtures/holdings-absence-cli/${fixture.fixture}`, import.meta.url));
+    expect(createHash("sha256").update(zip).digest("hex")).toBe(fixture.originalZipSha256);
+    // Protocol-only archive page; the complete real ZIP supplies every issuer/context/absence fact.
+    const before = { object: "page", id: args.archivePageId, parent: { type: "database_id", database_id: "p".repeat(32) }, archived: false, in_trash: false,
+      properties: { Key: { type: "title", title: [{ type: "text", text: { content: `${fixture.source.docId}:type1` }, plain_text: `${fixture.source.docId}:type1` }] },
+        Metadata: { type: "rich_text", rich_text: [] }, Files: { type: "files", files: [] },
+        "保有価格状態": { type: "select", select: null }, "保有価格理由": { type: "rich_text", rich_text: [] }, "保有価格再開情報": { type: "rich_text", rich_text: [] } } };
+    const page = { ...structuredClone(before), properties: testProperties(structuredClone(before.properties)) }, budget = { remainingRows: 20 };
+    vi.mocked(notionRequest).mockImplementation(async (method, path, body, options) => {
+      expect(path).toBe(`/pages/${args.archivePageId}`);
+      if (method === "PATCH") {
+        expect(options).toEqual({ singleAttempt: true });
+        Object.assign(page.properties, mirrored((body as { properties: Record<string, unknown> }).properties));
+        if (drift) page.properties.Key = mirrored({ Key: { title: [{ text: { content: `${fixture.source.docId}:type1変` } }] } }).Key as never;
+        return { object: "page", id: page.id } as never;
+      }
+      expect(method).toBe("GET"); return structuredClone(page) as never;
+    });
+    const result = await publishVerifiedShareholdings({ ...args, source: fixture.source, ownerName: fixture.ownerName, zip,
+      maxRows: 0, budget, observeIssuedShares: true });
+    return { before, page, budget, result };
+  }
+  it.each(actualAbsences)("通常定期publisherでも保存実 $source.stockCode の明示不該当だけを保存し全他props/価格をPOST照合", async fixture => {
+    const { before, page, budget, result } = await realAbsence(fixture);
+    expect(result).toMatchObject({ status: "held", parsed: 0, reasonCode: "explicit_not_applicable", notApplicable: fixture.notApplicable });
+    expect(restartInfo(page.properties)).toMatchObject({ notApplicable: fixture.notApplicable });
+    for (const [name, value] of Object.entries(before.properties)) expect(page.properties[name]).toEqual(value);
+    expect(page.properties["保有価格再開情報"].rich_text).toEqual([]); expect(budget.remainingRows).toBe(20);
+    expect(queryUniqueRow).not.toHaveBeenCalled(); expect(qualifyHoldingValuation).not.toHaveBeenCalled();
+    expect(vi.mocked(notionRequest).mock.calls.filter(([method]) => method === "PATCH")).toHaveLength(1);
+  });
+  it("実206Aのabsence marker読戻しで旧Keyが一文字でも変更されれば成功にしない", async () => {
+    await expect(realAbsence(actualAbsences[0], true)).rejects.toThrow("他の原本props");
+    expect(vi.mocked(notionRequest).mock.calls.filter(([method]) => method === "PATCH")).toHaveLength(1);
   });
 
   it("数値表があっても提出会社の保有主体が未成立なら原本HOLDのみで、明細へ書かない", async () => {

@@ -1,11 +1,11 @@
-/** Legacy custody migration is restricted to qualified nonzero holdings, never to HOLD rows. */
+/** Legacy custody migration requires qualified nonzero holdings or a requalified typed absence. */
 import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyLatestHoldings, prepareLatestHoldings } from "./backfill-shareholdings.js";
-import { parseShareholdingsData } from "../src/services/edinet/shareholdings.js";
+import { parseShareholdingsData, type ShareholdingsSource, type ShareholdingsNotApplicable } from "../src/services/edinet/shareholdings.js";
 import { HoldingsPriceIndex, qualifyHoldingValuation } from "../src/services/edinet/shareholdings-valuation.js";
 import { selectLatestHoldingsDocuments } from "./lib/shareholdings-backfill.js";
 import { readSavedHoldingsZip, publishVerifiedShareholdings } from "../../../src/shared/notion-archive/shareholdings.js";
@@ -103,7 +103,7 @@ describe("保有明細backfillのlegacy適用境界", () => {
     fixture(status, rows); await applyLatestHoldings(dir, maxRows);
     expect(readSavedHoldingsZip).not.toHaveBeenCalled();expect(recordEdinetZip).not.toHaveBeenCalled();expect(publishVerifiedShareholdings).not.toHaveBeenCalled();
   });
-  it("明示不該当のtyped根拠をprepareへ保持し、applyでlegacy0件の移行や価格処理へ渡さない", async () => {
+  it("明示不該当のtyped根拠を原本から再資格し、同custody/publisherへ渡すが価格処理はしない", async () => {
     const notApplicable = { version: 1 as const, basis: "whole_section_not_applicable" as const, zipSha256: sha, filename: "structural.htm",
       memberSha256: sha, blockHtmlSha256: sha, elementNamespace: "http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor",
       inlineNamespace: "http://www.xbrl.org/2008/inlineXBRL", context: { contextRef: "FilingDateInstant", entity: `${source.edinetCode}-000`, instantDate: "2026-06-30" }, statement: "原本資格は別suite。ここはtyped結果の伝播だけ" };
@@ -113,9 +113,46 @@ describe("保有明細backfillのlegacy適用境界", () => {
     const plan = JSON.parse(readFileSync(join(dir, "plan.json"), "utf8"));
     expect(plan.items[0]).toMatchObject({ status: "held", parsedRows: 0, notApplicable, sourceFetchedAt: "2026-06-30T00:00:00Z" });
     expect(readFileSync(plan.items[0].zipPath)).toEqual(bytes);
+    vi.mocked(publishVerifiedShareholdings).mockResolvedValueOnce({ status: "held", parsed: 0, reason: "原本明示不該当", reasonCode: "explicit_not_applicable", notApplicable });
     vi.mocked(readSavedHoldingsZip).mockClear(); await applyLatestHoldings(dir, 100);
-    expect(readSavedHoldingsZip).not.toHaveBeenCalled(); expect(recordEdinetZip).not.toHaveBeenCalled();
-    expect(publishVerifiedShareholdings).not.toHaveBeenCalled(); expect(qualifyHoldingValuation).not.toHaveBeenCalled();
+    expect(readSavedHoldingsZip).toHaveBeenCalledOnce(); expect(recordEdinetZip).toHaveBeenCalledOnce();
+    expect(publishVerifiedShareholdings).toHaveBeenCalledWith(expect.objectContaining({ maxRows: 0, archivePageId: "b".repeat(32) }));
+    expect(qualifyHoldingValuation).not.toHaveBeenCalled(); expect(process.exitCode).toBe(1);
+  });
+  const actualAbsences: Array<{ source: ShareholdingsSource & { edinetCode: string }; ownerName: string; fixture: string; originalZipSha256: string;
+    originalZipBytes: number; sourceFetchedAt: string; notApplicable: ShareholdingsNotApplicable }> = JSON.parse(readFileSync(new URL("../src/tests/fixtures/holdings-absence-cli/provenance.json", import.meta.url), "utf8")).items;
+  it.each(actualAbsences)("保存実原本 $source.stockCode は通常prepare→再資格→custody→同publisher→型付きHOLD receiptを通る", async fixture => {
+    const actual = await vi.importActual<typeof import("../src/services/edinet/shareholdings.js")>("../src/services/edinet/shareholdings.js");
+    vi.mocked(parseShareholdingsData).mockImplementation(actual.parseShareholdingsData);
+    const zip = readFileSync(new URL(`../src/tests/fixtures/holdings-absence-cli/${fixture.fixture}`, import.meta.url));
+    expect(createHash("sha256").update(zip).digest("hex")).toBe(fixture.originalZipSha256); expect(zip.length).toBe(fixture.originalZipBytes);
+    const parsed = actual.parseShareholdingsData(zip, fixture.source); expect(parsed.notApplicable).toEqual(fixture.notApplicable);
+    vi.mocked(selectLatestHoldingsDocuments).mockResolvedValue({ rows: [{ stockId: 1, stockCode: fixture.source.stockCode,
+      docId: fixture.source.docId, edinetCode: fixture.source.edinetCode, fiscalYearEnd: fixture.source.fiscalYearEnd,
+      ownerName: fixture.ownerName, submittedAt: new Date(fixture.notApplicable.context.instantDate) }], more: false });
+    vi.mocked(readSavedHoldingsZip).mockResolvedValue({ status: "ready", archivePageId: "a".repeat(32), bytes: zip,
+      sha256: fixture.originalZipSha256, originalManifest: "known", sourceCustody: "legacy", metadata: {},
+      fetchedAt: fixture.sourceFetchedAt, metadataMissing: [] });
+    vi.mocked(publishVerifiedShareholdings).mockResolvedValue({ status: "held", parsed: 0, reason: parsed.reason!,
+      reasonCode: "explicit_not_applicable", notApplicable: parsed.notApplicable });
+    await prepareLatestHoldings({ limit: 1, afterCode: null, dir, valuationPath: null });
+    const prepared = JSON.parse(readFileSync(join(dir, "plan.json"), "utf8")).items[0];
+    expect(prepared).toMatchObject({ status: "held", parsedRows: 0, source: fixture.source, notApplicable: fixture.notApplicable });
+    await applyLatestHoldings(dir, 1); await applyLatestHoldings(dir, 1);
+    expect(recordEdinetZip).toHaveBeenCalledOnce(); expect(publishVerifiedShareholdings).toHaveBeenCalledOnce();
+    expect(publishVerifiedShareholdings).toHaveBeenCalledWith(expect.objectContaining({ source: fixture.source, zip, maxRows: 0 }));
+    const receipt = JSON.parse(readFileSync(join(dir, `${fixture.source.stockCode}-${fixture.source.docId}.held.json`), "utf8"));
+    expect(receipt.result).toMatchObject({ status: "held", parsed: 0, reasonCode: "explicit_not_applicable", notApplicable: fixture.notApplicable });
+    expect(existsSync(join(dir, `${fixture.source.stockCode}-${fixture.source.docId}.published.json`))).toBe(false);
+    expect(qualifyHoldingValuation).not.toHaveBeenCalled(); expect(process.exitCode).toBe(1);
+  }, 15_000); // Complete saved ZIP parsing plus fsynced CLI receipts under parallel CI; no network.
+  it("planだけに明示不該当を後付けしても原本再資格が失敗すればcustody/native前に停止", async () => {
+    fixture("held", 0); const path = join(dir, "plan.json"), plan = JSON.parse(readFileSync(path, "utf8"));
+    plan.items[0].notApplicable = { basis: "whole_section_not_applicable" }; writeFileSync(path, JSON.stringify(plan));
+    vi.mocked(parseShareholdingsData).mockReturnValue({ source, status: "no_detail_table", holderScope: "unqualified",
+      reason: "提出者不明", holdings: [], filename: null, contextRef: null, elementId: "jpcrp_cor:ShareholdingsTextBlock" });
+    await expect(applyLatestHoldings(dir, 1)).rejects.toThrow(); expect(selectLatestHoldingsDocuments).not.toHaveBeenCalled();
+    expect(readSavedHoldingsZip).not.toHaveBeenCalled(); expect(recordEdinetZip).not.toHaveBeenCalled(); expect(publishVerifiedShareholdings).not.toHaveBeenCalled();
   });
   it("資格成立の非0件だけ同bytesを現行keyへ保存し、そのpageIdで公開する", async () => {
     fixture();await applyLatestHoldings(dir, 100);
