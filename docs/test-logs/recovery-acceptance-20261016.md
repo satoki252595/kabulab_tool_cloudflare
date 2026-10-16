@@ -2,6 +2,26 @@
 
 追跡は[#348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)。この記録は以下の対象の実測であり、全20機能・全空欄の完了を意味しない。
 
+## 10月17日03:20 JSTの追加確認
+
+| 対象 | この時点の受入・確認 | 残件 |
+|---|---|---|
+| 事業タグ本文 | 固定776社中607社。停止した3179/9273の2社を19要求の読取だけで照合し、旧386要求・通常publisher・全39値・他props・原本・物理3ファイルを別processで再検証 | 未着手169社を新runtime・新しい有限名前空間で準備中。旧停止・原文・未知状態は保持し、同じ業務更新は再送していない |
+| Mac通常環境 | 03:14:14に`117b2133`へ切替え。canonical.env・同kernel writer state・依存lockを保持し、競合準備の固定33社を設定。旧43dの1,503 sourceと旧.env bytesを保全、旧入口の.envだけ無効化 | 競合準備5件の実行と次20/21時の通常receiptは未受入。モデル競合判定も停止中 |
+| 保有DB行数 | 295要求の原応答・cursor・9完了区間の全域・ID一意を独立再生し、cutoff `2026-10-16T17:56:00.000Z`前のqueryable active page 27,674行を受入。上限に達した親8区間800行は集計から除外 | transaction snapshotやworkspace全体容量の証明ではない。保有原本213行/23文書・価格未受入という業務上の状態は変わらない |
+| 保有prepare SQL | #448の実2 SELECTは旧171,241読取行/400.8285ms→83,678行/95.7946msで、全21行・順序・選択20行・moreが一致。#451では本番の既存code UNIQUE索引とcode範囲検索・外側rowid検索を3 readで確認し、03:20にmainへ統合 | #451の本番SELECT読取量と通常prepare全体は未測定。ローカルの中央値2.171→0.231msを本番性能へ換算しない |
+| RAW索引 | cursor13,554/78,832・残65,278、永続raw_inflightを保持。明示1回修復の共通CLIは#450で準備、Actionsの型・試験は成功 | CloudflareのPR buildはasset APIエラーで失敗。変更をmainへ統合しておらず、実修復・再送・cursor変更は0 |
+
+#447/#448/#449はmainへ統合し、通常Cloudflare buildログの実配信を確認した。各versionは`2e5e4962-9153-4d09-82c8-cb9703f551cf`（02:55:22）、`ee405253-e7c3-4ba2-9dac-bcb657f764ec`（03:01:23）、`b1c1f2e0-c199-4607-b493-93ca27ad45b2`（03:07:49）。#449はNotionが除去するU+200Bだけを送信本文で正規化し、原文・同期/判定入力SHAは保持する。新旧runtimeと旧proofの版を混同しない。
+
+部分2社の読取閉鎖は16.565秒、Notion13/D1 SELECT6、要求4,182B/応答1,555,355B、D1読取150行、業務書込・モデル・原本取得API0。旧STOP SHA `bfd7c807c7a45762a358b6655f336cdadffe634da168a6dedf676f8bad7094e5`は不変。root最終受入SHAは`333bd1fba4d297889ba22191bc4e88c60b31b7b62fd48b132dec6946e6470373`で、未送信48社を含む残169社は別計画へ分離した。
+
+保有countの実時間は980.825秒、要求本文103,624B/応答本文27,628,804B。元SUCCESSの`nativeWireBytesMeasured=true`という表記は採用せず、独立監査でdecoded body bytesへ限定する。全headers/wireは未計測。DB行数に残19,783行を全て新規と仮定した保守的投影は47,457行であり、全金融行の原本資格・workspace全容量・外部同時writer不在を推定で証明する値ではない。単一DBの行数上限とは[Notion公式仕様](https://www.notion.com/help/optimize-database-load-times-and-performance)の条件で比較する。
+
+#451の3 readはPRAGMA index_listと旧/新EXPLAINだけで、実SELECTを実行していない。要求2,869B/応答3,424B、rows_read/writeとも0、追加DDL・Notion・モデル0。必須索引欠落時は同じ1問い合わせが失敗し、別計画へ切り替えない。全量保有公開は通常原本資格・Notion要求時間と有限予算が別途必要である。
+
+追加私有証跡は`mac-competitor-stage-rollout-v2/{SUCCESS,root-verification,legacy-preservation}.json`、`.runtime/biztag-notion-text/source-v1/tmp/biztag-partial-closure-20261017/closure2-readonly-v2/root-final-acceptance.json`、`tmp/feature-audit-20261017/holdings-count-v4-independent-audit-v1/{root-replay,root-final-acceptance}.json`、SQLの`tmp/code-index-native-plan-v1/root-independent-acceptance.json`。元readのSTOPを保存し、追加モデル・有料APIによる補完は0。全20機能の最終受入は引き続き未完。
+
 ## 10月17日02:54 JSTの追加確認
 
 | 対象 | この時点の受入・確認 | 残件 |
