@@ -18,6 +18,12 @@ function page() {
 }
 beforeEach(() => vi.resetAllMocks());
 describe("⑤原本のread-only照合", () => {
+  it("明示singleAttempt/native guardを追加queryなしで共通clientへ透過する", async () => {
+    vi.mocked(notionRequest).mockResolvedValue({ results: [page()], has_more: false });
+    const options = { singleAttempt: true, beforeRequest: vi.fn() };
+    await findCanonicalRawFileAttachments([digest], options);
+    expect(notionRequest).toHaveBeenCalledOnce(); expect(vi.mocked(notionRequest).mock.calls[0]?.[3]).toBe(options);
+  });
   it("SHA限定queryだけ行い、hosted存在とphysical検証を混同せずURLを返さない", async () => {
     vi.mocked(notionRequest).mockResolvedValue({ results: [page()], has_more: false });
     const found = await findCanonicalRawFiles([digest]);

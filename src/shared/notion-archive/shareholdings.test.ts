@@ -1,7 +1,7 @@
 /** schema移行の保全と原表資格後の書込境界。原文をfixtureへ複製しない。 */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
-import type { ShareholdingsExtraction } from "../../../services/yuho-quant/src/services/edinet/shareholdings.js";
+import type { ShareholdingsExtraction, ShareholdingsNotApplicable } from "../../../services/yuho-quant/src/services/edinet/shareholdings.js";
 import { parseShareholdingsData, verifySavedHoldingsSource } from "../../../services/yuho-quant/src/services/edinet/shareholdings.js";
 import { HoldingPriceIssuerMismatch, HoldingsPriceIndex, qualifyHoldingValuation } from "../../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js";
 import { queryUniqueRow, recordPrimaryData } from "./archive.js";
@@ -231,6 +231,39 @@ describe("株式保有の原典限定writer", () => {
     expect(await publishVerifiedShareholdings(args)).toEqual({ status: "held", parsed: 0, reason: "原表未対応" });
     expect(queryUniqueRow).not.toHaveBeenCalled();
     expect(saved[`/pages/${args.archivePageId}`]).toMatchObject({ "保有明細状態": { select: { name: "要確認" } } });
+  });
+
+  // Protocol-only evidence; real source/subject/context qualification is covered by shareholdings-absence.test.ts.
+  const notApplicable: ShareholdingsNotApplicable = { version: 1, basis: "whole_section_not_applicable",
+    zipSha256: createHash("sha256").update(args.zip).digest("hex"), filename: extraction.filename!,
+    memberSha256: createHash("sha256").update(args.zip).digest("hex"), blockHtmlSha256: createHash("sha256").update(args.zip).digest("hex"),
+    elementNamespace: "http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor",
+    inlineNamespace: "http://www.xbrl.org/2008/inlineXBRL",
+    context: { contextRef: "FilingDateInstant", entity: `${source.edinetCode}-000`, instantDate: "2026-09-18" },
+    statement: "(5) 【株式の保有状況】 該当事項はありません。" };
+  it("明示不該当は型付き原本根拠をHOLDへ残し、明細0件成功・新価格queueや旧価格変更を作らない", async () => {
+    vi.mocked(parseShareholdingsData).mockReturnValue({ ...extraction, status: "explicit_not_applicable", reason: "原本明示不該当", holdings: [], notApplicable });
+    const path = `/pages/${args.archivePageId}`, price = { "保有価格状態": { select: { name: "要確認" } }, "保有価格理由": { rich_text: [{ text: { content: "旧価格の資格は不明" } }] } };
+    saved[path] = structuredClone(price);
+    const budget = { remainingRows: 20 };
+    expect(await publishVerifiedShareholdings({ ...args, budget })).toEqual({ status: "held", parsed: 0, reason: "原本明示不該当", reasonCode: "explicit_not_applicable", notApplicable });
+    expect(restartInfo(saved[path]).notApplicable).toEqual(notApplicable);
+    expect(restartInfo(saved[path]).sourceQueueVersion).toBeUndefined(); expect(restartInfo(saved[path]).factsSha256).toBeUndefined();
+    for (const [name, value] of Object.entries(price)) expect((saved[path] as Record<string, unknown>)[name]).toEqual(value);
+    expect(testProperties(saved[path])["保有価格再開情報"]).toBeUndefined(); expect(budget.remainingRows).toBe(20);
+    expect(queryUniqueRow).not.toHaveBeenCalled(); expect(qualifyHoldingValuation).not.toHaveBeenCalled();
+    expect(Object.keys(saved)).toEqual([path]);
+  });
+  it.each(["unknown", "nonzero", "cursor", "completed"])("明示不該当で旧%sのmarker/factsを付け替えない", async mode => {
+    vi.mocked(parseShareholdingsData).mockReturnValue({ ...extraction, status: "explicit_not_applicable", reason: "原本明示不該当", holdings: [], notApplicable });
+    const info = { source, ownerName: args.ownerName, zipBytes: args.zip.length, zipSha256: notApplicable.zipSha256,
+      parsed: mode === "nonzero" ? 1 : 0, ...(mode === "cursor" ? { sourceQueueVersion: 1, sourceNextHoldingOffset: 0 } : {}) };
+    const path = `/pages/${args.archivePageId}`;
+    saved[path] = { "保有明細状態": { select: { name: mode === "unknown" ? "実行中（結果未確定）" : mode === "completed" ? "明細原本照合済" : "再開待ち" } },
+      "保有明細再開情報": { rich_text: [{ text: { content: JSON.stringify(info) } }] } };
+    const before = structuredClone(saved);
+    await expect(publishVerifiedShareholdings(args)).rejects.toThrow(); expect(saved).toEqual(before);
+    expect(vi.mocked(notionRequest).mock.calls.filter(([method]) => method === "PATCH" || method === "POST")).toHaveLength(0);
   });
 
   it("数値表があっても提出会社の保有主体が未成立なら原本HOLDのみで、明細へ書かない", async () => {
