@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "source": "Yahoo Chart raw physically archived stock-sync run 38539360030.1 (2026-10-14)",
+  "manifestSha256": "3d4b5e30fd36be1af43b58cfd7f5363362f8ebad54f479d7dd27024d913a4f37",
+  "projection": "Original meta subset, unchanged events, last130 original timestamps and OHLCV/adjclose. No generated values.",
+  "gzipSha256": "e31e0eecc781d8e31a6778896d911403cb344371ba231c022b9e1a26a2cf7f20",
+  "gzipBytes": 6456,
+  "members": [
+    {
+      "code": "7203",
+      "sourceSha256": "e4ea6524d2afdcc8eea2fc1f1eafb3bc2d1120d8b68ae224cb3873ed2a7dc7f3",
+      "sourceBytes": 81353,
+      "receivedAt": "2026-10-14T10:30:39.547Z",
+      "projectionSha256": "395aa67d7f9c4bd7ee3e922f90cb14fabd4b723e98bb1d2873eed92d8b52fc02",
+      "projectionBytes": 8180
+    },
+    {
+      "code": "9252",
+      "sourceSha256": "782f0e1376ceb1144ab7cd976b731cfcb74ccfdbd147584d74bfd1567cf60112",
+      "sourceBytes": 88722,
+      "receivedAt": "2026-10-14T09:21:16.494Z",
+      "projectionSha256": "5fd73d5ce435a67bec760167d106a49cbb555b456242e6a6d918030463a53e4c",
+      "projectionBytes": 7089
+    },
+    {
+      "code": "4374",
+      "sourceSha256": "72577045d462b8966bde7e185c82abda9c8677a26f73bf503b1df7f9c04fef86",
+      "sourceBytes": 74360,
+      "receivedAt": "2026-10-14T09:04:54.468Z",
+      "projectionSha256": "9fc5eda9f819a7dd2bee82ded9cb82737004180363de34f9e0019053d31e9c81",
+      "projectionBytes": 6530
+    }
+  ]
+}
