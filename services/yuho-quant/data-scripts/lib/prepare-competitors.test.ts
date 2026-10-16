@@ -89,6 +89,18 @@ it("同入力は同一SHA/gzip/keyを共有archiveへ渡し、実skipの物理�
   expect(model.record.mock.calls[1][0].files[0].bytes).toEqual(model.record.mock.calls[0][0].files[0].bytes);
 });
 
+it("実2社の通常prepare出力と物理receiptをstageへ渡し、本文SHA/対象/状態の一致後だけcursorを閉じる", async () => {
+  const { planPrepareStage, startPrepareStage, acceptPrepareStage } = await import("../../../../scripts/biztag-local/competitor-prepare-stage.js");
+  const stage = planPrepareStage(options().codes, dir); startPrepareStage(stage);
+  const { prepareCompetitors } = await import("./prepare-competitors.js");
+  const summary = await prepareCompetitors({ ...options(), outDir: stage.outDir });
+  acceptPrepareStage(stage, JSON.stringify(summary), Date.now() + 60_000);
+  const cursor = JSON.parse(readFileSync(stage.cursorPath, "utf8"));
+  expect(cursor.afterCode).toBe([...options().codes].sort().at(-1)); expect(cursor.holds).toEqual([]);
+  expect(readdirSync(stage.outDir)).not.toContain("stage-pending.json");
+  expect(model.client).not.toHaveBeenCalled(); expect(model.verify).toHaveBeenCalledOnce();
+});
+
 it("prepare CLIの明示0.3rpsは.envの2.0rpsより狭いnative開始間隔を保持する", async () => {
   vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
   const original = globalThis.fetch, starts: number[] = [];

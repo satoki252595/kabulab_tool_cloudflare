@@ -1,6 +1,6 @@
 # 事業タグ・優待要約のMac定時運用
 
-更新: 2026-10-14。事業タグの唯一の定時writerをApple Silicon Macへ移す。
+更新: 2026-10-17。事業タグの唯一の定時writerをApple Silicon Macへ移す。
 適格新規の初回と、最新有報IDまたは既知の実入力SHAが変わった対象だけClef-Flash/MPSを使う。
 同一入力の保存タグは再利用し、旧失敗・不足は従来のkeywords/excludes一致で補完する。
 開始日前の上場を新規AI対象へ広げず、未保存の旧入力SHAは捏造しない。TypeSafeへの自動代替、語彙審査、
@@ -31,6 +31,30 @@ Linuxの`catchup.yml`はEDINET/TDnetを継続し、biztagの定期writerを起�
 checkout/一次データ取得前に明示停止する。MacのwriterへGitHubからジョブを
 転送する仕組みも設けない。株価/macroeconomicsのCloudflare 4 Cronは別の経路であり、
 この設定では変更しない。
+
+## 競合の機械準備stage（任意・配備は別受入）
+
+`.env`の任意キー`BIZTAG_COMPETITOR_PREPARE_CODES`へ、受入対象の固定コード集合を明示した場合だけ、
+20時biztagの正常終了後に通常CLI `competitors --prepare-only --judge=semif`を同じ唯一writerで実行する。
+未設定ではstageを起動しない。競合推論・relation・確率・判定日の更新は行わない。
+
+固定集合は1〜100社。コード順に最大5件を選び、物理保存確認後のafter-codeで次へ進む。末尾後は先頭へ巡回し、
+変更入力を再資格化する。同入力archive-skipでも毎晩同じ先頭5件へ戻らない。HOLDはその入力の保留一覧に保持し、
+競合なし/判定完了と扱わない。scope変更は停止する。変更する場合は旧cursor/closureの保全と新scopeを確認する。
+
+別CLI processへ新規読取6分・Notion最大0.3rpsを明示する。stage childは最大7分でSIGTERM。
+startup receiptの所要も含めた全体30分timerをリセットしない。開始から22分以降はstageを始めず、
+receipt用に1分を残す。20時/21時calendarと既存readcheckの30分期限は変更しない。
+
+`tmp/biztag-local/competitor-prepared/stage-pending.json`をchild起動前に固定scope/cursor/selectedへ束縛する。
+kill/通信/原本保存の結果不明では、入力SHAが変わっても次stageを始めない。pendingを消して再試行しない。
+通常CLIの正常終了・物理確認ACK、gzip本文SHA、manifest対象/状態/HOLDとreceiptの一致を確認してから、
+closure保存→cursor原子的更新→pending除去の順に閉じる。途中停止でpendingが残れば、実archive/receiptと照合してから扱う。
+
+保存済みcorpus条件では5件に44 Notion読取とD1 4回、候補CPU21.07秒、maxRSS約2.56GiBを要した。
+現在入力の全文量・archive/親processのgzip読戻し・追加電力/所要は未測定。7分完了や全量完走を保証しない。
+83社なら正常な5件stageの一巡に最低17回を要するため、定時巡回と有限ローカル回復は区別する。
+実測と未受入は[stage検証記録](test-logs/competitor-finite-stage-20261017.md)を参照。
 
 ## 受入と設定
 

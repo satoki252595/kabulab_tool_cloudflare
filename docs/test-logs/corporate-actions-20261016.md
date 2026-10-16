@@ -68,3 +68,7 @@ PREの最初の検証はローカルSQLite行オブジェクトのprototype差�
 - [物理POST](https://www.notion.so/3fbd74ff84cd81e8afcfcdf89fc84b2c): gzip735,302B、SHA `9a36981813f6e38da782e72f75b18cecac1cefb6d5ee16e57ad95e8c875b083a`、展開4,785,914B、SHA `73647a23909ac0c111a70b4e176762800f3f4f823093ce5fec7625c6554a0876`。
 
 これはschemaだけの受入であり、列は全NULLのままである。通常日次による同一snapshot値の充填と月次の保存結果・HOLD数は未受入。初回充填後は旧株価writerの再開を禁止する。
+
+## 2026-10-17の原本経路と残差
+
+[原本再利用の経路調査](corporate-actions-sources-20261017.md)に、保存EDINET3社の株数精度・期末/提出時点の相違と、保存TDnet717タイトルの既存parser結果を記録した。717件でratio/factor/effectiveDateの非NULLは0で、実誤係数採用は確認していないため新しいタイトル分類器は追加しない。正式な株数単位・効力日・全権利の資格化と正常定時の受入は#343に維持する。

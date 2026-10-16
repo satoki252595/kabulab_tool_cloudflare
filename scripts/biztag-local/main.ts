@@ -2,15 +2,23 @@
  * Mac専用の事業タグ・優待要約定時処理。
  * Nix shell内から preflight / install / run を呼ぶ。自動更新・再試行はしない。
  */
-import { spawn, execFileSync } from "node:child_process";
+import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { preflight } from "./runtime.js";
 import { LOCAL_JOB_HOURS, localJobScheduledFor, parseLocalJobReceipt, startLocalJobReceipt, mirrorLocalJobReceipt } from "./receipt.js";
+import { biztagLocalEnv } from "./env.js";
+import { acceptPrepareStage, planPrepareStage, startPrepareStage } from "./competitor-prepare-stage.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+/** startup receiptの所要も30分へ含める。child起動から30分へ延長しない。 */
+export function localJobRemainingMs(startedAt: string, nowMs: number): number {
+  const start = Date.parse(startedAt);
+  if (!Number.isFinite(start) || !Number.isFinite(nowMs) || nowMs < start) throw new Error("ローカルjobの有限時計が不正です。");
+  return Math.max(0, start + 30 * 60_000 - nowMs);
+}
 /** 許可した2処理だけを起動する。未知のjobを取得前に拒否する。 */
 export function localJob(kind: string | undefined): { label: string; hour: number; script: string; args: string[] } {
   if (kind === undefined || kind === "biztag") {
@@ -89,19 +97,61 @@ async function run(kind: string | undefined): Promise<void> {
   try {
     writeFileSync(`${receipt}.started.json`, JSON.stringify(running), { mode: 0o600, flag: "wx" });
     const mirroredVersion = await startLocalJobReceipt(running, undefined, `${receipt}.previous-incomplete.json`);
-    const child = spawn("pnpm", ["exec", "tsx", job.script, ...args], {
-      cwd: root, env: childEnv, stdio: ["ignore", log, log], detached: true,
-    });
-    const stop = (): void => { if (child.pid !== undefined) process.kill(-child.pid, "SIGTERM"); };
-    const timer = setTimeout(stop, 30 * 60_000);
+    let child: ChildProcess | undefined;
+    let stopped = false;
+    const stop = (): void => {
+      stopped = true;
+      if (child?.pid !== undefined && child.exitCode === null && child.signalCode === null) process.kill(-child.pid, "SIGTERM");
+    };
+    const remainingMs = localJobRemainingMs(startedAt, Date.now());
+    const timer = setTimeout(stop, Math.max(0, remainingMs));
     process.once("SIGTERM", stop);
     process.once("SIGINT", stop);
     let result: { code: number | null; signal: NodeJS.Signals | null } = { code: null, signal: null };
     try {
-      result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-        child.once("error", reject);
-        child.once("exit", (code, signal) => resolve({ code, signal }));
+      if (remainingMs <= 0) throw new Error("receipt開始照合中に全体30分を超えました。childを起動しません。");
+      const first = spawn("pnpm", ["exec", "tsx", job.script, ...args], {
+        cwd: root, env: childEnv, stdio: ["ignore", log, log], detached: true,
       });
+      child = first;
+      result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+        first.once("error", reject);
+        first.once("exit", (code, signal) => resolve({ code, signal }));
+      });
+      const scope = jobKind === "biztag" ? biztagLocalEnv.competitorPrepareCodes() : undefined;
+      if (result.code === 0 && !stopped && scope !== undefined) {
+        // 同じ30分timerをresetしない。stage7分＋receipt1分の余地がなければ開始しない。
+        if (Date.now() - Date.parse(startedAt) >= 22 * 60_000) {
+          writeFileSync(`${receipt}.prepare-not-started.json`, JSON.stringify({ status: "not-started", reason: "insufficient-overall-budget" }), { mode: 0o600, flag: "wx" });
+          result = { code: 1, signal: null };
+        } else {
+          const stage = planPrepareStage(scope, state);
+          startPrepareStage(stage);
+          const stageDeadline = Math.min(Date.now() + 7 * 60_000, Date.parse(startedAt) + 29 * 60_000);
+          const second = spawn("pnpm", ["exec", "tsx", job.script, ...stage.args], {
+            cwd: root, env: childEnv, stdio: ["ignore", "pipe", log], detached: true,
+          });
+          child = second;
+          const chunks: Buffer[] = []; let stdoutBytes = 0;
+          second.stdout!.on("data", (bytes: Buffer) => {
+            stdoutBytes += bytes.length;
+            if (stdoutBytes > 1024 * 1024) stop();
+            else chunks.push(bytes);
+          });
+          const stageTimer = setTimeout(stop, Math.max(0, stageDeadline - Date.now()));
+          try {
+            result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+              second.once("error", reject); second.once("close", (code, signal) => resolve({ code, signal }));
+            });
+            const stdout = Buffer.concat(chunks).toString("utf8");
+            writeFileSync(`${receipt}.prepare-summary.json`, stdout, { mode: 0o600, flag: "wx" });
+            if (result.code === 0 && !stopped) acceptPrepareStage(stage, stdout, stageDeadline);
+            else if (result.code === 0) result = { code: 1, signal: null };
+          } finally { clearTimeout(stageTimer); }
+        }
+      }
+    } catch (error) {
+      result = { code: 1, signal: null }; throw error;
     } finally {
       clearTimeout(timer);
       process.removeListener("SIGTERM", stop);
