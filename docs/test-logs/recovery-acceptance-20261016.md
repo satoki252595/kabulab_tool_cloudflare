@@ -2,6 +2,26 @@
 
 追跡は[#348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)。この記録は以下の対象の実測であり、全20機能・全空欄の完了を意味しない。
 
+## 10月17日02:54 JSTの追加確認
+
+| 対象 | この時点の受入・確認 | 残件 |
+|---|---|---|
+| 事業タグ本文 | 固定776社中605社。追加13組の先頭9組450社を共通通常処理で同期し、全39値・他props・根拠・sourceと外側/通常publisherの物理原本をrootまで照合 | 残171社。10組目の2社は更新ACK200後に照合停止、未受入。うち9273の本文はNotionがU+200Bを1文字落としていた。元停止・全要求/応答・原文を保全し、通常builder修正と読取専用の閉鎖後に未着手169社へ進む |
+| 保有明細原本列 | 追加10文書36行を02:25:43にrootまで独立照合し、計23文書213行。追加36は旧12・新24、全476 native要求/応答、実22ファイル・添付1件ずつ・全読戻しSHAを確認 | 価格はこの23文書とも未受入。原表HOLD17文書・未照合の保護旧25行を保持し、全市場完了とは数えない |
+| RAW索引 | 同じmanifest/cutoffの通常inspectでcursor13,554/78,832、残65,278と直前原本/15列indexを確認 | run38940600004の原本PUTが結果不明で停止。cursor位置の原本とindexは実欠測、永続raw_inflightを保持。別plan・自動再送をせず、明示1回CAS修復の共通CLIを準備中 |
+| 本番保有SQL | 候補銘柄を先に限定する同1SQLの修正を検証中。保存済み2,945株・30,569文書で旧新3,170 caseの選択/order/moreが一致 | corpusは株ごとの保存時点で、同時全市場snapshotではない。純SQLite中央値36.07→2.19msは本番D1 rows_readの実測ではない。少量のpaired readとPR/CIが必要 |
+| 発行株数 | #447で通常Actions/Nodeの既存type1展開Mapから2項目を観測し、普通株/単位/主体/経済日を資格化するコードをCI確認中 | 原文観測であり、分割・増資等の法的原因/係数や財務・価格への適用完了ではない。WorkerはDEI gateと理由付き未観測で、未測定full解析を有効化しない |
+
+保有36行の通常実行は1,009.208秒、Notion404・hosted32・D1 SELECT40、要求6,098,230B/応答16,503,576B、D1読取2,000行/34.2525ms・書込0。原ファイル名の監査側期待値を共通命名へ直しただけで、業務更新は再送していない。旧監査停止とv1/v2を保持し、rootの別process純再計算で22実upload・22一意ID・各添付1件まで確認した。
+
+RAWの正常inspect run38942280144は読取12要求、R2 payload31,605,805B、6.123秒、Notion/上流/モデル/PUT/INSERT0。原state全SHA `4dc53ee36af09314387e78efe7b45a191fa1930a155d125d72413f9f63a2384f` とETagは前後同値で、unknownを解除していない。既存正常inspectが検証した遠隔raw/indexの全payloadはworkflowからexportされず、rootは保存manifest全bytes・期待state SHA・直前index全15列の期待SHAを戻り値へ結合した。全prefixの独立再生や最終78,832件anti-joinとは区別する。
+
+全市場の保有準備を旧SQLで繰り返すとD1読取が約2,200万〜1.3億行になる計算のため、先に共通SQLを軽くする。Cloudflare契約照会は403、既存ブラウザはログイン画面で、Workers/D1プランとR2実storage classは未確認。推定有料枠を根拠に全量を開始しない。原本/欠測のLLM補完・追加有料APIは0。
+
+Macは旧`43d563a3`のまま、旧body chainは停止・全process終端。不可視文字の通常修正を受け入れ、部分2社の読取専用照合が閉じた後に、同一canonical.env・同kernel writer state・同依存lockで新mainへ切り替える。旧sourceと.env bytesを保全して実行入口だけ無効にし、残169社を新しい有限名前空間で処理する計画である。競合準備stageの実配備/5件準備/次20・21時の定時receiptはまだ受入へ加えない。
+
+私有証跡は`A621-mechanical-remaining-v1/batch-{01..09}/{SUCCESS,independent-acceptance,root-physical-acceptance}.json`、同`batch-10/STOP.json`、`A169-new-runtime-proposal-v1/proposal.json`、保有`apply36-after1417-v1/{independent-acceptance-v3,root-independent-acceptance}.json`、`tmp/feature-audit-20261017/raw-inflight-38940600004-inspect-v1/{summary,root-independent-acceptance}.json`。全20機能の最終受入は引き続き未完。
+
 ## 10月17日02:18 JSTの追加確認
 
 | 対象 | この時点の受入済み | 残件 |
