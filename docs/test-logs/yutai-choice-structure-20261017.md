@@ -4,7 +4,7 @@
 
 新しい純関数 `parseBenefitChoiceStructure` を通常月次取込の `buildPublicBenefitFacts` と、Mac定期 `runLocalSummary` の既存定型compilerへ共用する。新しい依存、表、列、API、source取得やNotion要求を追加しない。既存原本・更新前全行の物理保管、原子取込、全POST、入力変化・値・条件の共有guardは維持する。
 
-対応する表見出しと、本文全体が `◆以下より1点を選択`＋2～8件の連続番号一覧である場合だけ資格化する。各行は対応済み商品ラベル、正の安全整数の円額、`相当`/`分` で全文一致する必要がある。範囲・不正桁区切り・番号欠け/重複・非円単位・未知ラベル・追加注記・不明見出しは未解析。保有期間・抽選・申込・併用があれば、この構造では資格化しない。NFKCと前後空白だけを表記正規化し、原文は変更せず全文SHAへ束縛する。
+対応する表見出しと、本文全体が `◆以下より1点を選択`＋2～8件の連続番号一覧である場合だけ資格化する。各行は対応済み商品ラベル、正の安全整数の円額、`相当`/`分` で全文一致する必要がある。見出しの両商品は本文一覧に存在し、明示的な「等」がない場合は2選択肢・2商品と一致する必要がある。範囲・不正桁区切り・番号欠け/重複・非円単位・未知ラベル・追加注記・不明見出しは未解析。保有期間・抽選・申込・併用があれば、この構造では資格化しない。NFKCと前後空白だけを表記正規化し、原文は変更せず全文SHAへ束縛する。
 
 `public_facts` の新producerはversion2。`conditionStructure` は `literal_parsed`＋`ast: {take:1,options:[{ordinal,listedYen,notation}]}`、または `unparsed`＋`ast:null`＋理由。両方に文法ruleと原文全文SHAを残す。商品ラベルや掲載原文はDTOへ入れない。旧version1は同じstrict readerで変更せず読める。掲載選択肢の円額は評価額・最大額・合計額ではなく、選択群の `qualifiedAmount`/`estimatedValue` はNULLを保持する。
 
@@ -34,8 +34,8 @@ nix develop --offline --command pnpm exec tsx tmp/choice-grammar-proof-v1/replay
 
 ## 費用・未受入範囲
 
-同保存5,748群のparserのみ3回計測は24.65/20.95/19.24ms（中央値20.95ms）。追加JSON propertyは群単位1,102,832B、7,716行へ付す場合1,479,964B。HTTP transport・既存原本保管・額判定・SQL・描画を含まないローカル測定であり、本番処理時間や完走を保証しない。未要約で文法が適合する群はモデル0で処理できる。有効な既存要約を再生成してモデル回数を減らした実績とは呼ばない。
+同保存5,748群のparserのみ3回計測は24.94/19.51/18.18ms（中央値19.51ms）。追加JSON propertyは群単位1,102,832B、7,716行へ付す場合1,479,964B。HTTP transport・既存原本保管・額判定・SQL・描画を含まないローカル測定であり、本番処理時間や完走を保証しない。未要約で文法が適合する群はモデル0で処理できる。有効な既存要約を再生成してモデル回数を減らした実績とは呼ばない。
 
 既存v1行の全件書換や本番データ補完は行っていない。通常月次full-importは新v2を生成するが、既存metadata backfillはNULL行限定のまま。保有期間tier・併用・抽選・公式資格等の全条件が構造化済みとはしない。実本番の新v2・次Mac定時の受入は別途必要。
 
-検証: Nix/Node22、7 suites175 PASS＋既存private入力欠測2 skip、standalone JSS3 suites25 PASS、両プロジェクトtypecheck・対象lint・diff check PASS。実15群のprivate回帰は実行済み。全群最終純proof `replay-v3.json` SHA `14fc4ab93f88fc5969bcbab67a9d4275bce9e81ccbc719c225c6806ca20dbf96`、replay script SHA `fcbde0fb72b89658122e7f572c0ab425cdf8008759e9f25947d86b390af50ba7`。計測 `measure-v1.json` とscriptも同私有namespaceに保持する。これらは正常toolの保存入力照合で、本番データ適用・次定時受入ではない。
+検証: Nix/Node22、7 suites175 PASS＋既存private入力欠測2 skip、standalone JSS3 suites25 PASS、両プロジェクトtypecheck・対象lint・diff check PASS。実15群のprivate回帰は実行済み。全群最終純proof `replay-v4.json` SHA `8ba5129b81ba608dfbbae5299510b5121f8dd7b19f6a91593d7293fdbd8eb8ef`、replay script SHA `fcbde0fb72b89658122e7f572c0ab425cdf8008759e9f25947d86b390af50ba7`。計測 `measure-v2.json` とscriptも同私有namespaceに保持する。これらは正常toolの保存入力照合で、本番データ適用・次定時受入ではない。

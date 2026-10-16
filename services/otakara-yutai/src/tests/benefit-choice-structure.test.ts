@@ -65,7 +65,8 @@ describe("全文に束縛した1点選択の構造", () => {
       else expect(parseBenefitChoiceStructure(headedDescription("カタログギフトまたは食事券", text)).status).toBe("unparsed");
     }
     for (const text of [description + "\n1年以上保有", description + "\n併用可", description + "\n抽選", description + "\n申込必要",
-      headedDescription("保有期間別の選択", body), body, '【種別：壊れた値】\n' + body]) {
+      headedDescription("保有期間別の選択", body), headedDescription("カタログギフトまたは株主優待券", body),
+      headedDescription("カタログギフトまたは食事券", body + "\n3、株主優待券 3,000円分"), body, '【種別：壊れた値】\n' + body]) {
       expect(parseBenefitChoiceStructure(text).status).toBe("unparsed");
     }
   });
