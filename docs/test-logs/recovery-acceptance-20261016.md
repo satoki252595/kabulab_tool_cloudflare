@@ -2,6 +2,39 @@
 
 追跡は[#348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)。この記録は以下の対象の実測であり、全20機能・全空欄の完了を意味しない。
 
+## 10月17日06:30 JSTの追加確認
+
+保有株の次22文書383行も通常処理・全60実ファイル・全POST・旧原本/旧値の保護をroot別実行で閉じ、累計59文書703行を受け入れた（価格は別）。本文2,417社の先頭50社も全1,213 native、通常publisher物理PRE、保存済み全POSTと永続closureをrootで独立照合し、残2,367社。海外20文書105数値の受入は維持する。私有root最終SHAは保有`a9c9f96685df4e738a3a40eaa88e48b7ebb1cf58211f89dafa73108d3398c15a`、本文先頭50`b1239b629a17bad6322bf8e5f3f5ba1ef279a5a848aa7f082d7c6c3bbe8bb29d`。
+
+Clefは06:27:22に104社/106 exchange/580問の保存を完了し、単一owned子の終了と全6ファイルのSHA・実wire・通常client再生をrootで確認した。新forward104・旧同入力replay2、ピークRSS20,721,287,168B・swap増0・HTTP0。生成のroot最終SHAは`406e7366319e3e8180574e6da9b6368ba13770e8e27cee3d0aeef90ad617a85c`。全本文処理後のfresh入力資格と意味結果の通常公開は未受入であり、104社公開済みとは数えない。
+
+#462の初回CIは実4502の跨run回帰2件が5秒超過で失敗した。1.3MB PREをassertionライブラリで要素ごとに比較していたため、同じ全文バイト一致をNode標準`Buffer.equals()`で検証する。timeout・全原本・中断/再送禁止のassertion・本番コードは変更しない。同Nix/依存lockの単独29件は6.38秒から0.190秒、対象3件は2,544/2,531/1,240msから39/37/42msとなった。CI全体と本番処理速度の削減率へは転用しない。
+
+## 10月17日06:18 JSTの追加確認
+
+| 対象 | この時点の受入・確認 | 残件 |
+|---|---|---|
+| 補足DBの全体計画 | active3,687社・latest年報3,666・補足3,712行を、43読取/書込0で通常plannerへ渡した。本文同期2,417・再判定104・skip1,165・新規1へ分類し、固定776＋135社との交差0を独立確認 | skipには原本HOLD20が含まれ、新規648Aも原本HOLD。原本HOLD計21を完了にしない。1,145のmetadata skipも旧意味判断の再検証完了ではない。全量の同時snapshotではない |
+| 本文同期2,417社 | #461の通常publisher修正をmainとMac定期入口へ反映。海外20の通常適用と別normal inspectを閉じ、06:16:56に49組の通常機械処理を一度開始 | 受入への加算0。各組の物理PRE/CAS/全POSTと独立保存監査、local closureを閉じる。19時の絶対期限・同じ実入力・再送禁止を維持 |
+| 事業タグ104社 | 保存原本・全旧props・原時計を855読取で再確認し、全native SHAと通常readerをrootで通信0再生。全104が実入力変更。新旧consumerで全入力・580質問/106 exchangeのwireとtoken layoutが一致し、06:11:26に単一ローカルClef子で生成開始 | 意味結果の公開0、部分出力を104社完了に数えない。旧102社の不明な判定入力SHAは補わない。生成はHTTP0・最大106 forward/8時間/RSS32GiB/swap増1GiB/19時で停止し、通常公開は本文chain全閉鎖後 |
+| 保有株式の原本列 | 最初9文書91行の全通常/物理PREPOST・原本49の保護・旧prefixを閉鎖し、歴史受入は計37文書320行 | 次22文書383行は通常`applyLatestHoldings`一回で進行中、受入への加算0。旧312/新71・保護旧39行・原本58・原本HOLD19を保持する。価格の受入とは別 |
+| 海外売上 | #460の通常保存cohort CLIで先頭20文書105数値を反映。全6表PRE/POST、20 ZIP/本文、20原子SQL、PREPOST2実体、20 claimsを全947 nativeと別normal inspectまでroot独立照合 | 次after3779、残146数値文書と主体HOLD10。残146は既存上限20で8組・約5時間＋変動の条件計画。次保有0.75枠への切替え前は追加HTTP0 |
+| 株価41銘柄 | 実10/16 batchと38gzip/118,249,845B・全7,375 member・41 Chart＋41 Quote＋N225を保存全文から照合。通常parser拒否0、N225はfresh、41社の当日OHLC/調整値/出来高は全NULL | 41社の最新正値は10/15。公式の同日売買なし・停止・廃止分類は不明。前日値や0で埋めず、8303の過去RSI245本HOLDとも分ける |
+| 歴史RAW索引 | failed46の原ACK不明を保持。normal inspect48と追加D1一行読取で、現state位置14,412/残64,420、inflightなし、直前原本/実15列の履歴、active/state前後同値を照合。通常run38966887308を単発dispatch/204 ACKで再開 | failed46の処理件数をcursor差で作らない。元pool起点・最大200を保持しop49/continue151、実行指定9cdfを継承。workflow head e4cとは分けて終端logで確認する。新coverage加算と最終78,832件anti-joinは未受入 |
+| 本番配備 | #460はmain2bac、05:32:30/version442dddec。#461はmain e4c1a7e3、06:01:27/version4224e38d。Macは06:02:20に同e4cへ更新し、旧f3の1,560 source/旧.env、104観測の31source/6依存を全SHA保全 | 同calendar/kernel writer/state/依存lockを維持。監視accepted revisionは06:03:05更新/CLI ACKまでで、次20/21時の定時receiptは未受入 |
+
+#461は物理PRE archiveの最初のmutationより前に、canonical stateへfull PRE/intentを0600・排他的作成・fsyncで保存する。全読戻しと旧根拠退役後だけclosureを追記し、未閉鎖・不正stateは次runのmetadata/model/HTTPより前に停止する。追加API・依存・モデル0。実135のPRE分布を循環した2,417件規模の測定storeは1,452,878,631B、初回scan4,073.54msで、4GiBを超えれば停止する。将来の分布・最悪scan・全量完走を保証しない。測定用storeだけを測定器が削除し、実source・証跡・測定器・結果は保持した。初回createと版更新の未保護経路は[別の残件](biztag-sticky-publication-20261017.md)として残す。
+
+同時Notion枠は、現在の保有1.0＋本文1.7＋RAW0.25＝2.95 req/sを上限案とし、海外20のinspect終了までは本文を開始しない。次の保有計画を0.75へ切り替えた後だけ、海外0.25も同時に予約できる。GPU生成はHTTP0で並行し、事業タグの通常公開は本文chain全終端後に行う。今回だけの全件照合を毎日の定期処理へ追加したものではない。
+
+海外20の3段階は947 requests/Notion585/SELECT318/atomic20/hosted24、retained response79,041,024B・D1 read174,616行・実1,494.80秒（Notion0.4rps）。新源取得・モデル・価格/補足更新0。残146の20件上限を拡張せず、全146/888数値の8組計画を保存した。約1.275M reads/3,533 writesの条件費用は[公式D1単価](https://developers.cloudflare.com/d1/platform/pricing/)で約$0.005だが、契約・含有枠・当日残枠は未確認。全targetsのfresh資格、各1800秒/caps/独立inspect後のadvanceを維持し、完走保証にしない。
+
+private root receipt SHAは、全体planner `abf57183e7026525140b4bbde23cf1b3e74d3754e87a542476d8be9ec48bb1f8`、104原本 `958e971fc93cc66a2ab742feb18e4beaa3628108e65d4280acdeeda8ba1cb9fe`、保有91 `09c67096871fe666e36dcadad2a374933d798bf57aa0faadd73734d14cb65f5c`、海外20最終 `740e963da2a6e95ba5c8c91453dae8ef2cf059b76f686eb4cdf5a01e64e6fa86`、stock38物理 `4b5409af3554678d527c276bd3bab0c29c8ec5a694f6365c07f429b785b89b06`、RAW48 `a45fde1da4b051f7d08706791bd19de61235b5b50a3ff6088ba5799d60cc25a3`、Mac新配備 `78cdfda2e51cf1e7f83a70825068717b1007604797fc9dc9cd5ed350164713c4`。本文root releaseは`0b26b08cb30f9812fbf64d567baab78191c8fd5f4f4ed38f4737b953c5caf77a`、GPU root releaseは`2731d2ac57a3453913c66434e1bc3ff1088619a35d34d15e9eab8ad955286c1f`で、開始許可を結果受入へ読み替えない。原文・秘密値・署名URLはGitへ入れない。
+
+株価41の次原典候補は[JPX日報の相場表](https://www.jpx.co.jp/markets/statistics-equities/daily/01.html)で、公式手引きは翌営業日掲載と、数値なし・未上場/制度上なしの記号差を定める（10/17確認）。当日相場表をまだ取得しておらず、41社を売買なしと分類しない。
+
+VWAP残1,656・日足3原本HOLD、優待の条件意味対応/公式照合、競合の意味判断、原TDnet PDF1件、権利処理#343の単位/増資/併合等、次の通常定時全量は引き続き未完。保有の法的株数基準不足5,362件は欠測理由を保持し、5,362件すべての誤価格が確定したとは扱わない。全20機能の最終受入へ広げない。
+
 ## 10月17日05:12 JSTの追加確認
 
 | 対象 | この時点の受入・確認 | 残件 |
