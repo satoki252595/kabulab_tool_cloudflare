@@ -1,5 +1,5 @@
 /** ⑤の既存原本を読む。アップロードは行わず、永続metadataに添付URLを含めない。 */
-import { assertCursorProgress, notionRequest } from "./client.js";
+import { assertCursorProgress, notionRequest, type NotionRequestOptions } from "./client.js";
 import { notionEnv } from "./env.js";
 
 export interface CanonicalRawFile {
@@ -81,12 +81,12 @@ export function parseCanonicalRawFile(value: unknown, dbId: string): CanonicalRa
 }
 
 /** OR<=50、応答<=100。欠測はmap不在、重複/打切り/未知行は停止する。 */
-async function queryCanonicalRawPages(shas: readonly string[]): Promise<Map<string, { raw: CanonicalRawFile; page: unknown }>> {
+async function queryCanonicalRawPages(shas: readonly string[], opts?: NotionRequestOptions): Promise<Map<string, { raw: CanonicalRawFile; page: unknown }>> {
   if (shas.length === 0 || shas.length > 50 || new Set(shas).size !== shas.length || shas.some((sha) => !/^[a-f0-9]{64}$/.test(sha))) throw new Error("⑤原本SHA照合は一意な1〜50件だけです");
   const dbId = notionEnv.NOTION_DB_RAW_FILES();
   const response = await notionRequest<{ results: unknown[]; has_more: boolean }>("POST", `/databases/${dbId}/query`, {
     filter: { or: shas.map((sha) => ({ property: "SHA256", rich_text: { equals: sha } })) }, page_size: 100,
-  });
+  }, opts);
   if (response.has_more || response.results.length >= 100) throw new Error("⑤原本SHA照合が打ち切られました");
   const result = new Map<string, { raw: CanonicalRawFile; page: unknown }>();
   for (const value of response.results) {
@@ -103,9 +103,9 @@ export async function findCanonicalRawFiles(shas: readonly string[]): Promise<Ma
 
 export interface CanonicalRawAttachment { raw: CanonicalRawFile; file: { name: string; url: string } }
 /** 既存SHA queryのfilesを再利用。署名URLは短命のメモリ内利用専用、log/manifestへ保存禁止。 */
-export async function findCanonicalRawFileAttachments(shas: readonly string[]): Promise<Map<string, CanonicalRawAttachment>> {
+export async function findCanonicalRawFileAttachments(shas: readonly string[], opts?: NotionRequestOptions): Promise<Map<string, CanonicalRawAttachment>> {
   const result = new Map<string, CanonicalRawAttachment>();
-  for (const [sha, { raw, page }] of await queryCanonicalRawPages(shas)) {
+  for (const [sha, { raw, page }] of await queryCanonicalRawPages(shas, opts)) {
     const props = object(object(page).properties), attachments = object(props["ファイル"]).files as unknown[];
     const original = attachments.map(object).filter((file) => file.name === raw.filename || file.name === `${raw.filename}.zip`);
     if (original.length !== 1) throw new Error("⑤canonical原本添付を一意に確定できません");
