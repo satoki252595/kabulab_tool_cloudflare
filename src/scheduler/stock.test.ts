@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { scheduledVwapGuard } from "../../scripts/vwap/lib/scheduled-window.js";
 import {
   DISPATCH_CRON,
   READCHECK_CRON,
@@ -59,6 +63,33 @@ describe("定時VWAPは同頻度CF one-shotで開始/終了窓を検査", () => 
     }
     expect(calls).toEqual([]); expect(puts).toEqual([]);
   });
+  it("本番で観測した17:00:52は同じ17:00分のdispatch・receipt・Actions受付へ実時計を保持する", async () => {
+    const observed = 1792137652 * 1000, now = observed + 123, observedDate = "2026-10-16";
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(now);
+    try {
+      const { bucket, puts } = makeBucket();
+      const { fetchFn, calls } = makeFetch(() => jsonRes({ workflow_run_id: 101,
+        run_url: "https://api.github.com/repos/satoki252595/kabulab_tool_cloudflare/actions/runs/101",
+        html_url: "https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/101" }));
+      const controller = { cron: VWAP_DISPATCH_CRON, scheduledTime: observed }, env = { BUCKET: bucket, GITHUB_ACTIONS_TOKEN: TOKEN };
+      expect(await handleStockScheduled(controller, env, { fetchFn, nowMs: now })).toEqual({ status: "dispatched", workflowRunId: 101 });
+      expect(await handleStockScheduled(controller, env, { fetchFn, nowMs: now })).toEqual({ status: "duplicate", workflowRunId: 101 });
+      expect(calls).toHaveLength(1);
+      const payload = JSON.parse(String(calls[0].init?.body));
+      expect(payload.inputs).toEqual({ target: "scheduled-daily-intra", scheduled_date: observedDate, daily_session_source: "yahoo-direct" });
+      expect(puts[0].key).toBe(vwapReceiptKey(observedDate));
+      expect(JSON.parse(puts[0].value)).toMatchObject({ status: "claimed", claimedAt: new Date(now).toISOString() });
+      const admission = scheduledVwapGuard({ plannedDate: payload.inputs.scheduled_date, runId: "101.1", phase: "daily", nowMs: now,
+        directory: mkdtempSync(join(tmpdir(), "vwap-native-clock-")) });
+      expect(admission.admission).toMatchObject({ plannedDate: observedDate, admittedAt: new Date(now).toISOString() });
+      expect(() => admission.assertActive()).not.toThrow();
+    } finally { vi.useRealTimers(); }
+  });
+  it("予定時刻は17:00分だけを受け入れ、10分受付を52秒分延長しない", () => {
+    for (const offset of [0, 1, 52_000, 59_999]) expect(resolveRunDate("vwap-dispatch", start + offset, start + 600_000)).toBe(date);
+    for (const offset of [-1, 60_000]) expect(() => resolveRunDate("vwap-dispatch", start + offset, start + 600_000)).toThrow("17:00 JSTの分");
+    expect(() => resolveRunDate("vwap-dispatch", start + 52_000, start + 600_001)).toThrow("開始期限");
+  });
   it("専用receiptへ1回POSTし、同じ予定日のduplicateは再送0", async () => {
     vi.setSystemTime(new Date(start));
     const { bucket, puts } = makeBucket();
@@ -75,9 +106,10 @@ describe("定時VWAPは同頻度CF one-shotで開始/終了窓を検査", () => 
   });
   it("unknown dispatchはclaimedを保持してduplicate再送0", async () => {
     const { bucket } = makeBucket(), { fetchFn, calls } = makeFetch(() => { throw new Error("transport unknown"); });
-    const deps = { bucket, token: TOKEN, cron: VWAP_DISPATCH_CRON, scheduledDate: date, nowMs: start, fetchFn };
-    await expect(runVwapDispatch(deps)).rejects.toThrow("unknown");
-    await expect(runVwapDispatch(deps)).rejects.toThrow("未完了");
+    const controller = { cron: VWAP_DISPATCH_CRON, scheduledTime: start + 52_000 }, env = { BUCKET: bucket, GITHUB_ACTIONS_TOKEN: TOKEN };
+    const deps = { nowMs: start + 52_123, fetchFn };
+    await expect(handleStockScheduled(controller, env, deps)).rejects.toThrow("unknown");
+    await expect(handleStockScheduled(controller, env, deps)).rejects.toThrow("未完了");
     expect(calls).toHaveLength(1);
   });
   it("readcheckは同日の一意成功・17:10内開始・23:30内完了だけ受入", () => {
