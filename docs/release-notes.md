@@ -9,6 +9,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ## 2026-10-17
 
+- 本番作業: 固定776社の本文同期を全件検証し、保有原本列を28文書229行まで反映。Macを`65579f60`へ更新、通常競合の最初5社をモデル0で準備し、145社の最新残分類とRAWの同一pool継続を確認した。価格・海外数値15文書・次定時・競合意味判定の未受入と実測負荷を[台帳](test-logs/recovery-acceptance-20261016.md)へ残す。
 - 本文同期は原文SHAを保持してNotion送信表現の別SHAを記録し、原4/businessの同値証拠がある時だけ競合prepareを資格化する。旧receiptの再確認は固定コード/有限予算の通常機械CLIに限定し、現在39本文をguardしてreceiptだけ更新する。[実原本と停止境界](test-logs/biztag-text-representation-receipt-20261017.md)を記録する。
 - RAW原本の通常Actions継続は、初回の実行commit SHAをcheckoutと次dispatchへ引き継ぎ、mainが進んでも同じrawコード・依存lockで処理する。不正revision・checkout不一致は依存準備前に停止し、固定集合・元run予算・CAS/unknown境界を保持する。
 - 通常競合の機械prepareは、既存active/latest読取で証明した最新有報の母集団から候補を選び、policy・選定snapshot・除外理由を新入力SHAへ束縛する。選出後の資格不足や空候補はHOLDとし、旧確率・競合relation・固定scopeを変更しない。[保存断面と通常回帰](test-logs/competitor-prepare-current-corpus-20261017.md)を記録する。

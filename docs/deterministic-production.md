@@ -55,7 +55,7 @@ GitHubの[workflow dispatch仕様](https://docs.github.com/en/rest/actions/workf
 新規読取6分/child7分/最大0.3rpsで実行する。after-codeは同入力skipでも進み、末尾後は巡回する。
 stage-level pendingをchild前に固定し、unknownは別入力へも再送しない。実物理ACK/本文SHA/対象/保留を
 照合後だけcursorを進める。startup receiptを含む既存全体30分・20/21時calendar/readcheckを維持する。
-stageは10/17 03:14:14 JSTにMac runtime `117b2133`へ配備し、固定33社scopeと同一canonical.env/kernel writer stateを確認した。現在入力の実受入と次20時のstage receiptは未実施。親processのgzip検証費用も未測定として[記録](test-logs/competitor-finite-stage-20261017.md)へ残す。
+stageは10/17 04:16:47 JSTのMac runtime `65579f60`へ配備し、固定33社scopeと同一canonical.env/kernel writer stateを保持した。通常CLIの手動最初5社は物理保管/通常helper ACK/cursorまで受入したが、選出Bの資格不足でready0/5 HOLD。候補と質問を削らず、意味判定・次20時のstage receiptは未受入である。実child193.76秒/CPU27.43秒/RSS約2.38GBと保存入力の再生範囲を[受入台帳](test-logs/recovery-acceptance-20261016.md)へ記録する。
 
 ## 優待の定型処理
 
@@ -69,7 +69,7 @@ stageは10/17 03:14:14 JSTにMac runtime `117b2133`へ配備し、固定33社sco
 
 ## 配備と完了の判定
 
-10/17 03:14:14 JSTにMac runtimeを`117b2133`へ更新した。Nix・同じ依存lockで関連4 suite/37 testを確認し、通常の本文送信正規化と有限競合準備stageを配備した。旧43dのsource1,503件と旧.env bytesは保全し、旧実行入口の.envを無効化した。旧049/277も.env.preservedへ同じbytesを保持している。本文の固定776社は607社まで受入済みで、旧部分停止2社の業務更新は再送せず読取で閉じた。残169社・競合入力の実準備・次回の定時receiptは別に受け入れる。Cloudflare側は#451のmain `76a82193`を03:20:52にversion `79e562d7-935a-451e-bf2a-3a05d5d06bf8`として通常配信した。各実行先の版と受入範囲は[台帳](test-logs/recovery-acceptance-20261016.md)で追跡する。
+10/17 04:16:47 JSTにMac runtimeを`65579f60`へ更新した。Nix・同じ依存lockを使い、原文/Notion送信表現の別SHA照合と現在有報に束縛した有限競合準備を配備した。旧117bのsource1,542件と旧.env bytes、さらに旧43d/049/277の原本を保全し、旧実行入口の.envを無効化した。本文の固定776社は全件をcode/docId集合と物理PRE/POSTまで受入済みで、旧部分停止2社の業務更新は再送していない。監視側accepted revisionも同版へ更新したが、新しい20/21時の実receiptは未受入。Cloudflare側は同mainを04:16:09にversion `d61c452a-815e-4d12-be16-fa5bd738e330`として通常配信した。各実行先の版と受入範囲は[台帳](test-logs/recovery-acceptance-20261016.md)で追跡する。
 
 10/16のMac定時はmain `27709ccf`で実行した。20時の事業タグは20:20:13に終了し、本文同期143・再判定5・skip49、資格HOLD23を記録した。21時の優待要約は21:00:09に終了し、現行pending・モデル起動とも0だった。訪問197社を全3,687社の充足率へ読み替えない。[当日の受入記録](test-logs/recovery-acceptance-20261016.md)に実receiptと原応答の検証範囲を残す。
 
