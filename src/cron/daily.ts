@@ -2289,6 +2289,7 @@ function buildIndicatorRows(
   item: FlushItem<never>
 ): BuiltRow<Record<string, unknown>>[] {
   const snap = item.snap;
+  const latestBar = snap.ohlcv6mo.at(-1);
   // screenStock() は indicators 6 値の純関数。旧 swing_stock_screening 表と
   // 同じ値を同じ run で書くので、表示される数値は変わらない。
   const screen = screenStock({
@@ -2297,7 +2298,7 @@ function buildIndicatorRows(
     atrPct: snap.atrPct,
     sma5: snap.sma5,
     sma20: snap.sma20,
-    latestClose: snap.latestClose,
+    latestClose: latestBar === undefined ? null : requiredAdjustedClose(latestBar),
   });
   return [
     {

@@ -131,7 +131,8 @@ function savedSource() {
 
 describe("保存原本と通常定時取得の共通計算", () => {
   it("実8303の投影は同一応答のadjcloseを使い、通常取得/replay同値・通常終値/clock保持", async () => {
-    const { buildMomentumRow, buildStockSnapshot } = await import("../../cron/daily.js");
+    const { buildMomentumRow, buildStockSnapshot, writeStockSnapshot } = await import("../../cron/daily.js");
+    const { drizzle } = await import("drizzle-orm/sqlite-proxy");
     const { decodeCloses } = await import("../indicators/momentum-series.js");
     const { calcMomentum } = await import("../../../services/financial-math/src/services/emh.js");
     serve("8303");
@@ -164,6 +165,17 @@ describe("保存原本と通常定時取得の共通計算", () => {
     expect(trend.trendShort).toBe(true);
     expect(trend.latestClose).toBe(snapshot.latestClose);
     expect(trend.ohlcv6mo.at(-1)!.close).toBe(snapshot.ohlcv6mo.at(-1)!.close);
+    // 同じsnapshotのスクリーニング保存もadj/SMAで判定し、価格列は受領closeを保持する。
+    const savedIndicators: Record<string, unknown> = {};
+    const db = drizzle(async (sql, params) => {
+      const insert = sql.match(/insert into "swing_stock_indicators" \(([^)]+)\)/);
+      if (insert !== null) {
+        insert[1].split(", ").forEach((column, i) => { savedIndicators[column.replaceAll('"', "")] = params[i]; });
+      }
+      return { rows: [] };
+    }) as Parameters<typeof writeStockSnapshot>[0];
+    await writeStockSnapshot(db, trend, undefined, { runStartedSec: 1 });
+    expect(savedIndicators).toMatchObject({ trend_short: 1, trend_ok_short: 1, latest_close: 1478.5 });
     for (const adj of [undefined, null, 0, -1, NaN, Infinity]) {
       const missing = structuredClone(saved.ohlcv);
       missing.at(-1)!.adj = adj;

@@ -17,6 +17,7 @@ export interface ScreeningInput {
   atrPct: number | null;
   sma5: number | null;
   sma20: number | null;
+  /** SMAと同じ系列の終値。通常日次は同一応答のadjcloseを渡す。 */
   latestClose: number | null;
 }
 

@@ -7,7 +7,7 @@
 | RSI・終値移動平均・MACD | 日次と保存原本replayが同じbuilderを使用。今回、調整済み終値の欠測を通常終値で補完する経路を除去 | 次回の通常日次、実原本と保存指標の確認。修正のCIを定時成功とは数えない |
 | 調整値の欠測 | 直近130本に通常終値だけがある日は計算前にSTOP。古い5年範囲だけなら原SHA・件数・期間とmissing_adjusted_closeを記録し、既存RSIを保持 | 欠測を「分割なし」と解釈しない。終値・調整値ともNULLの日は欠測を維持 |
 | 配当・分割／併合イベント | Yahooの原timestamp、分子・分母・比率、配当額・通貨、対応価格SHA、訂正履歴を保存。支払日はnot-provided | 取得応答のイベントを全期間の完全な権利台帳とは扱わない |
-| 終値トレンド・モメンタム | `buildStockSnapshot`のトレンドはSMAと同じ調整済み終値を比較。`buildMomentumRow`は同一Chart応答の末尾90本の調整済み終値を使用し、欠測時は通常終値で補完せずSTOP | 次の通常日次による再生成と本番読戻し。修正前の保存投影の全量切替えは未受入 |
+| 終値トレンド・スクリーニング・モメンタム | `buildStockSnapshot`と保存時の`screenStock`はSMAと同じ調整済み終値を比較。`buildMomentumRow`は同一Chart応答の末尾90本の調整済み終値を使用し、欠測時は通常終値で補完せずSTOP | 次の通常日次による再生成と本番読戻し。修正前の保存投影の全量切替えは未受入 |
 | ATR・値幅・前日比・出来高比・取引価格シグナル | OHLCV系計算は受領値を使用。シグナルの約定用価格も受領closeを保持 | 株式日次にはVWAPのzero-split gateを共用していない。OHLC・出来高の基準一致や権利日をまたぐ計算は未受入。調整済み系列への単純な係数適用で対応済みにしない |
 | 優待の月次移動平均乖離スコア | `monthly.ts`が受領株価`core.price`と調整済み`swing.sma25`を`scoreMADeviation`へ渡す | 同じ日付・同じ価格基準の入力を証明する残件。このPRの終値トレンド修正だけで月次スコアも受入済みにしない |
 | VWAP・5分足 | quote受領値のbasisを明示。日足原本の観測期間で分割なしを確認できる窓だけを認定 | 分割をまたぐ窓やprovider側の価格・出来高の株数単位が不明なものはHOLD。係数を推測で再適用しない |
@@ -47,3 +47,5 @@ Yahooの調整済み終値は分割・配当を反映する系列であり、通
 ローカル検証: Nix Node22.22.2/pnpm9.15.9でcron全24 suite/420 PASS、共有Yahoo/系列とEMH/テクニカルの追加5 suite/96 PASS、TypeScript・対象ESLint・diff check PASS。実8303の90本CSVは通常終値517Bから調整済み終値1,491Bへ増えた（+974B、精度を丸めない）。D1の行数とクエリ数は同じで、全銘柄の保存bytes差は次回実行で測る。同原本の新builderをウォームアップ後50,000回実行して164.934ms（約3.30µs/回、元サイト通信・モデル0）。これはローカルの純計算実測で、本番全体の時間・容量保証ではない。
 
 公開projectionだけでなく、私有の全原本Chart 1,221本（SHA `bf9735d9ae7af4888625a5a6e5a53c9f3d69588273a1cb79a4cacbcc5d5244db`）とQuoteSummary（SHA `0eccbe841e38ce0e236044ed3958c28d1308e3c4d0252df6c4cc86d2491d4191`）も追加通信0でreplayした。過去245本のRSI履歴HOLDを保持し、直近130本、モメンタム90本と元clock/bytesを検証。CSVのSHAは`98d931db7443d873fb497b0015ac291cbda5eded9485bbe342b0a81c93a4b5d4`。元原本の実体と私有receiptはGitに含めない。
+
+保存時の`screenStock`呼出しも同じadjcloseを渡す。実原典への明示fault injectionで、保存する`trend_short`と`trend_ok_short`が同じ判定となり、`latest_close`は受領1,478.5円のまま保持することを検証した。追加後のcron・日次資格・スクリーニング26 suite/437 PASS、TypeScriptと対象ESLintもPASS。保存済みraw入力の既存修復器を再実行したり、過去のスクリーニング行を一括変更したりはしない。
