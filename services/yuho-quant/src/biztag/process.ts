@@ -46,6 +46,8 @@ export interface ProcessDeps {
   jevClient: JevClient;
   /** 実際に構成した判定clientのモデルID。旧receiptのmodelを代入しない。 */
   model: string;
+  /** 既知入力の同値同期だけを許可し、実入力変更の意味判定はHOLDする。 */
+  mechanicalOnly?: boolean;
   /** 判定原本の来歴を通常Node journalへ渡す。旧receiptは変更しない。 */
   localJudgeInput?: (receipt: InputReceipt, textsSha256: string) => void;
   localJudgeDate?: () => string;
@@ -380,8 +382,6 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
   if (!Object.values(sectionMap).some((text) => text.trim().length > 0)) {
     throw new Error(`事業タグ対象の本文がありません (${item.stockCode} ${doc.docId})。判定・既存結果の更新を保留します。`);
   }
-  const result = prefilter(deps.vocab, sectionMap);
-  const candidateCount = result.candidates.length;
   const baseInput: SupplementRowInput = {
     companyName: item.companyName,
     stockCode: item.stockCode,
@@ -396,19 +396,13 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
   };
   const tagDoc = `${doc.docId} ${formatPeriodJa(doc.periodEnd)}`;
   const business = sectionMap.business;
-  const receipt: InputReceipt = {
-    docId: doc.docId, textPageId: doc.notionDocPageId,
-    businessSha256: business === undefined ? null : await sha256Hex(business),
-    sectionsSha256: await sha256Hex(JSON.stringify(PREFILTER_SECTIONS.map((key) => [key, sectionMap[key] === undefined ? null : sectionMap[key]]))),
-    stateSha256: null, vocabVersion: deps.vocab.version, model: null,
-  };
-  const syncedTexts = await textReceipt(doc, textsByColumn, receipt);
+  const sectionsSha256 = await sha256Hex(JSON.stringify(PREFILTER_SECTIONS.map((key) => [key, sectionMap[key] === undefined ? null : sectionMap[key]])));
   if (item.checkSourceInput) {
     const previous = readInputReceipt(item.row?.judgeInput);
     if (previous === null || previous.docId !== doc.docId) {
       throw new Error("同一書類の入力照合に必要な旧SHAがありません。旧判定を保持してHOLD");
     }
-    if (previous.sectionsSha256 === receipt.sectionsSha256) {
+    if (previous.sectionsSha256 === sectionsSha256) {
       if (item.row === null || typeof item.row.judgeInput !== "string") throw new Error("入力照合の既存行が不正です");
       await writeRowWithEvidence(item, deps, {
         ...baseInput, judgeInput: withTextSyncReceipt(item.row.judgeInput, {
@@ -420,6 +414,20 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
     }
   }
   const localJudge = item.initialSemif === true || item.sourceChangedLocalJudge === true;
+  // 同値判定は語彙/較正/model/journalに触れる前に閉じる。差があれば旧propsを保持する。
+  if (deps.mechanicalOnly && localJudge) {
+    return { stockCode: item.stockCode, kind: item.kind, outcome: "skipped", qualificationHeld: true,
+      tagStatus: item.row === null ? null : item.row.tagStatus,
+      candidateCount: item.row === null ? null : item.row.candidateCount, ...ZERO_JEV_STATS };
+  }
+  const result = prefilter(deps.vocab, sectionMap);
+  const candidateCount = result.candidates.length;
+  const receipt: InputReceipt = {
+    docId: doc.docId, textPageId: doc.notionDocPageId,
+    businessSha256: business === undefined ? null : await sha256Hex(business), sectionsSha256,
+    stateSha256: null, vocabVersion: deps.vocab.version, model: null,
+  };
+  const syncedTexts = await textReceipt(doc, textsByColumn, receipt);
   const judgeName = localJudge ? localJudgeName(deps) : null;
   const judgePrefix = item.sourceChangedLocalJudge ? `${judgeName}入力変更の再判定`
     : judgeName === "Clef-Flash" ? INITIAL_CLEF_INPUT_PREFIX : INITIAL_SEMIF_INPUT_PREFIX;

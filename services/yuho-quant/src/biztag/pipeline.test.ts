@@ -7,6 +7,7 @@ import { createClefClient, CLEF_MODEL } from "../../../../src/shared/clef/client
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
+import { createHash } from "node:crypto";
 import { createJevClient, jevEnv } from "../../../../src/shared/jev/index.js";
 import { assertLatestDocCurrent, loadLatestDocs, loadNewStockEligibility, type LatestDoc } from "./source.js";
 import type { LedgerEntry, SupplementRow, SupplementRowInput } from "../../../../src/shared/notion-archive/index.js";
@@ -14,7 +15,8 @@ import type { StockTextSection } from "../../../../src/shared/notion-archive/sto
 import { makeBudgetedVerifySources } from "./sources-verify.js";
 import { MINI_VOCAB } from "./vocabulary/__fixtures__/mini-vocab.js";
 import { composeRunNotify, isBillingBlockedError, runBiztag, type RunSummary } from "./pipeline.js";
-import { withTextSyncReceipt } from "./plan.js";
+import { readInputReceipt, readTextSyncReceipt, withInputReceipt, withTextSyncReceipt } from "./plan.js";
+import { PREFILTER_SECTIONS } from "./prefilter.js";
 import { TEXT_SECTIONS } from "../services/edinet/text-sections.js";
 import { NotionUnknownResultError } from "../../../../src/shared/notion-archive/client.js";
 
@@ -538,6 +540,43 @@ describe("runBiztag — billingBlocked 集計", () => {
 
 
 describe("runBiztag input-change safety", () => {
+  it.each(["mechanicalOnly", "dryRun"] as const)("%s compares real saved39 known four-section inputs before semantic factories", async mode => {
+    const actual = JSON.parse(gunzipSync(readFileSync(new URL("./competitors/fixtures/prepare-actual-20261017.json.gz", import.meta.url))).toString());
+    const latest = actual.latest[0] as LatestDoc, page = actual.pages[0];
+    const rich = (name: string) => page.properties[name].rich_text.map((t: { plain_text: string }) => t.plain_text).join("");
+    const sections = TEXT_SECTIONS.flatMap(s => rich(s.title) === "" ? [] : [{ sectionKey: s.key, itemName: s.title, text: rich(s.title) }]);
+    const text = new Map(sections.map(s => [s.sectionKey, s.text])), sha = (s: string) => createHash("sha256").update(s).digest("hex");
+    // 実保存39本文のprotocol投影。歴史的に存在しない判定入力の回復とは扱わない。
+    const judgeInput = withInputReceipt(rich("判定入力"), { docId: latest.doc!.docId, textPageId: "previous-pointer",
+      businessSha256: sha(text.get("business")!), sectionsSha256: sha(JSON.stringify(PREFILTER_SECTIONS.map(key => [key, text.has(key) ? text.get(key) : null]))),
+      stateSha256: null, vocabVersion: page.properties["単語帳の版"].select.name, model: null });
+    const row = minimalRow({ stockCode: latest.stockCode, companyName: latest.companyName, sector33: latest.sector33,
+      docId: latest.doc!.docId, tagDoc: rich("事業タグの根拠書類"), tagStatus: "判定済",
+      vocabVersion: page.properties["単語帳の版"].select.name, judgeInput });
+    const before = structuredClone(row), localJournal = vi.fn(() => { throw new Error("no journal for mechanical comparison"); });
+    vi.mocked(loadLatestDocs).mockResolvedValue([latest]); notionMocks.loadSupplementRows.mockResolvedValue([row]);
+    notionMocks.readStockTextRow.mockResolvedValue(sections);
+    const opts = { budgetMs: 10_000, [mode]: true, model: CLEF_MODEL, localJournal,
+      get thresholds(): never { throw new Error("no calibration for mechanical comparison"); } };
+    const same = await runBiztag(opts);
+    expect(same).toMatchObject({ countsByKind: { retag: 1 }, qualificationHeld: [], failures: [], judge: { calls: 0 }, coverage: { judged: 1 } });
+    expect(notionMocks.readStockTextRow).toHaveBeenCalledTimes(1);
+    if (mode === "mechanicalOnly") {
+      const written = notionMocks.replaceEvidenceBlock.mock.calls[0][2];
+      expect(readInputReceipt(written.judgeInput)).toEqual(readInputReceipt(judgeInput));
+      expect(readTextSyncReceipt(written.judgeInput)?.equivalentJudgmentInputSha256).toBe(readInputReceipt(judgeInput)!.sectionsSha256);
+      for (const key of ["upstream", "tagStatus", "tagDoc", "vocabVersion", "judgedAt", "evidenceText"]) expect(written).not.toHaveProperty(key);
+    }
+    notionMocks.replaceEvidenceBlock.mockClear(); notionMocks.readStockTextRow.mockClear();
+    // 別の実保存社の本文で差分を注入する負例。旧入力の別社への転用ではない。
+    const otherBusiness = actual.pages[1].properties["事業の内容"].rich_text.map((t: { plain_text: string }) => t.plain_text).join("");
+    notionMocks.readStockTextRow.mockResolvedValue(sections.map(s => s.sectionKey === "business" ? { ...s, text: otherBusiness } : s));
+    const different = await runBiztag(opts);
+    expect(different).toMatchObject({ countsByKind: { retag: 1 }, qualificationHeld: [latest.stockCode], failures: [], judge: { calls: 0 }, coverage: { judged: 0 } });
+    expect(notionMocks.readStockTextRow).toHaveBeenCalledTimes(1); expect(notionMocks.replaceEvidenceBlock).not.toHaveBeenCalled();
+    expect(row).toEqual(before); expect(localJournal).not.toHaveBeenCalled();
+    expect(createClefClient).not.toHaveBeenCalled(); expect(createJevClient).not.toHaveBeenCalled(); expect(jevEnv.TYPESAFE_API_KEY).not.toHaveBeenCalled();
+  });
   function changedSource() {
     vi.mocked(loadLatestDocs).mockResolvedValue([{ stockCode: "6103", companyName: "オークマ", sector33: "機械",
       doc: { docId: "S100YFQC", docTypeCode: "120", periodEnd: "2026-03-31", submittedAt: "2026-06-25T00:00:00Z", notionDocPageId: "new-text", textParseStatus: "ok" } }]);
