@@ -72,6 +72,14 @@ describe("notion-archive archive (parentPageId)", () => {
   const load = () => import("./archive.js");
 
   describe("recordPrimaryData", () => {
+    it("準備専用の既存DB必須指定はSearch欠落時のschema/createへ進まない", async () => {
+      route("POST", "/v1/search", [emptySearch()]);
+      const { recordPrimaryData } = await load();
+      await expect(recordPrimaryData({ service: "yuho-quant", key: "prepare-only", source: "protocol guard", metadata: {},
+        requireExistingDatabase: true })).rejects.toThrow("schemaを作成せず");
+      expect(calls).toHaveLength(1);
+      expect(calls.every(c => c.init.method === "POST" && new URL(c.url).pathname === "/v1/search")).toBe(true);
+    });
     it("実118文字添付名の上限超過はsearch/upload/page作成前に拒否する", async () => {
       const { recordPrimaryData } = await load();
       const filename = "stock-saved8303-stock-saved8303-finite-v5-PRE-eca0cad159c9a4024895a29a964ad4cd88bc579afb3929f2a56eaae1d6f79463.json.gz";
