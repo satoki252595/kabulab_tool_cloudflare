@@ -1073,6 +1073,14 @@ export class SupplementWriteHeldError extends Error {
   constructor(message: string, options?: ErrorOptions) { super(message, options); this.name = "SupplementWriteHeldError"; }
 }
 
+/** Node production supplies the same durable sink for every normal publisher call. */
+export interface SupplementPublicationJournal {
+  assertReady(): void;
+  reserve(input: { pageId: string; nextDocId: string; archiveKey: string; snapshot: string }): {
+    complete(output: { archivePageId: string; postPageSha256: string }): void;
+  };
+}
+
 /**
  * 既存行の根拠とpropertiesを二段階で置換する。全callerがこの順を共有する。
  * PRE物理保管→新根拠append/全文verify→properties PATCH/readback→旧根拠退役。
@@ -1085,8 +1093,11 @@ export async function replaceEvidenceBlock(
   block: unknown | null,
   input: SupplementRowInput,
   expectedProperties: Record<string, unknown>,
-  beforeWrite: () => Promise<void>
+  beforeWrite: () => Promise<void>,
+  journal: SupplementPublicationJournal
 ): Promise<void> {
+  if (!journal || typeof journal.assertReady !== "function" || typeof journal.reserve !== "function") throw new NotionConfigError("補足publisherのdurable journalがありません");
+  journal.assertReady(); // Any unresolved prior operation stops before the first HTTP, even if PRE/page/source changed.
   const props = buildSupplementProperties(input);
   const chunks = chunkPropertiesByBytes(props);
   if (typeof beforeWrite !== "function" || Object.keys(expectedProperties).length === 0) throw new Error("補足の書込前guardがありません");
@@ -1112,9 +1123,13 @@ export async function replaceEvidenceBlock(
   const preSha = await sha256Hex(snapshot);
   // 推論確率・新根拠の揺れでunknownの再送ラッチを迂回させない。
   const executionKey = await sha256Hex(JSON.stringify(canonicalizeForHash({ previous: before, nextDocId: input.docId, judgeInput: input.judgeInput })));
+  if (typeof input.docId !== "string" || input.docId.length === 0) throw new NotionConfigError("補足publisherの原書類IDがありません");
+  const archiveKey = `biztag-pre/${pageId}/${executionKey}`;
+  // Reserve before physical PRE archive calls: upload/page-create unknown is also sticky across runs.
+  const publication = journal.reserve({ pageId, nextDocId: input.docId, archiveKey, snapshot });
   const filename = "biztag-pre.json";
   const file = { filename, bytes: new TextEncoder().encode(snapshot), contentType: "application/json" };
-  const stored = await recordPrimaryData({ service: "yuho-quant", key: `biztag-pre/${pageId}/${executionKey}`,
+  const stored = await recordPrimaryData({ service: "yuho-quant", key: archiveKey,
     source: `Notion supplement ${pageId}`, metadata: { pageId, sha256: preSha, nextDocId: input.docId }, files: [file] });
   if (stored.outcome === "skipped_existing") throw new NotionUnknownResultError(`同じPREの既存実行あり。自動再送せず照合してください。PRE=${stored.pageId}`);
   await verifyArchivedAttachments(stored.pageId, [file], "事業タグ更新前PRE");
@@ -1139,6 +1154,7 @@ export async function replaceEvidenceBlock(
       throw new NotionUnknownResultError(`新根拠の結果確認が未完。再送せずPREと現値を照合してください。PRE=${stored.pageId}`, { cause });
     }
   }
+  let postPageSha256: string;
   try {
     for (const part of chunks) await notionRequest("PATCH", `/pages/${pageId}`, { properties: part }, { singleAttempt: true });
     const after = await evidencePage(pageId);
@@ -1152,6 +1168,7 @@ export async function replaceEvidenceBlock(
         throw new Error(`補足の保持対象が読戻し時に変更: ${name}`);
       }
     }
+    postPageSha256 = await sha256Hex(JSON.stringify(canonicalizeForHash(after)));
   } catch (cause) {
     throw new NotionUnknownResultError(`補足propertiesの結果確認が未完。再送・旧根拠削除を停止しPREと現値を照合してください。PRE=${stored.pageId}`, { cause });
   }
@@ -1165,4 +1182,5 @@ export async function replaceEvidenceBlock(
   } catch (cause) {
     throw new NotionUnknownResultError(`旧根拠退役の結果確認が未完。再送せずPREと現値を照合してください。PRE=${stored.pageId}`, { cause });
   }
+  publication.complete({ archivePageId: stored.pageId, postPageSha256 });
 }

@@ -38,6 +38,8 @@ GitHubの[workflow dispatch仕様](https://docs.github.com/en/rest/actions/workf
 
 通常CLIの`pnpm biztag run --mechanical-only --codes=<対象コード列> --limit=<件数> --budget-min=<分>`は、本番定期と同じ計画・本文同期・キーワード照合・共有publisherを使う。新規初回や実入力変更による再判定は明示HOLDとし、モデルの起動・原応答journal・較正の読込へ進めない。機械照合不能を別モデルで補わない。
 
+通常Macの既存行publisherはcanonical `.env` と同じwriter stateへfull PRE・intent・完了receiptをimmutableに保存する。全POSTと旧根拠退役の確認前に止まった処理は、次runが別PRE/別文書でもmetadata・モデル・HTTPより前に停止する。NodeだけがFS sinkを供給し、共有publisherにNode FS依存と追加API要求を入れない。既存NotionのPRE原本保管は維持し、初回createと語彙版だけのupdateは別の未保護残件として[検証記録](test-logs/biztag-sticky-publication-20261017.md)へ残す。
+
 同じ文書の保存本文pointer更新は、共通processorで既知4節の実SHAを先に比較する。同値なら旧判定receiptを変えず、通常publisherで本文だけ同期する。実差はprocessorのprefilter・較正・journal・モデルより前に機械modeの資格HOLDとなる。通常CLI全体の既存metadata/語彙/schema読取が0になるという意味ではない。未知・壊れた旧入力を同値へ昇格しない。
 
 旧タグ・根拠・判定日・未知の旧入力SHAを保持し、書込前の最新文書照合・物理PRE・単発更新・全property読戻しを通常経路で行う。初回判定や再判定のHOLDは`qualificationHeld`と専用件数へ残し、`remaining=0`だけで全件完了と判断しない。既定の20時処理は従来どおり、必要な対象だけローカルClefを使う。依存・上流取得・毎日の実行回数は追加しない。ローカルは同じlockのNix環境で実行し、main反映とMac専用runtimeへの配備は別に確認する。
