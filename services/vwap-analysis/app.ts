@@ -5,7 +5,7 @@ import { Hono } from "hono";
 import type { DailyFetchProof } from "../../src/shared/yahoo/client.js";
 import type { DailyBar } from "../../src/shared/yahoo/client.js";
 import { assertCorporateEventsShape, assertEventSourceProof, corporateEventPins, corporateSplitProjection,
-  currentEventRevisions, priceSnapshotJson, type CorporateEvents } from "../../src/shared/yahoo/corporate-events.js";
+  currentEventRevisions, corporateEventDateBasis, priceSnapshotJson, type CorporateEvents } from "../../src/shared/yahoo/corporate-events.js";
 import { sha256Hex } from "../../src/shared/sha256.js";
 import {
   intraWindowOf,
@@ -213,10 +213,10 @@ app.get("/api/daily", async (c) => {
   const cached = (o: unknown) =>
     new Response(JSON.stringify(o), { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=3600" } });
   const daily = await readDailyObject(c.env.BUCKET, code);
-  if (!daily) return cached({ code, bars: [], splits: [], dividends: null, corporateEvents: null,
+  if (!daily) return cached({ code, bars: [], splits: [], dividends: null, corporateEvents: null, corporateEventDateBasis: null,
     corporateEventsStatus: "not-fetched", note: "未取得（バックフィル待ち）", proof: null });
   return cached({ code, updated: daily.updated, bars: daily.bars, splits: daily.splits, proof: daily.proof,
-    corporateEvents: daily.corporateEvents, corporateEventsStatus: daily.corporateEvents === null ? "not-fetched" : "observed",
+    corporateEvents: daily.corporateEvents, corporateEventDateBasis: daily.corporateEvents === null ? null : corporateEventDateBasis(daily.corporateEvents), corporateEventsStatus: daily.corporateEvents === null ? "not-fetched" : "observed",
     dividends: daily.corporateEvents === null ? null : currentEventRevisions(daily.corporateEvents.dividends) });
 });
 

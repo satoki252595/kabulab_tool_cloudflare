@@ -5,7 +5,7 @@
 ## 保存・API契約
 
 - 通常日足は現在も1回の10年取得。今回1か月の価格差分取得へ変更しない。イベントだけは要求範囲に見えない過去日を削除せず、同日の訂正を`version`・原値SHA・元の取得根拠付きで追加する。同値再入で履歴を増やさない。
-- `corporateEvents` schema1は配当原`amount`、原timestamp、JST権利落ち日、通貨と`chart.result[0].meta.currency`出典を保持。支払日を権利落ち日から推定せず`null / not-provided`とする。通貨欠落も`null`。分割は原timestamp、JST効力日、分子・分母・比率を保持する。
+- `corporateEvents` schema1は配当原`amount`、原timestamp、JST権利落ち日、通貨と`chart.result[0].meta.currency`出典を保持。支払日を権利落ち日から推定せず`null / not-provided`とする。通貨欠落も`null`。分割は原timestamp、JST報告日、分子・分母・比率を保持する。旧`split-effective`ラベルを法的効力日の資格とは扱わない（[2026-10-17の契約明示](yahoo-event-date-basis-20261017.md)）。
 - 応答にイベントなしは`verified-none-in-response`（当該応答/要求範囲だけ）。旧保存物や未取得R2は`corporateEvents: null / corporateEventsStatus: not-fetched / dividends: null`。旧ratio-only分割は`legacySplits`として保持し、失われた原timestamp・分子分母・取得時計を補作しない。
 - `/api/daily`は既存`bars / splits / proof`を保ち、最新の既知配当versionと全訂正履歴を追加する。各sourceにYahoo要求URL、実本文取得時計、原本文SHA、対応する保存価格snapshotのSHAとbasisを持たせる。
 - basisはYahooの`quote`値を受信したまま既存OHLC2桁丸めで正規化したもの。provider側の調整内容はこの応答では未証明で、調整前価格とは主張しない。`adjclose`は金融入力に使わず、ローカルで配当/分割を再調整しない。consumerが分割係数を再適用すれば二重調整になり得る。snapshot SHAのcanonical JSONは`{priceBasis, bars:[{date,o,h,l,c,v}]}`。保存/API両境界で価格と原値SHAを照合する。
