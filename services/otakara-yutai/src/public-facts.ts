@@ -24,11 +24,16 @@ export const VALUE_REASON_LABELS = {
 export type PublicBenefitFacts = {
   version: 1;
   sourceGroup: string;
+  /** 掲載表記の検出。必要条件・適用対象を確認済みという意味ではない。 */
   holding: boolean;
+  /** 掲載中の期間表記。株数・保有条件・別の利用期間との対応は未確定。 */
   holdingPeriods: string[];
+  /** 選択・抽選に関する掲載表記の検出。対象の確定ではない。 */
   choice: boolean;
   lottery: boolean;
+  /** 申込・応募表記の検出。希望者限定等を全員必須へ読み替えない。 */
   application: boolean;
+  /** 併用可否の掲載表記。券の利用と特典の同時受取を区別した確認は未実施。 */
   combination: "allowed" | "not_allowed" | "unverified";
   valueStatus: "source_amount_qualified" | "unresolved";
   qualifiedAmount: number | null;

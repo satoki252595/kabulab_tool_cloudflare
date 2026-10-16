@@ -869,15 +869,15 @@ function renderBenefitGroups(groups: GenreGroup[]): string {
 export function renderBenefitFacts(facts: PublicBenefitFacts | null, amount: number | null): string {
   if (facts === null) return `<p class="product-desc-empty">適用条件・出典情報は未確認です</p>`;
   const holding = facts.holding
-    ? facts.holdingPeriods.length > 0 ? `掲載の期間区分 ${facts.holdingPeriods.join("・")}（株数との対応は掲載元で確認）` : "保有条件あり（期間未確定）"
+    ? facts.holdingPeriods.length > 0 ? `掲載の期間表記 ${facts.holdingPeriods.join("・")}（保有条件・株数との対応は掲載元で確認）` : "保有に関する記載あり（期間未確定）"
     : "掲載に記載なし（不要と確認したものではありません）";
-  const combination = { allowed: "掲載上は併用可", not_allowed: "掲載上は併用不可", unverified: "併用可否は未確認" }[facts.combination];
+  const combination = { allowed: "併用可の記載あり（対象未確認）", not_allowed: "併用不可の記載あり（対象未確認）", unverified: "併用可否は未確認" }[facts.combination];
   const reasons = facts.valueStatus === "source_amount_qualified" && amount === null
     ? "掲載額の反映は未確認" : facts.valueReasons.map(reason => VALUE_REASON_LABELS[reason]).join("・");
   return `<details><summary>適用条件・金額の根拠・出典</summary>
-    <p>${termTip("継続保有", "一定の期間、株を持ち続ける条件です。株数だけでなく対象の期間も確認してください。")}: ${h(holding)}</p>
-    <p>選択: ${facts.choice ? "選択条件あり（選択肢を合算しないでください）" : "掲載に記載なし"} / 抽選: ${facts.lottery ? "あり" : "掲載に記載なし"} / 申込・応募: ${facts.application ? "必要" : "掲載に記載なし"}</p>
-    <p>${termTip("併用", "複数の優待を同時に受け取れるかという条件です。選択式の優待をすべて受け取れるとは限りません。")}: ${h(combination)}。銘柄全体の合計額は未確認です。</p>
+    <p>${termTip("期間・保有の記載", "掲載中の期間や保有条件の表記です。預金などの利用期間と、株を持ち続ける期間は異なります。対象は掲載元で確認してください。")}: ${h(holding)}</p>
+    <p>選択: ${facts.choice ? "選択に関する記載あり（選択肢を合算しないでください）" : "掲載に記載なし"} / 抽選: ${facts.lottery ? "記載あり（対象は掲載元で確認）" : "掲載に記載なし"} / 申込・応募: ${facts.application ? "記載あり（必要性・対象は掲載元で確認）" : "掲載に記載なし"}</p>
+    <p>${termTip("併用", "何を組み合わせられるかに関する条件です。券の利用時の併用と、複数の優待を同時に受け取ることは異なります。対象は掲載元で確認してください。")}: ${h(combination)}。銘柄全体の合計額は未確認です。</p>
     <p>金額: ${h(reasons)}</p>
     <p><a href="${h(facts.source.listingUrl)}" target="_blank" rel="noopener noreferrer">掲載情報（みんかぶ）</a> / 個別受信日時: ${facts.source.fetchedAt === null ? "未記録" : h(facts.source.fetchedAt)} / バッチ受信日時: ${facts.source.batchFetchedAt === null ? "未記録" : h(facts.source.batchFetchedAt)}</p>
     <p>${facts.source.officialStatus === "verified" ? `<a href="${h(facts.source.officialUrl!)}" target="_blank" rel="noopener noreferrer">会社の公式情報と照合済み</a>（${h(facts.source.verifiedAt!)}）` : "会社の公式情報との照合は未実施です"}</p>
