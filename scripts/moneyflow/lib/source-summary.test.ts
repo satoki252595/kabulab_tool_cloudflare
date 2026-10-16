@@ -51,6 +51,7 @@ describe("同runのmoneyflow source集合join", () => {
   it("実23:40超・queue後の期限切れ・別日/不正clockを拒否する", () => {
     expect(() => moneyflowScheduledWindow(date, Date.parse(`${date}T14:40:00.001Z`))).toThrow();
     expect(() => moneyflowScheduledWindow("2026-02-30", nowMs)).toThrow();
+    expect(() => moneyflowScheduledWindow("2026-10-17", Date.parse("2026-10-17T10:00:00.000Z"))).toThrow();
     expect(() => join([summary("non-yahoo"), summary("yahoo")], requested, { nowMs: Date.parse(`${date}T14:40:00.001Z`) })).toThrow();
     for (const clock of [`${date}T14:40:00.001Z`, "2026-10-17T00:00:00.000Z", "not-a-clock"]) {
       const b = summary("yahoo"); b.finishedAt = clock;

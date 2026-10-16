@@ -27,6 +27,15 @@ afterEach(() => {
   vi.useRealTimers(); vi.resetModules();
 });
 const load = () => import("./client.js");
+it.each([2.0, 0.7])("通常CLIはtyped envだけでnative retryと次queueを%srpsへ抑える", async rps => {
+  process.env.NOTION_MAX_RPS = String(rps);
+  const { notionRequest } = await load();
+  statuses = [429, 200, 200];
+  const calls = Promise.all([notionRequest("GET", "/a"), notionRequest("GET", "/b")]);
+  await vi.runAllTimersAsync(); await calls;
+  const interval = Math.ceil(1000 / rps);
+  expect(starts).toEqual([0, interval, interval * 2]);
+});
 it("通常CLIのtyped env上限をretry/queueへ適用し、明示bulkの狭い予算を緩めない", async () => {
   process.env.NOTION_MAX_RPS = "2.0";
   const { notionRequest, setNotionMaxRps } = await load();

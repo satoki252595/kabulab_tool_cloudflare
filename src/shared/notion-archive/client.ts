@@ -54,7 +54,12 @@ export async function paceNotionNativeRequest(signal?: AbortSignal): Promise<voi
   if (!envPacingInitialized) {
     const configured = notionEnv.NOTION_MAX_RPS();
     // 明示bulk CLIが開始前に固定した、より狭い予算を環境値で上書きしない。
-    if (configured !== undefined && (nativeMinIntervalMs === null || notionInterval(configured) > nativeMinIntervalMs)) setNotionMaxRps(configured);
+    // schedule()は既にqueue時計を進めるが、ここは最初のnative fetchより前。
+    // 公開setterの開始前制約を緩めず、初回内部値だけを初期化する。
+    if (configured !== undefined) {
+      const interval = notionInterval(configured);
+      if (nativeMinIntervalMs === null || interval > nativeMinIntervalMs) nativeMinIntervalMs = interval;
+    }
     envPacingInitialized = true;
   }
   if (nativeMinIntervalMs === null) return;
