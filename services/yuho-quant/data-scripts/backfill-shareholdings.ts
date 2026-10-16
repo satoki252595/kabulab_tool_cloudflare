@@ -121,7 +121,7 @@ export async function applyLatestHoldings(dir: string, maxRows: number): Promise
       assert.ok(item.zipPath && item.zipSha256 && item.archivePageId);
       const zip = readFileSync(item.zipPath); assert.equal(hash(zip), item.zipSha256);
       const assertLatest = async () => {
-        const fresh = await selectLatestHoldingsDocuments(db, plan.selection);
+        const fresh = await selectLatestHoldingsDocuments(db, { ...plan.selection, onlyCode: item.source.stockCode });
         const latest = fresh.rows.find(row => row.stockCode === item.source.stockCode);
         assert.ok(latest, "対象銘柄が最新有報集合から消えています");
         assert.deepEqual({ docId: latest.docId, stockCode: latest.stockCode, edinetCode: latest.edinetCode, fiscalYearEnd: latest.fiscalYearEnd },

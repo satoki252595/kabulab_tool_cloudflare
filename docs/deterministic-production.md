@@ -22,6 +22,8 @@
 
 `yuho:backfill:holdings apply <privateDir> <maxRows1..1000>` は通常定期取込と同じpublisherを使う。文書ごとに最大100行のwindowを進め、書込前に最新文書ID・発行体・期末・提出会社名を照合する。残windowは定期処理と共通の保存cursorから再開する。既知の資格HOLDはreceiptへ固定し、自動で再送しない。通信や書込の結果不明はpending journalを残し、別通の送信と自動再実行を止める。旧未検証行は共有publisherの物理PRE/POSTと全props照合を通す。
 
+共通publisherは再開前に既完prefixの原本列を既存の期末一覧で照合し、最後のwindow後は全原表をもう一度検索してから完了と価格queueを登録する。prefixのdriftは元cursorのHOLD、最終照合の失敗はunknownを保持する。CLIの文書別latest照合はwindow内を銘柄コードで絞り、外側も既存のcode索引を使う。100行の実適用とD1読取コストの比較は[検証記録](test-logs/holdings-source-verification-20261016.md)を参照。
+
 ローカルは `nix develop -c pnpm yuho:backfill:holdings ...`。同じNode CLIをActionsでも実行でき、追加依存はない。有限の過去補完を定時の全量成功とは数えず、原本確定件数・保留・残window・価格確定を分けて受け入れる。
 
 ## 事業タグの機械処理だけを実行する
