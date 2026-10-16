@@ -38,8 +38,8 @@ export const momentumProjection = sqliteTable("p_momentum", {
    */
   bars: integer("bars").notNull(),
   /**
-   * 終値 CSV（**古い順**）。`null` 終値と非活動銘柄は生成時に落とすので、
-   * ここには有効な正の終値だけが並ぶ。`calcMomentum` の入力そのもの。
+   * 同一Chart応答の調整済み終値CSV（**古い順**）。両値NULLの日と非活動銘柄は
+   * 生成時に落とす。`calcMomentum`のリターン計算専用で、約定価格には使わない。
    */
   closes: text("closes").notNull(),
   /**
