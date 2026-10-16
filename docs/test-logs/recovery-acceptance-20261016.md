@@ -2,6 +2,128 @@
 
 追跡は[#348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)。この記録は以下の対象の実測であり、全20機能・全空欄の完了を意味しない。
 
+## 10月17日04:25 JSTの追加確認
+
+| 対象 | この時点の受入・確認 | 残件 |
+|---|---|---|
+| 事業タグ本文 | 固定776社の全件を受入、残0。新runtimeの残169社を48/50/50/21の通常機械処理で反映し、原計画のcode/docId全集合・重複0・83証跡の全SHAを04:03:10にrootで閉鎖 | 意味判定・競合判定とは別。各時点の個別PRE/POSTの合算で、同時全市場snapshotではない |
+| 保有明細原本列 | 追加5文書16行を通常publisherで反映し、04:07:48にrootで全250 native・全POST・10実ファイルを独立照合。計28文書229行、今回の旧9/新7・保護旧2行は不変 | 価格は未受入。原表HOLD12文書を保持し、次50文書/最大91行はまだ本番反映していない |
+| 保有prepare SQL | #451の通常prepareでafter1515/limit17を実行。1 SELECTは631 rows_read/6.4575ms、5 ready/16行・12 HOLDを原本17ZIPと照合 | 旧paired after145A/limit20とは選択範囲が違うため削減率を比較しない。全量の所要は未受入 |
+| Mac通常環境 | 04:16:47にmain `65579f60`へ切替え。旧117bの1,542 source・旧.envを全SHAで保全し、旧入口だけ無効化。同calendar/kernel writer/state/依存lockを保持。監視側accepted revisionもCLI ACKと更新時刻を確認 | 新版の次20/21時通常receiptは未受入。旧定時receiptを新しいSHAへ書き換えず、監視の欠測条件も緩めない |
+| 競合入力の最初の5社 | 通常CLIで130A/138A/145A/153A/155Aの入力を準備・物理保管し、通常helperでcursor155Aまで閉鎖。候補・qids・資格不足を保存 | 5社とも選出Bの資格不足でHOLD、ready0。候補を削って成功扱いせず、モデル・競合relation/確率更新・定時receipt作成は0 |
+| 事業タグの残分類 | 固定145社を通常readers/plannerで04:23:55に読取確認。旧B23は文書変更再判定候補22/資格済みskip1、定時資格HOLD23は本文不足HOLD20/同文書入力確認2/本文未取得1、旧skip99は全99 skip | metadata照合のみ。資格済みskip100も原4対象節・business・全39値は今回未観測で、判定入力の全検証済みとはしない。本文不足HOLDは計21社 |
+| 海外売上の次15文書 | 現原本15ZIP/12,767,433B・最新doc/主体/期末/本文を通常読取で再資格化。160 native（Notion109/D1 36/hosted15）、273.058秒、書込/モデル/上流API0 | 数値反映・全6表POST・物理PRE/POSTの受入はまだ。旧v3の12件途中STOPを全15の受入へ流用しない |
+| 歴史RAW索引 | 同一poolの明示1回修復→通常apply1→inspectを受入。cursor13,555/78,832・残65,277。#454の実行commit固定後、run38953333099を元pool45番目として1回起動 | 500/2GiB/新規受付3600秒・continue155・元最大200枠を保持。実行中の件数や最終anti-joinは未受入 |
+
+本文最終集合のroot受入SHAは`788b60f2ad2754701fdf30f5c8f7a8b63803819a5c35467e4a2c04476c023359`。先行155＋450＋停止2件の読取閉鎖＋新169＝776で、実入力変更211Aのモデル判定1社は重複加算しない。本文の全writerは終端し、旧STOP/unknown/原文は保持した。
+
+保有16行は154.484秒、Notion215/hosted15/D1 SELECT20、D1読取1,168行/12.347ms、要求3,912,392B/応答11,703,575B。実mutation56・新record17・物理10ファイル3,644,167B、通常receiptのSHAは`b4df56886d0749f3f3d89c307d4cf37a210c92aeb023648b7c4cee720d96ad7a`。通常終了値1は計画済み12 HOLDを表し、成功文書へ加算していない。準備・資格確認の読取はこの適用の250 nativeとは別に保存する。
+
+競合準備は193.76秒・CPU27.43秒・child peak RSS2,378,465,280B、Notion52要求（全HTTP数ではない）。gzip18,326,463B/展開JSON68,343,379B、全3,712選定metadata/151除外と3,561 corpus、消費238件の39本文を保存した。5社自身は資格を満たすが、選出Bの135 uniqueがHOLDである。通常CLIの物理検証receiptと保存gzipの別process再生を区別し、追加のremote物理GETは行っていない。全33社や毎日の所要への換算はしない。
+
+145社の読取は8 native（Notion4/D1 SELECT4）、応答9,126,985B・D1読取51,706行、モデル/業務・schema・原本保管書込0。同文書入力確認の6038/9344は既知4対象節の実SHA比較を先に行い、意味変更がある場合だけローカルClefへ渡す。20社の`kind=skip`にも`qualificationHeld=true`/doc=nullがあり、通常完了skipとは区別する。648Aと合わせた本文不足21社は生成で補完しない。旧skip99のうち保存receiptがあるものも未検証来歴を保持する。競合候補Bの135社は保存入力の通常計画ですべて本文同期対象であり、モデル必須とは証明されていない。別の有限通常機械処理で同期後に再資格化する。
+
+海外v3読取は13件目1379/S100YKAZの前でSTOPした。先行の保有移行で正しくtyped一次保管へ移った原本IDを、今回の読取guardが旧legacy IDへ固定していたことが原因だった。通常resolverは変更せず、exact keyの一意query・旧IDへのsource lineage・同ZIP SHA/size・同主体/期末・唯一添付を保存応答で証明したcanonical IDだけ許可するv4に修正した。v3の123 native/12途中結果・元manifest・停止原本は保持し、v4は別namespaceで一度だけ実行した。
+
+RAWのinspectは11 read/4.953秒、R2 payload31,716,688Bで前後state全文SHA/ETag一致、直前原本とindex15列一致、現在位置のraw/index両欠測を確認した。正常CLIが遠隔全payloadを検証した証跡であり、その全payloadはActionsからexportされていない。rootの保存manifest/期待値/実ログの結合を独立した全prefix遠隔再生と呼ばない。実行コードは`9cdf4f04`へ固定し、次runのworkflow head・runner OS・Secretsとは分ける。
+
+通常mainの実deployは#453が03:55:00/version `82b5cded-0121-47a9-b02c-75b2de714f28`、#454が04:11:26/`79b29e5c-4ce1-468d-8ec8-8050378fbaca`、#455が04:16:09/`d61c452a-815e-4d12-be16-fa5bd738e330`。#455は原39のSHAとNotion送信表現のSHAを分け、既知の旧4節/businessと同値を証明できる固定有限scopeだけreceiptを再資格化する通常CLIを追加した。原文・旧判定receiptのbytesを保持し、39本文の再送・一括再判定・新モデル依存は増やしていない。実receipt再資格化の本番適用はまだ行っていない。
+
+実10/16 18時stock run38877553046は当日足3,646/3,687、完全成功3,645・失敗42。41社の当日足欠測と8303の過去RSI245本HOLDを分けて保持する。最新VWAP成功run38903045497はmargin-onlyであり、日足/5分足全量成功ではない。03:15監視の旧Mac版差は設定を直したが、株価coverage欠測と原TDnet PDF1件の取得不能は継続する。配信成功を全20機能の成功に変えない。
+
+残RAW宣言payloadは約20.05GB。仮に全て新規・Standard・丸1か月なら[公式R2価格](https://developers.cloudflare.com/r2/pricing/)のGB単位切上げでraw payloadだけ約$0.315/月となる条件計算で、storage class・他object・操作の百万単位切上げ・account全体無料枠は未確認。[D1無料枠](https://developers.cloudflare.com/d1/platform/pricing/)は書込10万行/日等の制限があり、Paid契約は照会403のため未確認。公開repoの標準ubuntu runnerは[Actions compute minutes無料の対象](https://docs.github.com/en/billing/concepts/product-billing/github-actions)だが、全storageやローカル電力まで0円とはしない。追加有料LLM/原本APIはない。
+
+追加私有証跡は`continuation/fixed776-root-final-acceptance.json`、`mac-notion-receipt-rollout-v3/{SUCCESS,root-verification,monitor-secret-ACK}.json`、`holdings-pilot16-apply-b8fb-v1/actual-v1/root-independent-acceptance.json`、`manual-competitor-prepare-first5-v2`、`manual-competitor-prepare-first5-v2-post-audit-v1`、`biztag-remaining-fresh-plan-read-v1/actual-v1`、`overseas-next15-protected-read-v4`、RAWの`raw-ordinary-after-repair-38947608942-v1`、`continuation/cf-main-{453,454,455}-logs.txt`。10/16と10/17のprivate audit rootを分けて保全し、秘密値・原本文・署名URLはGitへ入れない。
+
+## 10月17日03:20 JSTの追加確認
+
+| 対象 | この時点の受入・確認 | 残件 |
+|---|---|---|
+| 事業タグ本文 | 固定776社中607社。停止した3179/9273の2社を19要求の読取だけで照合し、旧386要求・通常publisher・全39値・他props・原本・物理3ファイルを別processで再検証 | 未着手169社を新runtime・新しい有限名前空間で準備中。旧停止・原文・未知状態は保持し、同じ業務更新は再送していない |
+| Mac通常環境 | 03:14:14に`117b2133`へ切替え。canonical.env・同kernel writer state・依存lockを保持し、競合準備の固定33社を設定。旧43dの1,503 sourceと旧.env bytesを保全、旧入口の.envだけ無効化 | 競合準備5件の実行と次20/21時の通常receiptは未受入。モデル競合判定も停止中 |
+| 保有DB行数 | 295要求の原応答・cursor・9完了区間の全域・ID一意を独立再生し、cutoff `2026-10-16T17:56:00.000Z`前のqueryable active page 27,674行を受入。上限に達した親8区間800行は集計から除外 | transaction snapshotやworkspace全体容量の証明ではない。保有原本213行/23文書・価格未受入という業務上の状態は変わらない |
+| 保有prepare SQL | #448の実2 SELECTは旧171,241読取行/400.8285ms→83,678行/95.7946msで、全21行・順序・選択20行・moreが一致。#451では本番の既存code UNIQUE索引とcode範囲検索・外側rowid検索を3 readで確認し、03:20にmainへ統合 | #451の本番SELECT読取量と通常prepare全体は未測定。ローカルの中央値2.171→0.231msを本番性能へ換算しない |
+| RAW索引 | cursor13,554/78,832・残65,278、永続raw_inflightを保持。明示1回修復の共通CLIは#450で準備、Actionsの型・試験は成功 | CloudflareのPR buildはasset APIエラーで失敗。変更をmainへ統合しておらず、実修復・再送・cursor変更は0 |
+
+#447/#448/#449はmainへ統合し、通常Cloudflare buildログの実配信を確認した。各versionは`2e5e4962-9153-4d09-82c8-cb9703f551cf`（02:55:22）、`ee405253-e7c3-4ba2-9dac-bcb657f764ec`（03:01:23）、`b1c1f2e0-c199-4607-b493-93ca27ad45b2`（03:07:49）。#449はNotionが除去するU+200Bだけを送信本文で正規化し、原文・同期/判定入力SHAは保持する。新旧runtimeと旧proofの版を混同しない。
+
+部分2社の読取閉鎖は16.565秒、Notion13/D1 SELECT6、要求4,182B/応答1,555,355B、D1読取150行、業務書込・モデル・原本取得API0。旧STOP SHA `bfd7c807c7a45762a358b6655f336cdadffe634da168a6dedf676f8bad7094e5`は不変。root最終受入SHAは`333bd1fba4d297889ba22191bc4e88c60b31b7b62fd48b132dec6946e6470373`で、未送信48社を含む残169社は別計画へ分離した。
+
+保有countの実時間は980.825秒、要求本文103,624B/応答本文27,628,804B。元SUCCESSの`nativeWireBytesMeasured=true`という表記は採用せず、独立監査でdecoded body bytesへ限定する。全headers/wireは未計測。DB行数に残19,783行を全て新規と仮定した保守的投影は47,457行であり、全金融行の原本資格・workspace全容量・外部同時writer不在を推定で証明する値ではない。単一DBの行数上限とは[Notion公式仕様](https://www.notion.com/help/optimize-database-load-times-and-performance)の条件で比較する。
+
+#451の3 readはPRAGMA index_listと旧/新EXPLAINだけで、実SELECTを実行していない。要求2,869B/応答3,424B、rows_read/writeとも0、追加DDL・Notion・モデル0。必須索引欠落時は同じ1問い合わせが失敗し、別計画へ切り替えない。全量保有公開は通常原本資格・Notion要求時間と有限予算が別途必要である。
+
+追加私有証跡は`mac-competitor-stage-rollout-v2/{SUCCESS,root-verification,legacy-preservation}.json`、`.runtime/biztag-notion-text/source-v1/tmp/biztag-partial-closure-20261017/closure2-readonly-v2/root-final-acceptance.json`、`tmp/feature-audit-20261017/holdings-count-v4-independent-audit-v1/{root-replay,root-final-acceptance}.json`、SQLの`tmp/code-index-native-plan-v1/root-independent-acceptance.json`。元readのSTOPを保存し、追加モデル・有料APIによる補完は0。全20機能の最終受入は引き続き未完。
+
+## 10月17日02:54 JSTの追加確認
+
+| 対象 | この時点の受入・確認 | 残件 |
+|---|---|---|
+| 事業タグ本文 | 固定776社中605社。追加13組の先頭9組450社を共通通常処理で同期し、全39値・他props・根拠・sourceと外側/通常publisherの物理原本をrootまで照合 | 残171社。10組目の2社は更新ACK200後に照合停止、未受入。うち9273の本文はNotionがU+200Bを1文字落としていた。元停止・全要求/応答・原文を保全し、通常builder修正と読取専用の閉鎖後に未着手169社へ進む |
+| 保有明細原本列 | 追加10文書36行を02:25:43にrootまで独立照合し、計23文書213行。追加36は旧12・新24、全476 native要求/応答、実22ファイル・添付1件ずつ・全読戻しSHAを確認 | 価格はこの23文書とも未受入。原表HOLD17文書・未照合の保護旧25行を保持し、全市場完了とは数えない |
+| RAW索引 | 同じmanifest/cutoffの通常inspectでcursor13,554/78,832、残65,278と直前原本/15列indexを確認 | run38940600004の原本PUTが結果不明で停止。cursor位置の原本とindexは実欠測、永続raw_inflightを保持。別plan・自動再送をせず、明示1回CAS修復の共通CLIを準備中 |
+| 本番保有SQL | 候補銘柄を先に限定する同1SQLの修正を検証中。保存済み2,945株・30,569文書で旧新3,170 caseの選択/order/moreが一致 | corpusは株ごとの保存時点で、同時全市場snapshotではない。純SQLite中央値36.07→2.19msは本番D1 rows_readの実測ではない。少量のpaired readとPR/CIが必要 |
+| 発行株数 | #447で通常Actions/Nodeの既存type1展開Mapから2項目を観測し、普通株/単位/主体/経済日を資格化するコードをCI確認中 | 原文観測であり、分割・増資等の法的原因/係数や財務・価格への適用完了ではない。WorkerはDEI gateと理由付き未観測で、未測定full解析を有効化しない |
+
+保有36行の通常実行は1,009.208秒、Notion404・hosted32・D1 SELECT40、要求6,098,230B/応答16,503,576B、D1読取2,000行/34.2525ms・書込0。原ファイル名の監査側期待値を共通命名へ直しただけで、業務更新は再送していない。旧監査停止とv1/v2を保持し、rootの別process純再計算で22実upload・22一意ID・各添付1件まで確認した。
+
+RAWの正常inspect run38942280144は読取12要求、R2 payload31,605,805B、6.123秒、Notion/上流/モデル/PUT/INSERT0。原state全SHA `4dc53ee36af09314387e78efe7b45a191fa1930a155d125d72413f9f63a2384f` とETagは前後同値で、unknownを解除していない。既存正常inspectが検証した遠隔raw/indexの全payloadはworkflowからexportされず、rootは保存manifest全bytes・期待state SHA・直前index全15列の期待SHAを戻り値へ結合した。全prefixの独立再生や最終78,832件anti-joinとは区別する。
+
+全市場の保有準備を旧SQLで繰り返すとD1読取が約2,200万〜1.3億行になる計算のため、先に共通SQLを軽くする。Cloudflare契約照会は403、既存ブラウザはログイン画面で、Workers/D1プランとR2実storage classは未確認。推定有料枠を根拠に全量を開始しない。原本/欠測のLLM補完・追加有料APIは0。
+
+Macは旧`43d563a3`のまま、旧body chainは停止・全process終端。不可視文字の通常修正を受け入れ、部分2社の読取専用照合が閉じた後に、同一canonical.env・同kernel writer state・同依存lockで新mainへ切り替える。旧sourceと.env bytesを保全して実行入口だけ無効にし、残169社を新しい有限名前空間で処理する計画である。競合準備stageの実配備/5件準備/次20・21時の定時receiptはまだ受入へ加えない。
+
+私有証跡は`A621-mechanical-remaining-v1/batch-{01..09}/{SUCCESS,independent-acceptance,root-physical-acceptance}.json`、同`batch-10/STOP.json`、`A169-new-runtime-proposal-v1/proposal.json`、保有`apply36-after1417-v1/{independent-acceptance-v3,root-independent-acceptance}.json`、`tmp/feature-audit-20261017/raw-inflight-38940600004-inspect-v1/{summary,root-independent-acceptance}.json`。全20機能の最終受入は引き続き未完。
+
+## 10月17日02:18 JSTの追加確認
+
+| 対象 | この時点の受入済み | 残件 |
+|---|---|---|
+| 事業タグ本文 | 固定776社中455社。有限13組の先頭6組300社を共通通常CLIで反映し、全39値・他props・旧根拠・原本と外側/通常publisherの物理PRE/POSTを独立照合 | 残321社を同じ有限計画で継続。実入力変更211AのClef判定1社は別受入で、この455へ重複加算しない |
+| 保有明細 | 13文書177行を受入済み。次10文書36行は最新原本・全period PREを照合して通常source-only publisherで反映中 | 反映中の36は未加算、価格も未受入。保護旧行・原本HOLDを保持 |
+| 優待条件の表示 | #446をmain `8faf8c57`へ統合、02:10:38にversion `2884af91-ccd9-4854-ae1f-5f81ba8de136`を配信。実4881/7372画面でも申込・併用・期間を確定条件と断定しない表示を確認 | 公式照合・株数/期間・選択群の意味対応は未完。保存5,748群の追加厳密全文文法で新候補は0で、曖昧文を削って定型へ入れない |
+| 保有価格の名称資格 | #444をmain `3b8effc0`へ統合、02:03:13にversion `7710febd-d125-484b-ad3c-aa960464b334`を配信。必要なissuerだけ保存有報の公式英字名集合を通常価格資格へ渡し、同じ期限/bytes予算を守る | 保存入力33社289行の再生は価格の新規受入ではない。主体・同日bar・単位のHOLDを維持 |
+| RAW索引 | 同一pool run38925685573が01:38:21に500検証（新482・既存18）、cursor13,182/78,832・残65,650まで成功 | 次run38933527247は02:03:28にreceipt PUT結果不明で停止。状態の読取検査は継続中で、失敗runの部分進捗やcursorを未検証のまま受入へ加算しない |
+
+先頭6組300社は01:17:27〜02:10:33の通常反映で、モデル・上流API0。02:11:32までにrootの追加純監査も全300社の通常publisher物理PREと外側PRE/POSTの全文SHAを確認した。通常機械処理と追加の今回限りの受入読取を混同しない。
+
+#442のMac末尾競合準備stageは既存20時処理の正常終了後だけ固定5件を通常CLIで準備するコードとしてmainへ統合済み。現在runtimeは旧`43d563a3`のまま。候補runtime `8faf8c57`をNix・同lock・offline 274再利用/追加download0で準備し、関連4 suite/37 testを確認した。本文の全writerと監査が閉じるまで切替えず、配備・実入力の準備・次回20/21時定時receiptを別に受け入れる。競合モデルの停止は維持する。
+
+保有明細全体の純計画は、現在177行と反映中36行を除く1,718文書19,783行。旧12,576行と新7,207行の通常行操作だけでもNotion64,718要求、1.6rpsの間隔下限約11.24時間で、原本保管・準備・独立照合込みの条件計算は約18〜24時間＋通信である。8時間の有限範囲案と最初の100行pilotを用意したが未開始。実36の既存users/me応答から単一ファイル上限5,368,709,120Bを確認した一方、DB現在行数や全workspace容量の充足は未確認として残す。原本/欠測のLLM補完・追加有料APIは0。
+
+RAWのlocal読取検査は既存正常CLIを使ったが、raw bucket GETが403で停止した。receipt全文と原例外を保全し、同じlocal GETを再送せず、既存Actions Secretsの正常inspectへ切り替えた。PUT/INSERT/Notion/モデル0、unknown解除や通常apply再開は検査後の別判断とする。
+
+追加私有証跡は`A621-mechanical-remaining-v1/batch-{01..06}/{SUCCESS,independent-acceptance,root-physical-acceptance}.json`、`continuation/cf-main-{444,446}-logs.txt`、`continuation/yutai-446-public-ssr-v1`、`continuation/job-117083220211.log`、`tmp/feature-audit-20261017/holdings-bulk-finite-plan-v2`。全20機能の最終受入は引き続き未完。
+
+## 10月17日01:37 JSTの追加確認
+
+| 対象 | 受入済み | 残件 |
+|---|---|---|
+| 事業タグ本文 | 固定776社中255社。新しい固定13組の先頭2組・100社は01:17:27/01:28:00に全39値・他props・旧根拠・最新source・物理PRE/POSTを独立照合 | 残521社を同じ通常機械処理で継続。旧判定の未知SHAは補わない |
+| 保有明細 | 追加6文書31行を照合し、計13文書177行。全332 native要求/応答SHA、旧値、全period、物理5組10ファイルを01:31:27にrootが独立照合 | この13文書の価格は未受入。原表HOLD計7文書・原本未照合の旧22行を保持。全市場の原本列完了ではない |
+| 通常競合の機械準備 | #440をmainへ統合し、01:28:04にversion `115fca7d-ca24-43d7-b043-b4dfb0a0ccb2`を配信。現在doc/実39列・候補・質問を照合し、モデル0で物理保管するCLI | Mac定時stageの配備・実行は未受入。競合の意味判定を完了扱いにしない |
+| 株式の報告権利診断 | #441をmainへ統合し、01:34:04にversion `2679f017-10b7-4d54-8126-4df1cdb0fa37`を配信。同じ原本のイベントと実計算窓を既存batchへ保存 | 次の通常runは未受入。増資等の網羅性・OHLC/出来高基準は未確認のまま |
+
+本文の追加100社は2,634 native要求（Notion2,222）・349,688,121 response bytes。業務PATCH100、モデル・上流APIは0。別の保存原本監査で全100の通常publisher物理PREと外側PRE/POSTを全文SHA照合した。保有明細31行は旧25・新6、D1 SELECT18/924 rows/11.5667ms、Notion294・hosted20、実mutation85。元wrapperは715.877秒で保護原本の署名URL更新を差分とみなして停止した。更新を再送せず、既存共有file比較で署名query/expiryだけを正規化し、残7ページを7GET/15.209秒/書込0で確認して閉じた。元停止記録と全原値・時計を保持する。
+
+株式診断は保存済み7,373応答を同じ共通資格化で再生し、全3,686 raw/3,639金融snapshotが診断以外同値、当日足欠測47と8303のRSI履歴HOLDを保持。追加source/Notion要求・モデル・業務書込0、診断約8.09MB、単回比較のparser差は約0.734秒だった。通常環境の全量性能保証ではない。海外売上の次候補15文書も現在main `9c40ba85`のparserで保存原本を純再生し15/15抽出同値を確認したが、fresh PRE・atomic反映・本番受入は別途必要。
+
+私有証跡は`A621-mechanical-remaining-v1/batch-{01,02}/{SUCCESS,independent-acceptance,root-physical-acceptance}.json`、保有明細`apply31-after137A-v1/{independent-acceptance,root-independent-acceptance}.json`と`protect-post7-readonly-v1`、`continuation/cf-main-{440,441}-logs.txt`、`tmp/feature-audit-20261017/overseas-next15-current-main-pure-v2/result.json`。全20機能の最終受入は引き続き未完。
+
+## 10月17日01:10 JSTの追加確認
+
+本文は固定776社中155社を独立受入、残621社。追加50社は通常機械処理で更新・全POST確認後、見直し台帳の送信日時がNotionで分単位になったため検証側が停止した。業務更新は再送せず、現在の全文・最新source・全39値/他props/根拠を読取確認し、01:05:29に物理POSTを閉じ、01:05:58にrootが全SHAと通常builderで独立受入した。残621社は別の固定13組で開始し、停止したrunnerの名前空間は再開していない。
+
+追加50社の初回は1,297 native応答、業務PATCH50、194,558,826 response bytes。追加読取専用は401要求/書込0（監査のDB ID表記差で停止）と410要求/証跡保存3操作・業務書込0。合計2,108要求・Notion1,702要求の今回限りの復旧費用であり、通常定時へ同じ再読取を追加した設定ではない。モデル・上流APIは全0。独立監査では全50の通常publisher PRE、元全native、最終全nativeと物理PRE/POSTを照合した。生データと元停止記録を保持し、旧判定入力SHAの不明は変更しない。
+
+通常処理の#436は00:40:20にmain `c75be568`、version `65cd3ec5-5bb7-42bd-a7ec-ce6b99e21deb`を配信。非Yahoo27取得元を先行させ、同runの両summary・全source成功を結合する。#438は00:49:58にmain `8dfe0e05`、version `57896b13-29fa-43b3-bfd0-f6bbb3826067`を配信。追加300ms待機を省き、実Yahooの共通1秒制御と10年取得・権利原値・期限を保持する。通信削減と待機条件は[容量監査](yahoo-shared-capacity-20261016.md)へ記録し、次回定時全量の完走・実料金は未受入。
+
+#439の保有株価格の事前主体資格もmain `080cf156`へ統合し、01:09:15にversion `67e59d11-4dda-482f-bc99-63fbae6104a5`を配信した。有限windowを価格書込前に資格化し、確定する商号不一致を既知HOLDとして残す。ACK不明・原本破損は従来の停止を維持する。[実原本2例と検証](holdings-price-preflight-20261017.md)を参照。これを価格公開の完了に数えない。
+
+RAW同一poolは00:39:23にrun38919797532が成功。500検証（新483・既存17）、cursor12,682/78,832・残66,150、上流GET0、Notion10要求、elapsed2,501,889ms。次の同一pool run38925685573へ継続した。全範囲anti-join・全20機能の最終受入は未完。
+
+私有証跡は`A671-mechanical-remaining-v1/batch-01`、`A671-batch01-post-readonly-v2/{SUCCESS,root-independent-acceptance}.json`、`A621-finite-runner-v1`、`continuation/cf-main-{436,438,439}-logs.txt`、`continuation/job-117036506509.log`。最終POST gzip SHAは`310faa940044cffd6371d8450c204e92cf3211fa4c19f6ff4c61fe857755f0d7`。
+
 ## 10月17日00:36 JSTの追加確認
 
 211Aの有報がS100WW30からS100Z7YEへ変わった1社だけを、配備済みmain `43d563a3`の通常writer/pipelineとローカル`Cloudflare/clef-flash`で00:32:39〜00:34:40に再判定した。公式重み・processor・較正と同じ入力7,395 tokens／6問に束縛し、spawn1・Noul1・実forward1、既存1行のPATCH1・判定済。native138（Notion128・hosted3・D1読取7）、121.829秒。外部LLM・上流API・D1書込・再forwardは0。
