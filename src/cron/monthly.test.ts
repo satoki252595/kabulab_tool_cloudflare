@@ -1,12 +1,50 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { gunzipSync } from "node:zlib";
+import { parseChartResponse } from "../shared/yahoo/client.js";
+import { sma } from "../shared/indicators/technical.js";
+import { calculateTechnicalScore } from "../shared/scoring.js";
 
-import { groupBenefitDisplaySets, runMonthlyRebuild } from "./monthly.js";
+import { groupBenefitDisplaySets, monthlyMaComparison, runMonthlyRebuild } from "./monthly.js";
 import { runDateKeys } from "./daily.js";
 import type { OverlayCollectFn } from "./universe-overlay.js";
 import { fakeOverlayCollect } from "./tests/overlay-batch.js";
 import { makeThrowingSender } from "./tests/overlay-test-sender.js";
 
 const fakeCollect: OverlayCollectFn = fakeOverlayCollect;
+
+describe("月次MA25の価格基準資格", () => {
+  it("実8303の同一原典調整値を比較し、基準不明時はMAだけHOLDして他の技術点を保持する", () => {
+    const fixture = JSON.parse(gunzipSync(readFileSync(new URL("../shared/yahoo/fixtures/stock-daily-scopes-20261014.json.gz", import.meta.url))).toString());
+    const bars = parseChartResponse(JSON.parse(fixture["8303-chart"]), "8303").bars.slice(-130);
+    const index = bars.findIndex(b => b.date === "2026-05-14");
+    const bar = bars[index];
+    const ma25 = sma(bars.slice(0, index + 1).map(b => b.adj!), 25)!;
+    const point = { latestDate: bar.date, latestAdjustedClose: bar.adj!, sma25: ma25 };
+    const proven = monthlyMaComparison(bar.date, point);
+    expect(proven).toEqual({ price: 1606.5400390625, holdReason: null });
+    const inputs = { price: proven.price, ma25, per: null, pbr: null, dividendYield: null,
+      roe: null, yutaiYield: null, rsi14: null, macd: null, macdSignal: null };
+    expect(calculateTechnicalScore(inputs).score).toBe(80);
+    expect(calculateTechnicalScore({ ...inputs, price: bar.close }).score).toBe(60);
+    const faults = [
+      [undefined, "missing_indicator"],
+      [{ ...point, latestDate: null }, "missing_date"],
+      [{ ...point, latestDate: "2026-05-13" }, "date_mismatch"],
+      [{ ...point, latestAdjustedClose: null }, "missing_adjusted_close"],
+      [{ ...point, latestAdjustedClose: 0 }, "invalid_adjusted_close"],
+      [{ ...point, latestAdjustedClose: Infinity }, "invalid_adjusted_close"],
+      [{ ...point, sma25: null }, "missing_ma25"],
+      [{ ...point, sma25: -1 }, "invalid_ma25"],
+    ] as const;
+    for (const [candidate, reason] of faults) {
+      const held = monthlyMaComparison(bar.date, candidate);
+      expect(held).toEqual({ price: null, holdReason: reason });
+      const otherScores = { ...inputs, price: held.price, rsi14: 45, macd: 1, macdSignal: 0.5 };
+      expect(calculateTechnicalScore(otherScores).score).toBe(60);
+    }
+  });
+});
 
 import * as coreSchema from "../shared/db/core-schema.js";
 import {
@@ -44,6 +82,7 @@ describe("runMonthlyRebuild batch writes (L-56)", () => {
     roe: 8,
     roa: 4,
     marketCap: 100000,
+    dataDate: "2026-10-14",
   }));
   const swing = active.map((s) => ({
     stockId: s.id,
@@ -53,6 +92,8 @@ describe("runMonthlyRebuild batch writes (L-56)", () => {
     rsi14: 50,
     macd: 1,
     macdSignal: 0.5,
+    latestAdjustedClose: 1000 as number | null,
+    latestDate: "2026-10-14",
   }));
   const benefits = active.map((s) => ({
     stockId: s.id,
@@ -66,7 +107,8 @@ describe("runMonthlyRebuild batch writes (L-56)", () => {
 
   type Db = Parameters<typeof runMonthlyRebuild>[0];
 
-  function makeStub(benefitRows: typeof benefits = benefits, allRows: typeof benefits = benefitRows) {
+  function makeStub(benefitRows: typeof benefits = benefits, allRows: typeof benefits = benefitRows,
+    financialRows: typeof core = core, indicatorRows: typeof swing = swing) {
     const calls: { table: unknown; rowCount: number; rows: unknown[] }[] = [];
     const fakeDb = {
       update: () => ({ set: () => ({ where: async () => [] as unknown[] }) }),
@@ -122,8 +164,8 @@ describe("runMonthlyRebuild batch writes (L-56)", () => {
               ) => Promise.resolve([row]).then(resolve, reject),
             };
           }
-          if (t === coreSchema.stockFinancials) return core;
-          if (t === swingSchema.stockIndicators) return swing;
+          if (t === coreSchema.stockFinancials) return financialRows;
+          if (t === swingSchema.stockIndicators) return indicatorRows;
           // 同一テーブルに .where() 付き (利回り用) となし (月/ジャンル用) が
           // あるため、await 可能かつ .where() を持つ thenable を返す
           if (t === otakaraSchema.yutaiBenefits) {
@@ -156,6 +198,29 @@ describe("runMonthlyRebuild batch writes (L-56)", () => {
     const { db } = makeStub();
     const result = await runMonthlyRebuild(db, { collectOverlay: fakeCollect, sendOverlayBatch: makeThrowingSender() });
     expect(result.scoredStocks).toBe(N);
+    expect(result.maDeviationHolds).toEqual([]);
+  });
+
+  it("通常月次も実原典のadjcloseをスコアへ接続し、旧NULLはMAだけHOLD、株価/元日付を保持", async () => {
+    const fixture = JSON.parse(gunzipSync(readFileSync(new URL("../shared/yahoo/fixtures/stock-daily-scopes-20261014.json.gz", import.meta.url))).toString());
+    const bars = parseChartResponse(JSON.parse(fixture["8303-chart"]), "8303").bars.slice(-130);
+    const index = bars.findIndex(b => b.date === "2026-05-14");
+    const bar = bars[index];
+    const ma25 = sma(bars.slice(0, index + 1).map(b => b.adj!), 25)!;
+    const financialRows = core.map(row => ({ ...row, price: bar.close!, dataDate: bar.date }));
+    const indicatorRows = swing.map(row => ({ ...row, sma25: ma25, latestAdjustedClose: bar.adj!, latestDate: bar.date }));
+    for (const held of [false, true]) {
+      const inputRows = indicatorRows.map(row => ({ ...row, latestAdjustedClose: held ? null : row.latestAdjustedClose }));
+      const { db, calls } = makeStub(benefits, benefits, financialRows, inputRows);
+      const result = await runMonthlyRebuild(db, { collectOverlay: fakeCollect, sendOverlayBatch: makeThrowingSender() });
+      expect(result.maDeviationHolds).toHaveLength(held ? N : 0);
+      if (held) expect(result.maDeviationHolds[0].reason).toBe("missing_adjusted_close");
+      const savedFin = calls.find(c => c.table === otakaraSchema.stockFinancials)!.rows[0];
+      const savedScore = calls.find(c => c.table === otakaraSchema.stockScores)!.rows[0];
+      expect(savedFin).toMatchObject({ price: 1616.5, dataDate: "2026-05-14" });
+      // MA=80/RSI=40/MACD=60。旧raw比較なら53点となるため、この期待値で配線も固定する。
+      expect(savedScore).toMatchObject({ technicalScore: held ? 47.27 : 62 });
+    }
   });
 
   it("insert は ceil(N/5) + ceil(N/16) 回だけ呼ばれる", async () => {
@@ -221,6 +286,8 @@ describe("runMonthlyRebuild batch writes (L-56)", () => {
       .flatMap((c) => (c.rows as { stockId: number }[]).map((r) => r.stockId))
       .sort((a, b) => a - b);
     expect(allFinIds).toEqual(active.map((s) => s.id));
+    expect(calls.filter(c => c.table === otakaraSchema.stockFinancials)
+      .flatMap(c => c.rows as { dataDate: string }[]).every(row => row.dataDate === "2026-10-14")).toBe(true);
   });
 
   it("不認定の company 値・source NULL 値は利回りに入れない (null で書く)", async () => {

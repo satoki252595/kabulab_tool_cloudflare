@@ -9,7 +9,7 @@
 | 配当・分割／併合イベント | Yahooの原timestamp、分子・分母・比率、配当額・通貨、対応価格SHA、訂正履歴を保存。支払日はnot-provided | 取得応答のイベントを全期間の完全な権利台帳とは扱わない |
 | 終値トレンド・スクリーニング・モメンタム | `buildStockSnapshot`と保存時の`screenStock`はSMAと同じ調整済み終値を比較。`buildMomentumRow`は同一Chart応答の末尾90本の調整済み終値を使用し、欠測時は通常終値で補完せずSTOP | 次の通常日次による再生成と本番読戻し。修正前の保存投影の全量切替えは未受入 |
 | ATR・値幅・前日比・出来高比・取引価格シグナル | OHLCV系計算は受領値を使用。シグナルの約定用価格も受領closeを保持 | 株式日次にはVWAPのzero-split gateを共用していない。OHLC・出来高の基準一致や権利日をまたぐ計算は未受入。調整済み系列への単純な係数適用で対応済みにしない |
-| 優待の月次移動平均乖離スコア | `monthly.ts`が受領株価`core.price`と調整済み`swing.sma25`を`scoreMADeviation`へ渡す | 同じ日付・同じ価格基準の入力を証明する残件。このPRの終値トレンド修正だけで月次スコアも受入済みにしない |
+| 優待の月次移動平均乖離スコア | 同一indicator upsertでSMAと共に保存する`latest_adjclose`を同日付の場合だけ使用。旧NULL・日付不一致はMAだけHOLDし、RSI/MACDを按分。額面/要約変更で技術点は保持。0031は本番適用・全旧行保持を確認 | 次回通常日次による新列充填、月次のHOLD数・保存結果の確認。コード/CIだけで全量受入済みにしない |
 | VWAP・5分足 | quote受領値のbasisを明示。日足原本の観測期間で分割なしを確認できる窓だけを認定 | 分割をまたぐ窓やprovider側の価格・出来高の株数単位が不明なものはHOLD。係数を推測で再適用しない |
 | EPS・PER・時価総額 | QuoteSummary内の発行株数・浮動株数・現金／売上の1株値から株数尺度の矛盾を検出したときはNULLとする | これは応答内の整合検査であり、増資の正式な効力日・発行済株数の履歴・各指標の基準日の統一を保証しない |
 | 保有明細の期末参考時価 | 同一発行体・JPY・当期末当日のraw終値と期末株数を結合し、当期末後の分割を観測した場合は評価を保留する。新規取得や局所係数補完は行わない | 原本の観測範囲までの検査であり、全権利イベント・capture後の状態・不明な株数基準まで確認したとは扱わない。全量公開も別途受入が必要 |
@@ -49,3 +49,22 @@ Yahooの調整済み終値は分割・配当を反映する系列であり、通
 公開projectionだけでなく、私有の全原本Chart 1,221本（SHA `bf9735d9ae7af4888625a5a6e5a53c9f3d69588273a1cb79a4cacbcc5d5244db`）とQuoteSummary（SHA `0eccbe841e38ce0e236044ed3958c28d1308e3c4d0252df6c4cc86d2491d4191`）も追加通信0でreplayした。過去245本のRSI履歴HOLDを保持し、直近130本、モメンタム90本と元clock/bytesを検証。CSVのSHAは`98d931db7443d873fb497b0015ac291cbda5eded9485bbe342b0a81c93a4b5d4`。元原本の実体と私有receiptはGitに含めない。
 
 保存時の`screenStock`呼出しも同じadjcloseを渡す。実原典への明示fault injectionで、保存する`trend_short`と`trend_ok_short`が同じ判定となり、`latest_close`は受領1,478.5円のまま保持することを検証した。追加後のcron・日次資格・スクリーニング26 suite/437 PASS、TypeScriptと対象ESLintもPASS。保存済みraw入力の既存修復器を再実行したり、過去のスクリーニング行を一括変更したりはしない。
+
+## 優待月次のMA25基準
+
+通常月次と優待更新の全scoring callerを確認し、月次は同じindicator行に保存した調整済み終値とSMAだけを比較する。D1日足の既存有効行は通常では遡及更新しないため、日付一致だけでSMAと同一原本と主張せず、生成SQL0031でnullable REAL 1列を追加する。列には係数ではなく同じ応答の実adjcloseを保存し、SMAと同じ1文upsertで更新する。日次の既存起動時SELECTに索引結合して列検査も行い、取得/クエリの回数を増やさない。
+
+実8303の2026-05-14 projectionでは、受領close1,616.5と調整値1,606.5400390625が異なり、同一応答のSMA25=1,692.4474072265625と比較したMA点は60から80へ変わる。これを回帰検証し、未取得・日付欠測/不一致・非正/非有限の調整値・MA欠測/不正はMAだけHOLDとなること、他の技術点を保持することを確認した。月次保存の財務日付も元core日付を保持する。優待額面の再計算は保存済み技術点をCASで保持し、ファンダメンタル/総合だけを共有関数で再計算する。
+
+Nix Node22.22.2/pnpm9.15.9で関連28 suite/558 PASS、公開消費者/スコアの追加3 suite/91 PASS、TypeScript・対象ESLint PASS。0031のローカル移行は既存全列・索引・行数の不変、新列の全旧行NULL、旧writer SQL互換を検証し、未適用は取得前にSTOPする。定期処理で追加の取得元GET・モデル・依存・D1リクエストは0、日次indicator bindは38列×2行=76で100上限内。初回有効値の保存後は旧株価writerを再開しない。次回定時の新列充填・月次読戻しは別受入である。増資等の統一契約やOHLCV基準の未完は#343に保持する。
+
+## 0031本番schema受入（2026-10-16 23:49 JST）
+
+生成SQL64B（SHA `ace1151f44fc56f83eaa67bd9e3bbc69613cbf7aa100b1e56ff95f02a9ec1849`）だけを単発適用した。旧3,767行の全38列・索引を直前の全件読取と照合し、追加後も全旧値と索引を保持、新39列目はnullable REAL/default NULLで全件NULLだった。株価等の業務値更新、取得元GET、モデル呼出しは0。既知のローカル株価CLIとGitHub stock-syncの実行中・待機中が0であることを直前確認した。
+
+PREの最初の検証はローカルSQLite行オブジェクトのprototype差でSTOPした。元STOP・native応答を保持し、値を変更せず通常オブジェクトへ正規化して同じ全値照合を完了した。PREは元開始から157秒、D1 SELECT計6・DDL0。単発適用は別intentで21.38秒、D1 SELECT8・batch1、Notion読取4/変更3・添付読取1、再送0。各native応答のHTTP status/bytes/SHAとSELECTのrows_written=0を保存し、全POSTをgzipで物理保管後に全バイト読戻しした。署名付きURLや原行はGitに含めない。
+
+- [物理PRE](https://www.notion.so/3fbd74ff84cd81249115fb460df19c55): gzip726,254B、SHA `d65051abc91e8ade9b7c881f3c92e99d023e4cd621f0cda0d0c3632422ef631b`。
+- [物理POST](https://www.notion.so/3fbd74ff84cd81e8afcfcdf89fc84b2c): gzip735,302B、SHA `9a36981813f6e38da782e72f75b18cecac1cefb6d5ee16e57ad95e8c875b083a`、展開4,785,914B、SHA `73647a23909ac0c111a70b4e176762800f3f4f823093ce5fec7625c6554a0876`。
+
+これはschemaだけの受入であり、列は全NULLのままである。通常日次による同一snapshot値の充填と月次の保存結果・HOLD数は未受入。初回充填後は旧株価writerの再開を禁止する。

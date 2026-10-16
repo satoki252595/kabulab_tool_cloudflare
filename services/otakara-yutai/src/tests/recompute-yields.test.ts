@@ -115,6 +115,17 @@ const finOf = (stockId: number) =>
   };
 
 describe("planYieldRecompute", () => {
+  it("利回り変更では同一調整系列で計算済みの技術点を保持し、受領price/MAから再計算しない", async () => {
+    // 実8303の2026-05-14 projection: raw=1616.5/adj=1606.5400390625、同一応答SMA25。
+    sqlite.prepare("UPDATE otakara_stock_financials SET price = ?, ma_25 = ? WHERE stock_id = ?")
+      .run(1616.5, 1692.4474072265625, STOCK_A);
+    sqlite.prepare("UPDATE otakara_stock_scores SET technical_score = ? WHERE stock_id = ?").run(80, STOCK_A);
+    const plan = await planYieldRecompute(db, [STOCK_A]);
+    expect(plan.entries[0].scoreNext?.technicalScore).toBe(80);
+    expect(plan.entries[0].scoreNext?.totalScore).toBeCloseTo(plan.entries[0].scoreNext!.fundamentalScore * 0.6 + 80 * 0.4, 2);
+    expect(finOf(STOCK_A).price).toBe(1616.5);
+  });
+
   it("変わる銘柄だけ changed になり、財務行の無い銘柄は対象外", async () => {
     const plan = await planYieldRecompute(db, [STOCK_A, STOCK_B, STOCK_C]);
     expect(plan.skippedNoRow).toEqual([STOCK_B]);
@@ -156,7 +167,7 @@ describe("planYieldRecompute", () => {
         next: null,
         changed: true,
         scorePrev: null,
-        scoreNext: expect.anything(),
+        scoreNext: null,
         scoreChanged: false,
       },
     ]);

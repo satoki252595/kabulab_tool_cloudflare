@@ -14,6 +14,7 @@
  */
 
 export interface ScoringInput {
+  /** MA25と同じ系列・日付の比較価格。財務/優待利回りの現在株価とは別に資格化する。 */
   price: number | null;
   per: number | null;
   pbr: number | null;

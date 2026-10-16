@@ -97,7 +97,13 @@ async function requestRouter(method: string, path: string, body?: unknown): Prom
     saved[path] = { ...(saved[path] as object), ...(body as { properties: Record<string, unknown> }).properties };
     return { object: path.startsWith("/databases/") ? "database" : "page", id: path.split("/").at(-1) };
   }
-  if (method === "POST") { saved[`/pages/${"e".repeat(32)}`] = (body as { properties: Record<string, unknown> }).properties; return { object: "page", id: "e".repeat(32) }; }
+  if (method === "POST") {
+    const count = Object.values(saved).filter(value => Object.hasOwn(value as object, "銘柄名")).length;
+    if (count > 1) throw new Error("Protocol fixture supports two distinct rows");
+    const id = (count === 0 ? "e" : "f").repeat(32);
+    saved[`/pages/${id}`] = (body as { properties: Record<string, unknown> }).properties;
+    return { object: "page", id };
+  }
   const properties = saved[path] as Record<string, unknown> | undefined;
   return { object: "page", id: path.split("/").at(-1), parent: { type: "database_id", database_id: (path.includes("a".repeat(32)) ? "p" : "d").repeat(32) },
     archived: false, in_trash: false, properties: { ...legacy, ...mirrored(holdingProperties(source,args.ownerName,holding)), Key: { type: "title", title: [{ type: "text", plain_text: `${source.docId}:type1`, text: { content: `${source.docId}:type1` } }] },
@@ -256,8 +262,8 @@ describe("株式保有の原典限定writer", () => {
   it.each([false, true])("既存行のfresh差分=%s: 変更時は止め、株数・帳簿価額だけを確定して旧値を保つ", async drift => {
     const existing = { object: "page", id: "e".repeat(32), parent: { type: "database_id", database_id: "d".repeat(32) },
       archived: false, in_trash: false, properties: { ...legacy, ...mirrored(holdingProperties(source,args.ownerName,holding)), "原本照合済": { type: "checkbox", checkbox: false } } };
-    holdingPeriodRows = async () => [existing];
     let patched = false;
+    holdingPeriodRows = async () => patched ? [await requestRouter("GET", `/pages/${existing.id}`)] : [structuredClone(existing)];
     vi.mocked(notionRequest).mockImplementation(async (method, path, body) => {
       if (path === `/pages/${existing.id}`) {
         if (method === "GET" && !patched) {
@@ -315,7 +321,7 @@ describe("株式保有の原典限定writer", () => {
     const second = publishVerifiedShareholdings({ ...args, archivePageId: "c".repeat(32), budget });
     expect((await first).status).toBe("published");
     expect((await second).status).toBe("held");
-    expect(vi.mocked(notionRequest).mock.calls.filter(([method, path]) => method === "POST" && path === `/databases/${"d".repeat(32)}/query`)).toHaveLength(1);
+    expect(vi.mocked(notionRequest).mock.calls.filter(([method, path]) => method === "POST" && path === `/databases/${"d".repeat(32)}/query`)).toHaveLength(2);
   });
 
   it("前回unknownは次定時にblind replayせず、原本GET/行書込も0", async () => {
@@ -531,6 +537,38 @@ describe("全原表へ束縛するsource有限window", () => {
     await expect(publishVerifiedShareholdings({ ...args, maxRows: 1 })).rejects.toThrow("全facts/order");
     expect(queryUniqueRow).not.toHaveBeenCalled();
     expect(savedInfo().sourceNextHoldingOffset).toBe(1);
+  });
+
+  it("既完prefixの原本列が変われば残windowを書かず、元cursorを保持してHOLDする", async () => {
+    const rows = windowRouter();
+    await publishVerifiedShareholdings({ ...args, maxRows: 1 });
+    Object.assign(rows[`/pages/${"e".repeat(32)}`].properties, mirrored({ "保有株数": { number: 13 } }));
+    vi.mocked(notionRequest).mockClear();
+    expect(await publishVerifiedShareholdings({ ...args, maxRows: 1 }))
+      .toMatchObject({ status: "held", reason: expect.stringContaining("既完window") });
+    expect(Object.keys(rows)).toHaveLength(1);
+    expect(savedInfo().sourceNextHoldingOffset).toBe(1);
+    expect(testProperties(saved[sourcePath])["保有明細状態"].select!.name).toBe("要確認");
+    expect(vi.mocked(notionRequest).mock.calls.filter(([method, path]) => method === "POST" && path === `/databases/${"d".repeat(32)}/query`)).toHaveLength(1);
+    expect(vi.mocked(notionRequest).mock.calls.some(([method, path]) => method === "POST" && path === "/pages")).toBe(false);
+  });
+
+  it("最終window後の全原表でdriftを検出したら完了や価格queueを登録せず、unknownを保持する", async () => {
+    const rows = windowRouter();
+    await publishVerifiedShareholdings({ ...args, maxRows: 1 });
+    const listing = holdingPeriodRows; let calls = 0;
+    holdingPeriodRows = async () => {
+      if (++calls === 2) Object.assign(rows[`/pages/${"e".repeat(32)}`].properties, mirrored({ "出典Context": { rich_text: [{ text: { content: "EXPLICIT_POST_WINDOW_DRIFT" } }] } }));
+      return listing();
+    };
+    await expect(publishVerifiedShareholdings({ ...args, maxRows: 1 })).rejects.toThrow("全原表の最終読戻し");
+    expect(Object.keys(rows)).toHaveLength(2);
+    expect(savedInfo().sourceNextHoldingOffset).toBe(1);
+    expect(testProperties(saved[sourcePath])["保有明細状態"].select!.name).toBe("実行中（結果未確定）");
+    expect(testProperties(saved[sourcePath])["保有価格再開情報"]).toBeUndefined();
+    vi.mocked(notionRequest).mockClear();
+    await expect(publishVerifiedShareholdings({ ...args, maxRows: 1 })).rejects.toThrow("前回結果が未確定");
+    expect(vi.mocked(notionRequest).mock.calls.every(([method]) => method === "GET")).toBe(true);
   });
 
   it.each(["rotation", "different-object", "different-version"] as const)("Filesの%sを全source CASで検査し、再署名だけを許容する", async change => {
