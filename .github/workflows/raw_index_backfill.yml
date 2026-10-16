@@ -37,11 +37,11 @@ on:
         type: string
         default: "0"
       reconcile_sha256:
-        description: "人間判断後の単一index_inflight回復だけ。apply/limit1/両SHA必須、通常は空欄"
+        description: "人間判断後の単一raw/index_inflight回復。apply/limit1/両SHA必須、通常は空欄"
         type: string
         default: ""
       reconcile_state_sha256:
-        description: "旧state.jsonの全bytes SHA256。intent既存/競合/結果不明は再送せず停止"
+        description: "旧state全bytes SHA256。失敗runを自動再dispatchしない、intent unknownも保全停止"
         type: string
         default: ""
 concurrency:

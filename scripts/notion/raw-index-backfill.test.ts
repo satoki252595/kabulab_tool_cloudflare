@@ -16,7 +16,7 @@ const raw: CanonicalRawFile = { pageId: "b".repeat(32), filename: "edinet_csv_10
 const { sourceUrl: _sourceUrl, ...safe } = raw;
 const item: RawItem = { ...safe, source: "EDINET", licenseTag: "commercial-ok", convertStatus: "完了", docId: "S100TEST" };
 const key = canonicalRawKey(raw, item.docId), legacy = canonicalRawKey(raw, null);
-afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); vi.resetModules(); });
 const opts: RawBackfillOptions = { mode: "apply", planId: "test-plan", limit: 50, maxBytes: 67108864, maxSeconds: 1200, expectedCount: 1 };
 
 describe("fixed SHA SELECT bounded native retry", () => {
@@ -469,6 +469,166 @@ describe("人間判断後の単一索引reconcile", () => {
     const f = await interrupted();
     await expect(runRawBackfill({ ...f.reconcile, ...change }, f.io)).rejects.toThrow("明示reconcile");
     expect(f.io.get).not.toHaveBeenCalled(); expect(f.io.put).not.toHaveBeenCalled(); expect(f.io.insert).not.toHaveBeenCalled();
+  });
+});
+
+describe("人間判断後の単一raw reconcile", () => {
+  async function interrupted() {
+    const f = fixture(), put = f.io.put;
+    f.io.put = vi.fn(async (...args: Parameters<BackfillIo["put"]>) => { if (args[3] === f.io.rawBucket) throw new Error("old raw send unknown"); await put(...args); });
+    await expect(runRawBackfill(opts, f.io)).rejects.toThrow("old raw send unknown"); f.io.put = put;
+    const stateKey = "ops-bucket/ops/raw-index/test-plan/state.json", activeKey = "ops-bucket/ops/raw-index/active.json";
+    const oldState = f.objects.get(stateKey)!, oldActive = f.objects.get(activeKey)!;
+    const reconcile: RawBackfillOptions = { ...opts, limit: 1, maxSeconds: 600, cutoff: "2026-10-14T00:00:00.000Z", reconcileSha256: sha,
+      reconcileStateSha256: createHash("sha256").update(oldState.body).digest("hex") };
+    for (const fn of [f.io.get, f.io.put, f.io.list, f.io.download, f.io.index, f.io.insert, f.io.antiJoin, f.io.emit]) vi.mocked(fn).mockClear();
+    f.events.length = 0; f.emitted.length = 0;
+    return { ...f, reconcile, stateKey, activeKey, oldState, oldActive };
+  }
+  it("同⑤fullSHA→intent CAS/fullGET→raw単発CAS/fullGET→complete、旧state/索引を変更しない", async () => {
+    const f = await interrupted(), result = await runRawBackfill(f.reconcile, f.io);
+    expect(result).toMatchObject({ status: "manual_raw_reconciliation_complete", rawPuts: 1, rawGets: 3, d1Reads: 3, d1Inserts: 0,
+      receiptGets: 13, receiptPuts: 2, r2Gets: 16, requestLimit: 25, notionDownloadAttempts: 1, notionNativeRequestLimit: 3,
+      oldLatchUnchanged: true, cursor: 0, stateResets: 0, upstreamGets: 0, notionApiResponseBytesMeasured: false, httpHeadersMeasured: false });
+    expect(f.io.download).toHaveBeenCalledWith(item, [item], expect.objectContaining({ signal: expect.any(AbortSignal),
+      notionRequestOptions: { singleAttempt: true, beforeRequest: expect.any(Function) }, onAttempt: expect.any(Function) }));
+    expect(f.io.put).toHaveBeenCalledTimes(3); expect(f.rawPuts()).toHaveLength(1);
+    expect(f.io.insert).not.toHaveBeenCalled(); expect(f.io.list).not.toHaveBeenCalled();
+    expect(f.objects.get(f.stateKey)).toEqual(f.oldState); expect(f.objects.get(f.activeKey)).toEqual(f.oldActive);
+    const intent = `ops/raw-index/test-plan/resolutions/${sha}/intent.json`;
+    const intentAt = f.events.indexOf(`ops-bucket:PUT:${intent}`), rawAt = f.events.indexOf(`raw-bucket:PUT:${key}`);
+    expect(f.events.indexOf("hosted:GET")).toBeLessThan(intentAt);
+    expect(f.events.indexOf(`ops-bucket:GET:${intent}`, intentAt)).toBeLessThan(rawAt);
+    expect(f.events.indexOf("fsync:raw_reconciliation_put_inflight")).toBeLessThan(rawAt);
+    expect(f.objects.get(`raw-bucket/${key}`)!.body).toEqual(body);
+    for (const call of vi.mocked(f.io.put).mock.calls) expect(call[2]).toBeNull();
+    const reads = await Promise.all(vi.mocked(f.io.get).mock.results.map(result => result.value));
+    expect(result).toMatchObject({ measuredPayloadBytes: reads.reduce((sum, read) => sum + (read === null ? 0 : read.body.length), 0) +
+      vi.mocked(f.io.put).mock.calls.reduce((sum, call) => sum + call[1].length, 0) + body.length });
+    vi.mocked(f.io.put).mockClear(); vi.mocked(f.io.download).mockClear();
+    await expect(runRawBackfill(f.reconcile, f.io)).rejects.toThrow("intentが既存"); expect(f.io.put).not.toHaveBeenCalled(); expect(f.io.download).not.toHaveBeenCalled();
+  });
+  it.each(["source-sha", "wire-count", "raw-existing", "index-existing", "state-sha"])("資格失敗 %s はintent/raw/INSERT0", async fault => {
+    const f = await interrupted();
+    if (fault === "source-sha") { const download = f.io.download; f.io.download = vi.fn(async (...args: Parameters<BackfillIo["download"]>) => ({ ...await download(...args), body: new Uint8Array([1, 2, 3, 4]) })); }
+    if (fault === "wire-count") { const download = f.io.download; f.io.download = vi.fn(async (...args: Parameters<BackfillIo["download"]>) => ({ ...await download(...args), wireBytes: 999 })); }
+    if (fault === "raw-existing") f.objects.set(`raw-bucket/${key}`, { body, etag: '"existing"' });
+    if (fault === "index-existing") f.rows.set(sha, expectedRawIndex(item, f.io.rawBucket, key));
+    if (fault === "state-sha") f.reconcile.reconcileStateSha256 = "0".repeat(64);
+    await expect(runRawBackfill(f.reconcile, f.io)).rejects.toThrow(); expect(f.io.put).not.toHaveBeenCalled(); expect(f.io.insert).not.toHaveBeenCalled();
+  });
+  it.each(["success-partial", "metadata-429", "metadata-extra", "hosted-wait-deadline"])("shared native実数/.25rps/待機後guard: %s", async fault => {
+    const f = await interrupted();
+    vi.resetModules(); vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] }); vi.setSystemTime(f.io.now());
+    const current = await import("./raw-index-backfill.js"), client = await import("../../src/shared/notion-archive/client.js");
+    const { notionEnv } = await import("../../src/shared/notion-archive/env.js");
+    vi.spyOn(notionEnv, "NOTION_TOKEN").mockReturnValue("protocol-test-token"); vi.spyOn(notionEnv, "NOTION_MAX_RPS").mockReturnValue(1.6);
+    client.setNotionMaxRps(0.25); f.io.now = Date.now;
+    const starts: number[] = []; let hosted = 0;
+    const native = vi.spyOn(globalThis, "fetch").mockImplementation(async input => {
+      starts.push(performance.now());
+      if (String(input).startsWith("https://api.notion.com/")) {
+        if (fault === "hosted-wait-deadline") vi.setSystemTime(Date.now() + 534000);
+        return new Response(JSON.stringify({ results: [], has_more: false, next_cursor: null }), { status: fault === "metadata-429" ? 429 : 200 });
+      }
+      hosted++;
+      if (fault === "success-partial" && hosted === 1) {
+        let sent = false; return new Response(new ReadableStream<Uint8Array>({ pull(controller) {
+          if (!sent) { sent = true; controller.enqueue(body.subarray(0, 2)); } else controller.error(new TypeError("terminated"));
+        } }));
+      }
+      return new Response(body);
+    });
+    const find = vi.fn(async (_shas: readonly string[], options?: Parameters<typeof client.notionRequest>[3]) => {
+      await client.notionRequest("POST", `/databases/${"a".repeat(32)}/query`, {}, options);
+      if (fault === "metadata-extra") await client.notionRequest("POST", `/databases/${"a".repeat(32)}/query`, {}, options);
+      return new Map([[sha, { raw, file: { name: raw.filename, url: "https://file.notion.so/source.zip" } }]]);
+    });
+    f.io.download = current.createRawDownloader(find);
+    const settled = current.runRawBackfill(f.reconcile, f.io).then(value => ({ value, error: null }), error => ({ value: null, error }));
+    await vi.runAllTimersAsync(); const outcome = await settled;
+    expect(find).toHaveBeenCalledOnce(); expect(client.notionStats().requests).toBe(1);
+    if (fault === "success-partial") {
+      expect(outcome.error).toBeNull(); expect(outcome.value).toMatchObject({ notionApiNativeRequests: 1, notionDownloadAttempts: 2,
+        notionNativeRequests: 3, notionDownloadBytes: 6, requests: 25, requestLimit: 25 });
+      expect(starts).toEqual([0, 4000, 8000]); expect(native).toHaveBeenCalledTimes(3); expect(f.rawPuts()).toHaveLength(1);
+    } else {
+      expect(outcome.error).toBeInstanceOf(Error); expect(starts).toEqual([0]); expect(native).toHaveBeenCalledOnce();
+      expect(f.io.put).not.toHaveBeenCalled(); expect(f.io.insert).not.toHaveBeenCalled();
+      if (fault === "hosted-wait-deadline") expect(outcome.error.message).toContain("65秒headroom");
+    }
+    vi.resetModules();
+  });
+  it("明示metadata guardはcacheを再利用せず同SHAの現在値をqueryし直す", async () => {
+    const find = vi.fn(async () => new Map([[sha, { raw, file: { name: raw.filename, url: "https://file.notion.so/source.zip" } }]]));
+    const download = vi.fn(async (_file, _context, options?: ArchivedDownloadOptions) => {
+      await options!.onAttempt!({ phase: "start", attempt: 1, receivedBytes: 0 });
+      await options!.onAttempt!({ phase: "complete", attempt: 1, receivedBytes: body.length, status: 200 }); return body;
+    });
+    const get = createRawDownloader(find, download); await get(item, [item]);
+    const options = { singleAttempt: true, beforeRequest: vi.fn() }; await get(item, [item], { notionRequestOptions: options });
+    expect(find).toHaveBeenCalledTimes(2); expect(vi.mocked(find).mock.calls[1]).toEqual([[sha], options]);
+  });
+  it.each(["third-hosted", "hosted-bytes", "post-sha", "raw-race", "index-race", "state-race"])("有限予算/直前/POST %s は追加mutation0", async fault => {
+    const f = await interrupted();
+    if (fault.startsWith("third") || fault === "hosted-bytes") f.io.download = vi.fn(async (_item, _cohort, options) => {
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        await options!.onAttempt!({ phase: "start", attempt, receivedBytes: 0 });
+        await options!.onAttempt!({ phase: "complete", attempt, receivedBytes: fault === "hosted-bytes" ? 67108865 : 1, status: 200 });
+      } return { body, wireBytes: 3 };
+    });
+    const get = f.io.get, index = f.io.index; let rawReads = 0, stateReads = 0, indexReads = 0;
+    f.io.get = vi.fn(async (...args: Parameters<BackfillIo["get"]>) => {
+      const found = await get(...args);
+      if (args[0] === key && args[1] === f.io.rawBucket && ++rawReads === (fault === "raw-race" ? 2 : 3)) {
+        if (fault === "raw-race") return { body, etag: '"concurrent"' };
+        if (fault === "post-sha") return { ...found!, body: new Uint8Array([1, 2, 3, 4]) };
+      }
+      if (args[0].endsWith("state.json") && ++stateReads === 2 && fault === "state-race") return { ...found!, etag: '"changed"' };
+      return found;
+    });
+    if (fault === "index-race") f.io.index = vi.fn(async digest => ++indexReads === 2 ? expectedRawIndex(item, f.io.rawBucket, key) : index(digest));
+    await expect(runRawBackfill(f.reconcile, f.io)).rejects.toThrow(); expect(f.io.insert).not.toHaveBeenCalled();
+    expect(f.rawPuts()).toHaveLength(fault === "post-sha" ? 1 : 0);
+    expect(f.objects.has(`ops-bucket/ops/raw-index/test-plan/resolutions/${sha}/complete.json`)).toBe(false);
+    expect(f.objects.get(f.stateKey)).toEqual(f.oldState);
+    if (fault === "third-hosted") expect(f.emitted.filter(r => (r as { phase?: string; attemptPhase?: string }).phase === "hosted_read_attempt" && (r as { attemptPhase?: string }).attemptPhase === "start")).toHaveLength(2);
+    if (fault === "hosted-bytes") expect(f.emitted).toContainEqual(expect.objectContaining({ phase: "hosted_read_attempt", notionDownloadBytes: 67108865 }));
+  });
+  it.each([true, false])("intent PUT unknown/実適用=%s はraw0・同run再送0（不在intentの再dispatchは禁止）", async applied => {
+    const f = await interrupted(), put = f.io.put;
+    f.io.put = vi.fn(async (...args: Parameters<BackfillIo["put"]>) => { if (applied) await put(...args); throw new Error("intent unknown"); });
+    await expect(runRawBackfill(f.reconcile, f.io)).rejects.toThrow("intent unknown"); expect(f.io.put).toHaveBeenCalledTimes(1); expect(f.rawPuts()).toHaveLength(0);
+    expect(f.emitted).toContainEqual(expect.objectContaining({ phase: "resolution_receipt_inflight" }));
+    expect(f.objects.get(f.stateKey)).toEqual(f.oldState);
+    if (applied) { vi.mocked(f.io.put).mockClear(); await expect(runRawBackfill(f.reconcile, f.io)).rejects.toThrow("intentが既存"); expect(f.io.put).not.toHaveBeenCalled(); }
+    else expect(f.objects.has(`ops-bucket/ops/raw-index/test-plan/resolutions/${sha}/intent.json`)).toBe(false);
+  });
+  it.each([["raw", true], ["raw", false], ["complete", true], ["complete", false]] as const)("%s PUT unknown/実適用=%s は既知intentで次明示runも送信0", async (phase, applied) => {
+    const f = await interrupted(), put = f.io.put;
+    f.io.put = vi.fn(async (...args: Parameters<BackfillIo["put"]>) => {
+      if (phase === "raw" ? args[3] === f.io.rawBucket : args[0].endsWith("/complete.json")) {
+        if (applied) await put(...args); throw new Error("raw operation unknown");
+      } await put(...args);
+    });
+    await expect(runRawBackfill(f.reconcile, f.io)).rejects.toThrow("raw operation unknown");
+    expect(f.objects.get(f.stateKey)).toEqual(f.oldState); expect(f.io.insert).not.toHaveBeenCalled();
+    vi.mocked(f.io.put).mockClear(); vi.mocked(f.io.download).mockClear();
+    await expect(runRawBackfill(f.reconcile, f.io)).rejects.toThrow("intentが既存"); expect(f.io.put).not.toHaveBeenCalled(); expect(f.io.download).not.toHaveBeenCalled();
+  });
+  it("raw送信前fsync後の待機で65秒余裕を失えばrawPUT0、intentを残す", async () => {
+    const f = await interrupted(), emit = f.io.emit; let now = f.io.now(); f.io.now = () => now;
+    f.io.emit = vi.fn(async record => { await emit(record); if ((record as { phase: string }).phase === "raw_reconciliation_put_inflight") now += 535001; });
+    await expect(runRawBackfill(f.reconcile, f.io)).rejects.toThrow("65秒headroom"); expect(f.rawPuts()).toHaveLength(0); expect(f.io.insert).not.toHaveBeenCalled();
+    expect(f.objects.has(`ops-bucket/ops/raw-index/test-plan/resolutions/${sha}/intent.json`)).toBe(true);
+  });
+  it.each([true, false])("通常apply/inspectは元raw_inflightで自動raw再送0（原本実在=%s）", async exists => {
+    const f = await interrupted(); if (exists) f.objects.set(`raw-bucket/${key}`, { body, etag: '"existing"' });
+    try { await runRawBackfill(opts, f.io); } catch { /* The absent original remains an unknown STOP. */ }
+    expect(f.rawPuts()).toHaveLength(0); expect(f.io.download).not.toHaveBeenCalled();
+    vi.mocked(f.io.put).mockClear();
+    await inspectRawBackfill({ ...f.reconcile, mode: "inspect", reconcileSha256: undefined, reconcileStateSha256: undefined }, f.io);
+    expect(f.io.put).not.toHaveBeenCalled();
   });
 });
 
