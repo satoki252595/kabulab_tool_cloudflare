@@ -94,7 +94,7 @@ export async function main() {
             try {
               let rawCapture: YahooRawCapture | undefined;
               const options = {
-                ...(schedule.admission === null ? {} : { beforeRequest: schedule.assertActive }),
+                beforeRequest: schedule.assertActive,
                 onRaw: (capture: YahooRawCapture) => {
                   captures.push({ api: "intra", attempt, capture });
                   rawCapture = capture;
