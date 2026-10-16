@@ -79,7 +79,8 @@ jobs:
               if (!Array.isArray(r.testResults)) throw new Error("テスト結果JSONの構造が不正です");
               const skipped = r.testResults.flatMap(f => {
                 if (typeof f.name !== "string" || !Array.isArray(f.assertionResults)) throw new Error("テスト結果のsuiteが不正です");
-                return f.assertionResults.filter(a => a.status === "pending" || a.status === "skipped")
+                if (f.assertionResults.some(a => typeof a?.fullName !== "string" || !["passed", "failed", "skipped", "pending", "todo", "disabled"].includes(a.status))) throw new Error("個別テスト結果の構造が不正です");
+                return f.assertionResults.filter(a => !["passed", "failed"].includes(a.status))
                   .map(a => `${f.name.replace(process.cwd()+"/","")} > ${a.fullName}`);
               });
               if (skipped.length === 0) { console.log("skip されたテストはありません"); process.exit(0); }
