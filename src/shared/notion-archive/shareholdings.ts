@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { AssertionError } from "node:assert";
 import { createHash } from "node:crypto";
 import { parseShareholdingsData, verifySavedHoldingsSource, type Shareholding, type ShareholdingsSource, type ShareholdingsExtraction } from "../../../services/yuho-quant/src/services/edinet/shareholdings.js";
+import type { OfficialIssuerNames } from "../../../services/yuho-quant/src/services/edinet/shareholdings-issuer-names.js";
 import { HoldingPriceIssuerMismatch, HoldingsPriceIndex, parseHoldingsCodeList, qualifyHoldingValuation, type ArchivedSource, type HoldingValuation } from "../../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js";
 import { edinetArchiveFilename } from "../../../services/yuho-quant/src/services/edinet/archive.js";
 import { findUniqueBackupChildByTitle, queryUniqueRow, recordPrimaryData } from "./archive.js";
@@ -330,13 +331,13 @@ interface PublishHoldingsArgs {
   /** 旧cursor欠測HOLDの明示再資格だけ。全props/clockと全原表factsを物理PREへ固定する。 */
   sourceWindowPre?: ArchivedSource;
   /** publishVerifiedでは物理全文照合済みの原本だけ。保存入口は内部で照合する。 */
-  valuationSources?: { codeList: ArchivedSource; prices: readonly ArchivedSource[]; evidenceScope?: string };
+  valuationSources?: { codeList: ArchivedSource; prices: readonly ArchivedSource[]; evidenceScope?: string; officialIssuerNames?: OfficialIssuerNames; priceIndex?: HoldingsPriceIndex; checkOfficialIssuerNames?: () => Promise<{ status: "verified" } | { status: "held"; reason: string }> };
 }
 
 export interface HoldingPriceBudget { remainingChunks: number; remainingBytes: number }
 export type HoldingPriceSourceLoader = (holdings: readonly Shareholding[], budget: HoldingPriceBudget) => Promise<
-  { status: "ready"; snapshotId: string; evidenceScope: string; codeList: ArchivedSource; prices: ArchivedSource[] } |
-  { status: "held"; reason: string; reasonCode: "snapshot_unavailable" | "budget_exhausted" }
+  { status: "ready"; snapshotId: string; evidenceScope: string; codeList: ArchivedSource; prices: ArchivedSource[]; officialIssuerNames?: OfficialIssuerNames; priceIndex?: HoldingsPriceIndex; checkOfficialIssuerNames?: () => Promise<{ status: "verified" } | { status: "held"; reason: string }> } |
+  { status: "held"; reason: string; reasonCode: "snapshot_unavailable" | "budget_exhausted" | "issuer_source_unavailable" }
 >;
 
 export type PublishHoldingsResult =
@@ -455,13 +456,18 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
   const ready: Array<{ holding: Shareholding; valuation: HoldingValuation; properties: Record<string, HoldingProperty> }> = [];
   try {
     const catalog = args.valuationSources ? parseHoldingsCodeList(args.valuationSources.codeList) : null;
-    const prices = args.valuationSources ? new HoldingsPriceIndex(args.valuationSources.prices) : null;
+    const prices = args.valuationSources ? (args.valuationSources.priceIndex === undefined ? new HoldingsPriceIndex(args.valuationSources.prices) : args.valuationSources.priceIndex) : null;
+    if (args.valuationSources?.priceIndex) args.valuationSources.priceIndex.assertSources(args.valuationSources.prices);
     for (const holding of selected) {
       const valuation: HoldingValuation = catalog && prices
-        ? await qualifyHoldingValuation({ holding, fiscalYearEnd: args.source.fiscalYearEnd, catalog, prices })
+        ? await qualifyHoldingValuation({ holding, fiscalYearEnd: args.source.fiscalYearEnd, catalog, prices, officialIssuerNames: args.valuationSources?.officialIssuerNames })
         : { status: "unavailable", identity: null, reason: "銘柄同定・個別価格・分割観測の保存原本が未指定です" };
       ready.push({ holding, valuation, properties: { ...holdingProperties(args.source, args.ownerName, holding),
         ...sourceProperties(parsed, holding, zipSha256), ...valuationProperties(holding, valuation, args.valuationSources?.evidenceScope) } });
+    }
+    if (args.valuationSources?.checkOfficialIssuerNames) {
+      const current = await args.valuationSources.checkOfficialIssuerNames();
+      if (current.status === "held") return hold(current.reason, parsed.holdings.length, false, true);
     }
   } catch (error) {
     if (error instanceof HoldingPriceIssuerMismatch) return hold(error.message, parsed.holdings.length, false, true);
@@ -662,10 +668,11 @@ export function verifySavedHoldingsMetadata(metadata: Record<string, unknown>, s
 }
 
 /** 保存type1限定のbackfill準備。新規原本取得・schema変更・行更新は0。 */
-export async function readSavedHoldingsZip(source: ShareholdingsSource): Promise<
+export async function readSavedHoldingsZip(source: ShareholdingsSource, budget?: { remainingBytes: number }): Promise<
   { status: "ready"; archivePageId: string; bytes: Buffer; sha256: string; originalManifest: "known" | "unknown"; sourceCustody: "typed" | "legacy"; metadata: Record<string, unknown>; fetchedAt: string; metadataMissing: string[] } |
-  { status: "held"; reason: string }
+  { status: "held"; reason: string; reasonCode?: "budget_exhausted" }
 > {
+  if (budget) assert.ok(Number.isSafeInteger(budget.remainingBytes) && budget.remainingBytes >= 0);
   const { docId } = source;
   assert.match(docId, /^S[0-9A-Z]+$/);
   if (source.edinetCode === null) return { status: "held", reason: "提出者EDINETコードが未確定です" };
@@ -683,13 +690,31 @@ export async function readSavedHoldingsZip(source: ShareholdingsSource): Promise
   const allFiles = await listPageFiles(page.id, "Files");
   const files = sourceCustody === "typed" ? allFiles : allFiles.filter(file => file.name === edinetArchiveFilename(docId, 1));
   if (files.length !== 1 || files[0].kind !== "file" || files[0].name !== edinetArchiveFilename(docId, 1)) return { status: "held", reason: `${sourceCustody}原本のtype1単一Notion-hosted物理添付を確認できません（CSVは代用しません）` };
-  const bytes = Buffer.from(await downloadArchivedFile(files[0], "保有明細type1原本", { maxBytes: HOLDINGS_ZIP_MAX_BYTES }));
-  const digest = createHash("sha256").update(bytes).digest("hex");
   const parts = page.properties["Metadata"]?.rich_text;
   assert.ok(Array.isArray(parts));
   const metadata = JSON.parse(parts.map(part => {
     assert.equal(part.type, "text"); assert.equal(part.plain_text, part.text?.content); return part.plain_text;
   }).join(""));
+  let reservedBytes = 0;
+  if (budget) {
+    reservedBytes = HOLDINGS_ZIP_MAX_BYTES;
+    if (metadata.sourceZIPBytes !== undefined) {
+      assert.ok(Number.isSafeInteger(metadata.sourceZIPBytes) && metadata.sourceZIPBytes > 0 && metadata.sourceZIPBytes <= HOLDINGS_ZIP_MAX_BYTES);
+      reservedBytes = metadata.sourceZIPBytes;
+    }
+    if (metadata._fileManifest !== undefined) {
+      assert.ok(Array.isArray(metadata._fileManifest.files));
+      const entries = metadata._fileManifest.files.filter((entry: { originalFilename?: unknown }) => entry.originalFilename === files[0].name);
+      assert.equal(entries.length, 1); const expected = entries[0].byteLength;
+      assert.ok(Number.isSafeInteger(expected) && expected > 0 && expected <= HOLDINGS_ZIP_MAX_BYTES);
+      if (metadata.sourceZIPBytes !== undefined) assert.equal(expected, reservedBytes);
+      reservedBytes = expected;
+    }
+    if (reservedBytes > budget.remainingBytes) return { status: "held", reasonCode: "budget_exhausted", reason: "issuer保存原本の全文読取予算が不足しています（未知サイズは20MiBを予約）" };
+    budget.remainingBytes -= reservedBytes;
+  }
+  const bytes = Buffer.from(await downloadArchivedFile(files[0], "保有明細type1原本", { maxBytes: budget ? reservedBytes : HOLDINGS_ZIP_MAX_BYTES }));
+  const digest = createHash("sha256").update(bytes).digest("hex");
   if (metadata.sourceZIPSHA !== undefined) assert.equal(metadata.sourceZIPSHA, digest);
   if (metadata.sourceZIPBytes !== undefined) assert.equal(metadata.sourceZIPBytes, bytes.length);
   const metadataProof = verifySavedHoldingsMetadata(metadata, source);
@@ -708,6 +733,7 @@ export async function readSavedHoldingsZip(source: ShareholdingsSource): Promise
   }
   const identity = verifySavedHoldingsSource(bytes, source);
   if (identity.status === "held") return identity;
+  if (budget) { assert.ok(bytes.length <= reservedBytes); budget.remainingBytes += reservedBytes - bytes.length; }
   return { status: "ready", archivePageId: page.id, bytes, sha256: digest,
     originalManifest: metadata._fileManifest === undefined ? "unknown" : "known", sourceCustody, metadata, fetchedAt, metadataMissing: metadataProof.missing };
 }
@@ -909,7 +935,7 @@ export async function resumePendingShareholdingsPrices(args: {
       const selected = parsed.holdings.slice(info.nextHoldingOffset, info.nextHoldingOffset! + args.maxRows - result.usedRows);
       sources = await args.loadSources(selected, args.budget);
       if (sources.status === "held" || args.shouldStop()) {
-        if (sources.status === "held") assert.ok(sources.reasonCode === "budget_exhausted" || sources.reasonCode === "snapshot_unavailable");
+        if (sources.status === "held") assert.ok(sources.reasonCode === "budget_exhausted" || sources.reasonCode === "snapshot_unavailable" || sources.reasonCode === "issuer_source_unavailable");
         const retry = sources.status !== "held" || sources.reasonCode === "budget_exhausted";
         await recordRecoveryInfo(page.id, info, retry ? "再開待ち" : "要確認", sources.status === "held" ? sources.reason : "価格phaseの実時間予算を使い切りました", true, undefined, undefined, true);
         if (retry) result.pending = true; else result.held++;

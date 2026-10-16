@@ -8,6 +8,7 @@ import { parseStockCode } from "../../../../../src/shared/jpx/stock-code.js";
 import { parseDailyChart } from "../../../../../src/shared/yahoo/client.js";
 import { jstDateSec } from "../../../../../src/shared/vwap/proof.js";
 import type { Shareholding } from "./shareholdings.js";
+import type { OfficialIssuerEnglishName, OfficialIssuerNames } from "./shareholdings-issuer-names.js";
 
 export interface ArchivedSource { archivePageId: string; filename: string; bytes: Buffer; sha256: string;
   /** Explicit activated members only; full gzip bytes/SHA remain unchanged. Omitted for legacy callers. */
@@ -21,7 +22,7 @@ export type HoldingValuation =
   | { status: "unavailable"; reason: string; identity: ListedIdentity | null }
   | { status: "qualified"; identity: ListedIdentity; price: number; value: number; currency: "JPY"; date: string;
       priceSource: { archivePageId: string; gzipSha256: string; bodySha256: string; filename: string; symbol: string;
-        capturedAt: string; sourceTimestamp: number; range: string; priceBasis: string; splitObservation: string } };
+        capturedAt: string; sourceTimestamp: number; range: string; priceBasis: string; splitObservation: string; officialIssuerName?: OfficialIssuerEnglishName } };
 
 /** 原本/SHA/chart検証後に確定した主体不一致だけ。通信・破損・ACK不明とは区別する。 */
 export class HoldingPriceIssuerMismatch extends Error {
@@ -36,7 +37,7 @@ const sha = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 /** (株)/㈱は株式会社の同義表記。法人格の削除・位置変更・近似/略称照合はしない。 */
 export const exactLegalName = (value: string): string => value.normalize("NFKC").replace(/\s/g, "").replaceAll("(株)", "株式会社");
 /** 英字商号のASCII句読点だけを同義化する。綴り・略称・ハイフンは変更しない。 */
-const englishName = (value: string) => value.normalize("NFKC").replace(/[\s.,]/g, "").toLowerCase();
+export const exactEnglishName = (value: string) => value.normalize("NFKC").replace(/[\s.,]/g, "").toLowerCase();
 function assertSource(source: ArchivedSource): void {
   assert.match(source.archivePageId.replaceAll("-", ""), /^[a-f0-9]{32}$/i);
   assert.equal(sha(source.bytes), source.sha256, "保存原本のSHAが不一致です");
@@ -128,6 +129,8 @@ export class HoldingsPriceIndex {
     return bySymbol;
   }
 
+  assertSources(prices: readonly ArchivedSource[]): void { assert.equal(this.prices, prices, "price indexと保存原本集合が別です"); }
+
   candidates(symbol: string): readonly PriceCandidate[] {
     if (this.#bySymbol === null) {
       if (this.#buildStarted) throw this.#buildError;
@@ -159,7 +162,7 @@ export class HoldingsPriceIndex {
 }
 
 export async function qualifyHoldingValuation(args: {
-  holding: Shareholding; fiscalYearEnd: string; catalog: ShareholdingsCatalog; prices: readonly ArchivedSource[] | HoldingsPriceIndex;
+  holding: Shareholding; fiscalYearEnd: string; catalog: ShareholdingsCatalog; prices: readonly ArchivedSource[] | HoldingsPriceIndex; officialIssuerNames?: OfficialIssuerNames;
 }): Promise<HoldingValuation> {
   // 本関数は原表で確定した特定投資/みなし保有の上場scope限定（FSA開示定義）。
   const candidates = args.catalog.byLegalName.get(exactLegalName(args.holding.name));
@@ -174,10 +177,21 @@ export async function qualifyHoldingValuation(args: {
   const { source, member } = matches[0];
   const { range, parsed, raw } = await index.verifiedChart(matches[0], symbol);
   assert.equal(raw.meta.currency, "JPY"); assert.equal(raw.meta.exchangeTimezoneName, "Asia/Tokyo");
-  if (englishName(raw.meta.longName) !== englishName(identity.englishName)) throw new HoldingPriceIssuerMismatch({
+  const officialName = args.officialIssuerNames?.get(identity.code);
+  const acceptedNames = [identity.englishName];
+  if (officialName !== undefined) {
+    for (const name of ["code", "edinetCode", "corporateNumber"] as const) assert.equal(officialName[name], identity[name], "公式英字名集合の主体が不一致です");
+    assert.equal(exactLegalName(officialName.legalName), exactLegalName(identity.legalName));
+    assert.equal(officialName.priceCapturedAt, member.receivedAt, "公式英字名集合の価格captureが不一致です");
+    assert.ok(Date.parse(officialName.submittedAt) <= Date.parse(member.receivedAt));
+    acceptedNames.push(officialName.englishName);
+  }
+  if (!acceptedNames.some(name => exactEnglishName(name) === exactEnglishName(raw.meta.longName))) throw new HoldingPriceIssuerMismatch({
     symbol, expectedEnglishName: identity.englishName, observedEnglishName: raw.meta.longName,
     archivePageId: source.archivePageId, filename: source.filename, gzipSha256: source.sha256, bodySha256: member.sha256,
   });
+  const canonicalMatch = exactEnglishName(raw.meta.longName) === exactEnglishName(identity.englishName);
+  if (!canonicalMatch) assert.ok(officialName, "公式英字名の一致証拠が欠けています");
   const dates: string[] = raw.timestamp.map(jstDateSec);
   const indexes = dates.map((date: string, index: number) => date === args.fiscalYearEnd ? index : -1).filter((index: number) => index >= 0);
   if (indexes.length !== 1) return { status: "unavailable", identity, reason: "当期末当日の価格バーを一意に観測していません" };
@@ -197,5 +211,6 @@ export async function qualifyHoldingValuation(args: {
     priceSource: { archivePageId: source.archivePageId, gzipSha256: source.sha256, bodySha256: member.sha256, filename: source.filename,
       symbol, capturedAt: member.receivedAt, sourceTimestamp: raw.timestamp[indexes[0]], range,
       priceBasis: "当期末raw quote.close × 当期末株数。adjclose/丸め/局所分割調整なし",
-      splitObservation: "events=split,divを指定した同一応答で当期末後のsplit0。capture後の状態は未観測" } };
+      splitObservation: "events=split,divを指定した同一応答で当期末後のsplit0。capture後の状態は未観測",
+      ...(canonicalMatch ? {} : { officialIssuerName: officialName }) } };
 }

@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
 import { exactLegalName, HoldingPriceIssuerMismatch, HoldingsPriceIndex, parseHoldingsCodeList, qualifyHoldingValuation, type ArchivedSource } from "../services/edinet/shareholdings-valuation.js";
+import type { OfficialIssuerEnglishName } from "../services/edinet/shareholdings-issuer-names.js";
 import type { Shareholding } from "../services/edinet/shareholdings.js";
 
 const hash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
@@ -81,6 +82,25 @@ describe("保有明細の期末参考時価", () => {
     expect(target.englishName).toBe(fsaName);
     await expect(qualifyHoldingValuation({ holding: { ...holding, name: target.legalName }, fiscalYearEnd: "2026-06-30", catalog,
       prices: [source({ symbol: `${code}.T`, issuerName: priceName })] })).rejects.toBeInstanceOf(HoldingPriceIssuerMismatch);
+  });
+  it("事前資格済み公式英字名集合だけを使い、canonical名/原価格/主体とcapture束縛を保持する", async () => {
+    const target = [...catalog.byLegalName.values()].flat().find(row => row.code === "8418")!;
+    const saved = source({ symbol: "8418.T", issuerName: "Yamaguchi Financial Group, Inc." });
+    const evidence: OfficialIssuerEnglishName = { code: target.code, edinetCode: target.edinetCode, corporateNumber: target.corporateNumber, legalName: target.legalName,
+      englishName: "Yamaguchi Financial Group, Inc.", source: { docId: "S100YE1V", stockCode: target.code, edinetCode: target.edinetCode, fiscalYearEnd: "2026-03-31" },
+      archivePageId: "c".repeat(32), zipSha256: hash(zip), filename: "structural.xbrl", memberSha256: hash(zip), submittedAt: "2026-06-18T15:30:00+09:00", filingDate: "2026-06-18",
+      fetchedAt: "2026-06-18T15:30:00Z", priceCapturedAt: "2026-07-02T00:00:00Z", contextRef: "FilingDateInstant" };
+    const input = { holding: { ...holding, name: target.legalName }, fiscalYearEnd: "2026-06-30", catalog, prices: [saved] };
+    await expect(qualifyHoldingValuation(input)).rejects.toBeInstanceOf(HoldingPriceIssuerMismatch);
+    const result = await qualifyHoldingValuation({ ...input, officialIssuerNames: new Map([[target.code, evidence]]) });
+    expect(result).toMatchObject({ status: "qualified", identity: target, price: 100, value: 1200, priceSource: { gzipSha256: saved.sha256, officialIssuerName: evidence } });
+    expect(target.englishName).toBe("Yamaguchi Finacial Group,Inc."); expect(hash(saved.bytes)).toBe(saved.sha256);
+    for (const invalid of [{ code: "2874" }, { edinetCode: "E02576" }, { corporateNumber: "0".repeat(13) }, { legalName: "別主体" }, { priceCapturedAt: "2026-07-03T00:00:00Z" }]) {
+      await expect(qualifyHoldingValuation({ ...input, officialIssuerNames: new Map([[target.code, { ...evidence, ...invalid }]]) })).rejects.toThrow();
+    }
+    await expect(qualifyHoldingValuation({ ...input, officialIssuerNames: new Map([[target.code, { ...evidence, englishName: "OTHER OFFICIAL NAME" }]]) })).rejects.toBeInstanceOf(HoldingPriceIssuerMismatch);
+    const files = [saved], index = new HoldingsPriceIndex(files); index.assertSources(files);
+    expect(() => index.assertSources([...files])).toThrow("別");
   });
   it("原本商号/code/JPY/同日期末株数/同日raw close/分割0を検証し、日付と出典SHAを保つ", async () => {
     const result = await qualify(source());
