@@ -14,7 +14,7 @@ export interface PreSplitFiscalYearBasis {
   fiscalYearShares: string; issuedSharesFactSha256: string;
 }
 
-/** ponytail: 実1798原本の明示文型だけ。非対応注記を「分割無し」や倍率へ補完しない。 */
+/** ponytail: 実1798/1723原本の明示文型だけ。非対応注記を「分割無し」や倍率へ補完しない。 */
 export function observePreSplitFiscalYearBasis(zip: Buffer, source: ShareholdingsSource,
   filename: string, entries: ZipEntries): PreSplitFiscalYearBasis | undefined {
   const bytes = entries.get(filename);
@@ -35,7 +35,7 @@ export function observePreSplitFiscalYearBasis(zip: Buffer, source: Shareholding
   if (!context || context.entity !== `${source.edinetCode}-000` || context.endDate !== source.fiscalYearEnd) return;
   // XBRL textBlock is entity-encoded HTML; two existing decoder passes remove only that representation.
   const text = stripHtml(stripHtml(facts[0][2])).normalize("NFKC");
-  const statements = [...text.matchAll(/当社は(\d{4})年(\d{1,2})月(\d{1,2})日付で普通株式(\d+)株につき(\d+)株の割合で株式分割を行っていますが、上記事項は当該株式分割前の株式数を基準としています。/g)];
+  const statements = [...text.matchAll(/当社は、?(\d{4})年(\d{1,2})月(\d{1,2})日付で普通株式(\d+)株につき(\d+)株の割合で株式分割を行って(?:いますが、上記事項は当該株式分割前の株式数を基準としています|おります。上記の事項\s*は、当該株式分割前の株式数を基準としております)。/g)];
   if (statements.length !== 1) return;
   const statement = statements[0], legalEffectiveDate = `${statement[1]}-${statement[2].padStart(2, "0")}-${statement[3].padStart(2, "0")}`;
   if (!Number.isFinite(Date.parse(`${legalEffectiveDate}T00:00:00Z`)) || new Date(`${legalEffectiveDate}T00:00:00Z`).toISOString().slice(0, 10) !== legalEffectiveDate) return;
