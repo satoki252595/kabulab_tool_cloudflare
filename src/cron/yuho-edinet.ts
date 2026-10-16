@@ -107,7 +107,8 @@ export async function runYuhoEdinetCatchup(
   shard?: ShardOpts,
   d1HttpBatch?: ReturnType<typeof createD1HttpBatchSender>,
   holdingPriceSourceLoader?: HoldingPriceSourceLoader,
-  deadlineMs?: number
+  deadlineMs?: number,
+  producer?: { observeIssuedShares: true }
 ): Promise<YuhoEdinetResult> {
   const startedAt = Date.now();
   if (deadlineMs !== undefined && (!Number.isSafeInteger(deadlineMs) || startedAt >= deadlineMs)) throw new Error("EDINET catchupの絶対締切が不正または超過しました");
@@ -140,7 +141,8 @@ export async function runYuhoEdinetCatchup(
   const holdingsBudget = { remainingRows: 100 };
   let holdingsPending = false;
   if (!shard) {
-    const resumed = await resumePendingShareholdings({ maxRows: holdingsBudget.remainingRows, shouldStop: overBudget });
+    const resumed = await resumePendingShareholdings({ maxRows: holdingsBudget.remainingRows, shouldStop: overBudget,
+      observeIssuedShares: producer?.observeIssuedShares });
     holdingsBudget.remainingRows -= resumed.usedRows;
     holdingsPending = resumed.pending || resumed.held > 0;
     if (resumed.resumed > 0) byStatus["holdings:resumed"] = resumed.resumed;
@@ -258,7 +260,8 @@ export async function runYuhoEdinetCatchup(
       let r;
       try {
         r = await ingestDocument(db, {stockId, stockCode: code, doc,
-          archiveToNotion: true, custody: custodyByDoc.get(doc.docID), d1HttpBatch, holdingsBudget});
+          archiveToNotion: true, custody: custodyByDoc.get(doc.docID), d1HttpBatch, holdingsBudget,
+          observeIssuedShares: producer?.observeIssuedShares});
       } catch (error) {
         if (error instanceof ExistingTextReadbackMismatchError) {
           putPending("text_readback_mismatch");
@@ -275,6 +278,10 @@ export async function runYuhoEdinetCatchup(
         throw error; // 同runの次文書/source/L2へ進まない。
       }
       if (r.outcome !== "skipped_existing") {
+        if (r.issuedShares) {
+          const status = `issued-shares-observation:${r.issuedShares.status}`;
+          byStatus[status] = (byStatus[status] ?? 0) + 1;
+        }
         if (r.holdings) {
           const hs = `holdings:${r.holdings.status}`;
           byStatus[hs] = (byStatus[hs] ?? 0) + 1;

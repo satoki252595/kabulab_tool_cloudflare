@@ -40,8 +40,7 @@ export async function main(args = process.argv.slice(2)): Promise<0 | 1> {
   const db = createD1HttpDb(yuhoSchema) as unknown as Database;
   const sender = createD1HttpBatchSender();
   const loader = shard ? undefined : createHoldingPriceSourceLoader();
-  const result = deadline === undefined ? await runYuhoEdinetCatchup(db, shard, sender, loader)
-    : await runYuhoEdinetCatchup(db, shard, sender, loader, deadline);
+  const result = await runYuhoEdinetCatchup(db, shard, sender, loader, deadline, { observeIssuedShares: true });
   assertCatchupDeadline(deadline);
   console.info("[yuho-edinet]", JSON.stringify(result));
   return catchupHttpStatus(result) === 200 ? 0 : 1;
