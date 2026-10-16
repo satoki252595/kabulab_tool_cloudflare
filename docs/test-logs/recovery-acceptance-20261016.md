@@ -2,6 +2,31 @@
 
 追跡は[#348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)。この記録は以下の対象の実測であり、全20機能・全空欄の完了を意味しない。
 
+## 10月17日05:12 JSTの追加確認
+
+| 対象 | この時点の受入・確認 | 残件 |
+|---|---|---|
+| 競合候補の本文 | 先行776社と交差しない固定135社すべてを通常`--mechanical-only`で同期し、原39列・Notion表現SHA・旧判定/根拠・source・物理PRE/POSTをrootで独立照合 | 固定135の残0。業務PATCHは139で、社数と分割PATCH数を混同しない。意味判定と全市場の充足は未証明 |
+| 海外売上の追加15文書 | 82数値factを共通parser/原子D1で反映し、全6表POST・原本文・現原本・2実体PRE/POSTを別のfresh POST読取とroot再生まで受入 | 固定候補の残176は連結数値166/主体HOLD10。本文3,666の歴史受入と166のmembershipは一致するが、現在latest/source/全6表PREは未資格化 |
+| 保有株式の次50文書 | 通常prepareの実50ZIPと199 nativeを独立照合し、31 ready/474行・19 HOLD。最初9文書91行は通常resolverで旧83/新8/保護旧3行をfresh確認 | 本文全writer終端後、05:11に91行の通常反映を1回開始。完了へ未加算。続く22文書383行は計画のみ。価格の新規確定とは別 |
+| 入力比較と権利処理 | #457は04:53:22に配信。#458はmain `f3a7c738`、05:11:00/version `51915326-5f92-4428-9780-07810b3be514`へ配信 | 同じ既知4節SHAならモデル0。価格の法的日付/株数単位が不明ならunavailableを保持。5362件の単位証拠不足は別の残件 |
+| Mac通常環境 | 05:10:51にmain `f3a7c738`へ更新。旧65579の1,549 source/旧.envと本文135の34 runtime証拠を全SHAで保全。同lock/calendar/state/依存lockを維持 | accepted revision監視はCLI ACKと更新時刻まで確認。新20/21時の通常receiptは未受入。全体metadataと24対象の実原文再確認は別工程 |
+| 歴史RAW索引 | run38953333099の500 verified（既完22/新RAW・index478）を保存manifest・全実ログ・正常継続payloadでroot独立再生。cursor14,055/78,832・残64,777 | 元pool45番目から46番目へ継続。全遠隔raw/state/index bytesはexportされておらず、最終anti-joinと全量完了は未受入 |
+
+海外15のroot最終SHAは`615c89ba95627611d48f86574cd693264050cb2308f360845d68637489c69bd0`。v5適用347 native/299.958秒と、別fresh POST105 native/265.488秒で、旧本文・全6表・1379のcanonical原本lineage・2物理添付を照合した。適用はD1 read210/atomic batch15、Notion read114/archive mutation6、hosted2、要求3,879,662B/応答9,701,926B。別POSTはNotion67/D1 36/hosted2、要求4,601B/応答11,502,774B。元v3 STOP123要求とv4 PRE160要求も含む復旧全体は735 nativeで、上流API・モデル・補足更新・価格更新0。v4 writer observerの同SQL異paramsがMapで上書きされる問題は送信前の純検査で発見し、exact SQL+params集合へ修正したv5だけを一度実行した。旧manifest/停止を保持する。
+
+本文135のroot最終SHAは`96ac165747d4c3a3a01eefc8cc99abfe52a67962e77612fb3a3708f14a8a21f8`。全3batchの原code/docId集合・重複0・先行776とのcode/doc交差0・親process正常終端を確認し、05:10:26に閉鎖した。実3,867 native/Notion3,309・応答640,346,725B・業務PATCH139、モデル/上流API0。135社分の通常publisher物理PREと外側PRE/POSTを全bytesで再生した。runtime変更後も原source/dependency/env証拠を安定private pathで保持し、合計911社を同時全市場snapshotとは呼ばない。
+
+保有の通常prepareは492.583秒、D1 SELECT1/2,430 rows_read/4.0976ms、Notion148/hosted50、要求8,902B/応答45,576,082B。原ZIPは44,371,908B。first91資格は197.830秒/69 native（Notion60/D1 9）、要求14,859B/応答760,725B・D1読取420行、業務書込0。異なるafter/limitの旧実測との削減率比較はしない。HOLD19と余剰旧3行を成功へ足さず、先行受入28文書229行も保持する。
+
+権利処理は[分割単位の実原本と影響](holdings-split-legal-basis-20261017.md)を参照。rootでも22,755候補/116 gzipを同じ共通資格で21.978秒・HTTP0に再生し、旧qualified12,209のうち同値6,847/新unavailable5,362が全結果一致した。新たな誤価格5,362件を確定した値ではない。追加792 issuer読取案は採用せず、canonical splitは既存の資格済みrun-cacheだけ再利用する。cold時の追加issuer D1/Notion ZIPは0。原価格・株数への係数補正と今回の新規本番価格受入は0である。
+
+RAW45は2,404.338秒・原本観測転送292,152,673B・Notion10要求・D1 read1,456/index INSERT478、上流GET/モデル/Notion mutation0。実workflow headとcheckout実行版は共に`9cdf4f04`、checkout markerと全guard成功を確認した。通常continuationは同実行版・残154枠を維持し、新child46のworkflow head `a7de918e`とは区別する。root replay SHAは`f345d5c2e6fef548b13de746a94496235bf9f5900349ddbee026c8c8029a51aa`。child終端のcheckout実ログはまだ未受入であり、追加dispatchはしていない。
+
+株価の残41社は、10/16通常logの全membership・受信時計・当日bar NULLと、10/14保存済みChart/Quoteを共通parserで純照合した。41社とも10/16対象日とlatestBarDateが一致し、受信は18:18〜19:12 JSTで、日付跨ぎバグを示す証拠はなかった。10/14の33社取得/8社NULLを16日の取引有無へ転用しない。16日の原応答・公式売買/停止事実が未確認なのでsource HOLDを維持し、前日値/0/生成値で補わない。
+
+追加private証跡は10/17 audit rootの`B135-first5-mechanical-v1`、`B135-first5-finite-runner-v1/root-final-acceptance.json`、`mac-mechanical-input-rollout-v4`、`holdings-prepare50-after1719-b8fb-v1`、`holdings-pilot91-{qualification,apply}-b8fb-v1`、`holdings-rights-date-investigation-v1/impact-v1`、`stock41-saved-diagnostic-v1`、RAWの`raw-ordinary-after-repair-38947608942-v1/bulk45`、10/13 audit rootの`overseas-next15-protected-{read-v4,apply-v5,independent-post-v5}`。#456の実deployは04:34:45/version `c4c4dbf9-0c96-4c97-812b-d80805703160`。定時receipt・全20機能は引き続き未完である。
+
 ## 10月17日04:25 JSTの追加確認
 
 | 対象 | この時点の受入・確認 | 残件 |

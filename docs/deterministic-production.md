@@ -38,6 +38,8 @@ GitHubの[workflow dispatch仕様](https://docs.github.com/en/rest/actions/workf
 
 通常CLIの`pnpm biztag run --mechanical-only --codes=<対象コード列> --limit=<件数> --budget-min=<分>`は、本番定期と同じ計画・本文同期・キーワード照合・共有publisherを使う。新規初回や実入力変更による再判定は明示HOLDとし、モデルの起動・原応答journal・較正の読込へ進めない。機械照合不能を別モデルで補わない。
 
+同じ文書の保存本文pointer更新は、共通processorで既知4節の実SHAを先に比較する。同値なら旧判定receiptを変えず、通常publisherで本文だけ同期する。実差はprocessorのprefilter・較正・journal・モデルより前に機械modeの資格HOLDとなる。通常CLI全体の既存metadata/語彙/schema読取が0になるという意味ではない。未知・壊れた旧入力を同値へ昇格しない。
+
 旧タグ・根拠・判定日・未知の旧入力SHAを保持し、書込前の最新文書照合・物理PRE・単発更新・全property読戻しを通常経路で行う。初回判定や再判定のHOLDは`qualificationHeld`と専用件数へ残し、`remaining=0`だけで全件完了と判断しない。既定の20時処理は従来どおり、必要な対象だけローカルClefを使う。依存・上流取得・毎日の実行回数は追加しない。ローカルは同じlockのNix環境で実行し、main反映とMac専用runtimeへの配備は別に確認する。
 
 ## 競合入力の機械準備
@@ -68,6 +70,8 @@ stageは10/17 04:16:47 JSTのMac runtime `65579f60`へ配備し、固定33社sco
 この変更に追加の依存、取得元アクセス、有料モデルAPIはない。未対応分があるときのモデル常駐は従来どおり最大1個で、全体の速度改善は実運用で測る。ローカルの電力・時間を無料とは呼ばない。
 
 ## 配備と完了の判定
+
+10/17 05:10:51 JSTにMacをmain `f3a7c738`へ更新し、既知4節の比較を先に行う通常経路も配備した。旧65579の1,549 source・旧.env bytesを保全し、同calendar/kernel writer/state/依存lockを保持した。先行776社と交差しない本文135社も全件の通常/物理PRE/POST照合を閉じてから切り替えた。Cloudflareの同mainは05:11:00/version `51915326-5f92-4428-9780-07810b3be514`、監視accepted revisionはCLI ACKと更新時刻まで確認した。これを次20/21時の定時receiptや全20機能の完了に数えない。
 
 10/17 04:16:47 JSTにMac runtimeを`65579f60`へ更新した。Nix・同じ依存lockを使い、原文/Notion送信表現の別SHA照合と現在有報に束縛した有限競合準備を配備した。旧117bのsource1,542件と旧.env bytes、さらに旧43d/049/277の原本を保全し、旧実行入口の.envを無効化した。本文の固定776社は全件をcode/docId集合と物理PRE/POSTまで受入済みで、旧部分停止2社の業務更新は再送していない。監視側accepted revisionも同版へ更新したが、新しい20/21時の実receiptは未受入。Cloudflare側は同mainを04:16:09にversion `d61c452a-815e-4d12-be16-fa5bd738e330`として通常配信した。各実行先の版と受入範囲は[台帳](test-logs/recovery-acceptance-20261016.md)で追跡する。
 

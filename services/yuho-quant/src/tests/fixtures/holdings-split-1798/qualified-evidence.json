@@ -1,0 +1,46 @@
+{
+  "code": "1798",
+  "edinetCode": "E00251",
+  "corporateNumber": "7100001003530",
+  "legalName": "株式会社守谷商会",
+  "englishName": "MORIYA CORPORATION",
+  "source": {
+    "docId": "S100YDA3",
+    "stockCode": "1798",
+    "edinetCode": "E00251",
+    "fiscalYearEnd": "2026-03-31"
+  },
+  "archivePageId": "3e1d74ff-84cd-81f2-be52-d98f1f92baca",
+  "zipSha256": "01d2c3b0046b1b1e99d300155629fb604104f350ef8cb9608b14cdc5e0974e0c",
+  "filename": "XBRL/PublicDoc/jpcrp030000-asr-001_E00251-000_2026-03-31_01_2026-06-18.xbrl",
+  "memberSha256": "a551a9e1c835f8d47906f2ceddc0f04c9dbf9ce287a0a9ce08cca77b1d59a02b",
+  "submittedAt": "2026-06-18T13:02+09:00",
+  "filingDate": "2026-06-18",
+  "fetchedAt": "2026-06-18T13:02:00.000+00:00",
+  "priceCapturedAt": "2026-10-04T12:30:38.912Z",
+  "contextRef": "FilingDateInstant",
+  "preSplitFiscalYearBasis": {
+    "source": {
+      "docId": "S100YDA3",
+      "stockCode": "1798",
+      "edinetCode": "E00251",
+      "fiscalYearEnd": "2026-03-31"
+    },
+    "filename": "XBRL/PublicDoc/jpcrp030000-asr-001_E00251-000_2026-03-31_01_2026-06-18.xbrl",
+    "memberSha256": "a551a9e1c835f8d47906f2ceddc0f04c9dbf9ce287a0a9ce08cca77b1d59a02b",
+    "factSha256": "9a19dc03d4bfc9e941bccfe67134e75a8f61e5b23fbb84224fc4bc83c17313c0",
+    "element": "jpcrp_cor:NotesRegardingIssuedSharesAndTreasurySharesTextBlock",
+    "context": {
+      "contextRef": "CurrentYearDuration",
+      "entity": "E00251-000",
+      "startDate": "2025-04-01",
+      "endDate": "2026-03-31"
+    },
+    "statement": "当社は2026年4月1日付で普通株式1株につき5株の割合で株式分割を行っていますが、上記事項は当該株式分割前の株式数を基準としています。",
+    "legalEffectiveDate": "2026-04-01",
+    "numerator": 5,
+    "denominator": 1,
+    "fiscalYearShares": "2260000",
+    "issuedSharesFactSha256": "571b84e17eddcff4432187b88d65b6105c2f505018b6a35dc5d83afd00bc57e0"
+  }
+}
