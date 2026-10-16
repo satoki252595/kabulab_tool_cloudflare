@@ -5,7 +5,9 @@ import { readActivatedPriceSnapshot } from "../vwap/lib/holdings-price-registry.
 import { downloadArchivedFile } from "../moneyflow/lib/archived-files.js";
 import { notionRequest } from "../../src/shared/notion-archive/client.js";
 import { priceFileSchema, type PriceFile, type PriceSnapshot } from "../../src/shared/holdings/price-registry.js";
-import { exactLegalName, parseHoldingsCodeList, type ArchivedSource } from "../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js";
+import { exactLegalName, exactEnglishName, HoldingsPriceIndex, parseHoldingsCodeList, type ArchivedSource } from "../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js";
+import { createHoldingOfficialNamesLoader, type OfficialNameTarget } from "./holdings-issuer-names.js";
+import type { OfficialIssuerNames } from "../../services/yuho-quant/src/services/edinet/shareholdings-issuer-names.js";
 import type { Shareholding } from "../../services/yuho-quant/src/services/edinet/shareholdings.js";
 import { HoldingsCodeListBudgetError, readVerifiedHoldingsCodeList } from "./holdings-code-list.js";
 
@@ -44,16 +46,17 @@ export async function readHoldingPriceFile(expected: PriceFile): Promise<Archive
   return { archivePageId: expected.archivePageId, filename: expected.filename, sha256: expected.sha256, bytes };
 }
 
-export type HoldingPriceSources = { status: "ready"; snapshotId: string; evidenceScope: string; codeList: ArchivedSource; prices: ArchivedSource[] } |
-  { status: "held"; reasonCode: "snapshot_unavailable" | "budget_exhausted"; reason: string };
+export type HoldingPriceSources = { status: "ready"; snapshotId: string; evidenceScope: string; codeList: ArchivedSource; prices: ArchivedSource[]; priceIndex: HoldingsPriceIndex; officialIssuerNames: OfficialIssuerNames; checkOfficialIssuerNames: () => Promise<{ status: "verified" } | { status: "held"; reason: string; reasonCode: "budget_exhausted" | "issuer_source_unavailable" }> } |
+  { status: "held"; reasonCode: "snapshot_unavailable" | "budget_exhausted" | "issuer_source_unavailable"; reason: string };
 
 /** A single scheduled run owns this cache and its mutable download budget. Failed reads are not resent. */
-export function createHoldingPriceSourceLoader(): (holdings: readonly Shareholding[], budget: HoldingPriceBudget) => Promise<HoldingPriceSources> {
+export function createHoldingPriceSourceLoader(): (holdings: readonly Shareholding[], budget: HoldingPriceBudget, shouldStop?: () => boolean) => Promise<HoldingPriceSources> {
   let snapshot: Promise<PriceSnapshot | null> | undefined;
   let codeList: Promise<ArchivedSource> | undefined;
   let catalog: ReturnType<typeof parseHoldingsCodeList> | undefined;
   const chunks = new Map<string, Promise<ArchivedSource>>();
-  return async (holdings, budget) => {
+  const officialNames = createHoldingOfficialNamesLoader();
+  return async (holdings, budget, shouldStop) => {
     assert.ok(Number.isSafeInteger(budget.remainingChunks) && budget.remainingChunks >= 0 && Number.isSafeInteger(budget.remainingBytes) && budget.remainingBytes >= 0, "価格取得予算が不正です");
     snapshot ??= readActivatedPriceSnapshot();
     const active = await snapshot;
@@ -97,7 +100,19 @@ export function createHoldingPriceSourceLoader(): (holdings: readonly Shareholdi
     const prices: ArchivedSource[] = [];
     // Sequential await also retains rejected promises; the same run never retries transport/SHA errors.
     for (const key of required.keys()) prices.push(await chunks.get(key)!);
-    return { status: "ready", snapshotId: active.snapshotId,
+    const priceIndex = new HoldingsPriceIndex(prices), targets = new Map<string, OfficialNameTarget>();
+    for (const holding of holdings) {
+      const identities = catalog.byLegalName.get(exactLegalName(holding.name));
+      if (identities === undefined || identities.length !== 1 || holding.shares === null) continue;
+      const identity = identities[0], symbol = `${identity.code}.T`, candidates = priceIndex.candidates(symbol);
+      if (candidates.length !== 1) continue;
+      const chart = await priceIndex.verifiedChart(candidates[0], symbol);
+      assert.equal(chart.raw.meta.currency, "JPY"); assert.equal(chart.raw.meta.exchangeTimezoneName, "Asia/Tokyo");
+      if (exactEnglishName(chart.raw.meta.longName) !== exactEnglishName(identity.englishName)) targets.set(identity.code, { identity, priceCapturedAt: candidates[0].member.receivedAt });
+    }
+    const names = await officialNames([...targets.values()], budget, shouldStop);
+    if (names.status === "held") return names;
+    return { status: "ready", snapshotId: active.snapshotId, priceIndex, officialIssuerNames: names.names, checkOfficialIssuerNames: names.checkCurrent,
       evidenceScope: `snapshot ${active.snapshotId} 内。その他保存観測の存在は未判定`, codeList: codes, prices };
   };
 }

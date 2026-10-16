@@ -431,6 +431,25 @@ describe("保有明細の現行/legacy保存type1 reader", () => {
     expect(queryUniqueRow).toHaveBeenCalledTimes(1);expect(verifySavedHoldingsSource).toHaveBeenCalledWith(args.zip, source);
     expect(notionRequest).not.toHaveBeenCalled();
   });
+  it("issuer予算は既知サイズをGET前に予約し、未知サイズは20MiBを確保する", async () => {
+    vi.mocked(queryUniqueRow).mockResolvedValue(primary(`${source.docId}:type1`));
+    const short = { remainingBytes: args.zip.length - 1 };
+    expect(await readSavedHoldingsZip(source, short)).toMatchObject({ status: "held", reasonCode: "budget_exhausted" });
+    expect(fetch).not.toHaveBeenCalled(); expect(short.remainingBytes).toBe(args.zip.length - 1);
+    vi.mocked(queryUniqueRow).mockResolvedValue(primary(`${source.docId}:type1`, { _fileManifest: undefined }));
+    expect(await readSavedHoldingsZip(source, { remainingBytes: 20 * 1024 ** 2 - 1 })).toMatchObject({ status: "held", reasonCode: "budget_exhausted" });
+    expect(fetch).not.toHaveBeenCalled();
+    const full = { remainingBytes: 20 * 1024 ** 2 };
+    expect(await readSavedHoldingsZip(source, full)).toMatchObject({ status: "ready", originalManifest: "unknown" });
+    expect(full.remainingBytes).toBe(20 * 1024 ** 2 - args.zip.length); expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it("issuer読取unknownは予約を返さず、破損サイズmetadataはGET前にSTOPする", async () => {
+    vi.mocked(queryUniqueRow).mockResolvedValue(primary(`${source.docId}:type1`)); vi.mocked(fetch).mockRejectedValueOnce(new Error("READ_UNKNOWN"));
+    const budget = { remainingBytes: args.zip.length };
+    await expect(readSavedHoldingsZip(source, budget)).rejects.toThrow("READ_UNKNOWN"); expect(budget.remainingBytes).toBe(0);
+    vi.mocked(queryUniqueRow).mockResolvedValue(primary(`${source.docId}:type1`, { sourceZIPBytes: args.zip.length + 1 }));
+    await expect(readSavedHoldingsZip(source, { remainingBytes: 20 * 1024 ** 2 })).rejects.toThrow(); expect(fetch).toHaveBeenCalledTimes(1);
+  });
   it("現行不在時だけlegacy bare keyのtype1を明示採用し、同居CSVを使わない", async () => {
     vi.mocked(queryUniqueRow).mockResolvedValueOnce(null).mockResolvedValueOnce(primary(source.docId));
     vi.mocked(listPageFiles).mockResolvedValue([{ name: `${source.docId}_csv.zip`, kind: "file", url: "https://file.notion.so/csv" }, { name: `${source.docId}_xbrl.zip`, kind: "file", url: "https://file.notion.so/type1" }]);
@@ -725,9 +744,10 @@ describe("原本完了とは独立した保存価格queue", () => {
     const sourceBefore = await seedPublishedSource(), rowBefore = structuredClone(saved[rowPath]) as Record<string, unknown>;
     vi.mocked(qualifyHoldingValuation).mockResolvedValue(qualified());
     const loader = vi.fn<HoldingPriceSourceLoader>(async () => ready);
-    const result = await resumePendingShareholdingsPrices({ maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: loader });
+    const shouldStop = () => false;
+    const result = await resumePendingShareholdingsPrices({ maxRows: 100, shouldStop, budget: budget(), loadSources: loader });
     expect(result).toEqual({ usedRows: 1, resumed: 1, held: 0, pending: false });
-    expect(loader).toHaveBeenCalledWith(extraction.holdings, budget());
+    expect(loader).toHaveBeenCalledWith(extraction.holdings, budget(), shouldStop);
     const patch = vi.mocked(notionRequest).mock.calls.find(([method, path]) => method === "PATCH" && path === rowPath)![2] as { properties: Record<string, unknown> };
     expect(patch.properties).toMatchObject({ "株価": { number: 100 }, "保有時価": { number: 1200 }, "価格照合済": { checkbox: true } });
     for (const name of ["保有株数", "帳簿価額（円）", "出典原本SHA256", "原本照合済", "Name"]) expect(patch.properties).not.toHaveProperty(name);
@@ -760,6 +780,28 @@ describe("原本完了とは独立した保存価格queue", () => {
     expect(restartInfo(saved[`/pages/${args.archivePageId}`], "保有価格")).toEqual(restartInfo(sourceBefore, "保有価格"));
     for (const name of ["保有明細状態", "保有明細理由", "保有明細再開情報"]) expect((saved[`/pages/${args.archivePageId}`] as Record<string, unknown>)[name]).toEqual(sourceBefore[name]);
     for (const [path, row] of Object.entries(rowsBefore)) if (path !== `/pages/${args.archivePageId}`) expect(saved[path]).toEqual(row);
+  });
+
+  it("全価格資格後にも公式英字名の最新doc変更を事前HOLDし価格書込0を守る", async () => {
+    await seedPublishedSource(); vi.mocked(qualifyHoldingValuation).mockResolvedValue(qualified()); vi.mocked(notionRequest).mockClear();
+    const checkOfficialIssuerNames = vi.fn(async () => ({ status: "held" as const, reason: "公式issuerの最新doc変更" }));
+    expect(await resumePendingShareholdingsPrices({ maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: async () => ({ ...ready, checkOfficialIssuerNames }) }))
+      .toEqual({ usedRows: 0, resumed: 0, held: 1, pending: false });
+    expect(checkOfficialIssuerNames).toHaveBeenCalledTimes(1);
+    const patches = vi.mocked(notionRequest).mock.calls.filter(([method]) => method === "PATCH");
+    expect(patches).toHaveLength(1); expect(JSON.stringify(patches)).not.toContain("実行中（結果未確定）");
+    expect(saved[`/pages/${args.archivePageId}`]).toMatchObject({ "保有価格状態": { select: { name: "要確認" } } });
+  });
+
+  it("writer前issuer再照合の時間予算不足は価格unknownへ入れず再開待ち/cursorを保持する", async () => {
+    const before = await seedPublishedSource(); vi.mocked(qualifyHoldingValuation).mockResolvedValue(qualified()); vi.mocked(notionRequest).mockClear();
+    const checkOfficialIssuerNames = async () => ({ status: "held" as const, reasonCode: "budget_exhausted" as const, reason: "公式issuer照合の実時間予算不足" });
+    expect(await resumePendingShareholdingsPrices({ maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: async () => ({ ...ready, checkOfficialIssuerNames }) }))
+      .toEqual({ usedRows: 0, resumed: 0, held: 0, pending: true });
+    const patches = vi.mocked(notionRequest).mock.calls.filter(([method]) => method === "PATCH");
+    expect(patches).toHaveLength(1); expect(JSON.stringify(patches)).not.toContain("実行中（結果未確定）");
+    expect(saved[`/pages/${args.archivePageId}`]).toMatchObject({ "保有価格状態": { select: { name: "再開待ち" } } });
+    expect(restartInfo(saved[`/pages/${args.archivePageId}`], "保有価格")).toEqual(restartInfo(before, "保有価格"));
   });
 
   it("英字商号と同じmessageでも型付き事前不一致以外はunknown STOPを維持する", async () => {

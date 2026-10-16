@@ -206,6 +206,7 @@ export async function main(): Promise<void> {
             archiveToNotion,
             d1HttpBatch,
             holdingsBudget,
+            observeIssuedShares: true,
           });
           stat[r.parseStatus] = (stat[r.parseStatus] ?? 0) + 1;
           if (r.outcome === "ingested") {

@@ -30,6 +30,7 @@ import { STOCK_CODE_REGEX } from "../jpx/stock-code.js";
 import { sha256HexBytes } from "../sha256.js";
 import { fetchYahooWithSpacing } from "./request-spacing.js";
 import { parseCorporateEvents, yahooChartSourceUrl, type CorporateEvents } from "./corporate-events.js";
+import { buildStockCorporateDiagnostics, extractStockCorporateEvents, type StockCorporateDiagnostics } from "./stock-corporate-events.js";
 
 /**
  * 日本株銘柄コード。
@@ -545,6 +546,7 @@ export interface ChartResult {
   ohlcv: DailyOhlcv[];
   /** 株式日次の直近窓だけ資格化した場合。5年RSIは更新しない。 */
   rsiHistoryHold?: RsiHistoryHold;
+  corporateDiagnostics?: StockCorporateDiagnostics;
 }
 
 export interface RsiHistoryHold {
@@ -718,10 +720,12 @@ export async function fetchChart(
   const response = await yahooFetch(url, options?.beforeRequest);
 
   let sourceBytes: Uint8Array | undefined;
+  let receivedAt: string | undefined;
   if (options?.onRaw) {
     const bytes = await readRawBytes(response, symbol);
     sourceBytes = bytes;
-    await options.onRaw(rawCapture(symbol, response, bytes, new Date().toISOString()));
+    receivedAt = new Date().toISOString();
+    await options.onRaw(rawCapture(symbol, response, bytes, receivedAt));
   }
 
   if (!response.ok) {
@@ -729,7 +733,7 @@ export async function fetchChart(
   }
 
   return qualifyChartResponse(await response.json(), symbol, new Date().toISOString().split("T")[0],
-    options?.stockDailyScopes, sourceBytes);
+    options?.stockDailyScopes, sourceBytes, options?.stockDailyScopes ? receivedAt : undefined);
 }
 
 /** 取得と保存原本replayで共有する資格化。時計も原文も明示入力からのみ使う。 */
@@ -800,7 +804,16 @@ async function qualifyChartResponse(
   // しない (実測で別意味と確定 — 呼び出し側は実バー終値で前日比を組む)。
   const previousClose = meta.previousClose ?? null;
 
+  let corporateDiagnostics: StockCorporateDiagnostics | undefined;
+  if (stockDailyScopes) {
+    if (sourceBytes === undefined || receivedAt === undefined) throw new Error("株式権利診断の原文/実captureclockがありません");
+    corporateDiagnostics = buildStockCorporateDiagnostics({ events: extractStockCorporateEvents(json, receivedAt),
+      code: symbol, bodySha256: rsiHistoryHold === undefined ? await sha256HexBytes(new Uint8Array(sourceBytes)) : rsiHistoryHold.sourceSha256,
+      receivedAt, suppliedBars: rawBars, qualifiedBars: ohlcv });
+  }
+
   return { symbol, price, previousClose, dataDate, ohlcv,
+    ...(corporateDiagnostics === undefined ? {} : { corporateDiagnostics }),
     ...(rsiHistoryHold === undefined ? {} : { rsiHistoryHold }) };
 }
 
@@ -1518,6 +1531,7 @@ function combineStockRawData(
     dataDate: chart.dataDate,
     ohlcv: chart.ohlcv,
     annualFinancials: summary.annualFinancials,
+    ...(chart.corporateDiagnostics === undefined ? {} : { corporateDiagnostics: chart.corporateDiagnostics }),
     ...(chart.rsiHistoryHold === undefined ? {} : { rsiHistoryHold: chart.rsiHistoryHold }),
   };
 }

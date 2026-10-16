@@ -39,11 +39,11 @@ describe("direct Node catchup", () => {
     const log = vi.spyOn(console, "info").mockImplementation(() => {});
     try {
       expect(await main(["--part=0", "--of=8"])).toBe(0);
-      expect(runYuhoEdinetCatchup).toHaveBeenCalledWith(db, {part: 0, of: 8}, sender, undefined);
+      expect(runYuhoEdinetCatchup).toHaveBeenCalledWith(db, {part: 0, of: 8}, sender, undefined, undefined, { observeIssuedShares: true });
       expect(createHoldingPriceSourceLoader).not.toHaveBeenCalled();
       const loader = vi.fn(); vi.mocked(createHoldingPriceSourceLoader).mockReturnValue(loader);
       expect(await main([])).toBe(0);
-      expect(runYuhoEdinetCatchup).toHaveBeenLastCalledWith(db, undefined, sender, loader);
+      expect(runYuhoEdinetCatchup).toHaveBeenLastCalledWith(db, undefined, sender, loader, undefined, { observeIssuedShares: true });
       expect(sharedEnv.R2_SECRET_ACCESS_KEY).toHaveBeenCalledTimes(1);
       vi.mocked(runYuhoEdinetCatchup).mockResolvedValue({listErrors: ["2026-09-30"], ingestErrors: []} as never);
       expect(await main([])).toBe(1);

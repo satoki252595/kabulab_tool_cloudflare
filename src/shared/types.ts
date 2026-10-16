@@ -50,6 +50,7 @@ export interface StockRawData {
   dataDate: string;
   ohlcv: DailyOhlcv[];
   annualFinancials: AnnualFinancial[];
+  corporateDiagnostics?: import("./yahoo/stock-corporate-events.js").StockCorporateDiagnostics;
 }
 
 /** マクロ指数 1 シンボルの取得結果 */

@@ -59,6 +59,7 @@ import {
   type PriceSyncStatus,
 } from "../shared/notion-archive/index.js";
 import { sha256HexBytes } from "../shared/sha256.js";
+import type { StockCorporateDiagnostics } from "../shared/yahoo/stock-corporate-events.js";
 import { diagnoseConfirmedCloses, selectConfirmedCloses } from "./macro-session.js";
 import { captureMacroJpLeg, loadMacroJpLeg, macroJpCacheKey, type MacroJpLeg, type MacroJpLegStore } from "./macro-jp-leg.js";
 import { formatConfirmedHoldDiag, formatNullBandHoldLog, formatStockSessionDiag } from "./inc-financials-stale-diag.js";
@@ -153,6 +154,7 @@ export interface DailySyncResult {
 
 /** 銘柄ごとの処理結果 (in-memory) */
 interface StockSnapshot {
+  corporateDiagnostics?: StockCorporateDiagnostics;
   stockId: number;
   code: string;
   sector: string | null;
@@ -940,7 +942,8 @@ async function recordPriceSyncCompletion(args: {
 async function recordPriceSyncFailureSafely(
   cause: unknown,
   mode: PriceSyncBatchMode,
-  startedAtMs: number
+  startedAtMs: number,
+  corporateDiagnostics: NonNullable<PriceSyncBatchInput["corporateDiagnostics"]>,
 ): Promise<void> {
   try {
     await recordPriceSyncCompletion({
@@ -972,6 +975,7 @@ async function recordPriceSyncFailureSafely(
       failures: [],
       failureCollection: "aborted",
       originalError: rootCauseMessage(cause),
+      corporateDiagnostics,
     });
     console.info(`[sync-daily] 失敗バッチ保管 (例外時): ${key}`);
   } catch (archiveError) {
@@ -1026,6 +1030,8 @@ export interface PriceSyncBatchInput {
   originalError: string | null;
   currentUpdatedStocks?: number;
   rsiHistoryHolds?: ({ code: string } & RsiHistoryHold)[];
+  /** 同一Chartの用途窓診断。fresh HOLDも含む取得成功attemptのみ。原イベント全文はraw保管を参照。 */
+  corporateDiagnostics?: { code: string; attempt: number; expectedDate: string; diagnostic: StockCorporateDiagnostics }[];
 }
 
 /** バッチ冪等キー。run 一意 (同一 invocation の success/failure 二重を防ぐ)。 */
@@ -1094,6 +1100,7 @@ export function buildPriceSyncBatch(input: PriceSyncBatchInput): {
     categories,
     failures: input.failures,
     originalError: input.originalError,
+    ...(input.corporateDiagnostics === undefined ? {} : { corporateDiagnostics: input.corporateDiagnostics }),
     ...(input.rsiHistoryHolds === undefined ? {} : {
       currentUpdatedStocks: input.currentUpdatedStocks, rsiHistoryHolds: input.rsiHistoryHolds,
     }),
@@ -1178,16 +1185,18 @@ export async function runDailySync(
 ): Promise<DailySyncResult> {
   const startedAtMs = Date.now();
   const mode: PriceSyncBatchMode = options.stocksOnly === true ? "stocks" : "daily";
+  const corporateDiagnostics: NonNullable<PriceSyncBatchInput["corporateDiagnostics"]> = [];
   try {
     return await runDailySyncAndRecord(
       db,
       options.stocksOnly === true,
+      corporateDiagnostics,
       options.collectOverlay,
       options.sendOverlayBatch,
-      options.jpLegStore
+      options.jpLegStore,
     );
   } catch (e) {
-    await recordPriceSyncFailureSafely(e, mode, startedAtMs);
+    await recordPriceSyncFailureSafely(e, mode, startedAtMs, corporateDiagnostics);
     throw e;
   }
 }
@@ -1195,9 +1204,10 @@ export async function runDailySync(
 async function runDailySyncAndRecord(
   db: Db,
   stocksOnly: boolean,
+  corporateDiagnostics: NonNullable<PriceSyncBatchInput["corporateDiagnostics"]>,
   collectOverlay?: OverlayCollectFn,
   sendOverlayBatch?: OverlayBatchSender,
-  jpLegStore?: MacroJpLegStore
+  jpLegStore?: MacroJpLegStore,
 ): Promise<DailySyncResult> {
   const startedAt = Date.now();
   // 日付キーと週1ゲートは run 開始時刻に固定する (F-05。Phase 実行時刻で
@@ -1374,7 +1384,8 @@ async function runDailySyncAndRecord(
     };
     try {
       return await buildSnapshot(target.id, target.code, target.sector, targetDate,
-        jssAnnualByCode.get(target.code) ?? [], { onChartRaw: add("chart"), onSummaryRaw: add("quote-summary"), assertCaptured });
+        jssAnnualByCode.get(target.code) ?? [], { onChartRaw: add("chart"), onSummaryRaw: add("quote-summary"), assertCaptured,
+          onCorporateDiagnostics: diagnostic => { corporateDiagnostics.push({ code: symbol, attempt, expectedDate: targetDate, diagnostic }); } });
     } catch (error) {
       if (error instanceof YahooRawTooLargeError) custodyStop = error;
       for (const api of ["chart", "quote-summary"]) {
@@ -1676,6 +1687,9 @@ async function runDailySyncAndRecord(
   console.info(
     `[sync-daily] 完了: 成功=${fullySucceeded} 失敗=${failures.length} 当日更新=${succeeded} RSI履歴HOLD=${historyHolds.length} 所要=${elapsedSec.toFixed(1)}s`
   );
+  console.info(`[sync-daily] 報告権利診断: ${corporateDiagnostics.length}取得attempt・ATR窓内split報告=` +
+    `${corporateDiagnostics.filter(v => v.diagnostic.windows.atr130.reportedEventReferences.some(r => r.includes(".splits."))).length}` +
+    "。OHLC/volume基準=unknown、増資等を含む全権利の網羅性は未確認。");
 
   const tradingDate = projected.sourceMaxDate;
   await recordPriceSyncCompletion({
@@ -1706,6 +1720,7 @@ async function runDailySyncAndRecord(
     originalError: null,
     currentUpdatedStocks: succeeded,
     rsiHistoryHolds: historyHolds,
+    corporateDiagnostics,
   });
   console.info(
     `[sync-daily] 失敗バッチ保管: ${batchKey} (全${failures.length}件・切詰なし)`
@@ -1913,7 +1928,9 @@ async function buildSnapshot(
   sector: string | null,
   expectedDate: string,
   jssAnnualRows: JssAnnualRow[] = [],
-  rawOptions?: NonNullable<Parameters<typeof fetchStockRawData>[2]> & { assertCaptured: () => void },
+  rawOptions?: NonNullable<Parameters<typeof fetchStockRawData>[2]> & {
+    assertCaptured: () => void; onCorporateDiagnostics?: (diagnostic: StockCorporateDiagnostics) => void;
+  },
 ): Promise<StockSnapshot> {
   // 1 回の Chart(5y) + QuoteSummary で全指標を賄う
   let chartRaw: YahooRawCapture | undefined;
@@ -1926,6 +1943,7 @@ async function buildSnapshot(
     onSummaryRaw: rawOptions.onSummaryRaw,
   });
   rawOptions?.assertCaptured();
+  if (raw.corporateDiagnostics !== undefined) rawOptions?.onCorporateDiagnostics?.(raw.corporateDiagnostics);
   return buildStockSnapshot(stockId, code, sector, expectedDate, raw, jssAnnualRows, chartRaw);
 }
 
@@ -2034,6 +2052,7 @@ export function buildStockSnapshot(
     sma20Val < sma60Val;
 
   return {
+    ...(raw.corporateDiagnostics === undefined ? {} : { corporateDiagnostics: raw.corporateDiagnostics }),
     ...(raw.rsiHistoryHold === undefined ? {} : { rsiHistoryHold: raw.rsiHistoryHold }),
     stockId,
     code,

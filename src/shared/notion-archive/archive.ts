@@ -54,6 +54,8 @@ export interface RecordPrimaryDataInput {
    * service 名でも取り違えない)。
    */
   parentPageId?: string;
+  /** 準備専用処理は既存DBだけを使い、欠落時のschema作成を禁止する。 */
+  requireExistingDatabase?: true;
 }
 
 export interface RecordResult {
@@ -378,20 +380,27 @@ export function assertAdoptedDatabaseSchema(
 async function ensureDatabase(
   parentPageId: string,
   dbTitle: string,
-  cacheKey: string
+  cacheKey: string,
+  requireExisting = false
 ): Promise<string> {
   const cached = dbCache.get(cacheKey);
   if (cached) return cached;
 
-  const existing = await findBackupChildByTitle({
+  const findExisting = requireExisting ? findUniqueBackupChildByTitle : findBackupChildByTitle;
+  const existing = await findExisting({
     parentPageId,
     title: dbTitle,
     kind: "database",
   });
   if (existing) {
+    if (requireExisting) {
+      const schema = await notionRequest<{ properties: Record<string, { type: string }> }>("GET", `/databases/${existing}`);
+      assertAdoptedDatabaseSchema(schema.properties, DB_PROPERTIES, "既存の一次データDB");
+    }
     dbCache.set(cacheKey, existing);
     return existing;
   }
+  if (requireExisting) throw new Error("既存の一次データDBがありません。schemaを作成せず停止します");
 
   const res = await createDatabaseOrAdopt<{ id: string }>(
     {
@@ -423,9 +432,9 @@ function trashDbTitle(service: string): string {
   return `ごみ｜${service}`;
 }
 
-function ensureBackupDb(service: string, parentPageId?: string): Promise<string> {
+function ensureBackupDb(service: string, parentPageId?: string, requireExisting = false): Promise<string> {
   const parent = parentPageId ?? notionEnv.NOTION_ARCHIVE_PAGE_ID();
-  return ensureDatabase(parent, backupDbTitle(service), `backup:${parent}:${service}`);
+  return ensureDatabase(parent, backupDbTitle(service), `backup:${parent}:${service}`, requireExisting);
 }
 function ensureTrashDb(service: string, parentPageId?: string): Promise<string> {
   // 「ごみ｜<service>」も一次データ本体と同じ親ページ直下に置く (2026-09-25
@@ -784,7 +793,7 @@ export async function recordPrimaryData(
       frozenFiles.map(async (f) => ({ ...f, sha256: await sha256HexBytes(f.bytes) }))
     );
 
-  const dbId = await ensureBackupDb(input.service, input.parentPageId);
+  const dbId = await ensureBackupDb(input.service, input.parentPageId, input.requireExistingDatabase === true);
 
   if (!input.force) {
     const existing = await findPageMetaByKey(dbId, input.key);

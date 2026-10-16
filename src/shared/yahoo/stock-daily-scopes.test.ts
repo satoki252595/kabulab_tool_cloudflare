@@ -11,11 +11,13 @@ const proof = JSON.parse(readFileSync(new URL("./fixtures/stock-daily-scopes-202
 let client: typeof import("./client.js");
 beforeEach(async () => {
   vi.resetModules();
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-14T10:15:47.400Z"));
   vi.stubEnv("YAHOO_PROXY_BASE", "https://kabulab.example.test");
   vi.stubEnv("CRON_SECRET", "test-secret");
   client = await import("./client.js");
 });
-afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
 function serve(code: string, chart = fixture[`${code}-chart`]) {
   const fetch = vi.fn(async (input: string) => new Response(
@@ -86,7 +88,9 @@ describe("通常株式日次の用途別資格 (実原典の最小projection・�
     serve("7203");
     const strict = await client.fetchChart("7203", "5y");
     const scoped = await client.fetchChart("7203", "5y", { stockDailyScopes: true, onRaw: () => undefined });
-    expect(scoped).toEqual(strict);
+    const { corporateDiagnostics, ...scopedValues } = scoped;
+    expect(scopedValues).toEqual(strict);
+    expect(corporateDiagnostics).toMatchObject({ source: { code: "7203", receivedAt: "2026-10-14T10:15:47.400Z" }, basis: { ohlc: "unknown", volume: "unknown", localAdjustment: "none" } });
     expect(scoped.rsiHistoryHold).toBeUndefined();
   });
 

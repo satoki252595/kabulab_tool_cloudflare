@@ -41,6 +41,7 @@ import {
   recordEdinetZip,
   type DocCustody,
 } from "./edinet/archive.js";
+import type { IssuedShareObservation } from "./edinet/issued-shares.js";
 import { parseEdinetCsvZip } from "./edinet/csv.js";
 import {
   parseOrderData,
@@ -77,6 +78,9 @@ const NOTION_SERVICE = "yuho-quant";
 interface IngestDetails {
   /** 有報/本文完了と独立。HOLDは原本保管行から次定時に再開する。 */
   holdings?: PublishHoldingsResult;
+  /** 原本ZIP限定観測。価格/財務/権利係数には適用しない。 */
+  issuedShares?: { status: IssuedShareObservation["status"]; reason: string | null; candidateCount: number | null;
+    observedKinds: number | null; heldObservations: number | null; zipSha256: string; archivePageId: string };
   parseStatus: ParseStatus | "parse_error";
   factCount: number;
   /** 海外売上の構造化結果 (同じ有報から並行構造化)。 */
@@ -166,10 +170,12 @@ export async function ingestDocument(
     d1HttpBatch?: ReturnType<typeof createD1HttpBatchSender>;
     /** 通常catchup/backfillのrun全体で共有する100行枠。HOLDは原本行に別途保持。 */
     holdingsBudget?: ShareholdingsBudget;
+    observeIssuedShares?: true;
   }
 ): Promise<IngestResult> {
   const { stockId, stockCode, doc, force = false, archiveToNotion = true } = args;
   let holdingsResult: PublishHoldingsResult | undefined;
+  let issuedSharesResult: IngestDetails["issuedShares"];
 
   // Shared entrance preflight: 書込 backend の確定は fetch/remote save より前。
   // sqlite-proxy の db.batch はメソッド自体は存在するが batch callback 未配線
@@ -542,8 +548,18 @@ export async function ingestDocument(
       }
       const holdings = await publishVerifiedShareholdings({ source: { docId: doc.docID, stockCode,
         edinetCode: doc.edinetCode, fiscalYearEnd: periodEnd }, ownerName: doc.filerName, zip: xbrlZip,
-        archivePageId: archivedType1.pageId, maxRows: 100, budget: args.holdingsBudget });
-      holdingsResult = holdings;
+        archivePageId: archivedType1.pageId, maxRows: 100, budget: args.holdingsBudget,
+        observeIssuedShares: args.observeIssuedShares,
+        issuedSharesFilingDateEvidence: { rawSubmitDateTime: doc.submitDateTime, provenance: "same-edinet-document" } });
+      const { issuedSharesObservation: observation, ...holdingsWithoutObservation } = holdings;
+      holdingsResult = holdingsWithoutObservation;
+      if (observation !== undefined) {
+        issuedSharesResult = { status: observation.status, reason: observation.reason, candidateCount: observation.candidateCount,
+          observedKinds: observation.observations === null ? null : observation.observations.filter(o => o.qualification.status === "observed-kind").length,
+          heldObservations: observation.observations === null ? null : observation.observations.filter(o => o.qualification.status === "hold").length,
+          zipSha256: observation.zipSha256, archivePageId: archivedType1.pageId };
+        console.info(`[ingest] 発行株数の限定原文観測 docID=${doc.docID} ${JSON.stringify(issuedSharesResult)}`);
+      }
       console.info(`[ingest] 保有明細 ${holdings.status} docID=${doc.docID} rows=${holdings.parsed}${holdings.status === "held" ? ` reason=${holdings.reason}` : ""}`);
     }
     console.info(`[ingest] 原本保管処理終了 docID=${doc.docID}`);
@@ -727,5 +743,6 @@ export async function ingestDocument(
     textSectionCount: sections.length,
     periodEnd,
     holdings: holdingsResult,
+    issuedShares: issuedSharesResult,
   };
 }

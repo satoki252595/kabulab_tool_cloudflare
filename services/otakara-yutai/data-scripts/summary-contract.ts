@@ -38,7 +38,7 @@ function normalizeMonthPeriods(text: string): string {
 
 const periods = (s: string): string[] => [...s.matchAll(/(?<![0-9.,])([0-9]+|半)\s*(年|か月|ヶ月|カ月|ヵ月)\s*(以上|未満|以下|超)/g)].map(m => `${m[1]}${m[2]}${m[3]}`);
 
-/** 原文の適用条件を全生成経路と公開factsの双方で同じように読む。原文自体は返さない。 */
+/** 重要語・期間表記を検出し、要約での脱落を防ぐ。対象・必要性の確定や原文返却は行わない。 */
 export function sourceSummaryConditions(description: string) {
   const source = normalizeMonthPeriods(description);
   const choice = /選[択べんぶび]|いずれか|または|又は/;

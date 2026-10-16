@@ -2,7 +2,9 @@
 import assert from "node:assert/strict";
 import { AssertionError } from "node:assert";
 import { createHash } from "node:crypto";
-import { parseShareholdingsData, verifySavedHoldingsSource, type Shareholding, type ShareholdingsSource, type ShareholdingsExtraction } from "../../../services/yuho-quant/src/services/edinet/shareholdings.js";
+import { parseShareholdingsData, verifySavedHoldingsSource, verifyHoldingsSourceEntries, type Shareholding, type ShareholdingsSource, type ShareholdingsExtraction } from "../../../services/yuho-quant/src/services/edinet/shareholdings.js";
+import { observeIssuedShares, unobservedIssuedShares, type IssuedShareObservation } from "../../../services/yuho-quant/src/services/edinet/issued-shares.js";
+import type { OfficialIssuerNames } from "../../../services/yuho-quant/src/services/edinet/shareholdings-issuer-names.js";
 import { HoldingPriceIssuerMismatch, HoldingsPriceIndex, parseHoldingsCodeList, qualifyHoldingValuation, type ArchivedSource, type HoldingValuation } from "../../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js";
 import { edinetArchiveFilename } from "../../../services/yuho-quant/src/services/edinet/archive.js";
 import { findUniqueBackupChildByTitle, queryUniqueRow, recordPrimaryData } from "./archive.js";
@@ -327,21 +329,24 @@ export function holdingsFactsSha256(holdings: readonly Shareholding[]): string {
 interface PublishHoldingsArgs {
   source: ShareholdingsSource; ownerName: string; zip: Buffer; archivePageId: string; maxRows: number;
   budget?: ShareholdingsBudget;
+  /** Actions/Node正常入口だけ明示有効。Worker adminは未測定full診断を起動しない。 */
+  observeIssuedShares?: true;
+  issuedSharesFilingDateEvidence?: IssuedShareObservation["filingDateEvidence"];
   /** 旧cursor欠測HOLDの明示再資格だけ。全props/clockと全原表factsを物理PREへ固定する。 */
   sourceWindowPre?: ArchivedSource;
   /** publishVerifiedでは物理全文照合済みの原本だけ。保存入口は内部で照合する。 */
-  valuationSources?: { codeList: ArchivedSource; prices: readonly ArchivedSource[]; evidenceScope?: string };
+  valuationSources?: { codeList: ArchivedSource; prices: readonly ArchivedSource[]; evidenceScope?: string; officialIssuerNames?: OfficialIssuerNames; priceIndex?: HoldingsPriceIndex; checkOfficialIssuerNames?: () => Promise<{ status: "verified" } | { status: "held"; reason: string; reasonCode?: "budget_exhausted" | "issuer_source_unavailable" }> };
 }
 
 export interface HoldingPriceBudget { remainingChunks: number; remainingBytes: number }
-export type HoldingPriceSourceLoader = (holdings: readonly Shareholding[], budget: HoldingPriceBudget) => Promise<
-  { status: "ready"; snapshotId: string; evidenceScope: string; codeList: ArchivedSource; prices: ArchivedSource[] } |
-  { status: "held"; reason: string; reasonCode: "snapshot_unavailable" | "budget_exhausted" }
+export type HoldingPriceSourceLoader = (holdings: readonly Shareholding[], budget: HoldingPriceBudget, shouldStop?: () => boolean) => Promise<
+  { status: "ready"; snapshotId: string; evidenceScope: string; codeList: ArchivedSource; prices: ArchivedSource[]; officialIssuerNames?: OfficialIssuerNames; priceIndex?: HoldingsPriceIndex; checkOfficialIssuerNames?: () => Promise<{ status: "verified" } | { status: "held"; reason: string; reasonCode?: "budget_exhausted" | "issuer_source_unavailable" }> } |
+  { status: "held"; reason: string; reasonCode: "snapshot_unavailable" | "budget_exhausted" | "issuer_source_unavailable" }
 >;
 
-export type PublishHoldingsResult =
+export type PublishHoldingsResult = (
   | { status: "published"; parsed: number; created: number; updated: number; unchanged: number; unavailable?: number; pending?: boolean }
-  | { status: "held"; parsed: number; reason: string; usedRows?: number; pending?: boolean };
+  | { status: "held"; parsed: number; reason: string; usedRows?: number; pending?: boolean }) & { issuedSharesObservation?: IssuedShareObservation };
 
 /**
  * recordEdinetZip(type1)の物理全文照合を終えた同一bytesだけを渡す。
@@ -349,21 +354,35 @@ export type PublishHoldingsResult =
  * windowの完了は通全体の完了と区別し、最後だけ価格queueへ渡す。
  */
 export async function publishVerifiedShareholdings(args: PublishHoldingsArgs): Promise<PublishHoldingsResult> {
-  return publishHoldings(args);
+  const diagnostic: { observation?: IssuedShareObservation } = {};
+  const result = await publishHoldings(args, undefined, diagnostic);
+  return diagnostic.observation === undefined ? result : { ...result, issuedSharesObservation: diagnostic.observation };
 }
 
-async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapshotId?: string; info: RecoveryInfo }): Promise<PublishHoldingsResult> {
+async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapshotId?: string; info: RecoveryInfo }, diagnostic?: { observation?: IssuedShareObservation }): Promise<PublishHoldingsResult> {
   assert.ok(Number.isSafeInteger(args.maxRows) && args.maxRows >= 0 && args.maxRows <= 1000);
   assert.ok(args.ownerName.trim().length > 0);
   if (args.budget) assert.ok(Number.isSafeInteger(args.budget.remainingRows) && args.budget.remainingRows >= 0 && args.budget.remainingRows <= 100);
   const maxRows = Math.min(100, args.budget ? Math.min(args.maxRows, args.budget.remainingRows) : args.maxRows);
   const hold = async (reason: string, parsed: number, retry: boolean, pricePreflight = false): Promise<PublishHoldingsResult> => {
     if (pricePhase) await recordRecoveryInfo(args.archivePageId, pricePhase.info, retry ? "再開待ち" : "要確認", reason, true, undefined, undefined, pricePreflight);
-    else await recordRecoveryMarker(args, retry ? "再開待ち" : "要確認", reason, parsed);
-    return { status: "held", parsed, reason };
+    else await recordRecoveryMarker(args, retry ? "再開待ち" : "要確認", reason, parsed, undefined, diagnostic?.observation);
+    return { status: "held", parsed, reason, ...(retry ? { pending: true } : {}) };
   };
   if (args.zip.length > HOLDINGS_ZIP_MAX_BYTES) return hold("1原本20MiBの解析予算を超えています", 0, false);
-  const parsed = parseShareholdingsData(args.zip, args.source);
+  const parsed = parseShareholdingsData(args.zip, args.source, diagnostic === undefined ? undefined : { qualifySource: entries => {
+    if (args.observeIssuedShares === true) diagnostic.observation = observeIssuedShares(args.zip, args.source,
+        args.issuedSharesFilingDateEvidence === undefined ? null : args.issuedSharesFilingDateEvidence, entries);
+    else {
+      let identity: IssuedShareObservation["sourceQualification"];
+      try { const proof = verifyHoldingsSourceEntries(entries, args.source); identity = proof.status === "verified" ? { status: "verified", reason: null } : proof; }
+      catch (error) { identity = { status: "held", reason: `原本/DEI資格を確定できません: ${error instanceof Error ? error.message : String(error)}` }; }
+      diagnostic.observation = unobservedIssuedShares(args.zip, args.source,
+        identity.status === "held" && identity.reason !== null ? identity.reason : "このcallerはfull観測を有効化していません。Worker実負荷は未受入です", identity);
+    }
+    const identity = diagnostic.observation.sourceQualification;
+    return identity.status === "verified" ? { status: "verified" } : { status: "held", reason: identity.reason === null ? "提出者原本資格は未確認です" : identity.reason };
+  } });
   if (parsed.status !== "ok" || parsed.holderScope !== "filer_only") {
     return hold(parsed.reason ?? "提出会社の保有主体資格が未確認です", 0, false);
   }
@@ -384,7 +403,8 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
     const status = sourceBefore.properties["保有明細状態"]?.select?.name;
     assert.notEqual(status, "実行中（結果未確定）", "保有明細の前回結果が未確定です。再送せず読取照合してください");
     sourceInfo = { source: args.source, ownerName: args.ownerName, zipBytes: args.zip.length, zipSha256,
-      parsed: parsed.holdings.length, factsSha256: holdingsFactsSha256(parsed.holdings), sourceQueueVersion: 1, sourceNextHoldingOffset: 0 };
+      parsed: parsed.holdings.length, factsSha256: holdingsFactsSha256(parsed.holdings), sourceQueueVersion: 1, sourceNextHoldingOffset: 0,
+      ...(diagnostic?.observation === undefined ? {} : { issuedSharesObservation: diagnostic.observation }) };
     const previous = sourceBefore.properties["保有明細再開情報"];
     const previousText = previous?.type === "rich_text" ? richValue(previous) : "";
     if (previousText) {
@@ -455,13 +475,18 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
   const ready: Array<{ holding: Shareholding; valuation: HoldingValuation; properties: Record<string, HoldingProperty> }> = [];
   try {
     const catalog = args.valuationSources ? parseHoldingsCodeList(args.valuationSources.codeList) : null;
-    const prices = args.valuationSources ? new HoldingsPriceIndex(args.valuationSources.prices) : null;
+    const prices = args.valuationSources ? (args.valuationSources.priceIndex === undefined ? new HoldingsPriceIndex(args.valuationSources.prices) : args.valuationSources.priceIndex) : null;
+    if (args.valuationSources?.priceIndex) args.valuationSources.priceIndex.assertSources(args.valuationSources.prices);
     for (const holding of selected) {
       const valuation: HoldingValuation = catalog && prices
-        ? await qualifyHoldingValuation({ holding, fiscalYearEnd: args.source.fiscalYearEnd, catalog, prices })
+        ? await qualifyHoldingValuation({ holding, fiscalYearEnd: args.source.fiscalYearEnd, catalog, prices, officialIssuerNames: args.valuationSources?.officialIssuerNames })
         : { status: "unavailable", identity: null, reason: "銘柄同定・個別価格・分割観測の保存原本が未指定です" };
       ready.push({ holding, valuation, properties: { ...holdingProperties(args.source, args.ownerName, holding),
         ...sourceProperties(parsed, holding, zipSha256), ...valuationProperties(holding, valuation, args.valuationSources?.evidenceScope) } });
+    }
+    if (args.valuationSources?.checkOfficialIssuerNames) {
+      const current = await args.valuationSources.checkOfficialIssuerNames();
+      if (current.status === "held") return hold(current.reason, parsed.holdings.length, current.reasonCode === "budget_exhausted", true);
     }
   } catch (error) {
     if (error instanceof HoldingPriceIssuerMismatch) return hold(error.message, parsed.holdings.length, false, true);
@@ -662,10 +687,11 @@ export function verifySavedHoldingsMetadata(metadata: Record<string, unknown>, s
 }
 
 /** 保存type1限定のbackfill準備。新規原本取得・schema変更・行更新は0。 */
-export async function readSavedHoldingsZip(source: ShareholdingsSource): Promise<
-  { status: "ready"; archivePageId: string; bytes: Buffer; sha256: string; originalManifest: "known" | "unknown"; sourceCustody: "typed" | "legacy"; metadata: Record<string, unknown>; fetchedAt: string; metadataMissing: string[] } |
-  { status: "held"; reason: string }
+export async function readSavedHoldingsZip(source: ShareholdingsSource, budget?: { remainingBytes: number }, opts?: { observeIssuedShares: true }): Promise<
+  { status: "ready"; archivePageId: string; bytes: Buffer; sha256: string; originalManifest: "known" | "unknown"; sourceCustody: "typed" | "legacy"; metadata: Record<string, unknown>; fetchedAt: string; metadataMissing: string[]; issuedSharesObservation?: IssuedShareObservation } |
+  { status: "held"; reason: string; reasonCode?: "budget_exhausted" }
 > {
+  if (budget) assert.ok(Number.isSafeInteger(budget.remainingBytes) && budget.remainingBytes >= 0);
   const { docId } = source;
   assert.match(docId, /^S[0-9A-Z]+$/);
   if (source.edinetCode === null) return { status: "held", reason: "提出者EDINETコードが未確定です" };
@@ -683,13 +709,31 @@ export async function readSavedHoldingsZip(source: ShareholdingsSource): Promise
   const allFiles = await listPageFiles(page.id, "Files");
   const files = sourceCustody === "typed" ? allFiles : allFiles.filter(file => file.name === edinetArchiveFilename(docId, 1));
   if (files.length !== 1 || files[0].kind !== "file" || files[0].name !== edinetArchiveFilename(docId, 1)) return { status: "held", reason: `${sourceCustody}原本のtype1単一Notion-hosted物理添付を確認できません（CSVは代用しません）` };
-  const bytes = Buffer.from(await downloadArchivedFile(files[0], "保有明細type1原本", { maxBytes: HOLDINGS_ZIP_MAX_BYTES }));
-  const digest = createHash("sha256").update(bytes).digest("hex");
   const parts = page.properties["Metadata"]?.rich_text;
   assert.ok(Array.isArray(parts));
   const metadata = JSON.parse(parts.map(part => {
     assert.equal(part.type, "text"); assert.equal(part.plain_text, part.text?.content); return part.plain_text;
   }).join(""));
+  let reservedBytes = 0;
+  if (budget) {
+    reservedBytes = HOLDINGS_ZIP_MAX_BYTES;
+    if (metadata.sourceZIPBytes !== undefined) {
+      assert.ok(Number.isSafeInteger(metadata.sourceZIPBytes) && metadata.sourceZIPBytes > 0 && metadata.sourceZIPBytes <= HOLDINGS_ZIP_MAX_BYTES);
+      reservedBytes = metadata.sourceZIPBytes;
+    }
+    if (metadata._fileManifest !== undefined) {
+      assert.ok(Array.isArray(metadata._fileManifest.files));
+      const entries = metadata._fileManifest.files.filter((entry: { originalFilename?: unknown }) => entry.originalFilename === files[0].name);
+      assert.equal(entries.length, 1); const expected = entries[0].byteLength;
+      assert.ok(Number.isSafeInteger(expected) && expected > 0 && expected <= HOLDINGS_ZIP_MAX_BYTES);
+      if (metadata.sourceZIPBytes !== undefined) assert.equal(expected, reservedBytes);
+      reservedBytes = expected;
+    }
+    if (reservedBytes > budget.remainingBytes) return { status: "held", reasonCode: "budget_exhausted", reason: "issuer保存原本の全文読取予算が不足しています（未知サイズは20MiBを予約）" };
+    budget.remainingBytes -= reservedBytes;
+  }
+  const bytes = Buffer.from(await downloadArchivedFile(files[0], "保有明細type1原本", { maxBytes: budget ? reservedBytes : HOLDINGS_ZIP_MAX_BYTES }));
+  const digest = createHash("sha256").update(bytes).digest("hex");
   if (metadata.sourceZIPSHA !== undefined) assert.equal(metadata.sourceZIPSHA, digest);
   if (metadata.sourceZIPBytes !== undefined) assert.equal(metadata.sourceZIPBytes, bytes.length);
   const metadataProof = verifySavedHoldingsMetadata(metadata, source);
@@ -706,10 +750,16 @@ export async function readSavedHoldingsZip(source: ShareholdingsSource): Promise
     assert.equal(manifest.originalFilename, files[0].name);
     assert.equal(manifest.byteLength, bytes.length); assert.equal(manifest.sha256, digest);
   }
-  const identity = verifySavedHoldingsSource(bytes, source);
+  let issuedSharesObservation: IssuedShareObservation | undefined;
+  const identity = opts === undefined ? verifySavedHoldingsSource(bytes, source) : verifySavedHoldingsSource(bytes, source, {
+    onVerifiedEntries: entries => { issuedSharesObservation = observeIssuedShares(bytes, source,
+      typeof metadata.submitDateTime === "string" ? { rawSubmitDateTime: metadata.submitDateTime, provenance: "saved-archive-metadata" } : null, entries); },
+  });
   if (identity.status === "held") return identity;
+  if (budget) { assert.ok(bytes.length <= reservedBytes); budget.remainingBytes += reservedBytes - bytes.length; }
   return { status: "ready", archivePageId: page.id, bytes, sha256: digest,
-    originalManifest: metadata._fileManifest === undefined ? "unknown" : "known", sourceCustody, metadata, fetchedAt, metadataMissing: metadataProof.missing };
+    originalManifest: metadata._fileManifest === undefined ? "unknown" : "known", sourceCustody, metadata, fetchedAt, metadataMissing: metadataProof.missing,
+    ...(issuedSharesObservation === undefined ? {} : { issuedSharesObservation }) };
 }
 
 const RECOVERY = {
@@ -752,16 +802,18 @@ async function recoveryDatabase(): Promise<string> {
 interface RecoveryInfo {
   source: ShareholdingsSource; ownerName: string; zipBytes: number; zipSha256: string; parsed: number;
   factsSha256?: string;
+  issuedSharesObservation?: IssuedShareObservation;
   sourceQueueVersion?: 1; sourceNextHoldingOffset?: number;
   /** 未確定時もPREのexact key/SHAを保持し、同じ旧行PATCHを自動再送しない。 */
   legacyMigration?: { offset: number; rowIds: string[]; pre: MigrationFile; post?: MigrationFile };
   priceQueueVersion?: 1; nextHoldingOffset?: number; unavailableRows?: number; snapshotId?: string;
 }
 
-async function recordRecoveryMarker(args: PublishHoldingsArgs, status: string, reason: string, parsed: number, factsSha256?: string): Promise<void> {
+async function recordRecoveryMarker(args: PublishHoldingsArgs, status: string, reason: string, parsed: number, factsSha256?: string, issuedSharesObservation?: IssuedShareObservation): Promise<void> {
   const info: RecoveryInfo = { source: args.source, ownerName: args.ownerName, zipBytes: args.zip.length,
     zipSha256: createHash("sha256").update(args.zip).digest("hex"), parsed };
   if (factsSha256 !== undefined) info.factsSha256 = factsSha256;
+  if (issuedSharesObservation !== undefined) info.issuedSharesObservation = issuedSharesObservation;
   await recordRecoveryInfo(args.archivePageId, info, status, reason, false);
 }
 
@@ -803,7 +855,7 @@ async function recordRecoveryInfo(archivePageId: string, info: RecoveryInfo, sta
     const saved = JSON.parse(richValue(before.properties["保有明細再開情報"])) as RecoveryInfo;
     assert.notEqual(before.properties["保有明細状態"]?.select?.name, "明細原本照合済", "確定sourceを解析保留で戻しません");
     for (const name of ["source", "ownerName", "zipBytes", "zipSha256"] as const) assert.deepEqual(saved[name], info[name]);
-    info = saved; // 資格不成立のHOLDは既存cursor/factsを消さない。
+    info = info.issuedSharesObservation === undefined ? saved : { ...saved, issuedSharesObservation: info.issuedSharesObservation }; // cursor/factsを消さず同ZIPの今回診断だけ追記。
   }
   if (sourceExpected) {
     assert.equal(price, false);
@@ -907,9 +959,9 @@ export async function resumePendingShareholdingsPrices(args: {
       assert.equal(parsed.holdings.length, info.parsed, "価格phaseで原表の明細集合が変更されています");
       assert.equal(holdingsFactsSha256(parsed.holdings), info.factsSha256, "価格phaseで全facts/orderが変化しています");
       const selected = parsed.holdings.slice(info.nextHoldingOffset, info.nextHoldingOffset! + args.maxRows - result.usedRows);
-      sources = await args.loadSources(selected, args.budget);
+      sources = await args.loadSources(selected, args.budget, args.shouldStop);
       if (sources.status === "held" || args.shouldStop()) {
-        if (sources.status === "held") assert.ok(sources.reasonCode === "budget_exhausted" || sources.reasonCode === "snapshot_unavailable");
+        if (sources.status === "held") assert.ok(sources.reasonCode === "budget_exhausted" || sources.reasonCode === "snapshot_unavailable" || sources.reasonCode === "issuer_source_unavailable");
         const retry = sources.status !== "held" || sources.reasonCode === "budget_exhausted";
         await recordRecoveryInfo(page.id, info, retry ? "再開待ち" : "要確認", sources.status === "held" ? sources.reason : "価格phaseの実時間予算を使い切りました", true, undefined, undefined, true);
         if (retry) result.pending = true; else result.held++;
@@ -924,13 +976,14 @@ export async function resumePendingShareholdingsPrices(args: {
     const outcome = await publishHoldings({ source: info.source, ownerName: info.ownerName, zip: saved.bytes,
       archivePageId: page.id, maxRows: args.maxRows - result.usedRows, valuationSources: sources }, { snapshotId: sources.snapshotId, info });
     if (outcome.status === "published") { result.usedRows += outcome.parsed; result.resumed++; if (outcome.pending) result.pending = true; else if (outcome.unavailable! > 0) result.held++; }
+    else if (outcome.pending) result.pending = true;
     else result.held++;
   }
   return result;
 }
 
 /** EDINET完了checkpointとは独立した既知HOLDだけを、次定時に保存原本から優先再開。 */
-export async function resumePendingShareholdings(args: { maxRows: number; shouldStop: () => boolean }): Promise<{
+export async function resumePendingShareholdings(args: { maxRows: number; shouldStop: () => boolean; observeIssuedShares?: true }): Promise<{
   usedRows: number; resumed: number; held: number; pending: boolean;
 }> {
   assert.ok(Number.isSafeInteger(args.maxRows) && args.maxRows >= 0 && args.maxRows <= 100);
@@ -963,7 +1016,9 @@ export async function resumePendingShareholdings(args: { maxRows: number; should
     assert.equal(saved.archivePageId.replaceAll("-", ""), page.id.replaceAll("-", ""));
     assert.equal(saved.bytes.length, info.zipBytes); assert.equal(saved.sha256, info.zipSha256);
     const outcome = await publishVerifiedShareholdings({ source: info.source, ownerName: info.ownerName, zip: saved.bytes,
-      archivePageId: page.id, maxRows: args.maxRows - result.usedRows });
+      archivePageId: page.id, maxRows: args.maxRows - result.usedRows, observeIssuedShares: args.observeIssuedShares,
+      issuedSharesFilingDateEvidence: typeof saved.metadata.submitDateTime === "string"
+        ? { rawSubmitDateTime: saved.metadata.submitDateTime, provenance: "saved-archive-metadata" } : null });
     if (outcome.status === "published") { result.usedRows += outcome.parsed; result.resumed++; }
     else if (outcome.pending) { result.usedRows += outcome.usedRows!; result.resumed++; result.pending = true; }
     else { result.held++; result.pending = true; }
