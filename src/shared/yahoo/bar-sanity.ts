@@ -20,7 +20,7 @@ import type { DailyOhlcv } from "../types.js";
 export type Bar = DailyOhlcv;
 
 /** 調整済み系列へ通常終値を混ぜない。両値ともない日は欠測のまま。 */
-export function requiredAdjustedClose(bar: Bar): number | null {
+export function requiredAdjustedClose(bar: Pick<Bar, "date" | "close" | "adj">): number | null {
   if (bar.adj === null && bar.close === null) return null;
   if (typeof bar.adj !== "number" || !Number.isFinite(bar.adj) || bar.adj <= 0) {
     throw new Error(`${bar.date}: 調整済み終値が未取得または不正です。通常終値で補完しません`);

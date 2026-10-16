@@ -1993,6 +1993,8 @@ export function buildStockSnapshot(
   const atr = atr14(ohlcv6mo);
   const latestRow = ohlcv6mo[ohlcv6mo.length - 1];
   const latestClose = latestRow?.close ?? null;
+  // SMAと同じ受領adjclose系列で比較する。約定用のlatestCloseは変更しない。
+  const latestAdjustedClose = closes6mo.at(-1);
   const atrPctRatio =
     atr !== null && latestClose !== null && latestClose > 0
       ? atr / latestClose
@@ -2009,15 +2011,15 @@ export function buildStockSnapshot(
   const trendLong =
     sma5Val !== null &&
     sma20Val !== null &&
-    latestClose !== null &&
+    latestAdjustedClose !== undefined && latestAdjustedClose !== null &&
     sma5Val > sma20Val &&
-    latestClose > sma5Val;
+    latestAdjustedClose > sma5Val;
   const trendShort =
     sma5Val !== null &&
     sma20Val !== null &&
-    latestClose !== null &&
+    latestAdjustedClose !== undefined && latestAdjustedClose !== null &&
     sma5Val < sma20Val &&
-    latestClose < sma5Val;
+    latestAdjustedClose < sma5Val;
   const perfectOrderLong =
     sma5Val !== null &&
     sma20Val !== null &&
@@ -2287,6 +2289,7 @@ function buildIndicatorRows(
   item: FlushItem<never>
 ): BuiltRow<Record<string, unknown>>[] {
   const snap = item.snap;
+  const latestBar = snap.ohlcv6mo.at(-1);
   // screenStock() は indicators 6 値の純関数。旧 swing_stock_screening 表と
   // 同じ値を同じ run で書くので、表示される数値は変わらない。
   const screen = screenStock({
@@ -2295,7 +2298,7 @@ function buildIndicatorRows(
     atrPct: snap.atrPct,
     sma5: snap.sma5,
     sma20: snap.sma20,
-    latestClose: snap.latestClose,
+    latestClose: latestBar === undefined ? null : requiredAdjustedClose(latestBar),
   });
   return [
     {
@@ -2400,7 +2403,7 @@ function buildMomentumRows(
   item: FlushItem<never>
 ): BuiltRow<Record<string, unknown>>[] {
   // Phase 6 の D1 読み直しの代わりに、メモリ上の 6mo スライスから upsert。
-  // 同じ入力・同じ関数 (buildMomentumRow) なので /emh の数値は不変。
+  // 同一Chart応答の調整済み終値からリターンを組む。受領closeはOHLCVへ別保存。
   // source_max_date は暫定で自銘柄の最新日、Phase 6 で全体 MAX に直す。
   const row = buildMomentumRow(item.snap.ohlcv6mo);
   if (row === null) return [];
@@ -2822,8 +2825,8 @@ export async function pruneOhlcvRetention(
 //   2. Phase 6 (`rebuildMomentumProjection`) は MAX(date) 1 文 +
 //      source_max_date の backfill + 掃除 DELETE だけを行う。
 //
-// メモリ build が D1 読み直しと一致する根拠: 読む列は遡及修正されない生 `close`、
-// 窓は prune 後と同じ末尾 90 本、ソート・usable 判定・encode は同じ関数。
+// 同じ原本応答のadjcloseを使う。異なる取得日の調整系列をD1から混ぜない。
+// 末尾90本の窓・ソート・usable判定・encodeは通常取得と保存原本replayで共通。
 // 失敗した銘柄の行は掃除 DELETE で消える (/emh は欠けた分だけ件数が減る)。
 // -----------------------------------------------------------------------------
 
@@ -2845,17 +2848,16 @@ export interface MomentumProjectionResult {
 /**
  * メモリ上の OHLCV から投影 1 行分を作る (純関数)。
  *
- * 末尾 90 本を取り、日付順に並べ、使える終値だけ残す。D1 読み直しと同じ
- * 順序・同じ述語なので、同じ入力なら同じ行になる。有効な終値が 1 本も無ければ
- * null (その銘柄は投影しない。D1 読み直し版の `usable.length === 0` continue
- * と同じ)。
+ * 末尾90本を日付順にし、同一応答の調整済み終値を使用する。調整値の欠測・不正は
+ * 通常終値で補完せずSTOP。両値ともない日は欠測とし、全日欠測なら投影しない。
  */
 export function buildMomentumRow(
-  ohlcv: ReadonlyArray<{ date: string; close: number | null }>
+  ohlcv: ReadonlyArray<Pick<DailyOhlcv, "date" | "close" | "adj">>
 ): { asOf: string; bars: number; closes: string } | null {
   const tail = ohlcv.slice(-PROJECTION_BARS);
   const sorted = [...tail].sort((a, b) => (a.date < b.date ? -1 : 1));
-  const usable = sorted.filter((b) => isUsableClose(b.close));
+  const usable = sorted.map((bar) => ({ date: bar.date, close: requiredAdjustedClose(bar) }))
+    .filter((b) => isUsableClose(b.close));
   if (usable.length === 0) return null;
   const last = usable[usable.length - 1] as { date: string; close: number };
   return {

@@ -148,6 +148,7 @@ describe("buildMomentumRow", () => {
     const chronological = Array.from({ length: 130 }, (_, i) => ({
       date: dateAt(i),
       close: 100 + i,
+      adj: 100 + i,
     }));
     // 末尾 90 位置の順序が崩れていても、日付順に揃えてから畳む。
     const shuffled = [...chronological.slice(-90)].reverse();
@@ -163,13 +164,12 @@ describe("buildMomentumRow", () => {
     expect(closes[89]).toBe(229);
   });
 
-  it("NULL・非正を落とし、as_of は残った末尾の日付", () => {
+  it("両値NULLだけを欠測とし、as_of は残った末尾の日付", () => {
     const row = buildMomentumRow([
-      { date: dateAt(0), close: 100 },
-      { date: dateAt(1), close: null },
-      { date: dateAt(2), close: -5 },
-      { date: dateAt(3), close: 110 },
-      { date: dateAt(4), close: null },
+      { date: dateAt(0), close: 100, adj: 100 },
+      { date: dateAt(1), close: null, adj: null },
+      { date: dateAt(3), close: 110, adj: 110 },
+      { date: dateAt(4), close: null, adj: null },
     ]);
     expect(row).toEqual({ asOf: dateAt(3), bars: 2, closes: "100,110" });
   });
@@ -178,8 +178,8 @@ describe("buildMomentumRow", () => {
     expect(buildMomentumRow([])).toBeNull();
     expect(
       buildMomentumRow([
-        { date: dateAt(0), close: null },
-        { date: dateAt(1), close: 0 },
+        { date: dateAt(0), close: null, adj: null },
+        { date: dateAt(1), close: null, adj: null },
       ])
     ).toBeNull();
   });
@@ -187,7 +187,7 @@ describe("buildMomentumRow", () => {
   it("投影を経由しても calcMomentum の数値が変わらない", () => {
     const closes = [100, 102, 101, 105, 110, 108, 112, 115, 113, 118];
     const row = buildMomentumRow(
-      closes.map((close, i) => ({ date: dateAt(i), close }))
+      closes.map((close, i) => ({ date: dateAt(i), close, adj: close }))
     );
     expect(row).not.toBeNull();
     const viaProjection = calcMomentum(decodeCloses(row?.closes ?? ""), 5);
