@@ -27,6 +27,18 @@ afterEach(() => {
   vi.useRealTimers(); vi.resetModules();
 });
 const load = () => import("./client.js");
+it.each(["queue", "retry"])("有限読取guardは%s待機後のnative再開を期限内で止める", async kind => {
+  const { notionRequest, notionStats } = await load();
+  const { NotionConfigError } = await import("./env.js");
+  const guard = () => { if (Date.now() > 1_000_100) throw new NotionConfigError("finite read STOP"); };
+  statuses = kind === "retry" ? [429] : [200];
+  const call = kind === "retry" ? notionRequest("GET", "/a", undefined, { beforeRequest: guard }) :
+    notionRequest("GET", "/a").then(() => notionRequest("GET", "/b", undefined, { beforeRequest: guard }));
+  const result = call.catch(e => e);
+  await vi.runAllTimersAsync();
+  expect(await result).toMatchObject({ name: "NotionConfigError" });
+  expect(starts).toEqual([0]); expect(notionStats().requests).toBe(1); expect(notionStats().transientRetries).toBe(0);
+});
 it.each([2.0, 0.7, 1.6, 1.0])("通常CLIはtyped envだけでnative retryと次queueを%srpsへ抑える", async rps => {
   process.env.NOTION_MAX_RPS = String(rps);
   const { notionRequest } = await load();

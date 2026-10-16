@@ -1,0 +1,37 @@
+{
+  "kind": "Actual accepted A5 physical POST projection, not original native response bytes",
+  "source": "tmp/feature-audit-20261016/A5-normal-mechanical-post-readonly-v1/POST.json.gz",
+  "sourceSha256": "4c9c8869d9d63af2825b8e36a7dcd1b0d4701857f36fbee3b5529d88b89ab179",
+  "planPath": "tmp/feature-audit-20261016/A876-live-plan-readonly-v1/result.json",
+  "planSha256": "1185087175577d096c86479a96befc12f9456eed91c0d5afed5360ead2520caa",
+  "stocks": [
+    "215A",
+    "2160"
+  ],
+  "projection": "First two accepted after pages: native properties and all39 text values retained; native UUIDs deterministically pseudonymized, property ids replaced, unused top-level actor/URL fields omitted. No prices/probabilities/text/dates invented. LatestDoc fields come from the recorded D1 plan and full POST doc proof, with mixed saved read clocks; not a fresh current snapshot.",
+  "fixtureSha256": "3ab9bb6ea25c0506655face88ad4f4eb6c35c23d6e32ac0e84f7544763b0b9f3",
+  "nativeCalls": 0,
+  "modelCalls": 0,
+  "filings": [
+    {
+      "stockCode": "215A",
+      "docId": "S100YS8Y",
+      "docTypeCode": "120",
+      "periodEnd": "2026-04-30",
+      "submittedAt": "2026-07-27T15:30:00.000Z",
+      "canonicalBodyNativePagesSha256": "f4dca5e3a2d807a235558da5d7af2e0583e6c356e8145eda9a67d2041b2ac10e",
+      "sourcePagePropertiesSha256": "83c3fbe444791644588d416441a3b5090dc88137c40e5548c1f5550344d2c166",
+      "accepted39TextSyncSha256": "1eedc6ff7201878fdf166a2d8db41f96833cb3fe7d304851ae1f2b5fb73d7d1f"
+    },
+    {
+      "stockCode": "2160",
+      "docId": "S100XV4B",
+      "docTypeCode": "120",
+      "periodEnd": "2025-12-31",
+      "submittedAt": "2026-03-27T16:55:00.000Z",
+      "canonicalBodyNativePagesSha256": "b852ee0ec0a89b85e340c10dcbc21e99a2e386aa20c4bfe0aa7c11ec3d30d9f8",
+      "sourcePagePropertiesSha256": "b6c505b7fad1bb7d5eb2951ec6c6ce365acfed13e2580ecfe8a72b9dd3909131",
+      "accepted39TextSyncSha256": "725c25c7b312198acb6c6b703961ceaa0ca90dc501bc2beff84a61eef230e349"
+    }
+  ]
+}

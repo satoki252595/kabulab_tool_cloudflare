@@ -776,6 +776,30 @@ DB を作ってから確定した dbId で自己参照列を PATCH 追加する�
   一括で埋まる実行タイミングは運営判断で任意に告知してよい。本 PR では告知の
   自動化機構は作らない — 依頼どおり）。
 
+### 12.6.1 モデルを呼ばない通常の入力準備
+
+```bash
+nix develop --offline -c pnpm biztag competitors --prepare-only --judge=semif --codes=215A,2160 --limit=2 --budget-min=7 --notion-max-rps=0.3 --out=tmp/competitor-prepared
+```
+
+`prepare-only`は固定コード・limit・新規読取の有限予算・private保存先を明示する。既存の候補生成、
+A state/B質問、較正を使い、TypeSafe gate/認証キー・モデルclient・競合relation/判定4列・schema変更へ
+進まない。`--dry-run`は従来どおりモデルを呼ぶため、準備とは区別し併用しない。
+`--notion-max-rps`は共通pacingの明示上限で、`.env`の通常予算より狭い値を指定できる。省略時は既存の型付き環境設定を使う。
+
+補足DBは型付き設定の既存DBだけを読む。D1の最新doc/期末/pointer、現在タグ、実39本文と同期receipt、
+corpusで使った事業本文を照合する。候補Bの資格不足は候補を入れ替えず対象AをHOLDにする。
+旧タグの入力来歴が未保存なら`unverified-legacy`を保持し、現在のタグ値を使うことを旧意味判定の
+再検証と呼ばない。既知の旧4節SHAが現在本文と違う場合もHOLDにする。
+
+全入力・候補順・qids・全文SHA・較正/ソースSHAとHOLD一覧を1gzipへ固定し、共有一次保管へ実体upload/
+全bytes照合する。同入力は同じkeyで再uploadを省き、既存manifest/物理照合は省かない。
+archive送信開始だけ残る場合は再送せず停止する。準備済みは競合判定済みではなく、旧確率を別入力へ
+流用しない。後の判定/公開では現在世代を改めて照合する。
+
+通常CLIと同じMac唯一writerを通る。定時stageの接続/配備・本番実読取は別受入で、現時点で追加していない。
+実保存入力の検証と条件コストは [準備の検証記録](test-logs/competitor-mechanical-prepare-20261017.md) を参照。
+
 ### 12.7 費用見積もり（全銘柄一括実行）
 
 - 母集団: 「事業タグの状態 = 判定済」の銘柄数（実測 2026-09-26 時点 3,607社）。

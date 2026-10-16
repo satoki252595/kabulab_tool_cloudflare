@@ -184,7 +184,8 @@ async function doFetch(
   makeInit: () => RequestInit,
   label: string,
   isNonIdempotentCreate = false,
-  singleAttempt = false
+  singleAttempt = false,
+  beforeRequest?: () => void
 ): Promise<Response> {
   const stopOnUnknown = isNonIdempotentCreate || singleAttempt;
   const operation = isNonIdempotentCreate ? "非冪等create" : "単発mutation";
@@ -193,8 +194,10 @@ async function doFetch(
     attempt++;
     let res: Response;
     try {
+      beforeRequest?.();
       const init = makeInit();
       await paceNotionNativeRequest();
+      beforeRequest?.();
       stats.requests++;
       res = await fetch(url, init);
     } catch (e) {
@@ -278,6 +281,8 @@ async function doFetch(
 }
 
 export interface NotionRequestOptions {
+  /** 有限読取の実開始guard。queue/pacing/retryの待機後にも再検査する。恒久停止はNotionConfigError。 */
+  beforeRequest?: () => void;
   /** このmutationは1回だけ送信する。結果不明・拒否とも再送しない。共有queue/ペーシングは維持。 */
   singleAttempt?: boolean;
   /**
@@ -438,7 +443,8 @@ export async function notionRequest<T = unknown>(
       }),
       `${method} ${path}`,
       isCreate,
-      opts?.singleAttempt === true
+      opts?.singleAttempt === true,
+      opts?.beforeRequest
     );
     const family = readListFamily(method, path);
     if (family === null) {
