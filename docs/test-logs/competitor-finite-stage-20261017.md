@@ -21,6 +21,8 @@ pendingを削除して再送する運用は禁止する。unknownは既存archiv
 正常終了時はsummary/物理receipt、gzip全SHA、解凍本文SHA=input SHA、manifest target順・各status・
 一意HOLDとsummaryを照合し、今回のCLI開始/終了時計をpendingへ束縛する。closure→cursor原子的更新→
 pending除去の順で閉じる。途中killでpendingが残る場合は安全側に停止する。
+pending/closure/nextはfile fsyncし、pending作成・closure作成・cursor rename・pending unlinkのdirectory更新も
+既存Clef journalの純粋な`syncParent`でfsyncする。モデルjournalのforward/budget経路は呼ばない。
 HOLDは保存した入力の保留として残し、競合なし/旧意味判定の検証済みへ読み替えない。
 同input再使用時の最初の物理確認時計と、今回CLI物理照合後の終了時計を分けて残す。
 
@@ -38,7 +40,7 @@ ACK/child/receiptはprotocol置換であり、外部原本を保管/照合した
 - 既存20/21時job、kernel writer、Linux writer停止の回帰も維持。
 - #440と同じ保存実2社の通常prepare出力/gzip/物理receiptをstage ACKへ直接渡し、全39入力の正例でもclosure/cursor前進を確認した（transport/物理ACKは置換、live0）。
 
-ローカルはNix/Node22/frozen依存で対象3 suites / 28 checks、全型検査、対象lintが成功した。mergeはexact CIの確認後とし、
+ローカルはNix/Node22/frozen依存で通常prepare/stage/runtime/Clef journalの4 suites / 42 checks、全型検査、対象lintが成功した。mergeはexact CIの確認後とし、
 Mac runtimeのrollforwardは既存writer終了後に別受入する。
 
 ## 条件コストと未受入

@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import { join, resolve } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { parseStockCode } from "../../src/shared/jpx/stock-code.js";
+import { syncParent } from "./clef-journal.js";
 
 const sha = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const stop = (): never => { throw new Error("競合準備stageのscope/cursor/物理receiptが不正です。自動再送せず停止します"); };
@@ -11,7 +12,7 @@ export function planPrepareStage(scope: readonly string[], state: string) {
   const codes = [...scope].sort();
   if (codes.length === 0 || codes.length > 100 || new Set(codes).size !== codes.length || codes.some(c => parseStockCode(c) !== c)) stop();
   const outDir = join(state, "competitor-prepared");
-  mkdirSync(outDir, { recursive: true, mode: 0o700 });
+  if (!existsSync(outDir)) { mkdirSync(outDir, { mode: 0o700 }); syncParent(outDir); }
   const pendingPath = join(outDir, "stage-pending.json");
   if (existsSync(pendingPath)) stop(); // 入力SHAが変わっても、未知の前stageを自動再送しない。
   const cursorPath = join(outDir, "cursor.json"), scopeSha256 = sha(JSON.stringify(codes));
@@ -35,7 +36,8 @@ export function startPrepareStage(plan: ReturnType<typeof planPrepareStage>): vo
   if ((existsSync(plan.cursorPath) ? readFileSync(plan.cursorPath, "utf8") : null) !== plan.previous) stop();
   writeFileSync(plan.pendingPath, JSON.stringify({ version: 1, scopeSha256: plan.scopeSha256,
     previousCursorSha256: plan.previous === null ? null : sha(plan.previous), selected: plan.codes,
-    startedAt: new Date().toISOString(), purpose: "input-preparation-only;unknown-blocks-all-next-inputs" }), { mode: 0o600, flag: "wx" });
+    startedAt: new Date().toISOString(), purpose: "input-preparation-only;unknown-blocks-all-next-inputs" }), { mode: 0o600, flag: "wx", flush: true });
+  syncParent(plan.pendingPath);
 }
 
 /** CLI正常終了後だけ呼ぶ。HOLDは保存済みの保留分類であり、競合なし/判定完了ではない。 */
@@ -84,14 +86,17 @@ export function acceptPrepareStage(plan: ReturnType<typeof planPrepareStage>, st
   const pendingSha256 = sha(pendingRaw), closure = join(plan.outDir, `stage-closed-${pendingSha256}.json`);
   writeFileSync(closure, JSON.stringify({ pending, pendingSha256, inputSha256: s.inputSha256, gzipSha256: s.gzipSha256,
     archivePageId: s.archivePageId, firstArchiveVerifiedAt: receipt.verifiedAt, attemptStartedAt: s.startedAt, attemptFinishedAt: s.finishedAt,
-    holds: s.holds }), { mode: 0o600, flag: "wx" });
+    holds: s.holds }), { mode: 0o600, flag: "wx", flush: true });
+  syncParent(closure);
   const next = `${plan.cursorPath}.${process.pid}.next`;
   if (Date.now() >= deadlineMs) stop();
   writeFileSync(next, JSON.stringify({ version: 1, scopeSha256: plan.scopeSha256, afterCode: plan.codes[plan.codes.length - 1],
     preparedScope: plan.codes, inputSha256: s.inputSha256, gzipSha256: s.gzipSha256,
     archivePageId: s.archivePageId, firstArchiveVerifiedAt: receipt.verifiedAt, attemptStartedAt: s.startedAt, attemptFinishedAt: s.finishedAt,
     holds: s.holds, stagePendingSha256: pendingSha256,
-    purpose: "input-preparation-only;not-a-competitor-decision" }), { mode: 0o600, flag: "wx" });
+    purpose: "input-preparation-only;not-a-competitor-decision" }), { mode: 0o600, flag: "wx", flush: true });
   renameSync(next, plan.cursorPath);
+  syncParent(plan.cursorPath);
   unlinkSync(plan.pendingPath); // この順序ならcursor直後にkillされてもpendingが残って安全側にSTOPする。
+  syncParent(plan.pendingPath);
 }
