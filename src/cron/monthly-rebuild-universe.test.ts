@@ -145,11 +145,10 @@ describe("runMonthlyRebuild の母集団 (active かつ equity かつ is_yutai)"
       .prepare("SELECT price, data_date AS dataDate FROM otakara_stock_financials WHERE stock_id = ?")
       .get(REIT_ID);
     expect(reit).toEqual({ price: 500, dataDate: FROZEN_DATE });
-    const today = new Date().toISOString().split("T")[0];
     const equity = sqlite
       .prepare("SELECT data_date AS dataDate FROM otakara_stock_financials WHERE stock_id = ?")
       .get(EQUITY_ID);
-    expect(equity).toEqual({ dataDate: today });
+    expect(equity).toEqual({ dataDate: FROZEN_DATE });
   });
 });
 

@@ -130,6 +130,8 @@ export const stockIndicators = sqliteTable(
 
     // --- 最新値 ---
     latestClose: real("latest_close"),
+    /** 同じsnapshot/SMAと同一Chart応答の調整済み終値。旧行のNULLは未取得。 */
+    latestAdjustedClose: real("latest_adjclose"),
     latestVolume: real("latest_volume"),
     latestDate: text("latest_date"),
     /** 前日比% (当日 close - 前日 close) / 前日 close × 100 */

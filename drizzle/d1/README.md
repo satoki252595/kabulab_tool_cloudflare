@@ -16,6 +16,18 @@ Cloudflare D1 (`kabulab-cf`) 用のスキーマ生成物。生成は
 
 ## 適用先が 2 系統あることに注意
 
+### 0031 — 同一指標snapshotの調整済み終値（本番適用・定時受入は別途確認）
+
+`0031_stock_adjusted_point.sql`は`swing_stock_indicators.latest_adjclose`のnullable REAL
+1列ADDだけ。既存行はNULLで、原値をUPDATEしない。新コードの配信前に生成SQLを適用し、
+行数・全旧列・索引・全旧行NULLと物理PRE/POSTを確認する。日次の既存起動時SELECTで
+未適用を取得前にSTOPし、新列とSMAを同じindicator upsertで保存する。
+
+月次は同日付の新列だけをMA25比較へ使う。旧NULLはMA成分のみHOLDし、他の技術点は
+既存の按分契約で保持する。初回充填後に旧株価writerを再開しない（旧コードは新列を
+更新せず、SMAと新列を別原本にしてしまう）。列追加だけで過去行の充填・次回日次成功を
+受入済みにしない。snapshot/journalはgenerateで作り、直前0030 snapshotを削除する。
+
 ### 0030 — 地域注記の省略理由（2026-10-16 本番適用済み）
 
 `0030_overseas_omission_proof.sql` は `yuho_documents.overseas_omission_json`

@@ -1,0 +1,1 @@
+ALTER TABLE `swing_stock_indicators` ADD `latest_adjclose` real;

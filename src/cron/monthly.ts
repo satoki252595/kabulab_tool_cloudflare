@@ -28,6 +28,7 @@ import * as otakaraSchema from "../../services/otakara-yutai/src/db/schema.js";
 import { scoreStock, type ScoringInput } from "../shared/scoring.js";
 import { trustedCompanyYieldValue } from "../../services/otakara-yutai/data-scripts/estimated-value-guard.js";
 import { runDateKeys } from "./daily.js";
+import { isCalendarDateString } from "../shared/vwap/proof.js";
 import { collectUniverseOfficialEvents } from "./universe-official-events.js";
 import {
   ensureUniverseOverlay,
@@ -42,6 +43,29 @@ type Db = ReturnType<typeof createMonthlyRebuildDb>;
 export interface MonthlyRebuildResult {
   scoredStocks: number;
   elapsedSec: number;
+  maDeviationHolds: { code: string; reason: MonthlyMaHoldReason }[];
+}
+
+type MonthlyMaHoldReason = "missing_indicator" | "missing_date" | "date_mismatch" |
+  "missing_adjusted_close" | "invalid_adjusted_close" | "missing_ma25" | "invalid_ma25";
+
+/** 同一indicator upsertのSMAと調整値だけをMA乖離率へ渡す。日足表から係数を推定しない。 */
+export function monthlyMaComparison(
+  financialDate: string,
+  swing: Pick<typeof swingSchema.stockIndicators.$inferSelect, "latestDate" | "latestAdjustedClose" | "sma25"> | undefined,
+): { price: number | null; holdReason: MonthlyMaHoldReason | null } {
+  if (swing === undefined) return { price: null, holdReason: "missing_indicator" };
+  if (!isCalendarDateString(financialDate) || !isCalendarDateString(swing.latestDate)) {
+    return { price: null, holdReason: "missing_date" };
+  }
+  if (financialDate !== swing.latestDate) return { price: null, holdReason: "date_mismatch" };
+  if (swing.latestAdjustedClose === null) return { price: null, holdReason: "missing_adjusted_close" };
+  if (!Number.isFinite(swing.latestAdjustedClose) || swing.latestAdjustedClose <= 0) {
+    return { price: null, holdReason: "invalid_adjusted_close" };
+  }
+  if (swing.sma25 === null) return { price: null, holdReason: "missing_ma25" };
+  if (!Number.isFinite(swing.sma25) || swing.sma25 <= 0) return { price: null, holdReason: "invalid_ma25" };
+  return { price: swing.latestAdjustedClose, holdReason: null };
 }
 
 /** Node→D1 HTTP クライアント (取込専用)。CLOUDFLARE_* env を内部で解決する。 */
@@ -104,9 +128,7 @@ export async function runMonthlyRebuild(
   // investment_certificate 1) は、同日のユーザー決定で core_stocks の行ごと元データから
   // 削除する (一度きりの手作業で、このコードの仕事ではない)。削除後、その詳細は 404 になる。
   //
-  // 注意: 下の `dataDate: today` は equity の行にも月次の実行日を付ける。元の
-  // core_stock_financials.data_date (日次の取得日。通常は数日前) は引き継いでいない。
-  // この改修より前からの挙動で、ここでは直さない。
+  // 株価/財務値の日付は元core行を保持する。月次の実行日で鮮度を進めない。
   const activeStocks = await db
     .select({ id: coreSchema.stocks.id, code: coreSchema.stocks.code })
     .from(coreSchema.stocks)
@@ -187,7 +209,7 @@ export async function runMonthlyRebuild(
   }
 
   let scoredCount = 0;
-  const today = new Date().toISOString().split("T")[0];
+  const maDeviationHolds: MonthlyRebuildResult["maDeviationHolds"] = [];
 
   // 行を貯めて表ごとに multi-row upsert (L-56)。1 銘柄=2 upsert 逐次だと
   // 3,230 往復/670 秒かかる。D1 bind 上限 (100/文): financials 18 列×5 行=90、
@@ -204,9 +226,11 @@ export async function runMonthlyRebuild(
     const swing = swingIndMap.get(s.id);
     const benefits = benefitMap.get(s.id) ?? [];
     const yutaiYield = calcYutaiYield(core.price, benefits);
+    const maComparison = monthlyMaComparison(core.dataDate, swing);
+    if (maComparison.holdReason !== null) maDeviationHolds.push({ code: s.code, reason: maComparison.holdReason });
 
     const input: ScoringInput = {
-      price: core.price,
+      price: maComparison.price,
       per: core.per,
       pbr: core.pbr,
       dividendYield: core.dividendYield,
@@ -237,7 +261,7 @@ export async function runMonthlyRebuild(
       macd: swing?.macd ?? null,
       macdSignal: swing?.macdSignal ?? null,
       yutaiYield,
-      dataDate: today,
+      dataDate: core.dataDate,
     });
     scoreRows.push({
       stockId: s.id,
@@ -303,7 +327,8 @@ export async function runMonthlyRebuild(
     `[sync-monthly] 完了: 優待スコア=${scoredCount} 所要=${elapsedSec.toFixed(1)}s`
   );
 
-  return { scoredStocks: scoredCount, elapsedSec };
+  if (maDeviationHolds.length > 0) console.warn(`[sync-monthly] MA25成分HOLD: ${JSON.stringify(maDeviationHolds)}`);
+  return { scoredStocks: scoredCount, elapsedSec, maDeviationHolds };
 }
 
 /**

@@ -218,6 +218,13 @@
       "when": 1791984424869,
       "tag": "0030_overseas_omission_proof",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1792160650843,
+      "tag": "0031_stock_adjusted_point",
+      "breakpoints": true
     }
   ]
 }
