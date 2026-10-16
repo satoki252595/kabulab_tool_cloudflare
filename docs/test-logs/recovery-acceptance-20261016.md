@@ -2,6 +2,23 @@
 
 追跡は[#348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)。この記録は以下の対象の実測であり、全20機能・全空欄の完了を意味しない。
 
+## 23:50 JSTの追加確認
+
+| 対象 | 追加の受入 | 残件・制限 |
+|---|---|---|
+| 保有株式の原本列 | main `59dd527e`の通常CLI/publisherで先行100行を23:33:32〜23:45:56に反映。旧59行と新規41行、全467 native応答・要求のSHA、全POST、旧5列・他props保持、4組の物理PRE/POSTを検証 | 固定10銘柄の準備範囲は原本HOLD3・残46行。価格は未確定で、全市場の公開完了ではない |
+| 事業タグ本文 | main `43d563a3`の通常`--mechanical-only`で先行5社の39項目を同期。旧タグ・根拠・判定日・未知の旧入力SHAを保持し、全233 native応答と物理PRE/POSTの全SHAを確認 | 固定776件の残771件。続く50件は実行中で、完了数へ加えない。旧skip99は旧判定入力の検証完了ではなく、211Aの実入力変更判定も別途必要 |
+| VWAP 5分足 | [有限通常CLIの200件](vwap-finite-start-budget-20261015.md)で原本・旧履歴・全R2 POSTを独立照合 | 固定残1,656件と日足3件のHOLD。次30件はPREのみで、期限後のsource/PUTは0。定時全量の受入は未完 |
+| 共通株価計算 | #430をmain `c1ad90e2`へ統合し、Cloudflareの通常deploy/versionを確認。移動平均とトレンド・モメンタムの比較を同じ受領調整済み終値へ統一 | 次回定時の再生成は未受入。月次優待MA成分の同一snapshot対応と権利処理全体は別途追跡 |
+| Mac配備 | 23:27:12にmain `43d563a3`へ切替え。既存calendar・共通排他・同一依存lockと旧049/277原本を保持 | 新runtimeでの次回20時・21時の実receiptは未受入 |
+| 歴史RAW索引 | run38906853023が23:16:47に500件検証（新規486・既存14）、cursor11,682/78,832・残67,150。次の同一pool run38914482437が進行中 | 全範囲anti-joinは未完。元pool起点・最大200run・結果不明記録は保持 |
+
+保有株式100行の実測は743.05秒、Notion440要求・hosted17GET・D1 SELECT10、要求9,019,320 bytes／応答21,357,935 bytes、実mutation146。内部guardのwrites148には検索POST2件も含むため、業務mutation数と区別する。原本取得API・モデル呼出しは0。文書ごとの全母集団走査を、銘柄コードを内部CTEへ渡す最小修正で軽くし、残windowの済みprefixと全完了時の再照合を補強してから次へ広げる。
+
+本文5件は通常CLIの成功サマリ後に`process.exit(0)`が親controllerも終了させたため、保存を再送せず別の読取専用処理で全39値・旧props・根拠・最新sourceを照合し、23:46:45に物理POSTの全文読戻しを閉じた。元200応答と追加33応答の全bytes/SHAを通信0で再検証した。続く有限補完は同じCLI option契約・`withBiztagWriter`・`runBiztag`を直接使い、終了後の独立検証を行う。別の取得・抽出・更新ロジックは作らない。
+
+私有証跡は`tmp/feature-audit-20261016/A5-normal-mechanical-pilot-v1`、`A5-normal-mechanical-post-readonly-v1/{SUCCESS,independent-acceptance}.json`、`continuation/mac-mechanical-rollout-v1/SUCCESS.json`、`continuation/cf-main-c1ad-{build,logs}.txt`。保有明細は`.runtime/holdings-production-finish/source-v1/tmp/holdings-pilot-20261016/apply100-v1/{SUCCESS,independent-acceptance,root-independent-acceptance}.json`。秘密値・原文・署名URLはGitへ入れない。全20機能の最終受入は引き続き未完。
+
 ## 22:55 JSTの追加確認
 
 | 対象 | 確認結果 | 残件・制限 |
