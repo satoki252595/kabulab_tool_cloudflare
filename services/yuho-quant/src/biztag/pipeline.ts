@@ -370,6 +370,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
   const deps: ProcessDeps = {
     vocab,
     model: opts.model,
+    mechanicalOnly: opts.mechanicalOnly === true || opts.dryRun === true,
     localJudgeInput: (receipt, textsSha256) => { currentInput = { receipt, textsSha256 }; },
     localJudgeDate: opts.localJournal ? () => {
       const at = currentDecisionAt;
@@ -407,7 +408,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
       }
       workBudgetLeft--;
     }
-    if ((opts.dryRun || opts.mechanicalOnly) && (item.initialSemif || item.sourceChangedLocalJudge)) {
+    if ((opts.dryRun || opts.mechanicalOnly) && !item.checkSourceInput && (item.initialSemif || item.sourceChangedLocalJudge)) {
       // 明示モードでは推論しない。機械判定へも切り替えず保留を明示。
       qualificationHeld.push(item.stockCode);
       const mode = opts.mechanicalOnly ? "mechanical" : "dry_run";
