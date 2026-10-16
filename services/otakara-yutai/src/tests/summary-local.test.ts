@@ -148,8 +148,21 @@ describe("local summary generation/import boundary", () => {
     expect(rows()[0]).toMatchObject({ shortSummary: "QUOカード 3,000円分", estimatedValue: 3000 });
     const run = readdirSync(dir).find(name => name !== "progress.json")!;
     const pre = JSON.parse(gunzipSync(readFileSync(join(dir, run, "pre-import.json.gz"))).toString());
-    expect(pre).toMatchObject({ model: null, revision: null, protocol: "", deterministicRule: "simple-face-value-v1" });
+    expect(pre).toMatchObject({ model: null, revision: null, protocol: "", deterministicRule: "simple-face-value-and-one-of-v2" });
     expect(parseTaskFile(readFileSync(join(dir, run, "model-tasks.jsonl"), "utf8"))).toEqual([]);
+  });
+  it("全文1点選択はモデル0で通常PRE/原子取込/POSTへ通し、選択肢の掲載額を評価しない", async () => {
+    // 文法試験専用。実掲載値として出力しない。
+    const description = '【種別："カタログギフトまたは食事券"】\n◆以下より1点を選択\n1、カタログギフト 1,000円相当\n2、食事券 2,000円分';
+    const { deps, events, rows } = dependencies([row(1, { description })]);
+    const options = { stateDir: state(), limit: 60 };
+    expect(await runLocalSummary(options, deps)).toMatchObject({ accepted: 1, pendingAfter: 0,
+      modelCalls: 0, modelResidents: 0, deterministic: 1 });
+    expect(events).toEqual(["archive-pre", "apply", "archive-post"]);
+    expect(deps.generate).not.toHaveBeenCalled();
+    expect(rows()[0]).toMatchObject({ shortSummary: "優待を1点選択", estimatedValue: null, estimateValueSource: null });
+    expect(await runLocalSummary(options, deps)).toMatchObject({ selected: 0, modelCalls: 0 });
+    expect(events).toEqual(["archive-pre", "apply", "archive-post"]);
   });
   it("混在batchは未対応の群だけをモデルに渡し、全タスク共通の取込契約を守る", async () => {
     const { deps, rows } = dependencies([row(1, { description: "QUOカード 3,000円分" }), row(2)]);

@@ -78,6 +78,7 @@ kabuMCP の `edinet_*` とは分けてある（クライアントに両方登録
 `application=true` は希望者限定も含む申込・応募表記の検出であり、全員必須ではない。
 `combination` は対象未確認の併用表記を返し、券の利用と特典の同時受取を同義にしない。
 掲載URLを公式出典として扱わず、公式未照合と再配布権の未確認も維持する。
+新規producerの `public_facts.version=2` は `conditionStructure` に正規化前原文の全文SHAと、対応済み全文文法の `take: 1`・選択肢の連続番号・掲載円額・`相当`/`分` を持つ。商品ラベル・原文は含まない。掲載円額は `qualifiedAmount` や合計額ではなく、評価額はNULLを保つ。未対応は `status: unparsed`・`ast: null`・理由を返し、保有期間別・併用の構造は未解析のまま。旧v1も変更せず再読できる。既存v1を全件書き換える処理は追加しない。
 応答は `personal-only`。公開Workerの同経路は引き続き404である。
 
 ## 需給の出典契約
