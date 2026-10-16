@@ -32,6 +32,6 @@ CI fixtureは各文書の完全なPublicDoc instance・header・対象HTML（9 m
 
 Nix（Node22.22.2/pnpm9.15.9）で実ZIP10本のpure replay、保存142A/143A/141Aの全member SHA検証、主体・原文可視文字・継続・nil・namespace・context主体/日付/重複・DEIの負例を確認した。共有publisherでは価格列不変・予算未消費・価格queue未生成、旧unknown/nonzero/cursor/completedの書込0、通常prepare/applyでlegacy移行0を確認する。
 
-全typecheck、変更TypeScript6ファイルのlint、関連6suite計170testsがPASS。通信・モデル・業務書込は0。
+全typecheck、変更TypeScript6ファイルのlint、関連6suite計170testsがPASS。受入main `6c4da2d8`を通常mergeした後も、全typecheckと正常selector/RAW保管を含む8suite計186testsがPASS。通信・モデル・業務書込は0。
 
 本番への追加反映は実施していない。既受入の保有原本213行/23文書・価格0/23・未照合旧25行・source HOLD17を変更せず、2件のHOLD解除や全20機能の完了を主張しない。明示不該当を業務上の完了状態へ反映する場合は、既存行との全period照合・物理PRE/POST・旧状態保全を別途受け入れる。
