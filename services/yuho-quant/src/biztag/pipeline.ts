@@ -12,6 +12,7 @@
  * D1 は読むだけ (§0 運営決定)。Node から D1 へは HTTP (`createD1HttpDb`) で読む。
  */
 import { inArray } from "drizzle-orm";
+import { parseStockCode } from "../../../../src/shared/jpx/stock-code.js";
 import type { ClefJournalInput } from "../../../../scripts/biztag-local/clef-journal.js";
 import type { LocalDecisionExchange } from "../../../../src/shared/semif/client.js";
 import { NotionUnknownResultError } from "../../../../src/shared/notion-archive/client.js";
@@ -74,6 +75,8 @@ export interface RunBiztagOptions {
   dryRun?: boolean;
   /** 本文同期・機械照合だけを実行し、初回/入力変更のモデル判定はHOLDする。 */
   mechanicalOnly?: boolean;
+  /** 明示scope/finite limit/budgetだけで旧送信表現receiptを再資格化する。既定は無効。 */
+  refreshTextReceipt?: boolean;
   thresholds: BtThresholds;
   model: string;
 }
@@ -84,6 +87,7 @@ export interface RunSummary {
   budgetMs: number;
   dryRun: boolean;
   mechanicalOnly?: boolean;
+  refreshTextReceipt?: boolean;
   totalStocks: number;
   processed: number;
   remaining: number;
@@ -246,6 +250,12 @@ function makeDryRunLedgerWrites(): {
 }
 
 export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
+  if (opts.refreshTextReceipt && (!opts.mechanicalOnly || opts.codes === undefined || opts.codes.length === 0 || opts.codes.length > 100 ||
+      new Set(opts.codes).size !== opts.codes.length || opts.codes.some(code => parseStockCode(code) !== code) ||
+      !Number.isSafeInteger(opts.limit) || opts.limit! <= 0 || opts.limit! > opts.codes.length ||
+      !Number.isSafeInteger(opts.budgetMs) || opts.budgetMs <= 0)) {
+    throw new Error("送信表現receiptの再資格化にはmechanical-only・固定1〜100コード・有限limit/budgetが必要です");
+  }
   if (opts.model !== CLEF_MODEL) throw new Error("新規銘柄の判定モデルがClef-Flash較正対象と一致しません");
   const listingFrom = yuhoEnv.BIZTAG_NEW_LISTING_FROM();
   const start = Date.now();
@@ -333,7 +343,11 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
   const { dbId: supplementDbId, propertyIds } = await ensureSupplementDb(buildSchemaSpec(vocab, sector33Options));
   // 最新docと保存根拠・既知入力pointerを照合する。同一入力は全文再取得しない。
   const rows = await loadSupplementRows(supplementDbId, propertyIds);
-  const items = planWork(latest, rows, today, newStockEligibility);
+  const items = planWork(latest, rows, today, newStockEligibility).map(item =>
+    opts.refreshTextReceipt && item.kind === "skip" && !item.qualificationHeld && item.row?.tagStatus === "判定済"
+      ? { ...item, kind: "sync_text" as const, refreshTextReceipt: true,
+        reason: "明示finite scopeで旧原39同値を照合し、送信表現receiptを機械的に再資格化" }
+      : item);
   const retryExhausted = items.filter((i) => i.retryExhausted === true).map((i) => i.stockCode).sort();
   // 課金切れの未解決ブロッカーを台帳エラーから集計する。再試行期日の
   // 未来・到来・上限到達を問わない (skip も残件であり、完了ではない)。
@@ -447,6 +461,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     budgetMs: opts.budgetMs,
     dryRun: opts.dryRun ?? false,
     mechanicalOnly: opts.mechanicalOnly === true,
+    refreshTextReceipt: opts.refreshTextReceipt === true,
     totalStocks: items.length,
     processed,
     remaining: items.length - processed,

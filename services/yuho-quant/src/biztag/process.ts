@@ -19,7 +19,7 @@ import {
   type SupplementRowInput,
   type TagStatus,
 } from "../../../../src/shared/notion-archive/index.js";
-import { SupplementWriteHeldError } from "../../../../src/shared/notion-archive/stock-supplement.js";
+import { normalizeSupplementText, SupplementWriteHeldError } from "../../../../src/shared/notion-archive/stock-supplement.js";
 import type { StockTextSection } from "../../../../src/shared/notion-archive/stock-text.js";
 import type { JevClient } from "../../../../src/shared/jev/index.js";
 import { SemifUnavailableError } from "../../../../src/shared/semif/index.js";
@@ -29,7 +29,7 @@ import { formatPeriodJa } from "./evidence.js";
 import { buildJudgeInput, type DocMeta } from "./excerpt.js";
 import { judgeCandidates, type BtThresholds } from "./judge.js";
 import { INITIAL_CLEF_INPUT_PREFIX, INITIAL_SEMIF_INPUT_PREFIX, readInputReceipt, readTextSyncReceipt,
-  withInputReceipt, withTextSyncReceipt, type InputReceipt, type WorkItem } from "./plan.js";
+  withInputReceipt, withTextSyncReceipt, type InputReceipt, type TextSyncReceipt, type WorkItem } from "./plan.js";
 import { sha256Hex } from "../../../../src/shared/sha256.js";
 import { isPrefilterSection, prefilter, PREFILTER_SECTIONS, type PrefilterSectionKey } from "./prefilter.js";
 import { summarizeJudgments, summarizeKeywordMatches, type TagOutcome } from "./row.js";
@@ -107,7 +107,8 @@ async function writeRowWithEvidence(
   item: WorkItem,
   deps: ProcessDeps,
   input: SupplementRowInput,
-  evidenceBlock: unknown | null
+  evidenceBlock: unknown | null,
+  expectedTexts?: Record<string, string | null>
 ): Promise<string> {
   if (item.doc === null) throw new Error("書込前照合に必要な有報がありません");
   const doc = item.doc;
@@ -116,7 +117,9 @@ async function writeRowWithEvidence(
     catch (cause) { throw new SupplementWriteHeldError(`書込直前の最新有報照合をHOLD: ${cause instanceof Error ? cause.message : String(cause)}`, { cause }); }
   };
   if (item.row) {
-    await deps.replaceEvidenceBlock(item.row.pageId, evidenceBlock, input, savedRowGuard(item.row), beforeWrite);
+    const expected = savedRowGuard(item.row);
+    if (expectedTexts !== undefined) Object.assign(expected, buildSupplementProperties({ texts: expectedTexts }));
+    await deps.replaceEvidenceBlock(item.row.pageId, evidenceBlock, input, expected, beforeWrite);
     return item.row.pageId;
   }
   await beforeWrite();
@@ -152,10 +155,29 @@ function textColumnsOf(sections: StockTextSection[]): Record<string, string | nu
   return texts;
 }
 
-async function textReceipt(doc: Doc, texts: Record<string, string | null>) {
+async function textReceipt(doc: Doc, texts: Record<string, string | null>, judgment: InputReceipt | null) {
   if (doc.notionDocPageId === null) throw new Error("39本文同期のpointerがありません");
-  return { docId: doc.docId, textPageId: doc.notionDocPageId,
-    textsSha256: await sha256Hex(JSON.stringify(TEXT_SECTIONS.map(({ title }) => [title, texts[title]]))) };
+  const notionText = (value: string | null) => { const normalized = normalizeSupplementText(value); return normalized === "" ? null : normalized; };
+  const receipt: TextSyncReceipt = { docId: doc.docId, textPageId: doc.notionDocPageId,
+    textsSha256: await sha256Hex(JSON.stringify(TEXT_SECTIONS.map(({ title }) => [title, texts[title]]))),
+    notionTextsSha256: await sha256Hex(JSON.stringify(TEXT_SECTIONS.map(({ title }) => [title, notionText(texts[title])]))),
+  };
+  if (judgment === null || judgment.docId !== doc.docId) return receipt;
+  const four = PREFILTER_SECTIONS.map(key => {
+    const title = TITLE_BY_SECTION_KEY.get(key); if (title === undefined) throw new Error("判定節の列定義がありません");
+    return [key, texts[title]] as const;
+  });
+  const businessTitle = TITLE_BY_SECTION_KEY.get("business"); if (businessTitle === undefined) throw new Error("事業本文の列定義がありません");
+  const business = texts[businessTitle];
+  // 旧原4と原businessの両方を実原文で照合した場合だけ送信表現へ対応付ける。
+  if (business !== null && judgment.sectionsSha256 === await sha256Hex(JSON.stringify(four)) &&
+      judgment.businessSha256 === await sha256Hex(business)) {
+    receipt.equivalentJudgmentInputSha256 = judgment.sectionsSha256;
+    receipt.equivalentJudgmentBusinessSha256 = judgment.businessSha256;
+    receipt.notionSectionsSha256 = await sha256Hex(JSON.stringify(four.map(([key, value]) => [key, notionText(value)])));
+    receipt.notionBusinessSha256 = await sha256Hex(normalizeSupplementText(business)!);
+  }
+  return receipt;
 }
 
 function localJudgeName(deps: ProcessDeps): "Clef-Flash" | "SemIf" {
@@ -170,12 +192,22 @@ async function syncTexts(item: WorkItem, deps: ProcessDeps): Promise<ProcessOutc
   }
   const sections = await deps.readStockTextRow(item.doc.notionDocPageId);
   if (sections.length === 0) throw new Error("39本文の同期元が空です。旧値を保持してHOLD");
-  const texts = textColumnsOf(sections), receipt = await textReceipt(item.doc, texts);
+  const judgment = readInputReceipt(item.row.judgeInput);
+  const texts = textColumnsOf(sections), receipt = await textReceipt(item.doc, texts, judgment);
   const previous = readTextSyncReceipt(item.row.judgeInput);
-  const same = previous !== null && previous.docId === receipt.docId && previous.textPageId === receipt.textPageId && previous.textsSha256 === receipt.textsSha256;
-  if (same) await deps.assertLatestDocCurrent(item.stockCode, item.doc);
-  else await writeRowWithEvidence(item, deps, { docId: item.doc.docId, texts, textStatus: "取得済",
-    judgeInput: withTextSyncReceipt(item.row.judgeInput, receipt) }, undefined);
+  if (item.refreshTextReceipt && (previous === null || previous.docId !== receipt.docId ||
+      previous.textPageId !== receipt.textPageId || previous.textsSha256 !== receipt.textsSha256)) {
+    return { stockCode: item.stockCode, kind: item.kind, outcome: "skipped", tagStatus: item.row.tagStatus,
+      candidateCount: item.row.candidateCount, qualificationHeld: true, error: "旧原39 SHAと実原文が同値でないため送信表現の再資格化をHOLD", ...ZERO_JEV_STATS };
+  }
+  if (item.refreshTextReceipt && judgment !== null && receipt.notionSectionsSha256 === undefined) {
+    return { stockCode: item.stockCode, kind: item.kind, outcome: "skipped", tagStatus: item.row.tagStatus,
+      candidateCount: item.row.candidateCount, qualificationHeld: true, error: "旧原4 SHA/business SHAと実原文の同値証拠がないため再資格化をHOLD", ...ZERO_JEV_STATS };
+  }
+  const same = previous !== null && JSON.stringify(previous) === JSON.stringify(receipt);
+  if (same && !item.refreshTextReceipt) await deps.assertLatestDocCurrent(item.stockCode, item.doc);
+  else await writeRowWithEvidence(item, deps, { docId: item.doc.docId, ...(item.refreshTextReceipt ? {} : { texts }), textStatus: "取得済",
+    judgeInput: withTextSyncReceipt(item.row.judgeInput, receipt) }, undefined, item.refreshTextReceipt ? texts : undefined);
   return { stockCode: item.stockCode, kind: item.kind, outcome: same ? "skipped" : "updated",
     tagStatus: item.row.tagStatus, candidateCount: item.row.candidateCount, ...ZERO_JEV_STATS };
 }
@@ -200,7 +232,12 @@ function idsFromActiveLabels(vocab: Vocabulary, labels: string[]): string[] {
 export async function processStock(item: WorkItem, deps: ProcessDeps): Promise<ProcessOutcome> {
   switch (item.kind) {
     case "sync_text":
-      return syncTexts(item, deps);
+      try { return await syncTexts(item, deps); }
+      catch (error) {
+        if (!(error instanceof SupplementWriteHeldError)) throw error;
+        return { stockCode: item.stockCode, kind: item.kind, outcome: "skipped", tagStatus: item.row === null ? null : item.row.tagStatus,
+          candidateCount: item.row === null ? null : item.row.candidateCount, qualificationHeld: true, error: error.message, ...ZERO_JEV_STATS };
+      }
     case "skip":
       return {
         stockCode: item.stockCode,
@@ -344,7 +381,6 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
     throw new Error(`事業タグ対象の本文がありません (${item.stockCode} ${doc.docId})。判定・既存結果の更新を保留します。`);
   }
   const result = prefilter(deps.vocab, sectionMap);
-  const syncedTexts = await textReceipt(doc, textsByColumn);
   const candidateCount = result.candidates.length;
   const baseInput: SupplementRowInput = {
     companyName: item.companyName,
@@ -366,6 +402,7 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
     sectionsSha256: await sha256Hex(JSON.stringify(PREFILTER_SECTIONS.map((key) => [key, sectionMap[key] === undefined ? null : sectionMap[key]]))),
     stateSha256: null, vocabVersion: deps.vocab.version, model: null,
   };
+  const syncedTexts = await textReceipt(doc, textsByColumn, receipt);
   if (item.checkSourceInput) {
     const previous = readInputReceipt(item.row?.judgeInput);
     if (previous === null || previous.docId !== doc.docId) {
@@ -375,7 +412,7 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
       if (item.row === null || typeof item.row.judgeInput !== "string") throw new Error("入力照合の既存行が不正です");
       await writeRowWithEvidence(item, deps, {
         ...baseInput, judgeInput: withTextSyncReceipt(item.row.judgeInput, {
-          ...syncedTexts, equivalentJudgmentInputSha256: previous.sectionsSha256,
+          ...await textReceipt(doc, textsByColumn, previous), equivalentJudgmentInputSha256: previous.sectionsSha256,
         }),
       }, undefined);
       return { stockCode: item.stockCode, kind: item.kind, outcome: "updated", tagStatus: item.row.tagStatus,
