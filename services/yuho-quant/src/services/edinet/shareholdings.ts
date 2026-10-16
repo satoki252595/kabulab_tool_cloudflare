@@ -1,9 +1,11 @@
 /** 株式保有の当期明細。平文化CSV・株価・会社名から株数や上場区分を推定しない。 */
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { isUnassignedEdinetSecCode } from "./types.js";
 import { unzip, type ZipEntries } from "./zip.js";
 import { extractTables, tableToGridExpanded, unitToYenFactor } from "./html-table.js";
 import { stripHtml } from "./text-sections.js";
+import { readFilingDateInstant, type FilingDateInstant } from "./duration-context.js";
 
 export interface ShareholdingsSource {
   docId: string;
@@ -29,8 +31,18 @@ export interface Shareholding {
   rowIndex: number;
 }
 
+/** 節の明示不該当。株数0・全株式資産の不在・期末時点や価格完了を意味しない。 */
+export interface ShareholdingsNotApplicable {
+  version: 1;
+  basis: "whole_section_not_applicable" | "filer_both_investment_purposes_absent";
+  zipSha256: string; filename: string; memberSha256: string; blockHtmlSha256: string;
+  elementNamespace: string; inlineNamespace: string;
+  context: FilingDateInstant;
+  statement: string;
+}
+
 export interface ShareholdingsExtraction {
-  status: "ok" | "no_detail_table" | "unsupported";
+  status: "ok" | "no_detail_table" | "unsupported" | "explicit_not_applicable";
   reason: string | null;
   source: ShareholdingsSource;
   filename: string | null;
@@ -38,6 +50,7 @@ export interface ShareholdingsExtraction {
   contextRef: string | null;
   holdings: Shareholding[];
   holderScope: "filer_only" | "unqualified";
+  notApplicable?: ShareholdingsNotApplicable;
 }
 
 /** 保存type1のDEIを公式namespace・単一PublicDoc・提出者/証券コード/期末で照合する。 */
@@ -80,9 +93,10 @@ export function verifyHoldingsSourceEntries(zipEntries: ZipEntries, source: Shar
 const normalize = (text: string) => text.normalize("NFKC").replace(/\s/g, "");
 
 /** nonNumericは入れ子と自己閉じnilを含む。最初の閉じタグでは切らない。 */
-function shareholdingsBlocks(html: string): Array<{ html: string; contextRef: string | null; continued: boolean }> {
-  const blocks: Array<{ html: string; contextRef: string | null; continued: boolean }> = [];
+function shareholdingsBlocks(html: string): Array<{ html: string; opening: string; contextRef: string | null; continued: boolean }> {
+  const blocks: Array<{ html: string; opening: string; contextRef: string | null; continued: boolean }> = [];
   let start = -1, depth = 0, contextRef: string | null = null, continued = false;
+  let opening = "";
   for (const match of html.matchAll(/<\/?ix:nonNumeric\b[^>]*>/gi)) {
     const tag = match[0];
     const closing = tag.startsWith("</"), selfClosing = /\/\s*>$/.test(tag);
@@ -90,6 +104,7 @@ function shareholdingsBlocks(html: string): Array<{ html: string; contextRef: st
       if (closing || !/\bname=["']jpcrp_cor:ShareholdingsTextBlock["']/.test(tag)) continue;
       if (selfClosing) continue;
       start = match.index + tag.length;
+      opening = tag;
       depth = 1;
       const context = /\bcontextRef=["']([^"']+)["']/.exec(tag);
       contextRef = context === null ? null : context[1];
@@ -98,11 +113,48 @@ function shareholdingsBlocks(html: string): Array<{ html: string; contextRef: st
     }
     if (!selfClosing) depth += closing ? -1 : 1;
     if (depth !== 0) continue;
-    blocks.push({ html: html.slice(start, match.index), contextRef, continued });
+    blocks.push({ html: html.slice(start, match.index), opening, contextRef, continued });
     start = -1;
   }
   if (start >= 0) throw new Error("株式保有TextBlockの終端が不明です");
   return blocks;
+}
+
+/** 保存142A/143Aの完全な段落列だけ。別会社区画や「一部該当なし」は採らない。 */
+function explicitNotApplicable(block: ReturnType<typeof shareholdingsBlocks>[number], filename: string,
+  entries: ZipEntries, source: ShareholdingsSource, zip: Buffer): ShareholdingsNotApplicable | undefined {
+  if (!/^<ix:nonNumeric\s+(?:name="jpcrp_cor:ShareholdingsTextBlock"\s+contextRef="FilingDateInstant"|contextRef="FilingDateInstant"\s+name="jpcrp_cor:ShareholdingsTextBlock")\s+escape="true"\s*>$/.test(block.opening)) return;
+  const paragraph = /<p\b[^>]*>([^<]*)<\/p\s*>/gi;
+  const matches = [...block.html.matchAll(paragraph)];
+  if (block.html.replace(paragraph, "").trim() !== "") return;
+  const values = matches.map(m => normalize(stripHtml(m[1]))).filter(value => value.length > 0); // 原本の空白段落だけを正規化。
+  if (!/^\([1-9][0-9]?\)【株式の保有状況】$/.test(values[0])) return;
+  let basis: ShareholdingsNotApplicable["basis"];
+  if (values.length === 2 && values[1] === "該当事項はありません。") basis = "whole_section_not_applicable";
+  else if (JSON.stringify(values.slice(1)) === JSON.stringify([
+    "①投資株式の区分の基準及び考え方",
+    "当社は、保有目的が純投資目的の株式及び純投資目的以外の目的の株式のいずれも所有しておりません。",
+    "②保有目的が純投資目的以外の目的である株式投資", "該当事項はありません。",
+    "③保有目的が純投資目的である株式投資", "該当事項はありません。",
+  ].map(normalize))) basis = "filer_both_investment_purposes_absent";
+  else return;
+  const member = entries.get(filename); assert.ok(member);
+  const html = member.toString("utf8");
+  const root = /^\uFEFF?\s*(?:<\?xml[^>]*>\s*)?<html\b[^>]*>/.exec(html);
+  if (root === null || !/\bxmlns=(["'])http:\/\/www\.w3\.org\/1999\/xhtml\1/.test(root[0]) ||
+    [...html.matchAll(/\bxmlns\s*=/g)].length !== 1) return;
+  const namespaces = (prefix: string) => [...html.matchAll(new RegExp(`\\bxmlns:${prefix}\\s*=\\s*(["'])([^"']+)\\1`, "g"))];
+  const jpcrp = namespaces("jpcrp_cor"), ix = namespaces("ix");
+  if (jpcrp.length !== 1 || ix.length !== 1 || !root[0].includes(jpcrp[0][0]) || !root[0].includes(ix[0][0]) ||
+    !/^http:\/\/disclosure\.edinet-fsa\.go\.jp\/taxonomy\/jpcrp\/\d{4}-\d{2}-\d{2}\/jpcrp_cor$/.test(jpcrp[0][2]) ||
+    ix[0][2] !== "http://www.xbrl.org/2008/inlineXBRL") return;
+  const identity = verifyHoldingsSourceEntries(entries, source);
+  if (identity.status !== "verified") return;
+  const context = readFilingDateInstant(entries, filename, source.fiscalYearEnd);
+  if (context === null) return;
+  const sha = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+  return { version: 1, basis, zipSha256: sha(zip), filename, memberSha256: sha(member), blockHtmlSha256: sha(block.html),
+    elementNamespace: jpcrp[0][2], inlineNamespace: ix[0][2], context, statement: stripHtml(block.html) };
 }
 
 /** 明示非開示はNULL。保存原表の限定注1/2 prefix以外の注記・桁区切り不正はHOLD。 */
@@ -247,5 +299,8 @@ export function parseShareholdingsData(zip: Buffer, source: ShareholdingsSource,
   }
   if (result.holdings.length > 0) return { ...result, status: "ok", reason: null, holderScope: "filer_only" };
   if (excludedTables > 0) return { ...result, reason: "当社/提出会社と明示された保有区画に適格明細がありません（名義別区画は対象外）" };
+  const notApplicable = explicitNotApplicable(block, block.filename, entries, source, zip);
+  if (notApplicable !== undefined) return { ...result, status: "explicit_not_applicable", holderScope: "filer_only", notApplicable,
+    reason: "提出会社の株式保有節は原本で明示不該当です（期末数値や価格完了は未判定）" };
   return result;
 }

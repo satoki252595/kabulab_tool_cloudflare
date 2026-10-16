@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import * as schema from "../src/db/schema.js";
 import { selectLatestHoldingsDocuments } from "./lib/shareholdings-backfill.js";
-import { parseShareholdingsData, type ShareholdingsSource } from "../src/services/edinet/shareholdings.js";
+import { parseShareholdingsData, type ShareholdingsSource, type ShareholdingsNotApplicable } from "../src/services/edinet/shareholdings.js";
 import type { IssuedShareObservation } from "../src/services/edinet/issued-shares.js";
 import { HoldingsPriceIndex, parseHoldingsCodeList, qualifyHoldingValuation, type ArchivedSource } from "../src/services/edinet/shareholdings-valuation.js";
 import { readSavedHoldingsZip, publishVerifiedShareholdings } from "../../../src/shared/notion-archive/shareholdings.js";
@@ -35,6 +35,7 @@ const save = saveHoldingsReceipt;
 const hash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 interface SourcePath { path: string; archivePageId: string; filename: string; sha256: string }
 interface Item { parserSourceSha256?: string; source: ShareholdingsSource; ownerName: string; status: string; reason: string | null; parsedRows: number;
+  notApplicable?: ShareholdingsNotApplicable;
   issuedSharesSourceSha256?: string; issuedSharesObservation?: IssuedShareObservation;
   archivePageId?: string; zipPath?: string; zipSha256?: string; originalManifest?: string; projectionPath?: string; sourceCustody?: "typed" | "legacy"; sourceMetadata?: Record<string, unknown>; sourceFetchedAt?: string; sourceMetadataMissing?: string[] }
 
@@ -73,6 +74,7 @@ export async function prepareLatestHoldings(args: { limit: number; afterCode: st
       const projectionPath = join(args.dir, `${row.stockCode}-${row.docId}.current.jsonl`);
       writeHoldingsArtifact(projectionPath, records.map(record => JSON.stringify(record)).join("\n") + (records.length ? "\n" : ""));
       item = { source, ownerName: row.ownerName, status: parsed.status === "ok" ? "ready" : "held", reason: parsed.reason,
+        ...(parsed.notApplicable === undefined ? {} : { notApplicable: parsed.notApplicable }),
         ...(saved.issuedSharesObservation === undefined ? {} : { issuedSharesObservation: saved.issuedSharesObservation }),
         parsedRows: parsed.holdings.length, archivePageId: saved.archivePageId, zipPath, zipSha256: saved.sha256,
         originalManifest: saved.originalManifest, projectionPath, sourceCustody: saved.sourceCustody, sourceMetadata: saved.metadata, sourceFetchedAt: saved.fetchedAt, sourceMetadataMissing: saved.metadataMissing };
