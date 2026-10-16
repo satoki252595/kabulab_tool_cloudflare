@@ -24,7 +24,7 @@
 
 既存テストへ、年報なし/非年報だけのactive株、非普通株・inactive・未確定区分、最新期末と訂正の同時刻PK順、ページ境界`more`、`onlyCode`とcursorの交差、1問い合わせ、既存stock索引での文書検索を追加した。本番`period_end`はNOT NULLであり、NULLを補完する処理は追加しない。
 
-関連3 suite・68 test、型検査、lintはPASS。GitHub CIと本番の負荷測定はそれぞれ別に確認する。
+mainの発行株数診断変更を通常mergeした後の関連3 suite・74 test、型検査、lintはPASS。GitHub CIと本番の負荷測定はそれぞれ別に確認する。
 
 ```sh
 nix develop --offline -c pnpm exec vitest run services/yuho-quant/data-scripts/lib/shareholdings-backfill.test.ts services/yuho-quant/data-scripts/backfill-shareholdings.test.ts src/shared/db/core-stocks-license-boundary.test.ts
