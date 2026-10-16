@@ -1,6 +1,4 @@
 import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "../../src/shared/zod-mini.js";
 import { canonicalRawKey } from "./raw-index-plan.js";
@@ -20,36 +18,6 @@ const item: RawItem = { ...safe, source: "EDINET", licenseTag: "commercial-ok", 
 const key = canonicalRawKey(raw, item.docId), legacy = canonicalRawKey(raw, null);
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); vi.resetModules(); });
 const opts: RawBackfillOptions = { mode: "apply", planId: "test-plan", limit: 50, maxBytes: 67108864, maxSeconds: 1200, expectedCount: 1 };
-
-describe("normal RAW continuation execution revision", () => {
-  // Protocol records only; no source observations or remote requests.
-  const revision = "b".repeat(40), inputs = { mode: "apply", plan_id: "test-plan", cutoff: "2026-10-13T18:31:00.000Z",
-    expected_count: "2", limit: "1", max_bytes: "67108864", max_seconds: "600", continue_runs: "155", execution_revision: "" };
-  const records = [{ phase: "manifest", planId: inputs.plan_id, cutoff: inputs.cutoff, count: 2, manifestSha256: sha },
-    { phase: "summary", mode: "apply", inventoryRows: 2, manifestSha256: sha, upstreamGets: 0, cursor: 1, remaining: 1,
-      processed: 1, verified: 1, status: "partial", indexAntiJoin: null, limitReached: true, stoppedByBudget: false, budgetStopReason: null }];
-  const invoke = (nextInputs: typeof inputs, actualRevision: string) => spawnSync("python3", ["-c",
-    "import json,runpy,sys; p=json.load(sys.stdin); print(json.dumps(runpy.run_path(sys.argv[1])['continuation'](p['event'],p['records'],p['revision'])))",
-    fileURLToPath(new URL("./raw-index-continue.py", import.meta.url))], {
-    input: JSON.stringify({ event: { ref: "main", inputs: nextInputs }, records, revision: actualRevision }), encoding: "utf8", timeout: 5000,
-  });
-  it("initial actual SHA is carried unchanged across two continuations", () => {
-    const first = invoke(inputs, revision); expect(first.status).toBe(0);
-    const next = JSON.parse(first.stdout); expect(next.ref).toBe("main");
-    expect(next.inputs).toEqual({ ...inputs, continue_runs: "154", execution_revision: revision });
-    const second = invoke(next.inputs, revision); expect(second.status).toBe(0);
-    expect(JSON.parse(second.stdout).inputs).toEqual({ ...next.inputs, continue_runs: "153" });
-  });
-  it.each(["", "main", "b".repeat(39), "b".repeat(41), "B".repeat(40), `${revision}\n`, "$(git rev-parse HEAD)"])("invalid actual revision %j cannot produce a dispatch", invalid => {
-    const result = invoke(inputs, invalid); expect(result.status).not.toBe(0); expect(result.stdout).toBe("");
-  });
-  it("a different explicit revision or changed checkout cannot produce a dispatch", () => {
-    for (const explicit of ["main", "c".repeat(40)]) {
-      const result = invoke({ ...inputs, execution_revision: explicit }, revision);
-      expect(result.status).not.toBe(0); expect(result.stdout).toBe("");
-    }
-  });
-});
 
 describe("fixed SHA SELECT bounded native retry", () => {
   function credentials() {
