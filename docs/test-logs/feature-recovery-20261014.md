@@ -2,7 +2,15 @@
 
 追跡: [#348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)。監査と全20機能の完了条件は [feature-gap-audit-20261014.md](feature-gap-audit-20261014.md)。作業開始2026-10-14 JST。全件の本番受入が済むまではこのIssueを閉じない。
 
-## 10/16 00:37 JSTの追加確認
+## 10/16 19:48 JSTの追加確認
+
+- 本文の新038〜060、1,096通は05:52までに物理PRE/POST/FINAL・全文POST・旧最後退役を完了。19:29の独立した保存証跡検査で、全23batch/40,951節・原本全SHA・全6表の各更新・最終pointer/propsが一致した。追加通信/本番write/モデル0。固定3,666通中3,650通（99.6%）を受入。独立receipt SHA `f30dd8c1cf2db4cbc7c6f2d7636a159b7d44e9ae1761e6aa82fa55cc2eb9f361`。固定集合の受入を現在のlive全集合の完了へ広げない。
+- typed/legacy16は19:36:49に現原本全SHA/native DEI、最新doc/FY/pointerの前後一致、601節を再確認。51 HTTP/193.672秒、観測本文2,283,589B、上流GET/モデル/業務write0。対応要素のない23項目は理由不明を保持。新しい16件限定の本文処理はmain277の通常parser/本文backup/原子D1/全POST/旧最後退役を再利用し、48競合rollbackと7通信guardを検証後、19:46に開始した。本文の完了・補足39列の同期・DDLはまだ受入していない。
+- RAW run38760878683はreceipt PUT結果不明で停止。新[inspect38887340536](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/38887340536)は12要求/31,700,821B/4.895秒/書込0で、cursor9,477の原本22,675B全SHAと索引全15列を確認。旧state/元unknownは保持。[同値進行38888119673](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/38888119673)は4.618秒、原本GET1・state CAS1だけでcursor9,478/残69,354、RAW PUT/索引INSERT/Notion/元サイトGET0。native log SHA `98ea19ed570b76951aa9206ba96cc3870b16d36bc6cfb78e8e85b05404e8a371`。元200poolの消費27を継承し、[38888909104](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/38888909104)を500件/2GiB/新規開始3,600秒、後続172枠で単発dispatch。全78,832のanti-joinは未完。先行ローカルinspectのAccessDenied/1送信も保全し、資格を広げて再送していない。
+- MacはNix復帰後19:19:27に049からmain277へ安全に切替えた。90テスト・preflight成功、旧source161/input1,752/private320を保存照合。旧expired復旧・unknown・元.envを保持し、20時/21時calendarは新入口で待機。これを定時成功とは数えない。Cloudflare main277の通常deployもversion d3d109efを確認。
+- 19時catchup38884396231はTDnet1,387 upsertの後、EDINET7日/3通取込・identity_unresolved16/holdingsPendingを残して失敗。株式18時38877553046は観測時点で実行中、独立資金フロー38879272134はpending。監視の旧失敗を当日の全量成功で上書きしない。権利処理は[監査記録](corporate-actions-20261016.md)と既存#343で追跡し、全20機能の受入は引き続き未完。
+
+## 10/16 00:37 JSTの追加確認（以下はその時点の観測）
 
 - 本文は新039も全50通の物理PRE/POST/FINAL・旧最後退役まで完了し、固定3,666通中2,654通を受入。新040〜060の996通は実行中、typed/legacy16と通常補足同期は別で、DDLは引き続き未実行。
 - RAW run38752510418は500全照合/新規486/既完14、cursor9,320/残69,512で正常終了。元サイトGET0・Notion10要求、3,326.695秒、原本の観測転送296,480,157B（SDK/header/失敗応答bytesは含まない）。native log112,311B/SHA `842f115e7df5b1d894006be782eae4553558b803298189c27f568e247fc85820`。後続38760878683は通常継続で修正済main ee17fd42から起動済み。独立の再dispatchはせず、元poolと同じ固定manifestを維持する。
