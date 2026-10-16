@@ -549,7 +549,7 @@ export interface ChartResult {
 
 export interface RsiHistoryHold {
   scope: "rsi-5y";
-  reasonCode: "non_positive_adjusted_close";
+  reasonCode: "non_positive_adjusted_close" | "missing_adjusted_close";
   invalidBars: number;
   firstDate: string;
   lastDate: string;
@@ -674,9 +674,7 @@ export function parseChartResponse(json: unknown, symbol: string): ParsedChartRe
   assertResponseSymbol(normalizeSymbol(symbol), symbol, result.meta);
   const timestamps = result.timestamp ?? [];
   const quote = result.indicators.quote[0];
-  // Yahoo は interval=1d では indicators.adjclose を常に含む。
-  // 配列が空になるのは仕様変更時のみ。その場合 adj は全 null となり
-  // 呼び出し側の `r.adj ?? r.close` が機能する（adjclose 欠落 = 分割なし = close が正値）。
+  // 調整値の欠落を「分割なし」と解釈しない。通常終値とは別の欠測として保持する。
   const adjcloseArr = result.indicators.adjclose?.[0]?.adjclose ?? [];
 
   const bars: DailyOhlcv[] = timestamps.map((ts, i) => ({
@@ -760,12 +758,20 @@ async function qualifyChartResponse(
   const badAdjusted = stockDailyScopes
     ? rawBars.filter((bar) => typeof bar.adj === "number" && bar.adj <= 0)
     : [];
-  if (badAdjusted.length > 0) {
+  const missingAdjusted = stockDailyScopes
+    ? rawBars.filter((bar) => bar.close !== null && bar.adj === null)
+    : [];
+  const historyProblem = badAdjusted.length > 0
+    ? { bars: badAdjusted, reasonCode: "non_positive_adjusted_close" as const }
+    : missingAdjusted.length > 0
+      ? { bars: missingAdjusted, reasonCode: "missing_adjusted_close" as const }
+      : undefined;
+  if (historyProblem !== undefined) {
     assertRawBarsSane(symbol, rawBars.map((b) => ({ o: b.open, h: b.high, l: b.low, c: b.close, v: b.volume })));
     if (sourceBytes === undefined) throw new Error("株式日次の原文captureがありません");
     rsiHistoryHold = {
-      scope: "rsi-5y", reasonCode: "non_positive_adjusted_close", invalidBars: badAdjusted.length,
-      firstDate: badAdjusted[0].date, lastDate: badAdjusted.at(-1)!.date,
+      scope: "rsi-5y", reasonCode: historyProblem.reasonCode, invalidBars: historyProblem.bars.length,
+      firstDate: historyProblem.bars[0].date, lastDate: historyProblem.bars.at(-1)!.date,
       sourceSha256: await sha256HexBytes(new Uint8Array(sourceBytes)),
     };
   }

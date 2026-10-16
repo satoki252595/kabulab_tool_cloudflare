@@ -27,6 +27,36 @@ function serve(code: string, chart = fixture[`${code}-chart`]) {
 }
 
 describe("通常株式日次の用途別資格 (実原典の最小projection・追加取得0)", () => {
+  it("実projectionの調整値を明示的に欠損させると、過去RSIはHOLD・直近指標は通常終値で補完せずSTOP", async () => {
+    const { buildStockSnapshot } = await import("../../cron/daily.js");
+    const { requiredAdjustedClose } = await import("./bar-sanity.js");
+    for (const position of [0, -1]) {
+      const code = "8303";
+      const fault = JSON.parse(fixture[`${code}-chart`]);
+      const values = fault.chart.result[0].indicators.adjclose[0].adjclose;
+      expect(values.length).toBeGreaterThan(position === 0 ? 130 : 1);
+      values[position === -1 ? values.length - 1 : position] = null;
+      const fetch = serve(code, JSON.stringify(fault));
+      const raw = await client.fetchStockRawData(code, "5y", {
+        stockDailyScopes: true, onChartRaw: () => undefined, onSummaryRaw: () => undefined,
+      });
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(raw.rsiHistoryHold).toMatchObject({
+        reasonCode: position === 0 ? "missing_adjusted_close" : "non_positive_adjusted_close", invalidBars: 1,
+      });
+      const build = () => buildStockSnapshot(1, code, null, raw.ohlcv.at(-1)!.date, raw, []);
+      if (position === 0) expect(build()).toMatchObject({ rsiPercentile: null, rsiHistoryHold: raw.rsiHistoryHold });
+      else expect(build).toThrow(/調整済み終値.*通常終値で補完しません/);
+    }
+    const actual = JSON.parse(fixture["7203-chart"]).chart.result[0];
+    const close = actual.indicators.quote[0].close.at(-1);
+    const adj = actual.indicators.adjclose[0].adjclose.at(-1);
+    const bar = { date: "2026-10-14", open: close, high: close, low: close, close, volume: 0, adj };
+    expect(requiredAdjustedClose(bar)).toBe(adj);
+    expect(requiredAdjustedClose({ ...bar, close: null, adj: null })).toBeNull();
+    expect(() => requiredAdjustedClose({ ...bar, adj: null })).toThrow(/調整済み終値/);
+  });
+
   it("8303実原典の最小projectionから当日/130本を採用し、過去adj異常をprojection SHA付きHOLDにする", async () => {
     const fetch = serve("8303");
     const captures: YahooRawCapture[] = [];

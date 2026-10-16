@@ -82,7 +82,7 @@ import {
   type RsiHistoryHold,
 } from "../shared/yahoo/client.js";
 import { archiveYahooRawBatch, type YahooRawAttempt, type YahooRawMissing } from "../shared/yahoo/raw-custody.js";
-import { checkFreshClose } from "../shared/yahoo/bar-sanity.js";
+import { checkFreshClose, requiredAdjustedClose } from "../shared/yahoo/bar-sanity.js";
 import { fetchNikkeiVi } from "../shared/yahoo/nikkei-vi.js";
 import { calculateAllRsiSeries } from "../shared/indicators/rsi.js";
 import { computeRsiPercentileSnapshot } from "../shared/indicators/percentile.js";
@@ -1973,7 +1973,7 @@ export function buildStockSnapshot(
   // 「5 年」は名前であって保証ではない: 実測で最短 461 本 (≒1.9 年) の銘柄がある。
   const rsiPercentile = raw.rsiHistoryHold === undefined
     ? computeRsiPercentileSnapshot(calculateAllRsiSeries(raw.ohlcv
-      .map((r) => r.adj ?? r.close).filter((c): c is number => c !== null)))
+      .map(requiredAdjustedClose).filter((c): c is number => c !== null)))
     : null;
   // 優良株選定の年度売上は正本の年次系列 (001 銘柄詳細と共用の gate で整形)。
   // Yahoo 年次 (raw.annualFinancials) は旧表の writer にだけ残す。
@@ -1983,7 +1983,7 @@ export function buildStockSnapshot(
 
   // -- 6mo スライス → swing 用指標 —— adjclose ベースで分割歪みを除去 --
   // (ohlcv6mo と fresh gate は fetch 直後へ移動済み。全 technical 計算の前)
-  const closes6mo = ohlcv6mo.map((r) => r.adj ?? r.close);
+  const closes6mo = ohlcv6mo.map(requiredAdjustedClose);
 
   const sma5Val = sma(closes6mo, 5);
   const sma20Val = sma(closes6mo, 20);
