@@ -52,6 +52,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // 保存行変換は共有正準 (overseas-save-rows.ts) を使用する。
 import { toOverseasSaveRows } from "../src/services/overseas-save-rows.js";
+import { serializeOverseasOmission } from "../src/services/overseas-omission.js";
+import { sha256HexBytes } from "../../../src/shared/sha256.js";
 function chunk<T>(a: T[], s: number): T[][] {
   const o: T[][] = [];
   for (let i = 0; i < a.length; i += s) o.push(a.slice(i, i + s));
@@ -69,9 +71,12 @@ const all = await db
     id: yuhoDocuments.id,
     stockId: yuhoDocuments.stockId,
     docId: yuhoDocuments.docId,
+    edinetCode: yuhoDocuments.edinetCode,
     periodEnd: yuhoDocuments.periodEnd,
     filerName: yuhoDocuments.filerName,
     overseasParseStatus: yuhoDocuments.overseasParseStatus,
+    // 既存一覧照会で未適用migrationを検出する（追加HTTPなし・源取得前）。
+    overseasOmissionJson: yuhoDocuments.overseasOmissionJson,
   })
   .from(yuhoDocuments)
   .where(force ? undefined : isNull(yuhoDocuments.overseasParseStatus));
@@ -90,6 +95,7 @@ for (const r of targets) {
   let facts: ReturnType<typeof parseOverseasData>["facts"] = [];
   let proof: ReturnType<typeof parseOverseasData>["proof"];
   let omission: ReturnType<typeof parseOverseasData>["omission"];
+  let overseasOmissionJson: string | null = null;
   let zipBytes: Buffer | null = null;
   let fetchedAt: string | null = null;
   try {
@@ -130,7 +136,7 @@ for (const r of targets) {
   // 既存 key は recordPrimaryData 側で冪等スキップする。
   if (zipBytes) {
     if (fetchedAt === null) throw new Error("XBRL受信完了時刻がありません");
-    await recordEdinetZip({
+    const archive = await recordEdinetZip({
       service: "yuho-quant",
       docID: r.docId,
       type: 1,
@@ -148,6 +154,11 @@ for (const r of targets) {
         archivedBy: "backfill-overseas",
       },
     });
+    if (omission !== undefined) {
+      overseasOmissionJson = serializeOverseasOmission({ docId: r.docId, edinetCode: r.edinetCode, periodEnd: r.periodEnd,
+        archivePageId: archive.pageId, archiveManifest: archive.manifestMatch === "unknown" ? "unknown" : "known",
+        zipSha256: await sha256HexBytes(new Uint8Array(zipBytes)), omission });
+    }
   }
 
   // overseas 列の更新 (受注列・受注ファクトには触れない) + 海外ファクトの
@@ -163,7 +174,7 @@ for (const r of targets) {
   const statements = [
     db
       .update(yuhoDocuments)
-      .set({ overseasParseStatus: status, overseasHonbunFile: honbunFile })
+      .set({ overseasParseStatus: status, overseasHonbunFile: honbunFile, overseasOmissionJson })
       .where(eq(yuhoDocuments.id, r.id)),
     db.delete(overseasSalesFacts).where(eq(overseasSalesFacts.documentId, r.id)),
     ...chunk(rows, 8).map((part) =>

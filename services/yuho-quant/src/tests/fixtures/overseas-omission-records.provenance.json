@@ -1,0 +1,41 @@
+{
+  "description": "Minimal actual full-ZIP parser outputs and original source metadata for three filings, independently regenerated offline. Unlike excerpt ZIP fixtures, ZIP/member/rawBlock SHAs here all refer to the same actual full original ZIP. Test local SQLite IDs are structural only; source values, dates and facts unchanged. archiveManifest is original known/unknown observation, not a fabricated native recordPrimaryData outcome.",
+  "fixtureSha256": "013e1b8ee9996007b05c4bbcd02033f71c7cc082c33e99f02ac9f7f3216df264",
+  "fixtureBytes": 5862,
+  "documents": [
+    {
+      "code": "1414",
+      "docId": "S100Z5EY",
+      "savedReplaySha256": "8ed55de6d7efd1803c5c913f1fdddc7550f875ef24fc7f386fe1535c8b8cf01e",
+      "originalZipSha256": "7a91dd86e30402ec21e2d993c713c33afa5fe3b92501c04dcc09db022446cee7",
+      "originalZipBytes": 863442,
+      "itemSha256": "afbfdd3179372c4752674a709f5655fd03d3de3674c44b30d57a4f913b8fa172",
+      "originalManifest": "known",
+      "sourceHttpAcquisitionClock": "UNKNOWN; not replaced by saved metadata/hosted readback time",
+      "parserMemberAndRawBlockProofFromActualFullZip": true
+    },
+    {
+      "code": "1435",
+      "docId": "S100XSYD",
+      "savedReplaySha256": "a7d40f34c01ec9b62536759a680b7566daa343e6867388761adeec692716d1a4",
+      "originalZipSha256": "2064956f6842509e9aeb53921ba4cbdabe1787c2d026b5bab41f01d1772dfa35",
+      "originalZipBytes": 527978,
+      "itemSha256": "2f11a10ef8906851009bfc355b082b5956e3bbed52e2c5e582b14568c06d13f3",
+      "originalManifest": "unknown",
+      "sourceHttpAcquisitionClock": "UNKNOWN; not replaced by saved metadata/hosted readback time",
+      "parserMemberAndRawBlockProofFromActualFullZip": true
+    },
+    {
+      "code": "372A",
+      "docId": "S100YYO2",
+      "savedReplaySha256": "df45701ff810d4797d2d62dc8d416774939efd00a587e56f53e81adba2780c90",
+      "originalZipSha256": "164939bbeb5094d4cfea194f971cdffcae809af8ef281bcf0d0095598866a042",
+      "originalZipBytes": 723246,
+      "itemSha256": "805e43d75f8bbcd27e2757a39ddaf8a7d9aaf598d507e9991f2dea2e7fed8326",
+      "originalManifest": "known",
+      "sourceHttpAcquisitionClock": "UNKNOWN; not replaced by saved metadata/hosted readback time",
+      "parserMemberAndRawBlockProofFromActualFullZip": true
+    }
+  ],
+  "networkSourceModelBusinessCalls": 0
+}

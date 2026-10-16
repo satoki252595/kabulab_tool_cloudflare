@@ -129,6 +129,21 @@ describe("T0: 前提の固定 (sqlite-proxy の batch は未配線)", () => {
 });
 
 describe("T1/T2: 入口 preflight (fetch/remote save より前)", () => {
+  it("理由列の未適用migrationは既存照会で止まり、源取得・原本再送・batchは0", async () => {
+    const { db, calls } = proxyDb((query) => {
+      expect(query).toContain("overseas_omission_json");
+      throw new Error("offline schema control: overseas_omission_json missing");
+    });
+    const sender = senderDouble();
+    await expect(ingestDocument(db as unknown as Database, {
+      stockId: 11, stockCode: "1001", doc: annualDoc(), d1HttpBatch: sender.send,
+    })).rejects.toThrow("overseas_omission_json");
+    expect(calls).toHaveLength(1);
+    expect(download).not.toHaveBeenCalled();
+    expect(recordPrimaryData).not.toHaveBeenCalled();
+    expect(sender.calls).toEqual([]);
+  });
+
   it("T1: sender 無しの proxy db は EDINET 取得・D1 利用ゼロで止まる", async () => {
     const restore = silenceConsole();
     try {

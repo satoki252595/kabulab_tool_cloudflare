@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "4638a0fe-f2a9-470b-86c0-8e1a8f8b8f29",
-  "prevId": "5f14fdb6-334e-48b2-9588-9b9cc0a34f4d",
+  "id": "7a788243-e47e-4042-9c03-a9be2cafc92b",
+  "prevId": "4638a0fe-f2a9-470b-86c0-8e1a8f8b8f29",
   "tables": {
     "core_stock_annual_financials": {
       "name": "core_stock_annual_financials",
@@ -1384,6 +1384,13 @@
         },
         "overseas_honbun_file": {
           "name": "overseas_honbun_file",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "overseas_omission_json": {
+          "name": "overseas_omission_json",
           "type": "text",
           "primaryKey": false,
           "notNull": false,

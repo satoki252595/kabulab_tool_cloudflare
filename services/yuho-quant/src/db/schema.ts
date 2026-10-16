@@ -89,6 +89,8 @@ export const yuhoDocuments = sqliteTable(
     overseasParseStatus: text("overseas_parse_status"),
     /** 海外売上 抽出元の本文 iXBRL ファイル名（調査・監査用）。未取込は NULL */
     overseasHonbunFile: text("overseas_honbun_file"),
+    /** 明示された地域注記の省略理由と原文/原典SHA。未検証・未保存はNULL。 */
+    overseasOmissionJson: text("overseas_omission_json"),
     /**
      * 定性セクション (事業の内容・リスク等) の抽出結果。ok |
      * no_text_sections | parse_error。CSV (type=5) のみから抽出するので

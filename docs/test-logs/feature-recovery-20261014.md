@@ -2,7 +2,18 @@
 
 追跡: [#348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)。監査と全20機能の完了条件は [feature-gap-audit-20261014.md](feature-gap-audit-20261014.md)。作業開始2026-10-14 JST。全件の本番受入が済むまではこのIssueを閉じない。
 
-## 10/16 19:48 JSTの追加確認
+## 10/16 20:32 JSTの追加確認
+
+- typed/legacy16は19:53:17、通常parser/backup/原子D1/全POST/旧最後退役で完了。361.082秒、D1 read433/batch16、Notion read201/mutation48/hosted3、観測hosted5,736,577B。元サイトGET・原本再upload・補足write・model0。別プロセスの全保存証跡照合も成功し、固定本文3,666/3,666件を受入。独立receipt SHA `17c3da72e1071a62d94990f8db9eab421efbcd13b1ebdc2a42d1abe6b514197d`。16件の601節に含まれない23項目は原典の対応要素なし・理由不明を保持。補足39列や現在live集合の全受入へ広げない。
+- Mac事業タグの実20時処理は20:00:05〜20:20:13、main27709ccfでexit0。197件＝skip49/sync_text143/retag5、未走査3,490/母集団3,687であり全量完了ではない。Clef実要求7・外部AI API0、Notion1,962要求/429 0/通信再試行0、原応答7件のdurable journalを保持。qualificationHeld23とTypeSafe停止を維持し、summaryのvisited coverageを全体の判定済率として扱わない。20:29の独立R2 GET1/320Bで同じ終了receiptを全照合、SHA `be7d27f61714c88fccce91890a13822248dfefe699962c5b9ef17b49ed7bb685`。21時優待はまだ未受入。
+- 旧A known50の歴史POSTは、保存済みnative252応答を旧049ソースで通信0/モデル0に再生し、先頭15件が元物理POSTと同値と独立照合。残35件を15/15/5の3ファイルとして新namespaceで物理保管・全SHA検証した。新20要求/9mutation、元1,486要求と元POST3mutationを継承して計1,506要求/POST12mutation。stock PATCH・D1write・再推論0。失われた元row完了時計を生成せずnative個別時計を保持し、元expired/STOP/最終ACK不明を変更しない。現在のA876資格・補足同期完了とは区別する。
+- RAW38888909104はbytes上限で204件（新197・既完7）を受入し、cursor9,682/残69,150。22分27.120秒、実原本の観測転送478,702,584B、元サイトGET0/Notion5要求。native83,247B/SHA `1da0355393c6bd9c6fae5b76f4a79725fe6acaa68c10f196f4717a995020cf66`。500は上限であり毎runの保証件数ではない。後続38891434050はmain47921074、元poolの29枠目で継続中。全量anti-joinは未完。
+- #423はexact head b18c2b7の全CI成功後main47921074へマージ。19:56:11 JSTにCloudflare main build59b3bcbaの通常deploy/version77d3a95aを確認した。進行中の18時株式runは旧head277のため、新しい調整値欠測guardの次回定時受入は別に残す。
+- nullable地域注記理由の0030は本文・safe20の受入と旧schemaを使う有限writerの終端後に単一DDL1送信で適用し、38,219行の全NULL、既存列定義/索引/行数を確認。schema PRE/POSTを物理保管・全SHA検証、receipt SHA `a02500f5e5f95d4a306f30ad406b68f4fee6814cc18c49198a09ab20166f1ab5`。事前記録器の失敗namespace2個・読取4回・ファイル本体未送信のupload1件を保持し、DDLは再送していない。通常取込・画面配信と既存955件の理由反映は分けて受入する。
+
+全20機能は未完。本文の完了を、タグ・補足・株価全量・保有明細・VWAP・原本索引や原典非開示の数値充足へ拡張しない。
+
+## 10/16 19:48 JSTの追加確認（以下はその時点の観測）
 
 - 本文の新038〜060、1,096通は05:52までに物理PRE/POST/FINAL・全文POST・旧最後退役を完了。19:29の独立した保存証跡検査で、全23batch/40,951節・原本全SHA・全6表の各更新・最終pointer/propsが一致した。追加通信/本番write/モデル0。固定3,666通中3,650通（99.6%）を受入。独立receipt SHA `f30dd8c1cf2db4cbc7c6f2d7636a159b7d44e9ae1761e6aa82fa55cc2eb9f361`。固定集合の受入を現在のlive全集合の完了へ広げない。
 - typed/legacy16は19:36:49に現原本全SHA/native DEI、最新doc/FY/pointerの前後一致、601節を再確認。51 HTTP/193.672秒、観測本文2,283,589B、上流GET/モデル/業務write0。対応要素のない23項目は理由不明を保持。新しい16件限定の本文処理はmain277の通常parser/本文backup/原子D1/全POST/旧最後退役を再利用し、48競合rollbackと7通信guardを検証後、19:46に開始した。本文の完了・補足39列の同期・DDLはまだ受入していない。

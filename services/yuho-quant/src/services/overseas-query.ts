@@ -19,6 +19,7 @@ import { activeEquityCondition } from "../../../../src/shared/db/active-equity.j
 import { yuhoGrowthProjection } from "../../../../src/shared/db/projection-schema.js";
 import { yuhoDocuments, overseasSalesFacts } from "../db/schema.js";
 import type { StockHit } from "./order-query.js";
+import { parseOverseasOmission, type OverseasOmissionRecord } from "./overseas-omission.js";
 
 /** 海外売上の表示でも受注と同じ最大年数 (受注側 MAX_YEARS と一致) */
 const MAX_YEARS = 5;
@@ -50,6 +51,7 @@ export interface OverseasTrend {
     docTypeCode: string;
     /** 当該有報の海外売上 構造化結果。未取込(受注のみの旧レコード)は null */
     overseasParseStatus: string | null;
+    overseasOmission: OverseasOmissionRecord | null;
   }>;
   /** 古い→新しい順。最大 MAX_YEARS 年 */
   points: OverseasYearPoint[];
@@ -92,10 +94,12 @@ export async function getOverseasTrend(
   const docs = await db
     .select({
       docId: yuhoDocuments.docId,
+      edinetCode: yuhoDocuments.edinetCode,
       periodEnd: yuhoDocuments.periodEnd,
       submittedAt: yuhoDocuments.submittedAt,
       docTypeCode: yuhoDocuments.docTypeCode,
       overseasParseStatus: yuhoDocuments.overseasParseStatus,
+      overseasOmissionJson: yuhoDocuments.overseasOmissionJson,
     })
     .from(yuhoDocuments)
     .where(eq(yuhoDocuments.stockId, stockId))
@@ -176,6 +180,7 @@ export async function getOverseasTrend(
       submittedAt: d.submittedAt,
       docTypeCode: d.docTypeCode,
       overseasParseStatus: d.overseasParseStatus,
+      overseasOmission: parseOverseasOmission(d.overseasOmissionJson, d),
     })),
     points,
     hasStructuredData: points.some((p) => p.overseasYen !== null),
