@@ -178,6 +178,20 @@ describe("通常定時VWAPの5分足は同run受付と終了窓を継承", () =>
 });
 
 describe("ingest-intra main flow", () => {
+  it("有限手動intraはYahooの認証・間隔待機後も通信直前に期限を再検査する", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); const start = Date.parse("2026-10-14T08:00:00.000Z"); vi.setSystemTime(start);
+    process.argv.push("--codes=A", "--max-start-seconds=1");
+    mockLoadCodes.mockResolvedValue(["A"]); mockR2Get.mockResolvedValue(null);
+    mockFetch5m.mockImplementationOnce(async (_symbol, _range, options) => {
+      vi.setSystemTime(start + 1000);
+      options.beforeRequest?.();
+      return [{ ...BAR, ts: Date.parse("2026-10-14T06:00:00.000Z") / 1000 }];
+    });
+    await main();
+    expect(mockFetch5m.mock.calls[0][2].beforeRequest).toBeTypeOf("function");
+    expect(mockR2Get).not.toHaveBeenCalled(); expect(mockR2Put).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(2); expect(recordedBody().outcomes).toMatchObject({ A: { status: "error" } });
+  });
   it("有限手動intraはcustody中の期限到達後PUT0、原本/全outcome/予算を保管してexit2", async () => {
     vi.useFakeTimers({ toFake: ["Date"] }); const start = Date.parse("2026-10-14T08:00:00.000Z"); vi.setSystemTime(start);
     process.argv.push("--codes=A", "--max-start-seconds=1");
