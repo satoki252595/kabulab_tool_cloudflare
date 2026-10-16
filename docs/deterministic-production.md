@@ -73,6 +73,8 @@ stageは10/17 04:16:47 JSTのMac runtime `65579f60`へ配備し、固定33社sco
 
 ## 配備と完了の判定
 
+10/17にユーザーがWorkers Paid/D1有料枠の利用を確認した。[D1公式料金](https://developers.cloudflare.com/d1/platform/pricing/)（同日確認）の読取包含枠は月250億行、超過は百万行あたり$0.001。1.3億行は包含枠の0.52%で、他の利用を含む月間合計が枠内なら追加読取料はない。包含枠を使い切った仮定でもこの読取分は$0.13。書込・保存容量・Workers/R2等は別で、月間使用済み量は未確認。旧契約API403をPaid未確認のまま扱わず、既存の有限実行cap・索引利用・実rows_read記録は維持する。
+
 10/17 07:32:04 JSTのCloudflare配信はmain `7d938e38`、version `30a5f745-0de7-4d77-9779-5c21e5716d76`。受注は通常ingest/missingと同じ保存変換を共有する保存原本CLIを追加した。保有の不該当も通常CLI/共有publisherへ接続した。Mac e4c・保有b8等の稼働中sourceは固定し、Worker配備をMac配備や残cohortの適用完了と混同しない。通信の結果不明は再送せず保存済みintent/全値との照合へ進める。
 
 10/17 07:10:15 JSTのCloudflare mainは`faaf65ca`、version `752bb081-6088-4ccd-8774-745c73c3dea4`。#463/#466の明示的な分割前期末株数基準、#464のcreate/version journal、#465のYahoo報告日診断を通常sourceへ反映した。進行中の本文・保有・海外・VWAPはそれぞれ受入済みsource/lock/入力を固定し、途中でruntimeや.envを切り替えない。Mac e4cとWorker mainの版差・次定時未受入を[台帳](test-logs/recovery-acceptance-20261016.md)へ記録する。源欠測・unknownのHOLDや価格未資格を、配備成功で解除しない。

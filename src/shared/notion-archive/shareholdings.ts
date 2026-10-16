@@ -269,6 +269,31 @@ function assertMigrationPost(actual: HoldingPage, before: HoldingPage, changed: 
   }
 }
 
+/** Unknown PATCHの読取観測だけ。PRE一致も遅延適用を否定せず、再送/完了/marker解除を許可しない。 */
+export async function inspectHoldingPatch(args: { before: HoldingPage; changed: Record<string, HoldingProperty>; schema: HoldingsSchema }): Promise<{
+  status: "observed_pre" | "observed_intended" | "unknown"; current: HoldingPage; replayAuthorized: false;
+}> {
+  const { before, changed, schema } = args, id = (value: string) => value.replaceAll("-", "").toLowerCase();
+  assert.equal(id(schema.id), id(notionEnv.NOTION_STOCK_HOLDINGS_DB_ID()));
+  assert.equal(before.object, "page"); assert.equal(before.parent.type, "database_id");
+  assert.equal(id(before.parent.database_id), id(schema.id)); assert.match(id(before.id), /^[a-f0-9]{32}$/);
+  assert.equal(before.archived, false); assert.equal(before.in_trash, false);
+  assert.equal(before.properties["原本照合済"].checkbox, false); assert.equal(before.properties["価格照合済"].checkbox, false);
+  assert.equal(changed["原本照合済"]?.checkbox, true); assert.equal(changed["価格照合済"]?.checkbox, false);
+  for (const name of ["保有会社コード", "銘柄名", "期末"]) assertProperties(before.properties, { [name]: changed[name] });
+  const current = await notionRequest<HoldingPage>("GET", `/pages/${before.id}`, undefined, { singleAttempt: true });
+  for (const name of ["object", "id", "parent", "archived", "in_trash", "created_time"] as const) assert.deepEqual(current[name], before[name]);
+  for (const page of [before, current]) {
+    assert.ok(typeof page.last_edited_time === "string" && Number.isFinite(Date.parse(page.last_edited_time)));
+    assert(Object.values(page.properties).every(property => !("has_more" in property) || property.has_more === false));
+  }
+  try { assertSameHoldingPage(current, before); return { status: "observed_pre", current, replayAuthorized: false }; }
+  catch (error) { if (!(error instanceof AssertionError)) throw error; }
+  try { assertMigrationPost(current, before, changed, schema); return { status: "observed_intended", current, replayAuthorized: false }; }
+  catch (error) { if (!(error instanceof AssertionError)) throw error; }
+  return { status: "unknown", current, replayAuthorized: false };
+}
+
 export function holdingProperties(source: ShareholdingsSource, ownerName: string, holding: Shareholding): Record<string, HoldingProperty> {
   return {
     "Name": { title: splitRichText(`${source.stockCode} ${ownerName} → ${holding.name}`) },

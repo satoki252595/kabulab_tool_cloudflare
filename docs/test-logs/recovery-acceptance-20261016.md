@@ -2,6 +2,10 @@
 
 追跡は[#348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)。この記録は以下の対象の実測であり、全20機能・全空欄の完了を意味しない。
 
+## 10月17日07:47 JSTの契約確認
+
+ユーザーがWorkers Paid/D1有料枠の利用を確認した。D1の月250億行の読取包含枠に対して1.3億行は0.52%。以前の全量読取見積りを理由にFreeの日次500万行制限で扱う必要はない。月間残量は未確認で、旧有限capや期限を実行中に拡張せず、索引/固定scope/実読取量を維持する。費用の一次出典と他料金との区別は[本番運用](../deterministic-production.md)へ記録した。
+
 ## 10月17日07:35 JSTの追加確認
 
 受注の本番共通mapperと保存cohort CLI（#468）、保有不該当の通常CLI（#467）、保管来歴2ラベルの訂正（#469）はexact headの3 CI成功後にマージした。Cloudflareはmain `7d938e38`、07:32:04/version `30a5f745-0de7-4d77-9779-5c21e5716d76`まで実配信を確認。受注のroot独立813原本/海外20旧新SQL・expected再生もPASS、追加HTTP/モデル/適用0。Mac e4cと保有b8の進行中runtimeは変更していない。
