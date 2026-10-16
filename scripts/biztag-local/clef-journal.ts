@@ -15,7 +15,7 @@ export interface ClefJournalInput {
 }
 const FILE_MAX = 1024 * 1024, RUN_MAX = 64 * FILE_MAX, STORE_MAX = 1024 * FILE_MAX;
 const sha = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
-function syncParent(path: string): void {
+export function syncParent(path: string): void {
   const fd = openSync(dirname(path), "r"); try { fsyncSync(fd); } finally { closeSync(fd); }
 }
 function privatePath(path: string, directory: boolean): void {
