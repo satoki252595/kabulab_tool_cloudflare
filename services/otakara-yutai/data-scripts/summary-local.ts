@@ -1,4 +1,4 @@
-/** Local generation only; company amounts and atomic import use the existing contracts. */
+/** 単純な額面優待は定型処理し、残りだけローカル生成。金額・原子取込は共有契約を通す。 */
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -32,6 +32,7 @@ import { z } from "../../../src/shared/zod-mini.js";
 import { benefitKey } from "./benefit-key.js";
 import { loadBenefitRows, openOtakaraD1 } from "./benefit-rows.js";
 import { evaluateCompanyValue } from "./public-facts.js";
+import { splitHeadedDescription } from "./estimated-value-guard.js";
 import { applyImportAtomically } from "./import-summary-results.js";
 import { assertNotCommittable } from "./private-path.js";
 import { SummaryResult, planSummaryImport, type ImportPlan } from "./summary-import.js";
@@ -116,6 +117,24 @@ export function companyValue(task: SummaryTask): {
     recordMonths: task.recipients.map((r) => r.recordMonth),
   };
   return evaluateCompanyValue(task.description, context);
+}
+
+export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-v1";
+
+/** 全文が単純な種類＋額面の場合だけ定型化する。未対応の注記・見出し・条件を削らない。 */
+export function compileSimpleSummary(task: SummaryTask): SummaryResult | null {
+  const source = splitHeadedDescription(task.description);
+  if (source.malformed) return null;
+  const grammar = /^(QUOカードPay|QUOカード|クオカード|図書カードNEXT|図書カード|商品券|ギフトカード|自社商品|カタログギフト)[ \t]*(?:([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)円(分|相当))(?:を贈呈|贈呈)?[。]?$/u;
+  const body = source.body.normalize("NFKC").trim();
+  let match = grammar.exec(body);
+  // 種類だけの表見出し＋本文の額面も同じ全文文法で読む。金額は本文で認定する。
+  if (match === null && source.heading !== null) match = grammar.exec(`${source.heading.normalize("NFKC").trim()} ${body}`);
+  if (match === null || (source.heading !== null && source.heading.normalize("NFKC").trim() !== match[1])) return null;
+  const amount = companyValue(task);
+  if (amount.value === null || amount.value !== Number(match[2].replaceAll(",", ""))) return null;
+  return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion,
+    shortSummary: `${match[1]} ${amount.value.toLocaleString("en-US")}円${match[3]}`, estimatedValue: amount.value });
 }
 
 /** Entire protocol must correspond to the issued batch. Individual malformed summaries stay pending. */
@@ -233,7 +252,7 @@ function privateDir(path: string): void {
 export type LocalDependencies = {
   loadRows: () => Promise<BenefitRow[]>;
   generate: (tasksPath: string, runDir: string) => Promise<string>;
-  archive: (bytes: Uint8Array, clock: string, phase: "pre" | "post") => Promise<void>;
+  archive: (bytes: Uint8Array, clock: string, phase: "pre" | "post", generation: { deterministic: number; modelTasks: number }) => Promise<void>;
   apply: (rows: readonly BenefitRow[], plan: ImportPlan) => Promise<void>;
 };
 export type LocalReport = {
@@ -246,6 +265,7 @@ export type LocalReport = {
   toNull: number;
   modelCalls: number;
   modelResidents: 0 | 1;
+  deterministic: number;
   outcome: "empty" | "complete" | "partial_rejection";
 };
 
@@ -268,6 +288,7 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
       toNull: 0,
       modelCalls: 0,
       modelResidents: 0,
+      deterministic: 0,
       outcome: "empty",
     };
   let cursor: string | null = null;
@@ -295,9 +316,23 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
     join(runDir, "selected-pre.json"),
     JSON.stringify(rows.filter((r) => tasks.some((t) => t.taskId === benefitKey(r.stockCode, r.description)))),
   );
-  const protocol = await deps.generate(join(runDir, "tasks.jsonl"), runDir);
+  const deterministic = tasks.flatMap(task => { const result = compileSimpleSummary(task); return result === null ? [] : [result]; });
+  const deterministicIds = new Set(deterministic.map(result => result.taskId));
+  const modelTasks = tasks.filter(task => !deterministicIds.has(task.taskId));
+  const generation = { deterministic: deterministic.length, modelTasks: modelTasks.length };
+  const modelTasksText = serializeTasks(modelTasks);
+  parseTaskFile(modelTasksText);
+  writePrivate(join(runDir, "model-tasks.jsonl"), modelTasksText);
+  writePrivate(join(runDir, "deterministic.json"), JSON.stringify({ rule: DETERMINISTIC_SUMMARY_RULE, results: deterministic,
+    modelRequired: modelTasks.map(task => task.taskId) }));
+  const protocol = modelTasks.length > 0 ? await deps.generate(join(runDir, "model-tasks.jsonl"), runDir) : "";
   writePrivate(join(runDir, "generation.jsonl"), protocol);
-  const generated = buildLocalResults(tasks, protocol);
+  const model = modelTasks.length > 0 ? buildLocalResults(modelTasks, protocol)
+    : { resultsText: "", amountReasons: [], generationRejections: [], modelCalls: 0 };
+  const generated = { ...model, resultsText: deterministic.map(result => JSON.stringify(result) + "\n").join("") + model.resultsText,
+    deterministicRule: DETERMINISTIC_SUMMARY_RULE, deterministicTaskIds: [...deterministicIds],
+    amountReasons: [...deterministic.map(result => ({ taskId: result.taskId, value: result.estimatedValue,
+      reason: "qualified_company_per_grant" })), ...model.amountReasons] };
   writePrivate(join(runDir, "results.jsonl"), generated.resultsText);
   writePrivate(join(runDir, "qualification.json"), JSON.stringify(generated));
   const fresh = await deps.loadRows();
@@ -312,8 +347,8 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
     JSON.stringify({
       version: 1,
       clock,
-      model: SEMIF_HF_MODEL,
-      revision: SEMIF_HF_REVISION,
+      model: modelTasks.length > 0 ? SEMIF_HF_MODEL : null,
+      revision: modelTasks.length > 0 ? SEMIF_HF_REVISION : null,
       tasksText,
       protocol,
       ...generated,
@@ -334,7 +369,7 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
       run: runDir.split("/").at(-1),
     }),
   );
-  await deps.archive(bundle, clock, "pre"); // No D1 mutation if physical/archive/readback fails.
+  await deps.archive(bundle, clock, "pre", generation); // No D1 mutation if physical/archive/readback fails.
   const nextCursor = join(state, `progress-${randomUUID()}.json`);
   writePrivate(nextCursor, JSON.stringify({ cursor: tasks[tasks.length - 1].taskId }));
   renameSync(nextCursor, cursorPath);
@@ -377,7 +412,8 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
     pendingBefore: allTasks.length,
     pendingAfter: selectSummaryTasks(post).length,
     modelCalls: generated.modelCalls,
-    modelResidents: 1,
+    modelResidents: modelTasks.length > 0 ? 1 : 0,
+    deterministic: deterministic.length,
     outcome: rejected > 0 ? "partial_rejection" : "complete",
   };
   writePrivate(
@@ -401,7 +437,7 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
     const postBundle = gzipSync(postPlain);
     if (!gunzipSync(postBundle).equals(postPlain)) throw new Error("bundle_roundtrip");
     writePrivate(join(runDir, "post-import.json.gz"), postBundle);
-    await deps.archive(postBundle, postClock, "post");
+    await deps.archive(postBundle, postClock, "post", generation);
   }
   writePrivate(join(runDir, "complete.json"), JSON.stringify(report));
   unlinkSync(pendingWrite);
@@ -448,7 +484,7 @@ function dependencies(): LocalDependencies {
   return {
     loadRows: () => loadBenefitRows(db, "active-equity"),
     generate,
-    async archive(bytes, clock, phase) {
+    async archive(bytes, clock, phase, generation) {
       const file = {
         filename: "summary-local.json.gz",
         contentType: "application/gzip",
@@ -457,7 +493,7 @@ function dependencies(): LocalDependencies {
       const result = await recordPrimaryData({
         service: "otakara-yutai",
         key: `summary-local-${sha(bytes)}`,
-        source: "D1 current benefits / pinned cached Qwen local generation",
+        source: "D1 current benefits / deterministic rules and optional pinned cached Qwen local generation",
         fetchedAt: clock,
         force: false,
         metadata: {
@@ -465,8 +501,10 @@ function dependencies(): LocalDependencies {
           phase,
           bytes: bytes.length,
           sha256: sha(bytes),
-          model: SEMIF_HF_MODEL,
-          revision: SEMIF_HF_REVISION,
+          deterministicRule: DETERMINISTIC_SUMMARY_RULE,
+          ...generation,
+          model: generation.modelTasks > 0 ? SEMIF_HF_MODEL : null,
+          revision: generation.modelTasks > 0 ? SEMIF_HF_REVISION : null,
         },
         files: [file],
       });

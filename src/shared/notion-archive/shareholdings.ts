@@ -1,11 +1,12 @@
 /** 保有明細の唯一のNotion入口。旧推定値は残し、原表で確定した列だけを公開する。 */
 import assert from "node:assert/strict";
+import { AssertionError } from "node:assert";
 import { createHash } from "node:crypto";
 import { parseShareholdingsData, verifySavedHoldingsSource, type Shareholding, type ShareholdingsSource, type ShareholdingsExtraction } from "../../../services/yuho-quant/src/services/edinet/shareholdings.js";
 import { HoldingsPriceIndex, parseHoldingsCodeList, qualifyHoldingValuation, type ArchivedSource, type HoldingValuation } from "../../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js";
 import { edinetArchiveFilename } from "../../../services/yuho-quant/src/services/edinet/archive.js";
-import { findUniqueBackupChildByTitle, queryUniqueRow } from "./archive.js";
-import { notionRequest } from "./client.js";
+import { findUniqueBackupChildByTitle, queryUniqueRow, recordPrimaryData } from "./archive.js";
+import { assertCursorProgress, notionRequest } from "./client.js";
 import { notionEnv } from "./env.js";
 import { splitRichText } from "./rich-text.js";
 import { verifyArchivedAttachments } from "./readback.js";
@@ -159,6 +160,113 @@ interface HoldingPage {
   properties: Record<string, HoldingProperty>;
 }
 
+/** 同一issuer/期末だけを一度読む。各行で全DB検索せず、既存cursor/未完guardを使う。 */
+async function readHoldingPeriodRows(databaseId: string, source: ShareholdingsSource): Promise<HoldingPage[]> {
+  const rows: HoldingPage[] = [], ids = new Set<string>(), cursors = new Set<string>();
+  let cursor: string | undefined;
+  for (;;) {
+    const response = await notionRequest<{ results: HoldingPage[]; has_more: boolean; next_cursor: string | null }>(
+      "POST", `/databases/${databaseId}/query`, { filter: { and: [
+        { property: "保有会社コード", rich_text: { equals: source.stockCode } },
+        { property: "期末", date: { equals: source.fiscalYearEnd } },
+      ] }, page_size: 100, ...(cursor === undefined ? {} : { start_cursor: cursor }) });
+    for (const page of response.results) {
+      assert.equal(page.object, "page"); assert.equal(page.parent.type, "database_id");
+      assert.equal(page.parent.database_id.replaceAll("-", ""), databaseId.replaceAll("-", ""));
+      assert.equal(page.archived, false); assert.equal(page.in_trash, false);
+      assert.ok(!ids.has(page.id), "保有明細のページがcursor間で重複しています"); ids.add(page.id);
+      assertProperties(page.properties, { "保有会社コード": rt(source.stockCode), "期末": { date: { start: source.fiscalYearEnd } } });
+      rows.push(page);
+      assert.ok(rows.length <= 1000, "同一issuer/期末の候補1000行の読取予算を超えました");
+    }
+    if (!response.has_more) { assert.equal(response.next_cursor, null); return rows; }
+    assert.equal(typeof response.next_cursor, "string"); assertCursorProgress(cursors, response.next_cursor!); cursor = response.next_cursor!;
+  }
+}
+
+/** 種別欠測を特定投資とみなさない。whole documentと旧行の一対一対応だけを明示移行する。 */
+export function resolveHoldingRows(source: ShareholdingsSource, ownerName: string, allHoldings: readonly Shareholding[],
+  selected: readonly Shareholding[], rows: readonly HoldingPage[]):
+  { status: "ready"; selected: Array<{ existing: HoldingPage | null; migrateLegacy: boolean }> } | { status: "held"; reason: string } {
+  const byName = new Map<string, HoldingPage[]>(), sourceNames = new Map<string, number>();
+  for (const holding of allHoldings) { const count = sourceNames.get(holding.name); sourceNames.set(holding.name, count === undefined ? 1 : count + 1); }
+  for (const page of rows) {
+    const name = richValue(page.properties["銘柄名"]);
+    assertProperties(page.properties, { "保有会社コード": rt(source.stockCode), "期末": { date: { start: source.fiscalYearEnd } } });
+    const group = byName.get(name); if (group) group.push(page); else byName.set(name, [page]);
+  }
+  const resolved: Array<{ existing: HoldingPage | null; migrateLegacy: boolean }> = [];
+  for (const holding of selected) {
+    const named = byName.get(holding.name); if (named === undefined) { resolved.push({ existing: null, migrateLegacy: false }); continue; }
+    const exact = named.filter(page => { assert.equal(page.properties["保有種別"].type, "select"); return page.properties["保有種別"].select?.name === holding.kind; });
+    if (exact.length > 1) return { status: "held", reason: "同一issuer・銘柄名・期末・保有種別の既存行が複数あります" };
+    if (exact.length === 1) { resolved.push({ existing: exact[0], migrateLegacy: false }); continue; }
+    const legacy = named.filter(page => page.properties["保有種別"].select === null);
+    if (legacy.length === 0) { resolved.push({ existing: null, migrateLegacy: false }); continue; }
+    if (legacy.length !== 1 || named.length !== 1 || sourceNames.get(holding.name) !== 1) return { status: "held", reason: "種別未記録の旧行と原表全体の明細を一対一に対応できません" };
+    const page = legacy[0];
+    if (richValue(page.properties["保有会社"]) !== ownerName) return { status: "held", reason: "旧行の保有主体名が提出会社の明示名と完全一致しません" };
+    for (const name of ["原本照合済", "価格照合済"]) { assert.equal(page.properties[name].type, "checkbox"); if (page.properties[name].checkbox !== false) return { status: "held", reason: "旧行に既照合フラグがあり種別欠測の移行を許可できません" }; }
+    for (const name of ["出典文書ID", "出典原本SHA256", "出典明細行", "出典要素ID", "出典ファイル", "出典Context"]) {
+      if (richValue(page.properties[name]) !== "") return { status: "held", reason: "種別未記録の旧行に出典情報があり黙って置換できません" };
+    }
+    assert.ok(typeof page.created_time === "string" && Number.isFinite(Date.parse(page.created_time)));
+    assert.ok(typeof page.last_edited_time === "string" && Number.isFinite(Date.parse(page.last_edited_time)));
+    resolved.push({ existing: page, migrateLegacy: true });
+  }
+  return { status: "ready", selected: resolved };
+}
+
+/** 完了markerだけで同値としない。全原表のfile/contextを含む通常出典列を再照合する。 */
+export function verifyCompletedHoldingsSource(source: ShareholdingsSource, ownerName: string, parsed: ShareholdingsExtraction,
+  zipSha256: string, rows: readonly HoldingPage[]): { status: "verified" } | { status: "held"; reason: string } {
+  const found = resolveHoldingRows(source, ownerName, parsed.holdings, parsed.holdings, rows);
+  if (found.status === "held") return found;
+  for (const [index, choice] of found.selected.entries()) {
+    if (choice.migrateLegacy || choice.existing?.properties["原本照合済"]?.checkbox !== true) return { status: "held", reason: "完了sourceの原本確定行を全明細で確認できません" };
+    const holding = parsed.holdings[index];
+    const expected = { ...holdingProperties(source, ownerName, holding), ...sourceProperties(parsed, holding, zipSha256) };
+    try { assertProperties(choice.existing.properties, Object.fromEntries(Object.entries(expected).filter(([name]) => !VALUATION_COLUMNS.has(name)))); }
+    catch (error) { if (!(error instanceof AssertionError)) throw error; return { status: "held", reason: "完了sourceの全出典・原本確定値が保存原表と不一致です" }; }
+  }
+  return { status: "verified" };
+}
+
+interface MigrationFile { key: string; filename: string; sha256: string; bytes: number; pageId?: string }
+function migrationFile(source: ShareholdingsSource, offset: number, phase: "PRE" | "POST", bytes: Uint8Array): MigrationFile {
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  return { key: `holdings-legacy/${source.docId}/${offset}/${phase}/${sha256}`, filename: `holdings-legacy-${phase}.json`, sha256, bytes: bytes.length };
+}
+async function archiveMigration(source: ShareholdingsSource, file: MigrationFile, bytes: Uint8Array): Promise<MigrationFile> {
+  assert.ok(bytes.length <= 20 * 1024 * 1024, "移行証跡20MiBの予算を超えました");
+  assert.equal(bytes.length, file.bytes); assert.equal(createHash("sha256").update(bytes).digest("hex"), file.sha256);
+  const stored = await recordPrimaryData({ service: "yuho-quant", key: file.key, source: "保有明細の旧未検証行を保存原表で置換する通常移行", metadata: {
+    source, legacyValuesPreserved: true, unverifiedCanonicalValuesReplacedFromSavedSource: true, sha256: file.sha256,
+  }, files: [{ filename: file.filename, contentType: "application/json", bytes }] });
+  assert.equal(stored.fileTooLarge, false); assert.ok(stored.manifestMatch === "written" || stored.manifestMatch === "same");
+  await verifyArchivedAttachments(stored.pageId, [{ filename: file.filename, bytes }], "保有明細の旧行移行証跡");
+  return { ...file, pageId: stored.pageId };
+}
+function assertSameHoldingPage(actual: HoldingPage, expected: HoldingPage): void {
+  for (const name of ["object", "id", "parent", "archived", "in_trash", "created_time", "last_edited_time"] as const) assert.deepEqual(actual[name], expected[name], "保有明細のfresh PRE/POSTが変更されています");
+  assert.deepEqual(stableProperties(actual.properties), stableProperties(expected.properties), "保有明細のfresh全propsが変更されています");
+}
+function assertMigrationPost(actual: HoldingPage, before: HoldingPage, changed: Record<string, HoldingProperty>, schema: HoldingsSchema): void {
+  assert.equal(actual.object, "page"); assert.equal(actual.id, before.id); assert.deepEqual(actual.parent, before.parent);
+  assert.equal(actual.archived, false); assert.equal(actual.in_trash, false); assert.equal(actual.created_time, before.created_time);
+  assertProperties(actual.properties, changed);
+  assert.equal(actual.properties["検証状態"].id, schema.properties["検証状態"].id);
+  assert.equal(actual.properties["検証状態"].type, "formula");
+  assert.deepEqual(actual.properties["検証状態"].formula, { type: "string", string: "明細原本照合済" });
+  assertPriceStatus(actual.properties, schema);
+  assert.deepEqual(Object.keys(actual.properties).sort(), Object.keys(before.properties).sort());
+  for (const [name, value] of Object.entries(before.properties)) {
+    assert.equal(actual.properties[name].id, value.id, "移行でproperty IDが変更されています");
+    const expected = name === "検証状態" || name === "価格状態" ? { ...value, formula: actual.properties[name].formula } : value;
+    if (!Object.hasOwn(changed, name)) assert.deepEqual(stableProperty(actual.properties[name]), stableProperty(expected), "移行でlegacy/他propsが変更されています");
+  }
+}
+
 export function holdingProperties(source: ShareholdingsSource, ownerName: string, holding: Shareholding): Record<string, HoldingProperty> {
   return {
     "Name": { title: splitRichText(`${source.stockCode} ${ownerName} → ${holding.name}`) },
@@ -308,6 +416,11 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
         if (status === "明細原本照合済") {
           assert.equal(saved.sourceNextHoldingOffset, saved.parsed);
           if (args.budget) args.budget.remainingRows += reservedRows;
+          if (args.valuationSources === undefined || sourceBefore.properties["保有価格状態"]?.select?.name === "価格照合完了") {
+            const rows = await readHoldingPeriodRows(notionEnv.NOTION_STOCK_HOLDINGS_DB_ID(), args.source);
+            const verified = verifyCompletedHoldingsSource(args.source, args.ownerName, parsed, zipSha256, rows);
+            if (verified.status === "held") return { status: "held", parsed: parsed.holdings.length, reason: verified.reason };
+          }
           if (args.valuationSources) {
             const priceInfo = JSON.parse(richValue(sourceBefore.properties["保有価格再開情報"])) as RecoveryInfo;
             for (const name of ["source", "ownerName", "zipBytes", "zipSha256", "parsed", "factsSha256"] as const) assert.deepEqual(priceInfo[name], sourceInfo[name]);
@@ -352,24 +465,38 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
   const dbId = notionEnv.NOTION_STOCK_HOLDINGS_DB_ID();
   const schema = await readHoldingsSchema();
   assert.equal(Object.keys(buildHoldingsSchemaPatch(schema).properties).length, 0, "保有明細schemaの受入が未完了です");
-  // 未知のmutation結果で止まった通はこの状態を保持し、定時再開の対象にしない。
+  const periodRows = await readHoldingPeriodRows(dbId, args.source);
+  const resolved = resolveHoldingRows(args.source, args.ownerName, parsed.holdings, selected, periodRows);
+  if (resolved.status === "held") return hold(resolved.reason, parsed.holdings.length, false);
+  // 既照合行はfile/contextを含む全原本列を確認してからwrite0とする。
+  for (const [index, choice] of resolved.selected.entries()) if (choice.existing?.properties["原本照合済"]?.checkbox === true) {
+    try { assertProperties(choice.existing.properties, Object.fromEntries(Object.entries(ready[index].properties).filter(([name]) => !VALUATION_COLUMNS.has(name)))); }
+    catch (error) { if (!(error instanceof AssertionError)) throw error; return hold("既に原本照合済みの行と保存原表の全出典・確定値が一致しません", parsed.holdings.length, false); }
+  }
+  const migrating = resolved.selected.filter(choice => choice.migrateLegacy).map(choice => choice.existing!);
+  const preBytes = migrating.length === 0 ? undefined : Buffer.from(JSON.stringify({ source: args.source, ownerName: args.ownerName,
+    sourceZipSha256: zipSha256, factsSha256: holdingsFactsSha256(parsed.holdings), offset, rows: migrating }) + "\n");
+  if (preBytes !== undefined) {
+    assert.equal(pricePhase, undefined, "価格phaseはlegacy原本移行をしません");
+    sourceInfo!.legacyMigration = { offset, rowIds: migrating.map(page => page.id), pre: migrationFile(args.source, offset, "PRE", preBytes) };
+  }
+  // PRE upload未知も同じdurable source latchに残し、定時再開の対象にしない。
   if (!pricePhase) sourceBefore = await recordRecoveryInfo(args.archivePageId, sourceInfo!, "実行中（結果未確定）", "原表の資格成立。今回windowの読戻しは未完了", false, undefined, sourceBefore);
+  if (preBytes !== undefined) sourceInfo!.legacyMigration!.pre = await archiveMigration(args.source, sourceInfo!.legacyMigration!.pre, preBytes);
+  const migrationPosts: HoldingPage[] = [];
   const result = { status: "published" as const, parsed: selected.length, created: 0, updated: 0, unchanged: 0 };
   let unavailableInWindow = 0;
-  for (const { holding, valuation, properties } of ready) {
-    const existing = await queryUniqueRow<HoldingPage>(dbId, { and: [
-      { property: "保有会社コード", rich_text: { equals: args.source.stockCode } },
-      { property: "銘柄名", rich_text: { equals: holding.name } },
-      { property: "期末", date: { equals: args.source.fiscalYearEnd } },
-      { property: "保有種別", select: { equals: holding.kind } },
-    ] }, "保有明細が複数あるため原本行を特定できません");
+  for (const [index, { holding, valuation, properties }] of ready.entries()) {
+    const choice: { existing: HoldingPage | null; migrateLegacy: boolean } = resolved.selected[index];
+    const existing: HoldingPage | null = choice.existing, migrateLegacy = choice.migrateLegacy;
     if (existing) {
       assert.equal(existing.object, "page");
       assert.equal(existing.parent.type, "database_id");
       assert.equal(existing.parent.database_id.replaceAll("-", ""), dbId.replaceAll("-", ""));
       assert.equal(existing.archived, false);
       assert.equal(existing.in_trash, false);
-      assertProperties(existing.properties, { "保有会社コード": rt(args.source.stockCode), "銘柄名": rt(holding.name), "期末": { date: { start: args.source.fiscalYearEnd } }, "保有種別": { select: { name: holding.kind } } });
+      assertProperties(existing.properties, { "保有会社コード": rt(args.source.stockCode), "銘柄名": rt(holding.name), "期末": { date: { start: args.source.fiscalYearEnd } },
+        ...(migrateLegacy ? {} : { "保有種別": { select: { name: holding.kind } } }) });
       assert.equal(existing.properties["原本照合済"]?.type, "checkbox");
       assert.equal(typeof existing.properties["原本照合済"].checkbox, "boolean");
     }
@@ -395,6 +522,10 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
     }
     // 既存未検証行の旧値は専用legacy列に残り、物理PREもrootが保管している。
     const mutationProperties = !pricePhase ? properties : Object.fromEntries(Object.entries(properties).filter(([name]) => VALUATION_COLUMNS.has(name)));
+    if (existing) {
+      const fresh = await notionRequest<HoldingPage>("GET", `/pages/${existing.id}`);
+      assertSameHoldingPage(fresh, existing);
+    }
     const saved: { object: string; id: string } = existing
       ? await notionRequest("PATCH", `/pages/${existing.id}`, { properties: mutationProperties }, { singleAttempt: true })
       : await notionRequest("POST", "/pages", { parent: { database_id: dbId }, properties }, { singleAttempt: true });
@@ -417,7 +548,17 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
         if (!VALUATION_COLUMNS.has(name)) assert.deepEqual(stableProperty(readback.properties[name]), stableProperty(expected), "価格追記で他propsが変更されています");
       }
     }
+    if (migrateLegacy) { assertMigrationPost(readback, existing!, properties, schema); migrationPosts.push(readback); }
     if (existing) result.updated++; else result.created++;
+  }
+  if (migrationPosts.length > 0) {
+    const independent: HoldingPage[] = [];
+    for (const expected of migrationPosts) {
+      const fresh = await notionRequest<HoldingPage>("GET", `/pages/${expected.id}`); assertSameHoldingPage(fresh, expected); independent.push(fresh);
+    }
+    const bytes = Buffer.from(JSON.stringify({ source: args.source, sourceZipSha256: zipSha256, offset,
+      pre: sourceInfo!.legacyMigration!.pre, rows: independent, unverifiedCanonicalValuesReplacedFromSavedSource: true, legacyValuesPreserved: true }) + "\n");
+    sourceInfo!.legacyMigration!.post = await archiveMigration(args.source, migrationFile(args.source, offset, "POST", bytes), bytes);
   }
   if (!pricePhase) {
     const nextOffset = offset + selected.length, pending = nextOffset < parsed.holdings.length;
@@ -595,6 +736,8 @@ interface RecoveryInfo {
   source: ShareholdingsSource; ownerName: string; zipBytes: number; zipSha256: string; parsed: number;
   factsSha256?: string;
   sourceQueueVersion?: 1; sourceNextHoldingOffset?: number;
+  /** 未確定時もPREのexact key/SHAを保持し、同じ旧行PATCHを自動再送しない。 */
+  legacyMigration?: { offset: number; rowIds: string[]; pre: MigrationFile; post?: MigrationFile };
   priceQueueVersion?: 1; nextHoldingOffset?: number; unavailableRows?: number; snapshotId?: string;
 }
 

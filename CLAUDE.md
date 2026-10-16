@@ -339,6 +339,7 @@ import して使う（各サービスで `.tip` を再定義しない）。利�
 
 ## プロジェクト固有の規約
 
+- **定期処理は決定的なツールを優先する**: 取得・構造抽出・計算・照合・保存・検証は通常CLI/共有関数へ実装し、ローカル専用の復旧スクリプトだけで修正を終えない。意味判断が必要な残件だけをLLMへ渡し、同一入力に束縛した保存済み出力と厳密な検証を使う。原本欠落や曖昧な主体を生成で補わない。本番のWorkers/Actions/Macごとの実行可否、依存、定時起動、停止条件を [`docs/deterministic-production.md`](./docs/deterministic-production.md) に記録する。ローカルはNixで、本番と同じソース・依存lock・入力契約を検証する。
 - **JSX 禁止**: mono-repo 方針として、ビューは template literal を返す `.ts` 関数として実装する (Cloudflare Workers / esbuild ビルドでも全サービスがこの方式を踏襲する)。詳細は [`docs/new-project-template.md`](./docs/new-project-template.md) の §5。
 - **Hono のサブアプリ**は必ず `new Hono({ strict: false })` で生成し、trailing slash の有無に依らずマッチさせる。
 - **DB アクセス**は必ず Worker の D1 バインディング (`c.env.DB` → `createDb(c.env.DB)` / `createServiceDb`) 経由で取得し、接続先をハードコードしない。取込 (書込) は Node から `createD1HttpDb` (D1 REST) を使う。

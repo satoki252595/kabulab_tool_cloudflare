@@ -12,11 +12,23 @@ interface Admission {
 /** 日足が受付時計を1回保存し、同runの5分足だけがその時計を継承する。外部通信なし。 */
 export function scheduledVwapGuard(options: {
   plannedDate: string | undefined; runId: string; phase: "daily" | "intra";
-  nowMs?: number; directory?: string;
-}): { admission: Admission | null; assertActive(): void } {
+  nowMs?: number; directory?: string; maxStartSeconds?: string;
+}): { admission: Admission | null; startBudget?: { startedAt: string; deadline: string; seconds: number }; assertActive(): void } {
+  const nowMs = options.nowMs === undefined ? Date.now() : options.nowMs;
+  if (options.maxStartSeconds !== undefined) {
+    if (options.plannedDate !== undefined || options.phase !== "intra" ||
+        !/^[1-9]\d{0,2}$/.test(options.maxStartSeconds) || Number(options.maxStartSeconds) > 900) {
+      throw new Error("有限5分足の新規開始予算は手動intra専用の1〜900整数秒です");
+    }
+    const seconds = Number(options.maxStartSeconds), deadline = nowMs + seconds * 1000;
+    return { admission: null, startBudget: { startedAt: new Date(nowMs).toISOString(), deadline: new Date(deadline).toISOString(), seconds },
+      assertActive() {
+        const now = Date.now();
+        if (now < nowMs || now >= deadline) throw new Error("有限5分足の新規開始期限外です");
+      } };
+  }
   if (options.plannedDate === undefined) return { admission: null, assertActive() {} };
   if (!/^\d+(?:\.\d+)?$/.test(options.runId)) throw new Error("定時VWAPは同Actions run IDが必要です");
-  const nowMs = options.nowMs === undefined ? Date.now() : options.nowMs;
   const dir = options.directory === undefined ? join(process.cwd(), ".vwap-summaries") : options.directory;
   const path = join(dir, `vwap-scheduled-admission-${options.runId}.json`);
   let admission: Admission;

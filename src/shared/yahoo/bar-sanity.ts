@@ -19,6 +19,15 @@ import type { DailyOhlcv } from "../types.js";
 
 export type Bar = DailyOhlcv;
 
+/** 調整済み系列へ通常終値を混ぜない。両値ともない日は欠測のまま。 */
+export function requiredAdjustedClose(bar: Bar): number | null {
+  if (bar.adj === null && bar.close === null) return null;
+  if (typeof bar.adj !== "number" || !Number.isFinite(bar.adj) || bar.adj <= 0) {
+    throw new Error(`${bar.date}: 調整済み終値が未取得または不正です。通常終値で補完しません`);
+  }
+  return bar.adj;
+}
+
 /** 前日比の許容上限（倍）。ストップ高の連続でもこれは超えない。 */
 export const MAX_DAILY_RATIO = 10;
 

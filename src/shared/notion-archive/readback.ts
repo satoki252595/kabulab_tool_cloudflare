@@ -10,6 +10,7 @@
  * (診断 caller は薄い wrapper + 旧 label で契約維持)。
  */
 import { sha256HexBytes } from "../sha256.js";
+import { recordIrPdfReadback } from "./ir-pdf-timing.js";
 import { listPageFiles } from "./page-file.js";
 import { downloadArchivedFile } from "./archived-download.js";
 
@@ -37,14 +38,19 @@ export async function verifyArchivedAttachments(
   for (const f of files) {
     const got = byName.get(f.filename) ?? fail(`添付「${f.filename}」なし`);
     if (got.kind !== "file") fail(`「${f.filename}」が Notion-hosted 添付ではありません`);
-    const bytes = await downloadArchivedFile(got, label, { maxBytes: f.bytes.length });
-    if (bytes.length !== f.bytes.length) {
-      fail(`「${f.filename}」のバイト長 ${bytes.length} ≠ ${f.bytes.length}`);
+    const readStarted = performance.now();
+    try {
+      const bytes = await downloadArchivedFile(got, label, { maxBytes: f.bytes.length });
+      if (bytes.length !== f.bytes.length) {
+        fail(`「${f.filename}」のバイト長 ${bytes.length} ≠ ${f.bytes.length}`);
+      }
+      const [gotSha, wantSha] = await Promise.all([
+        sha256HexBytes(Uint8Array.from(bytes)),
+        sha256HexBytes(Uint8Array.from(f.bytes)),
+      ]);
+      if (gotSha !== wantSha) fail(`「${f.filename}」の SHA256 不一致`);
+    } finally {
+      recordIrPdfReadback(performance.now() - readStarted);
     }
-    const [gotSha, wantSha] = await Promise.all([
-      sha256HexBytes(Uint8Array.from(bytes)),
-      sha256HexBytes(Uint8Array.from(f.bytes)),
-    ]);
-    if (gotSha !== wantSha) fail(`「${f.filename}」の SHA256 不一致`);
   }
 }
