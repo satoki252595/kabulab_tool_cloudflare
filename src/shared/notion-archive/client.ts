@@ -30,13 +30,19 @@ let chain: Promise<unknown> = Promise.resolve();
 let lastStart = 0;
 let nativeMinIntervalMs: number | null = null;
 let lastNativeStart = -Infinity;
+let envPacingInitialized = false;
 
 /** 明示bulk CLI専用。開始前にだけ下限を固定し、未設定の通常380ms挙動は変えない。 */
-export function setNotionMaxRps(maxRps: number): void {
+function notionInterval(maxRps: number): number {
   const interval = Math.ceil(1000 / maxRps);
-  if (!Number.isFinite(maxRps) || maxRps <= 0 || maxRps > 1000 / MIN_INTERVAL_MS || !Number.isSafeInteger(interval) || interval > 2_147_483_647 || stats.requests !== 0 || lastStart !== 0) {
+  if (!Number.isFinite(maxRps) || maxRps <= 0 || maxRps > 1000 / MIN_INTERVAL_MS || !Number.isSafeInteger(interval) || interval > 2_147_483_647) {
     throw new NotionConfigError("Notion pacingは開始前の正有限・既定以下のrateだけ設定できます");
   }
+  return interval;
+}
+export function setNotionMaxRps(maxRps: number): void {
+  const interval = notionInterval(maxRps);
+  if (stats.requests !== 0 || lastStart !== 0) throw new NotionConfigError("Notion pacingは開始前にだけ設定できます");
   nativeMinIntervalMs = interval;
 }
 
@@ -45,6 +51,17 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /** 明示bulkの保存hosted GETも、APIのnative試行と同じrate枠へ入れる。 */
 export async function paceNotionNativeRequest(signal?: AbortSignal): Promise<void> {
   signal?.throwIfAborted();
+  if (!envPacingInitialized) {
+    const configured = notionEnv.NOTION_MAX_RPS();
+    // 明示bulk CLIが開始前に固定した、より狭い予算を環境値で上書きしない。
+    // schedule()は既にqueue時計を進めるが、ここは最初のnative fetchより前。
+    // 公開setterの開始前制約を緩めず、初回内部値だけを初期化する。
+    if (configured !== undefined) {
+      const interval = notionInterval(configured);
+      if (nativeMinIntervalMs === null || interval > nativeMinIntervalMs) nativeMinIntervalMs = interval;
+    }
+    envPacingInitialized = true;
+  }
   if (nativeMinIntervalMs === null) return;
   const wait = nativeMinIntervalMs - (performance.now() - lastNativeStart);
   if (wait > 0) await sleep(wait);
@@ -177,9 +194,7 @@ async function doFetch(
     let res: Response;
     try {
       const init = makeInit();
-      if (nativeMinIntervalMs !== null) {
-        await paceNotionNativeRequest();
-      }
+      await paceNotionNativeRequest();
       stats.requests++;
       res = await fetch(url, init);
     } catch (e) {

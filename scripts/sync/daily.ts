@@ -25,6 +25,7 @@ import { requireYahooProxyForNodeSync, sharedEnv } from "../../src/shared/env.js
 import { rootCauseMessage } from "../../src/shared/errors.js";
 import { r2GetVersion, r2Put } from "../vwap/lib/r2.js";
 import type { MacroJpLegStore } from "../../src/cron/macro-jp-leg.js";
+import { notionStats } from "../../src/shared/notion-archive/client.js";
 
 const MAX_CODES_PER_ERROR = 50;
 const MAX_ERROR_GROUPS = 20;
@@ -118,7 +119,7 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((e) => {
+main().finally(() => console.info(JSON.stringify({ notionStats: notionStats(), phase: "stock-or-context" }))).catch((e) => {
   console.error("[sync-daily] エラー:", rootCauseMessage(e));
   process.exit(1);
 });

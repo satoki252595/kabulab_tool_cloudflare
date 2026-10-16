@@ -179,6 +179,30 @@ JPX 告知 (2026-07-06)「信用取引残高の公表情報の変更日及び今
   NULL 前日比は 0 埋めせず null 伝播、分類不明・coverage 不足は成功にしない。
   JPX原本への再取得なし。通常信用残と資金フローの実受入・readbackは[自動処理の実行検証](./test-logs/automation-verification-20261004.md)に記録する。
 
+## 通常定期処理と共通排他 (2026-10-17)
+
+CF 18:15 JSTは `only=independent` の28取得元を、株式の成否・JPX休場に依存せず起動する。
+株式成功後のworkflow_callは、producerの実 `trade_date` を渡して価格依存の
+`sector-turnover` だけを処理する。手動の空指定all29/カンマsubsetも同じ正本一覧から選ぶ。
+
+Actionsは非Yahoo laneを先行させ、正常summaryを同run/attemptのartifactでYahoo laneへ渡す。
+Yahooを使うのは固定16世界指数の `global-indices` だけで、未保管の週バッチだけ各1回直列取得する。
+このjobだけ株式/VWAPと同じ `yahoo-source` 排他を保持する。非Yahoo27と
+sector-turnover単独は全量Yahoo待ちをせず、各lane内の取得元順・一次原本の物理保管・
+全項目同値確認・変更/欠落のfresh upsertを維持する。
+
+Yahoo jobの最後に、実summaryのrun/attempt・選択集合・重複0・全outcome成功・実時計をjoinする。
+独立定時の予定日はCFの `scheduled_date` を検証だけに使い、実23:40を超えてqueueから出たjobは
+catalog/source前に止まる。片側失敗・欠落・dry-run・期限超過を全28成功にしない。
+CF 23:45 readcheckも両job/producer/join stepの一意成功・順序・23:40完了を検証する。
+失敗jobだけの再実行で別attemptのartifactを混ぜて成功扱いにしない。
+
+Notionのprocess枠は型付き `NOTION_MAX_RPS` で開始前に固定し、API/native retryにも適用する。
+未指定なら従来380ms。実summaryの `notion` に実要求数/制限回数/一過性retry数を残す。
+共有枠の合計、bulk改善前後の必要要求数、背景scheduleの未測定条件は
+[容量監査](test-logs/yahoo-shared-capacity-20261016.md)を参照する。
+source分離・正常なunit regressionを、通常全量の期限内受入の代わりにはしない。
+
 ## 実装ファイル一覧 (Phase 0/1)
 
 - `src/shared/notion-archive/archive.ts` — `parentPageId` 対応 (親ページを

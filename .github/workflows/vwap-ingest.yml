@@ -93,6 +93,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 300 # 原本保管追加後の全量時間は初回正常runで計測する。
     env:
+      NOTION_MAX_RPS: "1.6"
       # Yahoo取得は直列。初回429/503・custody失敗は後続取得/PUTを停止する。
       CONC: "1"
       DELAY_MS: "300"

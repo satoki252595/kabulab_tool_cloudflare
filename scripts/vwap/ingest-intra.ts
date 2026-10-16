@@ -14,6 +14,7 @@ import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
 import { archiveYahooRawBatch, type YahooRawAttempt, type YahooRawMissing } from "../../src/shared/yahoo/raw-custody.js";
 import { proveIntraRecoveryCapture, resolveIntraRecoveryWindow, type IntraRecoveryProof } from "./lib/intra-recovery.js";
 import { scheduledVwapGuard } from "./lib/scheduled-window.js";
+import { notionStats } from "../../src/shared/notion-archive/client.js";
 
 export async function main() {
   const startedAt = new Date().toISOString();
@@ -303,5 +304,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   } catch (e: unknown) {
     console.error(`ingest-intra fatal: ${sanitizeLogText(e instanceof Error ? `${e.name}: ${e.message}` : String(e)).slice(0, 300)}`);
     process.exitCode = 2;
+  } finally {
+    console.info(JSON.stringify({ notionStats: notionStats(), phase: "vwap-intra" }));
   }
 }

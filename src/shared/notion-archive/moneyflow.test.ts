@@ -528,6 +528,112 @@ describe("notion-archive moneyflow", () => {
       ...overrides,
     });
 
+    describe("upsertObservationBatch", () => {
+      const batchInput = (category: string) => ({ ...sameInput, category });
+      const batchRow = (id: string, input: typeof sameInput, over: Record<string, unknown> = {}) => ({
+        object: "page", id, archived: false, in_trash: false,
+        parent: { type: "database_id", database_id: dbId },
+        properties: existingProps({
+          キー: { type: "title", title: [{ plain_text: `${input.period}|${input.indicatorKey}|${input.category}` }] },
+          区分: { type: "rich_text", rich_text: [{ plain_text: input.category }] },
+          値: { type: "number", number: input.value },
+          ...over,
+        }),
+      });
+
+      it("51同値行を50+1キーで完全照合し、返却順を保って個別query/writeを省く", async () => {
+        const inputs = Array.from({ length: 51 }, (_, i) => batchInput(`区分${i}`));
+        route("POST", `/v1/databases/${dbId}/query`, [
+          { results: inputs.slice(0, 50).map((input, i) => batchRow(`row${i}`, input)).reverse(), has_more: false, next_cursor: null },
+          { results: [batchRow("row50", inputs[50])], has_more: false, next_cursor: null },
+        ]);
+        const { upsertObservationBatch } = await load();
+        expect(await upsertObservationBatch(dbId, inputs)).toEqual(inputs.map((_, i) => ({ pageId: `row${i}`, outcome: "unchanged" })));
+        expect(calls).toHaveLength(2);
+        const bodies = calls.map((c) => JSON.parse(String(c.init.body)));
+        expect(bodies.map((b) => b.filter.or.length)).toEqual([50, 1]);
+        expect(bodies.every((b) => b.page_size === 100)).toBe(true);
+      });
+
+      it("変更と欠落はfresh per-key再読し、照合後の新規出現を二重作成しない", async () => {
+        const inputs = [batchInput("A"), batchInput("B"), batchInput("C")];
+        const oldB = batchRow("row-b", inputs[1], { 値: { type: "number", number: 1 } });
+        route("POST", `/v1/databases/${dbId}/query`, [
+          { results: [batchRow("row-a", inputs[0]), oldB], has_more: false, next_cursor: null },
+          { results: [oldB], has_more: false, next_cursor: null },
+          { results: [batchRow("row-c", inputs[2])], has_more: false, next_cursor: null },
+        ]);
+        route("PATCH", "/v1/pages/row-b", [batchRow("row-b", inputs[1])]);
+        const { upsertObservationBatch } = await load();
+        expect(await upsertObservationBatch(dbId, inputs)).toEqual([
+          { pageId: "row-a", outcome: "unchanged" }, { pageId: "row-b", outcome: "updated" }, { pageId: "row-c", outcome: "unchanged" },
+        ]);
+        expect(calls.filter((c) => c.init.method === "PATCH")).toHaveLength(1);
+        expect(calls.filter((c) => new URL(c.url).pathname === "/v1/pages")).toHaveLength(0);
+        expect(calls.filter((c) => new URL(c.url).pathname.endsWith("/query"))).toHaveLength(3);
+      });
+
+      it("同値でも19項目のどれかが欠ければno-opにせず、キー欠落は停止する", async () => {
+        const { matchUnchangedObservationRows } = await load();
+        for (const key of Object.keys(existingProps())) {
+          const row = batchRow("row", sameInput);
+          delete (row.properties as Record<string, unknown>)[key];
+          if (key === "キー") expect(() => matchUnchangedObservationRows(dbId, [sameInput], [row])).toThrow(/キー形状/);
+          else expect(matchUnchangedObservationRows(dbId, [sameInput], [row]).size).toBe(0);
+        }
+        const partial = batchRow("row", sameInput, {
+          指標: { type: "relation", relation: [{ id: sameInput.indicatorPageId }], has_more: true },
+        });
+        expect(matchUnchangedObservationRows(dbId, [sameInput], [partial]).size).toBe(0);
+      });
+
+      it("入力重複は全batchの送信前に停止し、空入力は通信0", async () => {
+        const { upsertObservationBatch } = await load();
+        const inputs = Array.from({ length: 51 }, (_, i) => batchInput(`区分${i}`));
+        await expect(upsertObservationBatch(dbId, [...inputs, inputs[0]])).rejects.toThrow(/入力キー重複/);
+        expect(await upsertObservationBatch(dbId, [])).toEqual([]);
+        expect(calls).toHaveLength(0);
+      });
+
+      it("未知キー・キー重複・同一page二重使用・inactive・別DB・件数超過を保全停止", async () => {
+        const { matchUnchangedObservationRows } = await load();
+        const a = batchInput("A"), b = batchInput("B"), row = batchRow("row-a", a);
+        for (const bad of [
+          [batchRow("other", batchInput("C"))], [row, row], [row, batchRow("row-a", b)],
+          [{ ...row, archived: true }], [{ ...row, in_trash: true }],
+          [{ ...row, parent: { type: "database_id", database_id: "other-db" } }],
+          [{ ...row, object: "block" }], [{ ...row, id: " " }], Array(101).fill(row),
+        ]) expect(() => matchUnchangedObservationRows(dbId, [a, b], bad)).toThrow(/保全停止/);
+        expect(() => matchUnchangedObservationRows(dbId, Array(51).fill(a), [])).toThrow(/件数上限/);
+      });
+
+      it.each([
+        { results: [], has_more: true, next_cursor: "next" },
+        { results: [], has_more: true, next_cursor: null },
+        { results: [], has_more: false, next_cursor: "unexpected" },
+        { results: [], has_more: false, next_cursor: null, request_status: { type: "incomplete" } },
+      ])("未完/不正paginationではfresh queryもwriteもしない: %j", async (response) => {
+        route("POST", `/v1/databases/${dbId}/query`, [response]);
+        const { upsertObservationBatch } = await load();
+        const { NotionConfigError } = await import("./env.js");
+        await expect(upsertObservationBatch(dbId, [sameInput])).rejects.toBeInstanceOf(NotionConfigError);
+        expect(calls).toHaveLength(1);
+      });
+
+      it("fresh作成のACK不明を再送/後続row処理へ変換しない", async () => {
+        const inputs = [batchInput("A"), batchInput("B"), batchInput("C")];
+        route("POST", `/v1/databases/${dbId}/query`, [
+          { results: [batchRow("row-a", inputs[0])], has_more: false, next_cursor: null },
+          { results: [], has_more: false, next_cursor: null },
+        ]);
+        route("POST", "/v1/pages", [{ id: "incomplete" }]);
+        const { upsertObservationBatch } = await load();
+        const { NotionUnknownResultError } = await import("./client.js");
+        await expect(upsertObservationBatch(dbId, inputs)).rejects.toBeInstanceOf(NotionUnknownResultError);
+        expect(calls).toHaveLength(3);
+      });
+    });
+
     it("既存行と値が完全一致なら PATCH せず unchanged を返す (ID のハイフン有無は同一視)", async () => {
       route("POST", `/v1/databases/${dbId}/query`, [{ results: [{ id: "obs-same", properties: existingProps() }] , has_more: false, next_cursor: null }]);
       const { upsertObservation } = await load();
