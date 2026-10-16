@@ -92,4 +92,40 @@ describe("公開優待条件DTO", () => {
     expect(groupBenefits([{ ...base, facts: null }])[0].tiers[0].products[0].estimatedValue).toBeNull();
     expect(groupBenefits([{ ...base, estimatedValue: 9000, facts: build("架空QUOカード3000円分") }])[0].tiers[0].products[0].estimatedValue).toBeNull();
   });
+
+  it("掲載表記の存在を全員の申込必須や特典の同時受取可へ読み替えない", () => {
+    const facts = build("希望者が申込、割引券は併用可。期間1年以上");
+    const html = renderBenefitFacts(facts, null);
+    expect(html).toContain("記載あり（必要性・対象は掲載元で確認）");
+    expect(html).toContain("併用可の記載あり（対象未確認）");
+    expect(html).toContain("券の利用時の併用と、複数の優待を同時に受け取ることは異なります");
+    expect(html).toContain("掲載の期間表記 1年以上（保有条件・株数との対応は掲載元で確認）");
+    expect(html).not.toContain("/ 申込・応募: 必要");
+    expect(html).not.toContain("複数の優待を同時に受け取れるかという条件です");
+  });
+
+  it.skipIf(!existsSync(sourcePath))("保存実原本の希望者申込・券の利用併用・期間表記も対象を捏造せず表示する", () => {
+    const bytes = readFileSync(sourcePath);
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe("02463516456db0f942021b56ebc22a57706281b68ce048fc67456fc7aeeca625");
+    const rows = (JSON.parse(bytes.toString()) as { rows: SourceRow[] }).rows;
+    expect(rows).toHaveLength(7716);
+    const groups = [...new Map(rows.map(row => [`${row.stockCode}\0${row.description}`, row])).values()];
+    const optionalApplications = groups.filter(row => /(?:希望|希望者|希望する株主)[\s\S]{0,40}(?:申[し込込み]+|応募)/.test(row.description));
+    const useCombination = groups.filter(row => /(?:割引|クーポン|優待券|買物券|食事券)[\s\S]{0,45}併用/.test(row.description));
+    const periodCandidates = groups.filter(row => !/保有|株主名簿|株主番号/.test(row.description) && /(?:[0-9]+|半)(?:年|か月|ヶ月|カ月|ヵ月)(?:以上|未満|以下|超)/.test(row.description.normalize("NFKC")));
+    expect(optionalApplications.length).toBeGreaterThan(0);
+    expect(useCombination.length).toBeGreaterThan(0);
+    expect(periodCandidates.length).toBeGreaterThan(0);
+    for (const row of [...optionalApplications, ...useCombination, ...periodCandidates]) {
+      const facts = buildPublicBenefitFacts({ code: row.stockCode, description: row.description,
+        context: { minShares: [row.minShares], recordMonths: [row.recordMonth] }, fetchedAt: null, batchFetchedAt: null });
+      const html = renderBenefitFacts(facts, null);
+      if (facts.application) expect(html).toContain("記載あり（必要性・対象は掲載元で確認）");
+      if (facts.combination !== "unverified") expect(html).toContain("対象未確認");
+      if (facts.holdingPeriods.length > 0) expect(html).toContain("掲載の期間表記");
+      expect(html).not.toContain("/ 申込・応募: 必要");
+      expect(html).not.toContain(row.description);
+      expect(facts.source.officialStatus).toBe("not_verified");
+    }
+  });
 });
