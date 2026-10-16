@@ -1,9 +1,10 @@
 /** schema移行の保全と原表資格後の書込境界。原文をfixtureへ複製しない。 */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import type { ShareholdingsExtraction, ShareholdingsNotApplicable } from "../../../services/yuho-quant/src/services/edinet/shareholdings.js";
 import { parseShareholdingsData, verifySavedHoldingsSource } from "../../../services/yuho-quant/src/services/edinet/shareholdings.js";
-import { HoldingPriceIssuerMismatch, HoldingsPriceIndex, qualifyHoldingValuation } from "../../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js";
+import { HoldingPriceIssuerMismatch, HoldingPriceShareBasisMismatch, HoldingsPriceIndex, qualifyHoldingValuation } from "../../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js";
 import { queryUniqueRow, recordPrimaryData } from "./archive.js";
 import { notionRequest } from "./client.js";
 import { verifyArchivedAttachments } from "./readback.js";
@@ -13,6 +14,7 @@ import { applyHoldingsSchema, buildHoldingsSchemaPatch, HOLDINGS_DESCRIPTION, LE
 vi.mock("../../../services/yuho-quant/src/services/edinet/shareholdings.js", () => ({ parseShareholdingsData: vi.fn(), verifySavedHoldingsSource: vi.fn(() => ({ status: "verified", filename: "structural.xbrl" })) }));
 vi.mock("../../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js", async importOriginal => ({
   HoldingPriceIssuerMismatch: (await importOriginal<typeof import("../../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js")>()).HoldingPriceIssuerMismatch,
+  HoldingPriceShareBasisMismatch: (await importOriginal<typeof import("../../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js")>()).HoldingPriceShareBasisMismatch,
   HoldingsPriceIndex: vi.fn(function () {}),
   parseHoldingsCodeList: vi.fn(() => ({ asOf: "2026-06-30", byLegalName: new Map() })), qualifyHoldingValuation: vi.fn(),
 }));
@@ -780,7 +782,7 @@ describe("原本完了とは独立した保存価格queue", () => {
     const shouldStop = () => false;
     const result = await resumePendingShareholdingsPrices({ maxRows: 100, shouldStop, budget: budget(), loadSources: loader });
     expect(result).toEqual({ usedRows: 1, resumed: 1, held: 0, pending: false });
-    expect(loader).toHaveBeenCalledWith(extraction.holdings, budget(), shouldStop);
+    expect(loader).toHaveBeenCalledWith(extraction.holdings, budget(), shouldStop, source.fiscalYearEnd);
     const patch = vi.mocked(notionRequest).mock.calls.find(([method, path]) => method === "PATCH" && path === rowPath)![2] as { properties: Record<string, unknown> };
     expect(patch.properties).toMatchObject({ "株価": { number: 100 }, "保有時価": { number: 1200 }, "価格照合済": { checkbox: true } });
     for (const name of ["保有株数", "帳簿価額（円）", "出典原本SHA256", "原本照合済", "Name"]) expect(patch.properties).not.toHaveProperty(name);
@@ -813,6 +815,27 @@ describe("原本完了とは独立した保存価格queue", () => {
     expect(restartInfo(saved[`/pages/${args.archivePageId}`], "保有価格")).toEqual(restartInfo(sourceBefore, "保有価格"));
     for (const name of ["保有明細状態", "保有明細理由", "保有明細再開情報"]) expect((saved[`/pages/${args.archivePageId}`] as Record<string, unknown>)[name]).toEqual(sourceBefore[name]);
     for (const [path, row] of Object.entries(rowsBefore)) if (path !== `/pages/${args.archivePageId}`) expect(saved[path]).toEqual(row);
+  });
+
+  it("実1798の市場3/30・法的4/1・FY3/31分割前株数はunknownより前にHOLDし全価格/旧cursorを保持する", async () => {
+    const issuer = JSON.parse(readFileSync(new URL("../../../services/yuho-quant/src/tests/fixtures/holdings-split-1798/qualified-evidence.json", import.meta.url), "utf8"));
+    const sourceBefore = await seedPublishedSource(), rowsBefore = structuredClone(saved);
+    const mismatch = new HoldingPriceShareBasisMismatch({ symbol: "1798.T", fiscalYearEnd: "2026-03-31", marketExDate: "2026-03-30",
+      priceCapturedAt: issuer.priceCapturedAt, priceBodySha256: "62ad3b17c528bb5e89ae781746f350932da60a9152992d53b13fc5bfdc2914ef", issuer, basis: issuer.preSplitFiscalYearBasis });
+    vi.mocked(qualifyHoldingValuation).mockRejectedValue(mismatch); vi.mocked(notionRequest).mockClear();
+    expect(await resumePendingShareholdingsPrices({ maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: async () => ready }))
+      .toEqual({ usedRows: 0, resumed: 0, held: 1, pending: false });
+    const mutations = vi.mocked(notionRequest).mock.calls.filter(([method, path]) => method === "PATCH" || method === "POST" && path === "/pages");
+    expect(mutations).toHaveLength(1); expect(mutations[0][1]).toBe(`/pages/${args.archivePageId}`);
+    expect(JSON.stringify(mutations)).not.toContain("実行中（結果未確定）");
+    expect(saved[`/pages/${args.archivePageId}`]).toMatchObject({ "保有価格状態": { select: { name: "要確認" } } });
+    expect(restartInfo(saved[`/pages/${args.archivePageId}`], "保有価格")).toEqual(restartInfo(sourceBefore, "保有価格"));
+    for (const name of ["保有明細状態", "保有明細理由", "保有明細再開情報"]) expect((saved[`/pages/${args.archivePageId}`] as Record<string, unknown>)[name]).toEqual(sourceBefore[name]);
+    for (const [path, row] of Object.entries(rowsBefore)) if (path !== `/pages/${args.archivePageId}`) expect(saved[path]).toEqual(row);
+    // Same prose with an untyped transport/source error remains an unknown latch; no catch-all reclassification.
+    saved = structuredClone(rowsBefore); vi.mocked(qualifyHoldingValuation).mockRejectedValue(new Error(mismatch.message));
+    await expect(resumePendingShareholdingsPrices({ maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: async () => ready })).rejects.toThrow("期末株数");
+    expect(saved[`/pages/${args.archivePageId}`]).toMatchObject({ "保有価格状態": { select: { name: "実行中（結果未確定）" } } });
   });
 
   it("全価格資格後にも公式英字名の最新doc変更を事前HOLDし価格書込0を守る", async () => {

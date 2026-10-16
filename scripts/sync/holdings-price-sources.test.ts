@@ -77,6 +77,27 @@ describe("通常Nodeの保存価格loader", () => {
       expect(await createHoldingPriceSourceLoader()([holding],budget())).toMatchObject({ status: "held", reasonCode: "issuer_source_unavailable" });
     } finally { factory.mockRestore(); }
   });
+  it("canonical一致でもsplit観測だけ既存issuer loaderを使い、期末後splitの既知保留には追加issuer GET0", async () => {
+    const changed = JSON.parse(raw.toString());
+    changed.chart.result[0].events = { splits: { split: { date: Date.parse("2026-10-01T00:00:00Z") / 1000, numerator: 5, denominator: 1 } } };
+    const body = Buffer.from(JSON.stringify(changed)), observed = { ...member, bodyBase64: body.toString("base64"), sha256: hash(body), byteLength: body.length };
+    const compressed = gzipSync(Buffer.from(JSON.stringify({ version: 1, members: [observed] }))), savedFile = file("b", "raw.json.gz", compressed);
+    vi.mocked(readActivatedPriceSnapshot).mockResolvedValue({ ...active, members: { "7203.T": { ...active.members["7203.T"], file: savedFile, bodySha256: observed.sha256, bodyBytes: body.length } } });
+    vi.mocked(notionRequest).mockImplementation(async (_method, path) => page(path.endsWith(codeFile.archivePageId) ? codeFile : savedFile) as never);
+    vi.mocked(downloadArchivedFile).mockImplementation(async saved => saved.name === codeFile.filename ? zip : compressed);
+    const checkCurrent = vi.fn(async () => ({ status: "verified" as const }));
+    const readNames = vi.fn(async () => ({ status: "ready" as const, names: new Map(), checkCurrent }));
+    const factory = vi.spyOn(issuerNames, "createHoldingOfficialNamesLoader").mockReturnValue(readNames);
+    try {
+      const loader = createHoldingPriceSourceLoader(), limit = budget(), shouldStop = () => false;
+      expect((await loader([holding], limit, shouldStop, "2026-10-01")).status).toBe("ready");
+      expect(readNames).toHaveBeenLastCalledWith([{ identity: expect.objectContaining({ code: "7203" }), priceCapturedAt: member.receivedAt }], limit, shouldStop);
+      expect((await loader([holding], limit, shouldStop, "2026-09-30")).status).toBe("ready");
+      expect(readNames).toHaveBeenLastCalledWith([], limit, shouldStop);
+      expect(downloadArchivedFile).toHaveBeenCalledTimes(2);
+    } finally { factory.mockRestore(); }
+  });
+
   it("active無し・予算不足はheld、必要setを部分取得して価格原本不在へ変換しない", async () => {
     vi.mocked(readActivatedPriceSnapshot).mockResolvedValueOnce(null);
     expect(await createHoldingPriceSourceLoader()([holding], budget())).toMatchObject({ status: "held", reasonCode: "snapshot_unavailable" });

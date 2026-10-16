@@ -119,9 +119,9 @@ describe("保有明細の期末参考時価", () => {
     expect((await qualify(source({ priceDate: "2026-06-29" }))).status).toBe("unavailable");
     expect((await qualify(source({ duplicate: true }))).status).toBe("unavailable");
   });
-  it("期末後のsplitはHOLDし、期末前のsplitで当期株数を二重調整しない", async () => {
+  it("期末後のsplitも、法的日付/株数単位が未確認の期末前splitも補正せず保留する", async () => {
     expect((await qualify(source({ splitDate: "2026-07-01" }))).status).toBe("unavailable");
-    expect((await qualify(source({ splitDate: "2026-06-29" }))).status).toBe("qualified");
+    expect(await qualify(source({ splitDate: "2026-06-29" }))).toMatchObject({ status: "unavailable", reason: expect.stringContaining("法的分割日") });
   });
   it("split要求根拠・通貨・英字商号・SHAが不一致ならSTOP", async () => {
     await expect(qualify(source({ eventsQuery: false }))).rejects.toThrow();

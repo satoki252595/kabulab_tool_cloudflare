@@ -1,0 +1,67 @@
+{
+  "provenance": "Exact retained issuer/owner ZIP and complete original price gzip; no synthesized data or live fetch.",
+  "issuer": {
+    "source": {
+      "docId": "S100YDA3",
+      "stockCode": "1798",
+      "edinetCode": "E00251",
+      "fiscalYearEnd": "2026-03-31"
+    },
+    "ownerName": "株式会社守谷商会",
+    "archivePageId": "3e1d74ff-84cd-81f2-be52-d98f1f92baca",
+    "zipSha256": "01d2c3b0046b1b1e99d300155629fb604104f350ef8cb9608b14cdc5e0974e0c",
+    "metadata": {
+      "docID": "S100YDA3",
+      "edinetCode": "E00251",
+      "secCode": "17980",
+      "filerName": "株式会社守谷商会",
+      "docTypeCode": "120",
+      "docDescription": "有価証券報告書－第72期(2025/04/01－2026/03/31)",
+      "periodStart": "2025-04-01",
+      "periodEnd": "2026-03-31",
+      "submitDateTime": "2026-06-18 13:02",
+      "parseStatus": "no_order_table",
+      "honbunFile": "XBRL/PublicDoc/0102010_honbun_jpcrp030000-asr-001_E00251-000_2026-03-31_01_2026-06-18_ixbrl.htm",
+      "factCount": 0,
+      "overseasParseStatus": "no_overseas_table",
+      "overseasHonbunFile": null,
+      "overseasFactCount": 0,
+      "textParseStatus": "ok",
+      "textSectionCount": 35,
+      "xbrlUnavailable": false
+    },
+    "fetchedAt": "2026-06-18T13:02:00.000+00:00"
+  },
+  "owner": {
+    "source": {
+      "docId": "S100YILN",
+      "stockCode": "1799",
+      "edinetCode": "E00250",
+      "fiscalYearEnd": "2026-03-31"
+    },
+    "ownerName": "第一建設工業株式会社",
+    "zipSha256": "91730bbd2194014df2d442376647adfe3bff10ee653d9074c83a97019cabb4e9"
+  },
+  "price": {
+    "archivePageId": "3efd74ff-84cd-810b-b009-ea2137d74d02",
+    "filename": "yahoo-raw-37202207552.1-vwap-daily-60-part-0.json.gz",
+    "gzipSha256": "4b8e37e6231db3cdec8f3f7850b0959ce7cf9bf85dee47de25153a4ea9563b2c",
+    "gzipBytes": 1437010
+  },
+  "member": {
+    "symbol": "1798.T",
+    "receivedAt": "2026-10-04T12:30:38.912Z",
+    "sha256": "62ad3b17c528bb5e89ae781746f350932da60a9152992d53b13fc5bfdc2914ef",
+    "byteLength": 188565
+  },
+  "sourcePointers": [
+    "https://www2.jpx.co.jp/disc/17980/140120260209551207.pdf",
+    "https://www.jpx.co.jp/english/markets/statistics-equities/monthly/vk0khi000001acd3-att/17_kenri2603.pdf"
+  ],
+  "limits": "Web pointers are research only; legal/pre-split statement evidence is original issuer ZIP. No price factor correction or production price acceptance.",
+  "codeList": {
+    "archivePageId": "3f8d74ff-84cd-8188-9724-c64cf81e15e8",
+    "filename": "Edinetcode-20261014.zip",
+    "sha256": "f65840ce54b4817583d02669cfbba8cbabf66d2225400a6ec0ee890450b86b0b"
+  }
+}

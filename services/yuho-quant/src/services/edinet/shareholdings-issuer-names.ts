@@ -3,14 +3,17 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { exactLegalName, type ArchivedSource, type ListedIdentity } from "./shareholdings-valuation.js";
 import { verifySavedHoldingsSource, type ShareholdingsSource } from "./shareholdings.js";
-import { unzip } from "./zip.js";
+import type { ZipEntries } from "./zip.js";
 import { stripHtml } from "./text-sections.js";
+import { observePreSplitFiscalYearBasis, type PreSplitFiscalYearBasis } from "./shareholdings-split-basis.js";
 
 export interface OfficialIssuerEnglishName {
   code: string; edinetCode: string; corporateNumber: string; legalName: string; englishName: string;
   source: ShareholdingsSource; archivePageId: string; zipSha256: string; filename: string; memberSha256: string;
   submittedAt: string; filingDate: string; fetchedAt: string; priceCapturedAt: string;
   contextRef: "FilingDateInstant";
+  /** Same verified issuer ZIP. Absence is unknown, never proof of split absence. */
+  preSplitFiscalYearBasis?: PreSplitFiscalYearBasis;
 }
 export type OfficialIssuerNames = ReadonlyMap<string, OfficialIssuerEnglishName>;
 
@@ -34,9 +37,11 @@ export function qualifyOfficialIssuerEnglishName(args: {
   assert.ok(Number.isFinite(Date.parse(submittedAt)) && Number.isFinite(Date.parse(args.fetchedAt)) && Number.isFinite(Date.parse(args.priceCapturedAt)));
   assert.ok(Date.parse(`${source.fiscalYearEnd}T00:00:00+09:00`) <= Date.parse(submittedAt));
   if (Date.parse(submittedAt) > Date.parse(args.priceCapturedAt)) return { status: "held", reason: "公式英字名の提出時点が価格captureより後です" };
-  const checked = verifySavedHoldingsSource(archived.bytes, source);
+  let entries: ZipEntries | undefined;
+  const checked = verifySavedHoldingsSource(archived.bytes, source, { onVerifiedEntries: value => { entries = value; } });
   if (checked.status === "held") return checked;
-  const bytes = unzip(archived.bytes).get(checked.filename); assert.ok(bytes);
+  assert.ok(entries);
+  const bytes = entries.get(checked.filename); assert.ok(bytes);
   const xml = bytes.toString("utf8").replace(/<!--[\s\S]*?-->/g, "");
   const bindings = [...xml.matchAll(/\bxmlns:([A-Za-z_][\w.-]*)\s*=\s*(["'])([^"']+)\2/g)];
   const dei = bindings.filter(match => /^http:\/\/disclosure\.edinet-fsa\.go\.jp\/taxonomy\/jpdei\/\d{4}-\d{2}-\d{2}\/jpdei_cor$/.test(match[3]));
@@ -62,8 +67,10 @@ export function qualifyOfficialIssuerEnglishName(args: {
   const instants = [...contexts[0][2].matchAll(new RegExp(`<${xbrli}:instant\\b[^>]*>([^<]*)<\\/${xbrli}:instant\\s*>`, "g"))];
   assert.equal(instants.length, 1); const filingDate = instants[0][1].trim();
   assert.equal(filingDate, metadata.submitDateTime.slice(0, 10), "公式英字名のFilingDateInstantが提出日と不一致です");
+  const preSplitFiscalYearBasis = observePreSplitFiscalYearBasis(archived.bytes, source, checked.filename, entries);
   return { status: "verified", evidence: { code: identity.code, edinetCode: identity.edinetCode, corporateNumber: identity.corporateNumber,
     legalName: identity.legalName, englishName: fields.FilerNameInEnglishDEI, source, archivePageId: archived.archivePageId,
     zipSha256: archived.sha256, filename: checked.filename, memberSha256: createHash("sha256").update(bytes).digest("hex"),
-    submittedAt, filingDate, fetchedAt: args.fetchedAt, priceCapturedAt: args.priceCapturedAt, contextRef: "FilingDateInstant" } };
+    submittedAt, filingDate, fetchedAt: args.fetchedAt, priceCapturedAt: args.priceCapturedAt, contextRef: "FilingDateInstant",
+    ...(preSplitFiscalYearBasis === undefined ? {} : { preSplitFiscalYearBasis }) } };
 }
