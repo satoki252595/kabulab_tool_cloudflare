@@ -1,7 +1,7 @@
 /**
  * 最新有報の保存type1だけで現行明細を再解析する。EDINET/Yahoo GET=0。
  * prepare <limit1..50> <afterCode|START> <privateDir> [valuation-source-paths.json]
- * apply <privateDir> <maxRows1..1000> — 未確定journalがあれば停止。成功通はreceiptで再開。
+ * apply <privateDir> <maxRows1..1000> — 未確定journalがあれば停止。確定windowだけ再開。
  */
 import "dotenv/config";
 import assert from "node:assert/strict";
@@ -91,10 +91,10 @@ export async function applyLatestHoldings(dir: string, maxRows: number): Promise
   assert.equal(plan.version, 1);
   assert.equal(plan.parserSourceSha256, PARSER_SOURCE_SHA256, "旧parser planは未受入です。保存ZIPから再準備してください");
   assertParserSourceUnchanged();
-  // fresh最新文書集合を一度読む。prepare後の新有報へ古い計画を適用しない。
-  const fresh = await selectLatestHoldingsDocuments(createD1HttpDb(schema), plan.selection);
+  const db = createD1HttpDb(schema);
   const evidence = valuationSources(plan.valuationPath);
-  const result = await guardedHoldingsMutation(join(dir, `apply-${Date.now()}.json`), "latest-saved-holdings", async () => {
+  const runId = Date.now();
+  const result = await guardedHoldingsMutation(join(dir, `apply-${runId}.json`), "latest-saved-holdings", async () => {
     if (evidence) for (const source of [evidence.codeList, ...evidence.prices]) {
       await verifyArchivedAttachments(source.archivePageId, [{ filename: source.filename, bytes: source.bytes }], "保有明細backfillの価格/同定原本");
     }
@@ -102,14 +102,33 @@ export async function applyLatestHoldings(dir: string, maxRows: number): Promise
     for (const item of plan.items) {
       assert.equal(item.parserSourceSha256, PARSER_SOURCE_SHA256, "item parser SHA不一致");
       assertParserSourceUnchanged();
-      const latest = fresh.rows.find(row => row.stockCode === item.source.stockCode);
-      assert.equal(latest?.docId, item.source.docId, "最新有報が準備時から変化しました。再準備してください");
       const receipt = join(dir, `${item.source.stockCode}-${item.source.docId}.published.json`);
-      if (existsSync(receipt)) { assert.equal(read(receipt).result.status, "published"); continue; }
+      if (existsSync(receipt)) {
+        const previous = read(receipt);
+        assert.deepEqual(previous.source, item.source); assert.equal(previous.zipSha256, item.zipSha256);
+        assert.equal(previous.result.status, "published"); assert.notEqual(previous.result.pending, true, "旧完了receiptに未完windowがあります。読取照合が必要です");
+        continue;
+      }
+      const heldReceipt = join(dir, `${item.source.stockCode}-${item.source.docId}.held.json`);
+      if (existsSync(heldReceipt)) {
+        const previous = read(heldReceipt);
+        assert.deepEqual(previous.source, item.source); assert.equal(previous.zipSha256, item.zipSha256);
+        assert.equal(previous.result.status, "held"); assert.notEqual(previous.result.pending, true);
+        held++; continue;
+      }
       if (item.status !== "ready") { held++; continue; }
-      if (usedRows + item.parsedRows > maxRows) { pending++; continue; }
+      if (usedRows === maxRows) { pending++; continue; }
       assert.ok(item.zipPath && item.zipSha256 && item.archivePageId);
       const zip = readFileSync(item.zipPath); assert.equal(hash(zip), item.zipSha256);
+      const assertLatest = async () => {
+        const fresh = await selectLatestHoldingsDocuments(db, plan.selection);
+        const latest = fresh.rows.find(row => row.stockCode === item.source.stockCode);
+        assert.ok(latest, "対象銘柄が最新有報集合から消えています");
+        assert.deepEqual({ docId: latest.docId, stockCode: latest.stockCode, edinetCode: latest.edinetCode, fiscalYearEnd: latest.fiscalYearEnd },
+          item.source, "最新有報・発行体・期末が準備時から変化しました。再準備してください");
+        assert.equal(latest.ownerName, item.ownerName, "提出会社名が準備時から変化しました。再準備してください");
+      };
+      await assertLatest();
       let archivePageId = item.archivePageId;
       if (item.sourceCustody === "legacy") {
         // 非0件の適格通だけを現行keyへ移す。HOLD/0件は上で除外し、一次データを二重化しない。
@@ -133,11 +152,28 @@ export async function applyLatestHoldings(dir: string, maxRows: number): Promise
           save(custodyReceipt, { observedAt: new Date().toISOString(), zipSha256: item.zipSha256, result: recorded });
         }
       } else await verifyArchivedAttachments(archivePageId, [{ filename: edinetArchiveFilename(item.source.docId, 1), bytes: zip }], "保有明細backfillの保存type1");
+      // 原本の物理読戻し中に新有報へ切り替わった場合も、公開前に止める。
+      await assertLatest();
+      const windowRows = Math.min(100, maxRows - usedRows);
       const result = await publishVerifiedShareholdings({ source: item.source, ownerName: item.ownerName, zip,
-        archivePageId, maxRows: item.parsedRows, valuationSources: evidence });
-      assert.equal(result.status, "published", "準備時に適格だった明細が未完了です");
-      usedRows += item.parsedRows; published++;
-      save(receipt, { observedAt: new Date().toISOString(), source: item.source, zipSha256: item.zipSha256, result });
+        archivePageId, maxRows: windowRows, valuationSources: evidence });
+      const proof = { observedAt: new Date().toISOString(), source: item.source, zipSha256: item.zipSha256, result };
+      if (result.status === "held") {
+        if (result.pending === true) {
+          assert.ok(Number.isSafeInteger(result.usedRows) && result.usedRows! > 0 && result.usedRows! <= windowRows);
+          usedRows += result.usedRows!; pending++;
+          save(join(dir, `${item.source.stockCode}-${item.source.docId}.window-${runId}.json`), proof);
+        } else { held++; save(heldReceipt, proof); }
+        continue;
+      }
+      assert.ok(Number.isSafeInteger(result.parsed) && result.parsed >= 0 && result.parsed <= windowRows);
+      usedRows += result.parsed;
+      if (result.pending === true) {
+        assert.ok(result.parsed > 0);
+        pending++; save(join(dir, `${item.source.stockCode}-${item.source.docId}.window-${runId}.json`), proof); continue;
+      }
+      published++;
+      save(receipt, proof);
     }
     return { usedRows, published, held, pending, upstreamRequests: 0 };
   });
