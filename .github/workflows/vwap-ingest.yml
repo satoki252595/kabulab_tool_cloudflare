@@ -96,7 +96,8 @@ jobs:
       NOTION_MAX_RPS: "1.6"
       # Yahoo取得は直列。初回429/503・custody失敗は後続取得/PUTを停止する。
       CONC: "1"
-      DELAY_MS: "300"
+      # 実HTTP開始は共有clientの1000ms間隔へ集約し、銘柄ごとの二重待機を足さない。
+      DELAY_MS: "0"
       # 取込 knob の通常値 (必須宣言。コード側に黙示既定なし)。
       MAX_RATE_LIMIT: "1"
       KEEP_DAYS: "365"

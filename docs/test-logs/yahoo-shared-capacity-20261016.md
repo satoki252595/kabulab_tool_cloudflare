@@ -122,12 +122,54 @@ stockの他macro/overlay/追加保管、全量intraの未観測part、uploadの�
 
 `Yahoo側1.6 + 非Yahoo1.0 + 背景予約0.3 = 2.9` は**予算表であり、背景の実上限制御ではない**。現在の背景処理は0.3rpsに自動制限されていないため、ワークスペース全processの合計<=3rpsを保証しない。広範なschedule/timeout変更や新broker/DOをこの問題の代用にはしていない。初期配分の全量runtime/料金・背景実数は次の正常全量で受け入れ、未観測の全量正常稼働はHOLDのまま扱う。
 
+## 10年取得と追加待機の監査（10/17追記）
+
+通常dailyには既にsource前skipがある。保存R2の`completedFetch`について同じ明示10年窓・
+確定対象日・原SHA・全採用OHLCVのSHA・独立session・NULL行会計が一致すると、銘柄のYahoo取得を
+省く（R2読取は必要）。未完/不正/旧証跡ではskipしない。同じsession内のvendor訂正はこのskipでは
+自動追跡せず、明示別scopeで扱う。新しい取引日は10yを1社1回取得し、窓内の旧日付がfreshに
+欠ける場合はHOLDして旧barsを保護する。日付ごとの再開はこの既存境界を使う。
+
+VWAPの価格基準は受領quote OHLCV（価格は小数2桁）で、adjcloseは金融入力に使わず、ローカルの
+権利係数も適用しない。split/div原値と同日訂正のversionは別途保持する。新sessionの10y全置換は
+過去のvendor quote修正も反映するため、1moだけの差分取得へ変えると現契約が変わる。
+増資等のYahoo未提供権利をここで対応済みにしたり、adjcloseでquoteを埋めたりしない。
+
+今回の最小変更はworkflowの`DELAY_MS`だけを300から0へ変更する。source本体・CONC=1・共通job排他・
+Yahoo実開始1000ms・初回制限STOP・原本保管・同一session/全置換・17:10/23:30 guardは維持する。
+daily 10y、intra range/明示window、^N225 sessionはすべて`yahooFetch`→`pacedYahooFetch`→
+`fetchYahooWithSpacing`を通る。Nodeのproxy送信も、Workerの`yahooFetchDirect`による認証page/crumb・
+401再認証/再GETも同じ実開始制御に通り、producer追加待機に依存するsourceは見つからなかった。
+制御はprocess/isolate内であり、別jobの排他は既存`yahoo-source` groupに依存する。
+
+削除するtimerの全量上限は`2×3687×300ms = 36.87分`だが、実短縮の下限は0である。
+HTTP/R2/計算が速い場合は共通1000ms待機が300msを吸収し、長い場合だけ一部または全部が余分になる。
+以下は保存済み200件のwrapper時計からの条件計算であり、変更後の実測ではない。
+
+| 保存pilot | source intent間隔99件の最小/中央値 | 応答所要100件の中央値 | 条件付きgap短縮上限 |
+|---|---:|---:|---:|
+| 最初100 | 999/1001ms | 500ms | 2.341秒 |
+| 次100 | 1000/1001ms | 370ms | 2.113秒 |
+
+上限は各gapで`min(300,max(0,gap−1000))`を合計した固定所要の比較で、最初の1件・外部遅延の変化を
+含めない。wrapper intentはclient admissionの直後の時計で、1msの記録差や上流wire時計を同一視しない。
+pilot時の`DELAY_MS`はenv snapshotがなく不明、現在の.env SHAも当時と異なるため、300msだったと
+仮定して実短縮を主張しない。通常workflowの旧300msだけが確定値である。従って36.87分を先の
+384.34分から引いて完走を予測しない。次の正常全量で実notionStats・全phase時間・全件受入を確認する。
+
+追加待機変更のローカル検証は同じNix/Nodeで4 suites35 PASS、tsc/lint/diff PASS。
+実client/実spacingを使い、producer待機なしの認証page/crumb/401再認証/再GETを全6発信各1000ms、
+daily/intra/window/session等の待機後期限STOPを既存回帰で確認した。source/業務通信0。
+
 ## 証跡
 
 生ログ・原本・秘密はGitへ入れない。ローカルprivate集計は `tmp/feature-audit-20261016/yahoo-capacity-offline-v1/result.json`、SHA-256 `133daec518a4afd01249bb46fd8ee674f46852e2939ba4016fc24cc22481c50e`。
 観測要求数の再計算は同dir `observation-counts-v1.json`、SHA-256 `bc0a64097d32bf9fdd9aec5fe7314124c80978f7a71bcbbd345d30a8eb67afa1`。ともに本番通信0で保存logから導出した条件記録である。
 原本保管の独立集計は同dir `custody-rate-result-v1.json`、SHA-256 `f0b32e3c565b12b0ef5353e062437f9592e639ab57665250d36d8daffc876b14`。
 再計算helper `custody-rate-count-v1.mjs` のSHA-256は `9b567af37a0ba762486e7068219e93aee1a200704df475312855c2da3dcecebd`。
+追加待機の保存時計集計は `tmp/feature-audit-20261017/vwap-delay-offline-v1/result.json`、
+SHA-256 `69240afd5fc4af4089a369b1d91040fdf12982e1dda4f8b4d2b4a14aa9392165`。
+同dirの再計算helper `count.mjs` は `2def9f062f6632f30c5a98c67369523b2473cd1f0c04368f889347b052054c74`。
 
 | 保存済み入力 | SHA-256 |
 |---|---|
