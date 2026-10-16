@@ -33,3 +33,17 @@ nix develop --offline -c pnpm lint
 ```
 
 本番D1の有限old/new SELECT比較と`rows_read`測定、次の通常prepareは別途受入する。保存latest応答の既観測171,301読取行を、新SQLの実測値へ置き換えてはいない。大量保有明細の実公開、原本・価格のHOLD解消、権利処理の完了もこの変更の受入範囲には含めない。
+
+## 既存索引を使う走査の固定
+
+続く本番の単発2 SELECT（同じ`afterCode=145A, limit=20`）は、旧全履歴171,241行/400.8285msから、#448の候補限定83,678行/95.7946msへ減った。21行の全列・順序、20行の選択と`more`が一致し、書込は0。元nativeと旧作業treeは`.runtime/holdings-prepare-sql/source-v1/tmp/holdings-prepare-paired-read-v2/`へ不変保存する。これだけでは127 prepareの読取が約1,063万行になる条件を解消できない。
+
+そこで、既存DDL `0000_clean_tag.sql`の`core_stocks_code_unique`を候補の`INDEXED BY`で指定し、外側stock結合を`NOT INDEXED`にする。後者もINTEGER PRIMARY KEYのrowid検索は許される。選択条件・順位・束縛値・通信数は変えない。DrizzleでSQL table fragmentを使うため、その2列の射影を同じ型のSQL式にする。索引欠落時にはprepareが失敗し、別計画・別問い合わせで補完しない。
+
+これは、[SQLite公式仕様](https://www.sqlite.org/lang_indexedby.html)が通常の最適化用hintとは区別する、実測済みの計画の固定である。索引名をschema契約にするため、本番の索引存在と実行計画を別の有限readで確認するまでmergeしない。DDL追加は不要。
+
+基準main `117b213394593b67199af738227101e25b15cb7b`の#448関数と、変更した通常関数を、同じ保存2,945株/30,569文書へ直接実行した。SQLの文字列置換をしない通常関数の3,170条件、全20/50件ページ、全`onlyCode`で全出力・時刻・`more`が一致。生成SQLは先行private案と完全一致した。`.runtime/holdings-prepare-code-index/source-v1/tmp/code-index-normal-v3/`の`result.json` SHA256は`2c07574a653b7d197eab319d35e2115c9cc8460f836048a8c3f1b5241fb86865`、`queries.json`は`83e353fb39e0bb2fff9a42535acb4900c16d4bed441878074eb0f6b874fda9a5`。原SQLiteの全SHAは前後不変で、HTTP/本番writeは0。
+
+同じ生成SQLのローカル5回中央値は2.171ms→0.231ms、概算VM命令140,000→19,000。候補は`core_stocks_code_unique (code>?)`で検索し、外側は`INTEGER PRIMARY KEY (rowid=?)`検索になる。両方のactive索引全株走査が消える。測定JSON SHA256は`1f47d3ab6a4d2ed76d8d3108794c04eed311bb0239bd0e8dc3b847bc7507a8e6`。この部分集合での測定を、本番`rows_read`や全量の時間へ換算しない。
+
+回帰では本番と同名のcode UNIQUE索引を使い、rowid検索、active全株索引走査の不在、索引欠落時の1問い合わせだけの失敗を確認。既存選択回帰・型検査・lintはPASS。本番は`PRAGMA index_list(core_stocks)`と基準/変更SQLの`EXPLAIN QUERY PLAN`各1回の計3 readを別releaseで行い、実行計画・索引が資格を満たさなければ停止する。実際の新SQLの`rows_read`測定と次の通常prepareは引き続き別受入とする。

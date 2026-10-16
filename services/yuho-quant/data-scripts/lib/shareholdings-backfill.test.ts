@@ -6,7 +6,8 @@ import { selectLatestHoldingsDocuments } from "./shareholdings-backfill.js";
 describe("保有明細backfillの最新有報選択", () => {
   it("最新会計期末を優先し、同一期末の訂正を日時/PKで確定、active普通株の母集団とcursorを守る", async () => {
     const sqlite = new DatabaseSync(":memory:");
-    sqlite.exec(`CREATE TABLE core_stocks (id INTEGER PRIMARY KEY, code TEXT UNIQUE, is_active INTEGER, instrument_type TEXT);
+    sqlite.exec(`CREATE TABLE core_stocks (id INTEGER PRIMARY KEY, code TEXT, is_active INTEGER, instrument_type TEXT);
+      CREATE UNIQUE INDEX core_stocks_code_unique ON core_stocks (code);
       CREATE TABLE yuho_documents (id INTEGER PRIMARY KEY, stock_id INTEGER, doc_id TEXT, edinet_code TEXT, filer_name TEXT, period_end TEXT, submitted_at INTEGER, doc_type_code TEXT);
       CREATE INDEX idx_core_stocks_active_market ON core_stocks (is_active);
       CREATE INDEX yuho_documents_stock_idx ON yuho_documents (stock_id);
@@ -35,6 +36,9 @@ describe("保有明細backfillの最新有報選択", () => {
       const plan = sqlite.prepare(`EXPLAIN QUERY PLAN ${queries[0].sql}`).all(...queries[0].params as never[]) as Array<{ detail: string }>;
       expect(plan.some(row => row.detail.includes("SEARCH yuho_documents USING INDEX yuho_documents_stock_idx (stock_id=?)"))).toBe(true);
       expect(plan.some(row => /^SCAN yuho_documents\b/.test(row.detail))).toBe(false);
+      expect(plan.some(row => row.detail.includes("USING INDEX core_stocks_code_unique"))).toBe(true);
+      expect(plan.some(row => row.detail.includes("SEARCH core_stocks USING INTEGER PRIMARY KEY (rowid=?)"))).toBe(true);
+      expect(plan.some(row => row.detail.includes("idx_core_stocks_active_market"))).toBe(false);
       const next = await selectLatestHoldingsDocuments(db, { afterCode: "1001", limit: 50 });
       expect(next.more).toBe(false);
       expect(next.rows.map(row => [row.stockCode, row.docId])).toEqual([["1006", "S100ACTIVE"]]);
@@ -59,6 +63,13 @@ describe("保有明細backfillの最新有報選択", () => {
       for (const onlyCode of ["INVALID", " 1001 ", null, 1001]) {
         await expect(selectLatestHoldingsDocuments(db, { afterCode: null, limit: 50, onlyCode: onlyCode as string })).rejects.toThrow();
       }
+      // 必須索引の欠落時は同じ1 SQLが失敗し、代替問い合わせを送らない。
+      sqlite.exec("DROP INDEX core_stocks_code_unique");
+      const beforeMissingIndex = queries.length;
+      await expect(selectLatestHoldingsDocuments(db, { afterCode: null, limit: 20 })).rejects.toMatchObject({
+        cause: { message: "no such index: core_stocks_code_unique" },
+      });
+      expect(queries).toHaveLength(beforeMissingIndex + 1);
     } finally { sqlite.close(); }
   });
 });
