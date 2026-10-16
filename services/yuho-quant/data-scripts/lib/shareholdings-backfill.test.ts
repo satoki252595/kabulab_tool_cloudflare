@@ -27,8 +27,25 @@ describe("保有明細backfillの最新有報選択", () => {
       const next = await selectLatestHoldingsDocuments(db, { afterCode: "1001", limit: 50 });
       expect(next.more).toBe(false);
       expect(next.rows.map(row => [row.stockCode, row.docId])).toEqual([["1006", "S100ACTIVE"]]);
+      for (const [code, docId] of [["1001", "S100CORRECT2"], ["1006", "S100ACTIVE"]]) {
+        const scoped = await selectLatestHoldingsDocuments(db, { afterCode: null, limit: 50, onlyCode: code });
+        expect(scoped.more).toBe(false);
+        expect(scoped.rows.map(row => [row.stockCode, row.docId])).toEqual([[code, docId]]);
+      }
+      for (const code of ["1002", "1003", "1004", "1005", "1007"]) {
+        expect((await selectLatestHoldingsDocuments(db, { afterCode: null, limit: 50, onlyCode: code })).rows).toEqual([]);
+      }
+      sqlite.exec(`INSERT INTO yuho_documents VALUES
+        (10,1,'S100NEXTFY','E00001','STRUCTURAL','2027-03-31',90,'120'),
+        (11,1,'S100OTHERDOC','E00001','STRUCTURAL','2028-03-31',999,'140');`);
+      expect((await selectLatestHoldingsDocuments(db, { afterCode: null, limit: 50, onlyCode: "1001" })).rows[0].docId).toBe("S100NEXTFY");
+      sqlite.exec("UPDATE core_stocks SET is_active=0 WHERE code='1001'");
+      expect((await selectLatestHoldingsDocuments(db, { afterCode: null, limit: 50, onlyCode: "1001" })).rows).toEqual([]);
       await expect(selectLatestHoldingsDocuments(db, { afterCode: "INVALID", limit: 50 })).rejects.toThrow();
       await expect(selectLatestHoldingsDocuments(db, { afterCode: null, limit: 51 })).rejects.toThrow();
+      for (const onlyCode of ["INVALID", " 1001 ", null, 1001]) {
+        await expect(selectLatestHoldingsDocuments(db, { afterCode: null, limit: 50, onlyCode: onlyCode as string })).rejects.toThrow();
+      }
     } finally { sqlite.close(); }
   });
 });
