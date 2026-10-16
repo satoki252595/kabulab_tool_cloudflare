@@ -1,6 +1,6 @@
 /** Structural Notion responses only; no production data or network. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildEvidenceBlock, buildSupplementProperties, replaceEvidenceBlock } from "./stock-supplement.js";
+import { buildEvidenceBlock, buildSupplementProperties, replaceEvidenceBlock, SupplementWriteHeldError } from "./stock-supplement.js";
 import { NotionUnknownResultError } from "./client.js";
 import zeroWidthNative from "./fixtures/9273-s100z2z6-notion-zero-width.json";
 
@@ -77,6 +77,36 @@ const reverseKeys = (value: unknown): unknown => Array.isArray(value) ? value.ma
   ? Object.fromEntries(Object.entries(value).reverse().map(([key, entry]) => [key, reverseKeys(entry)])) : value;
 
 describe("supplement evidence two-phase replacement", () => {
+  it.each(["same", "visible-diff", "unknown"])("9273実送信表現を事前guardし、receiptだけ再資格化する (%s)", async fault => {
+    const { provenance, rawText, notionReadbackText, oldJudgeInput, writtenJudgeInput } = zeroWidthNative;
+    const metadata = buildSupplementProperties({ docId: provenance.docId, judgeInput: oldJudgeInput, tagStatus: "判定済", tagDoc: provenance.docId });
+    const current = { ...metadata, ...buildSupplementProperties({ texts: { [provenance.property]: notionReadbackText + (fault === "visible-diff" ? "X" : "") } }) };
+    const expected = { ...metadata, ...buildSupplementProperties({ texts: { [provenance.property]: rawText } }) };
+    const next = { docId: provenance.docId, judgeInput: writtenJudgeInput };
+    io.request.mockImplementation(async (method: string, path: string, body?: { properties?: Record<string, unknown> }) => {
+      if (method === "GET" && path === "/pages/row") return { id: "row", last_edited_time: "2026-10-16T17:43:00Z", properties: structuredClone(current) };
+      if (method === "GET" && path.startsWith("/blocks/row/children")) return { results: [old], has_more: false, next_cursor: null };
+      if (method === "PATCH" && path === "/pages/row") {
+        expect(body?.properties).toEqual(buildSupplementProperties(next));
+        expect(body?.properties).not.toHaveProperty(provenance.property);
+        Object.assign(current, buildSupplementProperties(next));
+        if (fault === "unknown") throw new NotionUnknownResultError("single receipt PATCH unknown");
+        return {};
+      }
+      throw new Error(`unexpected ${method} ${path}`);
+    });
+    const run = replaceEvidenceBlock("row", undefined, next, expected, guard);
+    if (fault === "visible-diff") {
+      await expect(run).rejects.toBeInstanceOf(SupplementWriteHeldError);
+      expect(io.archive).not.toHaveBeenCalled(); expect(mutations()).toEqual([]);
+    } else if (fault === "unknown") {
+      await expect(run).rejects.toBeInstanceOf(NotionUnknownResultError); expect(mutations()).toEqual(["PATCH /pages/row"]);
+    } else {
+      await expect(run).resolves.toBeUndefined();
+      await replaceEvidenceBlock("row", undefined, next, { ...expected, ...buildSupplementProperties(next) }, guard);
+      expect(io.archive).toHaveBeenCalledOnce(); expect(mutations()).toEqual(["PATCH /pages/row"]);
+    }
+  });
   it.each([false, true])("9273実native表現を照合し、可視1文字の差はunknown STOPのまま (visibleDiff=%s)", async (visibleDiff) => {
     const { provenance, rawText, notionReadbackText, oldJudgeInput, writtenJudgeInput } = zeroWidthNative;
     const oldProps = buildSupplementProperties({ docId: provenance.docId, judgeInput: oldJudgeInput, tagStatus: "判定済", tagDoc: provenance.docId });

@@ -79,7 +79,10 @@ export function qualifyPreparedCompany(latest: LatestDoc | undefined, corpusRow:
     const sync = readTextSyncReceipt(fullRow.judgeInput), judgment = readInputReceipt(fullRow.judgeInput);
     // Notionの空rich_textはpublisherがクリアしたNULL。未知の欠落列は上で拒否する。
     const textsSha256 = hash(TEXT_SECTIONS.map(({ title }) => [title, fullRow.texts[title] === "" ? null : fullRow.texts[title]]));
-    if (sync === null || sync.docId !== doc.docId || sync.textPageId !== doc.notionDocPageId || sync.textsSha256 !== textsSha256) return hold("39-text-sync-receipt-mismatch");
+    if (sync === null || sync.docId !== doc.docId || sync.textPageId !== doc.notionDocPageId) return hold("39-text-sync-receipt-mismatch");
+    if (sync.notionTextsSha256 !== undefined) {
+      if (sync.notionTextsSha256 !== textsSha256) return hold("39-text-sync-receipt-mismatch");
+    } else if (sync.textsSha256 !== textsSha256) return hold("39-text-sync-receipt-mismatch");
     if (fullRow.texts["事業の内容"].trim() === "") return hold("business-text-missing");
     const currentTagSectionsSha256 = hash(PREFILTER_SECTIONS.map(key => {
       const def = TEXT_SECTIONS.find(s => s.key === key);
@@ -87,11 +90,16 @@ export function qualifyPreparedCompany(latest: LatestDoc | undefined, corpusRow:
       return [key, fullRow.texts[def.title] === "" ? null : fullRow.texts[def.title]];
     }));
     const businessSha256 = preparedSha(fullRow.texts["事業の内容"]);
-    if (judgment !== null && (judgment.sectionsSha256 !== currentTagSectionsSha256 || judgment.businessSha256 !== businessSha256)) {
+    const rawJudgmentMatches = judgment !== null && judgment.sectionsSha256 === currentTagSectionsSha256 && judgment.businessSha256 === businessSha256;
+    const notionJudgmentMatches = judgment !== null && sync.notionTextsSha256 === textsSha256 &&
+      sync.equivalentJudgmentInputSha256 === judgment.sectionsSha256 && sync.equivalentJudgmentBusinessSha256 === judgment.businessSha256 &&
+      sync.notionSectionsSha256 === currentTagSectionsSha256 && sync.notionBusinessSha256 === businessSha256;
+    if (judgment !== null && !rawJudgmentMatches && !notionJudgmentMatches) {
       return hold("known-tag-judgment-input-changed");
     }
     return { status: "qualified" as const, docId: doc.docId, periodEnd: doc.periodEnd, textPageId: doc.notionDocPageId,
       textsSha256, fullTextValuesSha256: hash(fullRow.texts), businessSha256, currentTagSectionsSha256,
+      textSyncRepresentation: sync.notionTextsSha256 === undefined ? "legacy-raw-exact" as const : "verified-notion-representation" as const,
       tagsSha256: hash([fullRow.upstream, fullRow.downstream, fullRow.distribution]), textSyncReceipt: sync,
       historicalTagInput: judgment, historicalTagInputStatus: judgment === null ? "unverified-legacy" as const : "stored-receipt" as const };
   } catch {

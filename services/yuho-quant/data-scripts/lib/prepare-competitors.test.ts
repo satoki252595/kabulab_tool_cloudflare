@@ -176,6 +176,50 @@ it("保存された8metadata列projectionと選定snapshotだけで資格/除外
   expect(model.client).not.toHaveBeenCalled();
 });
 
+it.each(["complete", "missing-proof", "old-business-changed", "corrupt-39"])("実2社の表示境界protocol: 原4/business同値対応%sだけprepareを資格化する", async fault => {
+  await run();
+  const first = JSON.parse(gunzipSync(model.record.mock.calls[0][0].files[0].bytes).toString());
+  const row = first.fullRows.find((r: { stockCode: string }) => r.stockCode === fixture.latest[0].stockCode);
+  const { TEXT_SECTIONS } = await import("../../src/services/edinet/text-sections.js");
+  const { PREFILTER_SECTIONS } = await import("../../src/biztag/prefilter.js");
+  const { withInputReceipt, readInputReceipt, readTextSyncReceipt, withTextSyncReceipt, INPUT_RECEIPT_PREFIX } = await import("../../src/biztag/plan.js");
+  const { processStock } = await import("../../src/biztag/process.js");
+  const { CLEF_MODEL } = await import("../../../../src/shared/clef/client.js");
+  const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+  // 原文は実保存値。U+200Bの注入はCI内の表示protocol検査でありnative原本への来歴主張ではない。
+  const raw = { ...row.texts, "事業の内容": row.texts["事業の内容"] + "\u200B" } as Record<string,string>;
+  const four = PREFILTER_SECTIONS.map(key => [key, raw[TEXT_SECTIONS.find(s => s.key === key)!.title] === "" ? null : raw[TEXT_SECTIONS.find(s => s.key === key)!.title]]);
+  const old = withInputReceipt(row.judgeInput, { docId: row.docId, textPageId: fixture.latest[0].doc!.notionDocPageId!,
+    businessSha256: sha(raw["事業の内容"]), sectionsSha256: sha(JSON.stringify(four)), stateSha256: null, vocabVersion: row.vocabVersion, model: null });
+  let written: { judgeInput?: string | null } | undefined;
+  await processStock({ kind: "sync_text", stockCode: row.stockCode, companyName: row.companyName, sector33: row.sector33,
+    doc: fixture.latest[0].doc, row: { ...row, judgeInput: old }, reason: "CI表示protocolの共通producer検査" }, {
+    get vocab(): never { throw new Error("vocab judgment forbidden"); }, get thresholds(): never { throw new Error("model thresholds forbidden"); },
+    model: CLEF_MODEL, today: "2026-10-17", jevClient: { askNoul: async () => { throw new Error("model forbidden"); } },
+    resolveMasterPageId: () => null, assertLatestDocCurrent: async () => {},
+    readStockTextRow: async () => TEXT_SECTIONS.flatMap(s => raw[s.title] === "" ? [] : [{ sectionKey: s.key, itemName: s.title, text: raw[s.title] }]),
+    createSupplementRow: async () => { throw new Error("create forbidden"); }, updateSupplementRow: async () => { throw new Error("non-atomic forbidden"); },
+    replaceEvidenceBlock: async (_pageId, _evidence, input, _old, guard) => { await guard(); written = input; },
+  });
+  expect(written).toBeDefined();
+  let input = written!.judgeInput!;
+  expect(input.split(INPUT_RECEIPT_PREFIX)[1]).toBe(old.split(INPUT_RECEIPT_PREFIX)[1]);
+  expect(readTextSyncReceipt(input)!.notionTextsSha256).not.toBe(readTextSyncReceipt(input)!.textsSha256);
+  if (fault === "missing-proof") { const sync = readTextSyncReceipt(input)!; delete sync.equivalentJudgmentBusinessSha256; input = withTextSyncReceipt(input, sync); }
+  if (fault === "corrupt-39") { const sync = readTextSyncReceipt(input)!; sync.notionTextsSha256 = sync.textsSha256; input = withTextSyncReceipt(input, sync); }
+  if (fault === "old-business-changed") input = withInputReceipt(input, { ...readInputReceipt(input)!, businessSha256: sha(first.fullRows[1].texts["事業の内容"]) });
+  const property = pages[0].properties["判定入力"];
+  property.rich_text = [{ type: "text", plain_text: input, text: { content: input } }];
+  const summary = await run();
+  expect(summary.ready).toBe(fault === "complete" ? 2 : 0);
+  if (fault !== "complete") {
+    const manifest = JSON.parse(gunzipSync(model.record.mock.calls[1][0].files[0].bytes).toString());
+    expect(manifest.qualification[row.stockCode]).toMatchObject({ status: "hold", reason: fault === "corrupt-39" ? "39-text-sync-receipt-mismatch" : "known-tag-judgment-input-changed" });
+    expect(manifest.prepared[1].qids).toEqual([`cp.${row.stockCode}`]);
+  }
+  expect(model.client).not.toHaveBeenCalled(); expect(model.key).not.toHaveBeenCalled(); expect(model.gate).not.toHaveBeenCalled();
+});
+
 it("選出BのAfter世代差は元候補/qidsを保持してA HOLD、別候補へ置換しない", async () => {
   const after = structuredClone(fixture.latest); after[1].doc!.notionDocPageId = fixture.dbId;
   model.latest.mockResolvedValueOnce(structuredClone(fixture.latest)).mockResolvedValueOnce(after);

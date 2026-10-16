@@ -5,9 +5,14 @@ import { SemifUnavailableError } from "../../../../src/shared/semif/index.js";
  * オークマ 2026-03-31 期有報 S100YFQC「事業の内容」を使う。
  */
 import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import type { SupplementRow, SupplementRowInput } from "../../../../src/shared/notion-archive/index.js";
 import { type JevAskResult, type JevClient } from "../../../../src/shared/jev/index.js";
-import { INPUT_RECEIPT_PREFIX, readInputReceipt, readTextSyncReceipt, withInputReceipt, type WorkItem } from "./plan.js";
+import { INPUT_RECEIPT_PREFIX, readInputReceipt, readTextSyncReceipt, withInputReceipt, withTextSyncReceipt, type WorkItem } from "./plan.js";
+import { TEXT_SECTIONS } from "../services/edinet/text-sections.js";
+import { PREFILTER_SECTIONS } from "./prefilter.js";
+import { buildSupplementProperties } from "../../../../src/shared/notion-archive/stock-supplement.js";
 import { processStock, type ProcessDeps } from "./process.js";
 import type { LatestDoc } from "./source.js";
 import { MINI_VOCAB } from "./vocabulary/__fixtures__/mini-vocab.js";
@@ -140,6 +145,64 @@ function jevAnswering(answers: Record<string, number>): JevClient {
 }
 
 describe("processStock", () => {
+  it("9273実U+200B単一節の投影は原39 SHAを保持し、明示再資格で別送信SHAと実readbackを照合。再実行はNOOP", async () => {
+    const actual = JSON.parse(readFileSync(new URL("../../../../src/shared/notion-archive/fixtures/9273-s100z2z6-notion-zero-width.json", import.meta.url), "utf8"));
+    const sha = (x: string) => createHash("sha256").update(x).digest("hex");
+    expect(sha(actual.rawText)).toBe(actual.provenance.rawTextSha256);
+    const texts = TEXT_SECTIONS.map(({ key, title }) => [title, key === "sustainability" ? actual.rawText : null]);
+    const rawSha = sha(JSON.stringify(texts)); // 他38節は未供与のテスト投影。実有報全39の回復証明ではない。
+    const doc = docOf({ docId: actual.provenance.docId, periodEnd: actual.provenance.periodEnd, notionDocPageId: actual.provenance.textPageId });
+    const oldInput = withTextSyncReceipt(actual.oldJudgeInput, { docId: doc.docId, textPageId: doc.notionDocPageId!, textsSha256: rawSha });
+    const row = rowOf({ stockCode: actual.provenance.stockCode, docId: doc.docId, tagStatus: "判定済", judgeInput: oldInput });
+    const ask = vi.fn(), { deps, updated } = makeDeps({ jevClient: { askNoul: ask }, readStockTextRow: async () =>
+      [{ sectionKey: actual.provenance.sectionKey, itemName: actual.provenance.property, text: actual.rawText }] });
+    const item = itemOf({ stockCode: row.stockCode, doc, row, kind: "sync_text", refreshTextReceipt: true });
+    expect(await processStock(item, deps)).toMatchObject({ outcome: "updated", jevCalls: 0 });
+    const written = updated[0].input, receipt = readTextSyncReceipt(written.judgeInput)!;
+    expect(receipt.textsSha256).toBe(rawSha); expect(receipt.notionTextsSha256).not.toBe(rawSha);
+    const expected = texts.map(([title, value]) => [title, value === null ? null : String(value).replaceAll("\u200B", "")]);
+    expect(receipt.notionTextsSha256).toBe(sha(JSON.stringify(expected)));
+    expect(written.texts).toBeUndefined(); // 明示refreshは現在39本文をguardしてreceiptだけを書く。
+    const props = buildSupplementProperties({ texts: { [actual.provenance.property]: actual.rawText } });
+    const sent = (props[actual.provenance.property] as { rich_text: Array<{ text: { content: string } }> }).rich_text.map(t => t.text.content).join("");
+    expect(sent).toBe(actual.notionReadbackText); expect(sha(sent)).toBe(actual.provenance.notionReadbackTextSha256);
+    expect(readInputReceipt(written.judgeInput)).toBeNull(); expect(written.judgeInput!.startsWith(actual.oldJudgeInput)).toBe(true);
+    updated.length = 0;
+    expect(await processStock({ ...item, row: { ...row, judgeInput: written.judgeInput! } }, deps)).toMatchObject({ outcome: "skipped" });
+    expect(updated).toHaveLength(1); // 同じpublisherへ現在39 guardを渡す。実mutation NOOPは共有suiteで検証。
+    updated.length = 0; expect(ask).not.toHaveBeenCalled();
+    expect(await processStock({ ...item, row: { ...row, judgeInput: withTextSyncReceipt(actual.oldJudgeInput,
+      { docId: doc.docId, textPageId: doc.notionDocPageId!, textsSha256: actual.provenance.rawTextSha256 }) } }, deps))
+      .toMatchObject({ qualificationHeld: true, outcome: "skipped" });
+    expect(updated).toHaveLength(0);
+  });
+
+  it.each(["same", "business-diff", "four-diff"])("実オークマ原4と旧businessの%sでは証明できた対応付けだけ保存し旧判定JSONは保持", async fault => {
+    const sha = (x: string) => createHash("sha256").update(x).digest("hex");
+    const four = PREFILTER_SECTIONS.map(key => [key, key === "business" ? OKUMA_BUSINESS_TEXT : null]);
+    const old = withInputReceipt("実原文の入力来歴を固定するprotocol検査", { docId: "S100YFQC", textPageId: "notion-page-okuma",
+      businessSha256: sha(fault === "business-diff" ? KYOKUYO_BUSINESS_TEXT : OKUMA_BUSINESS_TEXT),
+      sectionsSha256: fault === "four-diff" ? sha(JSON.stringify([])) : sha(JSON.stringify(four)),
+      stateSha256: null, vocabVersion: "v1", model: null });
+    const row = rowOf({ docId: "S100YFQC", tagStatus: "判定済", judgeInput: old });
+    const { deps, updated } = makeDeps({ readStockTextRow: async () => [{ sectionKey: "business", itemName: "事業の内容", text: OKUMA_BUSINESS_TEXT }] });
+    await processStock(itemOf({ kind: "sync_text", row }), deps);
+    const written = updated[0].input, sync = readTextSyncReceipt(written.judgeInput)!;
+    expect(written.judgeInput!.split(INPUT_RECEIPT_PREFIX)[1]).toBe(old.split(INPUT_RECEIPT_PREFIX)[1]);
+    expect(sync.notionTextsSha256).toBeDefined();
+    if (fault === "same") {
+      expect(sync.equivalentJudgmentInputSha256).toBe(readInputReceipt(old)!.sectionsSha256);
+      expect(sync.equivalentJudgmentBusinessSha256).toBe(readInputReceipt(old)!.businessSha256);
+      expect(sync.notionSectionsSha256).toBe(readInputReceipt(old)!.sectionsSha256);
+      expect(sync.notionBusinessSha256).toBe(readInputReceipt(old)!.businessSha256);
+    } else {
+      expect(sync.notionSectionsSha256).toBeUndefined(); expect(sync.notionBusinessSha256).toBeUndefined();
+      const refreshed = itemOf({ kind: "sync_text", refreshTextReceipt: true, row: { ...row, judgeInput: written.judgeInput! } });
+      updated.length = 0;
+      expect(await processStock(refreshed, deps)).toMatchObject({ qualificationHeld: true, outcome: "skipped" });
+      expect(updated).toHaveLength(0);
+    }
+  });
   it("同docの39本文だけを同期し、旧model/4SHA/タグ/根拠/判定時刻を変更しない。二回目はNOOP", async () => {
     const legacy = withInputReceipt("SemIf入力変更の再判定：保存済み説明", { docId: "S100YFQC", textPageId: "old-pointer", businessSha256: null,
       sectionsSha256: "a".repeat(64), stateSha256: null, vocabVersion: "v1", model: "Qwen3.5-4B@851bf6e/semif-mlx" });
