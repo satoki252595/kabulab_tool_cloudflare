@@ -523,6 +523,8 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
     expect(Number(fin?.fetched_at)).toBeGreaterThan(1);
     expect(Number.isInteger(fin?.fetched_at)).toBe(true);
     expect(sqlite.prepare("SELECT latest_date FROM swing_stock_indicators").get()).toEqual({ latest_date: "2026-10-14" });
+    expect(sqlite.prepare("SELECT latest_adjclose, sma_25 FROM swing_stock_indicators").get())
+      .toEqual({ latest_adjclose: snapshot.ohlcv6mo.at(-1)!.adj, sma_25: snapshot.sma25 });
     expect(sqlite.prepare("SELECT sma_5, sma_20, sma_75, atr_14, rsi_14, macd, macd_signal, pct_change_1d FROM swing_stock_indicators").get())
       .toEqual({ sma_5: snapshot.sma5, sma_20: snapshot.sma20, sma_75: snapshot.sma75,
         atr_14: snapshot.atr14, rsi_14: snapshot.rsi14, macd: snapshot.macd,
