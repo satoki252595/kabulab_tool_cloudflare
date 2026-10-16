@@ -8,6 +8,10 @@ on:
         type: choice
         options: [dry, apply, inspect]
         default: dry
+      execution_revision:
+        description: "実行コードの完全40桁commit SHA。初回空欄はgithub.sha、継続は同SHAを引継ぐ"
+        type: string
+        default: ""
       plan_id:
         description: "再開時は同じID。別IDで先行unknownを迂回しない"
         type: string
@@ -54,8 +58,18 @@ jobs:
   backfill:
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    env:
+      EXECUTION_REVISION: ${{ inputs.execution_revision || github.sha }}
     steps:
+      - name: Validate execution revision before checkout
+        run: '[[ "$EXECUTION_REVISION" =~ ^[0-9a-f]{40}$ ]]'
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXECUTION_REVISION }}
+      - name: Verify checked out execution revision
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXECUTION_REVISION"
+          printf 'raw_index_execution_revision=%s\n' "$EXECUTION_REVISION"
       - uses: DeterminateSystems/nix-installer-action@main
       - uses: DeterminateSystems/magic-nix-cache-action@main
         with:
@@ -100,8 +114,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          execution_revision="$(git rev-parse HEAD)"
+          test "$execution_revision" = "$EXECUTION_REVISION"
           nix develop -c python3 scripts/notion/raw-index-continue.py \
-            "$GITHUB_EVENT_PATH" tmp/raw-index/receipt.jsonl tmp/raw-index/continuation.json
+            "$GITHUB_EVENT_PATH" tmp/raw-index/receipt.jsonl tmp/raw-index/continuation.json "$execution_revision"
           if [ -f tmp/raw-index/continuation.json ]; then
             # Dispatch is single-attempt. An unknown API result is never resent automatically.
             gh api --method POST "repos/$GH_REPO/actions/workflows/raw_index_backfill.yml/dispatches" \
