@@ -107,8 +107,9 @@ const savedOverseasStatus = z.nullable(z.enum(["ok_geo_rows", "ok_geo_cols",
 const savedTextStatus = z.nullable(z.enum(["ok", "no_text_sections", "parse_error"]));
 
 // 保存行変換は共有正準 (overseas-save-rows.ts) を使用する。
-// (toYen は orders 系が共用。orders の振舞い変更なし。)
-import { toYen, toOverseasSaveRows } from "./overseas-save-rows.js";
+// 受注・海外はそれぞれ共有の正準保存変換を使用する。
+import { toOverseasSaveRows } from "./overseas-save-rows.js";
+import { toOrderSaveRows } from "./order-save-rows.js";
 import { serializeOverseasOmission } from "./overseas-omission.js";
 import { sha256HexBytes } from "../../../../src/shared/sha256.js";
 
@@ -618,26 +619,10 @@ export async function ingestDocument(
     // delete→insert と等価以上の一貫性)。送信口は入口 preflight で確定済み:
     // Worker は既存 db.batch、Node は明示 d1HttpBatch (同一 builders を
     // toSQL 化して送る。per-statement フォールバックはしない)。
-    const factRows = deduped.map((f) => ({
+    const factRows = toOrderSaveRows(deduped, parseStatus).map((row) => ({
       documentId: docIdSubquery,
       stockId,
-      fiscalYearEnd: f.fiscalYearEnd,
-      segmentName: f.segmentName,
-      segmentKind: f.segmentKind,
-      isConsolidated: f.isConsolidated,
-      unitLabel: f.unitLabel,
-      ordersReceivedRaw: f.ordersReceived,
-      orderBacklogRaw: f.orderBacklog,
-      ordersReceivedYen: toYen(f.ordersReceived, f.unitYenFactor),
-      orderBacklogYen: toYen(f.orderBacklog, f.unitYenFactor),
-      pattern:
-        parseStatus === "ok_pattern_b"
-          ? "pattern_b"
-          : parseStatus === "ok_pattern_c"
-            ? "pattern_c"
-            : parseStatus === "ok_total_only"
-              ? "total_only"
-              : "pattern_a",
+      ...row,
     }));
 
     // 海外売上ファクト (yuho_overseas_facts) も同じ docId サブクエリを親に
