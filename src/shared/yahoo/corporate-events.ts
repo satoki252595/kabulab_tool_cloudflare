@@ -14,18 +14,34 @@ export type DividendValue = {
   paymentDate: null; paymentDateStatus: "not-provided";
 };
 export type SplitValue = {
-  timestamp: number; date: string; dateMeaning: "split-effective";
+  timestamp: number; date: string;
+  /** 保存互換の旧ラベル。法的効力日や市場権利落日の資格を意味しない。dateBasisを参照。 */
+  dateMeaning: "split-effective";
   numerator: number; denominator: number; ratio: number;
+};
+const REPORTED_DATE_BASIS = Object.freeze({
+  status: "reported-timestamp-only", splitDate: "yahoo-event-timestamp-jst",
+  marketExDate: "not-verified", legalEffectiveDate: "not-verified", legacySplitDate: "unknown",
+} as const);
+export type CorporateEventDateBasis = Omit<typeof REPORTED_DATE_BASIS, "status"> & {
+  status: "reported-timestamp-only" | "legacy-meaning-unqualified";
 };
 export type EventRevision<T> = { version: number; valueSha256: string; value: T; source: EventSource };
 export type CorporateEvents = {
   schemaVersion: 1; source: EventSource;
+  /** 新生成の明示契約。旧保存物は未記載のまま読み、旧value/SHAを変更しない。 */
+  dateBasis?: typeof REPORTED_DATE_BASIS;
   /** 当該応答/要求範囲の観測。全期間でイベントなし、とは主張しない。 */
   observation: { dividends: "observed" | "verified-none-in-response"; splits: "observed" | "verified-none-in-response" };
   dividends: EventRevision<DividendValue>[]; splits: EventRevision<SplitValue>[];
   /** 旧保存物には原timestamp/分子/分母/sourceがない。推定で埋めない。 */
   legacySplits: Array<{ date: string; ratio: number }>;
 };
+/** 旧ラベルだけの保存物も、APIで法的効力日の確定に読み替えない。 */
+export function corporateEventDateBasis(events: CorporateEvents): CorporateEventDateBasis {
+  if (events.dateBasis === undefined) return { ...REPORTED_DATE_BASIS, status: "legacy-meaning-unqualified" };
+  return events.dateBasis;
+}
 export const yahooChartSourceUrl = (symbol: string, range: string, interval: string, events: boolean): string =>
   `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${encodeURIComponent(range)}&interval=${encodeURIComponent(interval)}${events ? "&events=split,div" : ""}`;
 export const dailyEventSourceUrl = (symbol: string, range: string): string => yahooChartSourceUrl(symbol, range, "1d", true);
@@ -79,14 +95,14 @@ export async function parseCorporateEvents(args: {
     const value: SplitValue = { timestamp: ts, date: jstDateSec(ts), dateMeaning: "split-effective", numerator, denominator, ratio: positive(numerator / denominator) };
     splits.push({ version: 1, valueSha256: await sha256Hex(splitJson(value)), value, source });
   }
-  const result: CorporateEvents = { schemaVersion: 1, source,
+  const result: CorporateEvents = { schemaVersion: 1, source, dateBasis: REPORTED_DATE_BASIS,
     observation: { dividends: dividends.length ? "observed" : "verified-none-in-response", splits: splits.length ? "observed" : "verified-none-in-response" },
     dividends, splits, legacySplits: [] };
   assertCorporateEventsShape(result, symbol);
   return result;
 }
 
-/** 同じJST権利落ち/分割日を訂正単位とし、異なる原値を新versionで残す。 */
+/** 同じYahoo報告timestamp由来のJST日付を訂正単位とし、異なる原値を新versionで残す。 */
 function mergeRevisions<T extends { date: string }>(old: readonly EventRevision<T>[], fresh: readonly EventRevision<T>[]): EventRevision<T>[] {
   const result = [...old];
   for (const next of fresh) {
@@ -112,6 +128,11 @@ export function mergeCorporateEvents(old: CorporateEvents | undefined, fresh: Co
 export function assertCorporateEventsShape(input: unknown, symbol: string): asserts input is CorporateEvents {
   const e = object(input);
   if (e.schemaVersion !== 1) fail();
+  if (e.dateBasis !== undefined) {
+    const basis = object(e.dateBasis);
+    if (Object.keys(basis).sort().join(",") !== Object.keys(REPORTED_DATE_BASIS).sort().join(",") ||
+        Object.entries(REPORTED_DATE_BASIS).some(([key, value]) => basis[key] !== value)) fail();
+  }
   const source = (input: unknown): void => {
     const s = object(input);
     if (s.symbol !== symbol || typeof s.requestedRange !== "string" || s.requestedRange === "" ||
