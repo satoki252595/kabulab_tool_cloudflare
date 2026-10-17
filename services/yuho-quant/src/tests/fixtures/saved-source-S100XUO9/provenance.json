@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "description": "Actual unique saved-source query response projection: signed URLs, unrelated page properties and response envelope omitted. Metadata rich_text and source clock are unchanged. No transport is represented as a new native response.",
+  "item": {
+    "stockCode": "290A",
+    "stockId": 2138,
+    "documentId": 51879,
+    "docId": "S100XUO9",
+    "edinetCode": "E40216",
+    "periodEnd": "2025-12-31",
+    "zipSha256": "891746f766b50e6a42a1f7fccb1f4e07b6852dfe666f56e128ba28361998cf09",
+    "archivePageId": "3eed74ff-84cd-816a-bee2-ddef5c9a05c5",
+    "originalManifest": "known",
+    "sourceFetchedAt": "2026-10-03T09:30:00.000+00:00"
+  },
+  "sourceQuery": {
+    "key": "S100XUO9:type1",
+    "responseStatus": 200,
+    "responseSha256": "b3e95b4da2c128ff226948f0926a7c054c7cb9e947ec53f030911e0647ff2b9e",
+    "responseBytes": 8043,
+    "requestSha256": "58683d274e1276648c0ae84151d06d52631d8d060559735d2a1512ca811aa712",
+    "responseCapturedAt": "2026-10-17T00:17:56.481Z"
+  },
+  "sourcePageProjectionSha256": "7e7d8a140a478920b266c71879ab6231563a28631538345d3917d90a8814bc3d",
+  "sourceMetadataMissing": [
+    "edinetCode",
+    "periodEnd"
+  ],
+  "zipSha256": "891746f766b50e6a42a1f7fccb1f4e07b6852dfe666f56e128ba28361998cf09",
+  "zipBytes": 1495818,
+  "sourceManifestSha256": "5fa05d6ce0245679af3ed0d22dba1a371420eb700ba0a4f494dd19a025af87aa",
+  "officialSourceURL": "https://api.edinet-fsa.go.jp/api/v2/documents/S100XUO9?type=1"
+}
