@@ -7,6 +7,10 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ---
 
+## 2026-10-18
+
+- RAWのhosted送信前に残時間が不足した場合、未知書込を含まない全検証済みprefixだけを通常partialとして閉じる。実送信直前の65秒検査・unknown停止・元poolを維持し、拒否されたattemptと成功download数を分ける。[実RAW74の停止SHA・保存3原本比較](test-logs/raw-read-budget-partial-20261018.md)で検証。旧STOPの解除・本番再開は別受入。
+
 ## 2026-10-17
 
 - 本番作業: 優待1899の通常1行v4移行、JPXのindex＋5XLS・7物理ファイルと公開URL設定、EDINETの新しい原HTTP1件・6観測の通常保存/全照合、#506配信と固定4関数の性能、RAW72の元pool内継続、Mac両登録のquiet切替を受入。[23:13以降の追加記録](test-logs/recovery-functional-status-20261017-2313.md)へ、本文1,758/2,417・残659と10/18の20/21時と次営業日10/19の18時・権利金融資格・全体受入の残件を分けて記録。`RunAtLoad=false`で即時job/receipt置換を避け、旧4aの期待版secretは次20/21時の両受入まで保持。

@@ -643,6 +643,9 @@ export async function reconcileRawIndex(opts: RawBackfillOptions, io: BackfillIo
   return result;
 }
 
+/** Only a refused hosted read start, before this item's mutation, may end as partial. */
+class RawReadBudgetStop extends NotionConfigError {}
+
 export async function runRawBackfill(opts: RawBackfillOptions, io: BackfillIo) {
   const start = io.now();
   validateRawOptions(opts, start);
@@ -716,6 +719,9 @@ export async function runRawBackfill(opts: RawBackfillOptions, io: BackfillIo) {
   let budgetReserved = 0, stoppedByBudget = false, budgetStopReason: "seconds" | "bytes" | null = null;
   while (state.cursor < manifest.items.length && stats.processed < opts.limit) {
     if (io.now() >= deadline) { stoppedByBudget = true; budgetStopReason = "seconds"; break; }
+    if (state.inflight === null && io.now() + 65_000 > deadline) {
+      stoppedByBudget = true; budgetStopReason = "seconds"; break;
+    }
     const item = manifest.items[state.cursor]!;
     // 先にworst-case raw転送を予約。原本を切り詰めず、次runへ丸ごと残す。
     const wrapperOverhead = Math.ceil(item.sizeBytes * 0.001) + 4096;
@@ -741,13 +747,17 @@ export async function runRawBackfill(opts: RawBackfillOptions, io: BackfillIo) {
     if (index !== null && body !== null) { stats.alreadyComplete++; stats.verified++; }
     else {
       if (body === null) {
-        checkClock(); stats.notionDownloads++;
+        checkClock();
+        if (state.inflight === null && io.now() + 65_000 > deadline) {
+          stoppedByBudget = true; budgetStopReason = "seconds"; processingItem = false; break;
+        }
         const remainingMs = deadline - io.now();
         if (remainingMs <= 0) throw new Error("[raw-backfill] 準備の時間予算到達。未完manifestを使わず停止");
         const beforeBytes = stats.notionDownloadBytes, beforeAttempts = stats.notionDownloadAttempts;
-        const saved = await io.download(item, manifest.items.slice(state.cursor, state.cursor + 50), {
+        let saved: Awaited<ReturnType<BackfillIo["download"]>>;
+        try { saved = await io.download(item, manifest.items.slice(state.cursor, state.cursor + 50), {
           signal: AbortSignal.timeout(remainingMs), beforeHostedRequest: () => {
-            if (io.now() + 65_000 > deadline) throw new NotionConfigError("[raw-backfill] hostedの65秒headroom不足。送信せず停止");
+            if (io.now() + 65_000 > deadline) throw new RawReadBudgetStop("[raw-backfill] hostedの65秒headroom不足。送信せず停止");
           }, onAttempt: async event => {
             if (event.phase === "start") stats.notionDownloadAttempts++;
             else stats.notionDownloadBytes += event.receivedBytes;
@@ -755,11 +765,15 @@ export async function runRawBackfill(opts: RawBackfillOptions, io: BackfillIo) {
               attemptPhase: event.phase, receivedBytes: event.receivedBytes, status: event.status,
               notionDownloadAttempts: stats.notionDownloadAttempts, notionDownloadBytes: stats.notionDownloadBytes });
           },
-        });
+        }); } catch (error) {
+          if (!(error instanceof RawReadBudgetStop) || state.inflight !== null) throw error;
+          stoppedByBudget = true; budgetStopReason = "seconds"; processingItem = false; break;
+        }
         if (stats.notionDownloadAttempts - beforeAttempts < 1 || stats.notionDownloadAttempts - beforeAttempts > 2 ||
             saved.wireBytes !== stats.notionDownloadBytes - beforeBytes) throw new Error("[raw-backfill] hosted物理転送が予約予算を超えました");
         validateBody(saved.body, item);
         if (saved.wireBytes > 2 * (item.sizeBytes + wrapperOverhead)) throw new Error("[raw-backfill] hosted物理転送が予約予算を超えました");
+        stats.notionDownloads++;
         stats.wouldPut++;
         if (opts.mode === "apply") {
           await saveState({ ...state, inflight: { sha256: item.sha256, key, phase: "raw_inflight" } });
