@@ -91,6 +91,10 @@ v2の本番13 SELECTも全結果は一致したが、旧read 16,620/7,374/16,130
 
 v3はunion内のexact doc経路だけを`observations CROSS JOIN documents WHERE documents.doc_id=observations.doc_id`へ変更する。既存のdoc ID UNIQUE索引を使い、観測を外側に固定する。rootが2026-10-17に確認したSQLite一次仕様は、[CROSS JOINの左右順を入れ替えない](https://www.sqlite.org/optoverview.html#manual_control_of_query_plans_using_cross_join)こと、[CASEのlazy評価と非相関副問合せの一度だけの評価](https://www.sqlite.org/lang_expr.html#the_case_expression)を明記する。純EXPLAINでも既存unique doc lookupを確認し、document全走査を拒否する回帰を追加した。原v1/v2の性能棄却を上書きせず、v3の本番read改善は別実測の受入を待つ。 保存163観測を市場selector用SQLiteへ合わせたpublic4関数の合成比較は、元schemaに必要な列が揃わず構築前に停止したため未受入。原値を補作せず、163候補/38 HOLDの原状態保持と歴史selectorの一致、435回帰の資格範囲を分けて残す。
 
+v3の本番13 SELECTは全結果一致、旧合計47,498行に対し新47,516行（**+18行、+0.037896%**）、D1 duration合計23.0237→26.17ms（+3.1463ms）でroot性能受入を閉じた。原180秒内の操作3.02秒、全native/読戻しを保存し、root receipt `edinet-lineage-market-readonly-probe-v3/root-final-acceptance-v1.json` SHA `179ff9cd9bcdcc286cd976b187cfbf56669a0ced14d6d4ff3ff37a34ac4f3427`、性能判断SHA `1a25cecfa2008727eb6fd874f835de4bfb49c359ec20256569c6fe5aaa2f5acc`へ束縛する。新表0行・writer停止時の各関数1回の比較であり、非空観測履歴の将来費用・percentile・月額課金・金融データ資格を保証しない。
+
+保存163観測の追加確認は、元36,929 document/163観測と不変の実20社projection/factsを宣言したtechnical組合せに限る。元strict本文の包含と全guard vectorは一致し、既存normal索引をmirrorしたSQLiteでは空表/無関係NULL/163観測で短絡を維持した（`guard163-cost-indexed.json` SHA `59037bb73fdd17923c6bf1a6c8824699ef75599f49aa64c46a7a332af9fba242`）。全vectorが0だったためpositive HOLDの根拠は前述の実3113/3382 protocol回帰と分ける。先行したschema不足/索引無しtrialの停止も保持し、この組合せをcurrent本番資格又はD1費用へ読み替えない。
+
 ## I/Oと上限
 
 通常cronの一覧原本capture/Notion物理保管は既存処理を再用するので追加source/Notionは0。変更観測が0なら観測保存のD1 IOも0。観測ありは2 SELECT＋ceil(未保存行/9) INSERT。原metadataが完全なHOLD候補に限り、既存issuer逆引きとnormal core集合を各90件以内で照合するD1 SELECTが増える。保存38 HOLDの候補0にはこのlookupを発行しない。新captureで変更観測ありの場合はsnapshot保全の進捗CAS1回、保存一覧からの再開時は`@list`予約/解除CAS2回が増える。

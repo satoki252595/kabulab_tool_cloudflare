@@ -81,6 +81,7 @@ jobs:
     env:
       NOTION_MAX_RPS: "1.6"
       NOTION_RPS: "1.6" # 同じYahoo job内のsector33 Pythonも同じ予約枠。
+      JPX_EX_RIGHTS_URL: ${{ vars.JPX_EX_RIGHTS_URL }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}

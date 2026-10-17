@@ -60,6 +60,7 @@ import {
 } from "../shared/notion-archive/index.js";
 import { sha256HexBytes } from "../shared/sha256.js";
 import type { StockCorporateDiagnostics } from "../shared/yahoo/stock-corporate-events.js";
+import { collectOfficialRightsCustody, type OfficialRightsCustody } from "./rights-official-custody.js";
 import { diagnoseConfirmedCloses, selectConfirmedCloses } from "./macro-session.js";
 import { captureMacroJpLeg, loadMacroJpLeg, macroJpCacheKey, type MacroJpLeg, type MacroJpLegStore } from "./macro-jp-leg.js";
 import { formatConfirmedHoldDiag, formatNullBandHoldLog, formatStockSessionDiag } from "./inc-financials-stale-diag.js";
@@ -945,6 +946,7 @@ async function recordPriceSyncFailureSafely(
   mode: PriceSyncBatchMode,
   startedAtMs: number,
   corporateDiagnostics: NonNullable<PriceSyncBatchInput["corporateDiagnostics"]>,
+  officialRightsCustody: OfficialRightsCustody[],
 ): Promise<void> {
   try {
     await recordPriceSyncCompletion({
@@ -977,6 +979,7 @@ async function recordPriceSyncFailureSafely(
       failureCollection: "aborted",
       originalError: rootCauseMessage(cause),
       corporateDiagnostics,
+      ...(officialRightsCustody.length === 0 ? {} : { officialRightsCustody }),
     });
     console.info(`[sync-daily] 失敗バッチ保管 (例外時): ${key}`);
   } catch (archiveError) {
@@ -1033,6 +1036,8 @@ export interface PriceSyncBatchInput {
   rsiHistoryHolds?: ({ code: string } & RsiHistoryHold)[];
   /** 同一Chartの用途窓診断。fresh HOLDも含む取得成功attemptのみ。原イベント全文はraw保管を参照。 */
   corporateDiagnostics?: { code: string; attempt: number; expectedDate: string; diagnostic: StockCorporateDiagnostics }[];
+  /** 公式資料の物理保持診断。イベント・係数・価格の資格とは別。 */
+  officialRightsCustody?: OfficialRightsCustody[];
 }
 
 /** バッチ冪等キー。run 一意 (同一 invocation の success/failure 二重を防ぐ)。 */
@@ -1102,6 +1107,7 @@ export function buildPriceSyncBatch(input: PriceSyncBatchInput): {
     failures: input.failures,
     originalError: input.originalError,
     ...(input.corporateDiagnostics === undefined ? {} : { corporateDiagnostics: input.corporateDiagnostics }),
+    ...(input.officialRightsCustody === undefined ? {} : { officialRightsCustody: input.officialRightsCustody }),
     ...(input.rsiHistoryHolds === undefined ? {} : {
       currentUpdatedStocks: input.currentUpdatedStocks, rsiHistoryHolds: input.rsiHistoryHolds,
     }),
@@ -1187,17 +1193,19 @@ export async function runDailySync(
   const startedAtMs = Date.now();
   const mode: PriceSyncBatchMode = options.stocksOnly === true ? "stocks" : "daily";
   const corporateDiagnostics: NonNullable<PriceSyncBatchInput["corporateDiagnostics"]> = [];
+  const officialRightsCustody: OfficialRightsCustody[] = [];
   try {
     return await runDailySyncAndRecord(
       db,
       options.stocksOnly === true,
       corporateDiagnostics,
+      officialRightsCustody,
       options.collectOverlay,
       options.sendOverlayBatch,
       options.jpLegStore,
     );
   } catch (e) {
-    await recordPriceSyncFailureSafely(e, mode, startedAtMs, corporateDiagnostics);
+    await recordPriceSyncFailureSafely(e, mode, startedAtMs, corporateDiagnostics, officialRightsCustody);
     throw e;
   }
 }
@@ -1206,6 +1214,7 @@ async function runDailySyncAndRecord(
   db: Db,
   stocksOnly: boolean,
   corporateDiagnostics: NonNullable<PriceSyncBatchInput["corporateDiagnostics"]>,
+  officialRightsCustody: OfficialRightsCustody[],
   collectOverlay?: OverlayCollectFn,
   sendOverlayBatch?: OverlayBatchSender,
   jpLegStore?: MacroJpLegStore,
@@ -1705,6 +1714,14 @@ async function runDailySyncAndRecord(
         : null,
   });
 
+  // 主要金融write・Phase6・期限確認・完了記録の後。custody待機でquote書込窓を消費しない。
+  if (sharedEnv.STOCK_SYNC_TARGET() === "scheduled-stocks") {
+    const custody = await collectOfficialRightsCustody(new Date(startedAt + 9 * 3600_000).toISOString().slice(0, 10));
+    officialRightsCustody.push(custody);
+    console.info(`[sync-daily] 公式権利原本: ${JSON.stringify(custody)}`);
+    if (custody.status === "incomplete") console.warn("[sync-daily] JPX source incomplete。権利資格は未確認のまま、既存株価の資格・値は変更しません。");
+  }
+
   // 失敗バッチの物理保管。結果 return の前 = CLI の 1% throw の前に完了させる。
   // 保管失敗は結果を返さず throw (例外パスへ。非0・fallback なし)。
   const batchKey = await archivePriceSyncBatch({
@@ -1722,6 +1739,7 @@ async function runDailySyncAndRecord(
     currentUpdatedStocks: succeeded,
     rsiHistoryHolds: historyHolds,
     corporateDiagnostics,
+    ...(officialRightsCustody.length === 0 ? {} : { officialRightsCustody }),
   });
   console.info(
     `[sync-daily] 失敗バッチ保管: ${batchKey} (全${failures.length}件・切詰なし)`

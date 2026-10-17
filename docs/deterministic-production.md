@@ -6,7 +6,13 @@
 
 [19:35の追加記録](test-logs/recovery-functional-status-20261017.md#1935-jstの追加受入と通常macへの配備)では、VWAP固定suffix1,854/1,856、保有原本列2,826行/218文書、受注固定112文書、海外140/166文書を別受入した。Mac通常版`4a66929c`の初回RunAtLoadはlocal/R2終了receiptまで確認したが、scheduledForは前日であり、当日の20/21時calendarは未受入。保存Clef104社との公開identity照合は37社、残67社は現在入力の再資格化待ちで、全20機能の完了時刻は未確定である。RAWの通常inspectはcursor20,411/残58,421、hosted独立枠の単発pilot69は速度改善未受入。全体受入件数とcursor、Worker最新版と凍結Mac版、原典HOLDと未実装ロジックを分けて追跡する。
 
+[21:52の追加記録](test-logs/recovery-functional-status-20261017.md#2152-jstの追加受入と実行先の区別)で、実21時の通常終了、208Aの限定4行訂正、通常ツールでの本文50社・全39項目・物理PRE/POST・永続completionを追加受入した。本文50社はモデル0・618.965秒、D1実読取106,874行/書込0行。旧原値・未知結果・期限を保持し、独立物理1,500社と別の通常completion258社の暫定union1,758/2,417を区別する。
+
+本体Cloudflare、独立JSS private、Macは別の配備先として確認する。#503のv4は本体と独立APIへ反映したが、1899の実1行移行とMac最新版はまだ未受入。#504のJPX保存コードも実設定・原本受入・権利の金融資格と分ける。RAWの有限な通常チェーンは継続中で、残4〜5日の条件付き見込みを全20機能の完了日へ読み替えない。
+
 ## 実行先と現在の例外
+
+JPX配当落・権利落等の短期掲載原本は、既存18時 `scheduled-stocks` の金融主要write・完了記録後の通常共有collectorでindex1＋最大5 XLSを共通Notion archiveへ物理保持する。公開 `JPX_EX_RIGHTS_URL` を型付き設定から必須参照し、未設定・欠測・保管不明は独立した `officialRightsCustody` 診断に残す。Yahooの価格資格・既存guardは代用せず、権利の法的日付・比率・普通株・金融適用も確定しない。[実原本・費用・未受入](test-logs/jpx-ex-rights-custody-20261017.md)を参照。本番URL設定/実取得/物理受入は別途で、capture実装を全権利対応とは数えない。
 
 | 処理 | 決定的な処理 | 実行先と制約 |
 |---|---|---|

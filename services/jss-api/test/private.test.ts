@@ -58,6 +58,21 @@ describe("内部面の優待時期", () => {
     expect(body.data[0]?.can_aggregate).toBe(false);
     expect(JSON.stringify(body)).not.toContain("description");
   });
+  it("実1899のv4投影を再読し、発送月を権利月へ変更せず金額合算を未確認に保つ", async () => {
+    const saved = (await import("../../otakara-yutai/src/tests/fixtures/record-tier-saved1.json")).default;
+    const facts = { ...saved.oldFacts, version: 4, conditionStructure: saved.expectedStructure };
+    const recipient = saved.recipients[0];
+    if (recipient === undefined) throw new Error("saved recipient missing");
+    const response = await app.request(`/v1/yutai/${saved.code}`, AUTH, env({ DB: stubD1(() => [
+      { genre_id: 110, min_shares: recipient.minShares, record_month: recipient.recordMonth, record_date: null, public_facts: JSON.stringify(facts) },
+    ]) }));
+    expect(response.status).toBe(200);
+    const body = await response.json() as { data: { public_facts: unknown; can_aggregate: boolean; record_month: number }[] };
+    expect(body.data[0]?.public_facts).toEqual(facts);
+    expect(body.data[0]?.can_aggregate).toBe(false);
+    expect(body.data[0]?.record_month).toBe(12);
+  });
+
   it("実4群のv3掲載期間を内部面で再読し、本人適用と合計を未確認に保つ", async () => {
     const saved = (await import("../../otakara-yutai/src/tests/fixtures/holding-period-saved4.json")).default.groups;
     for (const group of saved) {

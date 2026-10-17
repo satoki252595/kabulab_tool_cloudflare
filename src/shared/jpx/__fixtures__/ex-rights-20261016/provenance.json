@@ -1,0 +1,21 @@
+{
+  "provenance": "Actual official GET, redirect/retry 0; saved-only tests never fetch source or Notion. XLS rows are not parsed or financially qualified.",
+  "index": {
+    "url": "https://www.jpx.co.jp/listing/others/ex-rights/index.html",
+    "bytes": 27121,
+    "sha256": "c583791ea619206f91fdb53f708b0321e7821afdbca91bb2d734c759f0ebb43a",
+    "storedFile": "index.html.gz",
+    "encoding": "gzip",
+    "storedBytes": 6475,
+    "storedSha256": "8dc0725ba3ab56227f8c162e13b370771104633637d1e7c61c8bf8bec93945f3"
+  },
+  "xls": {
+    "url": "https://www.jpx.co.jp/listing/others/ex-rights/nlsgeu000004rws9-att/20261016.xls",
+    "bytes": 62464,
+    "sha256": "e5bb8034f993b5a9e664edfe2ea646d577b35e7fb7902cabdd9f197307e3cd0a"
+  },
+  "privateReceiptRoot": "tmp/feature-audit-20261017/rights-jpx-ex-rights-capture-proposal-v1",
+  "fetchedDateJST": "2026-10-17",
+  "LastModified": "Fri, 16 Oct 2026 04:00:29 GMT",
+  "financialQualification": "unqualified"
+}
