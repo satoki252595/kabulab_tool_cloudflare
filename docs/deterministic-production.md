@@ -4,6 +4,8 @@
 
 [10/17 16:00の全20機能の状況](test-logs/recovery-functional-status-20261017.md)に、本文950社・保有1,667行・受注40文書・VWAP1,399銘柄の別照合と、RAWの通常索引再開、優待READ停止、通常定時との通信枠の切替えを記録した。全量・価格/権利・実認証API・次定時の未受入は維持する。
 
+[19:35の追加記録](test-logs/recovery-functional-status-20261017.md#1935-jstの追加受入と通常macへの配備)では、VWAP固定suffix1,854/1,856、保有原本列2,826行/218文書、受注固定112文書、海外140/166文書を別受入した。Mac通常版`4a66929c`の初回RunAtLoadはlocal/R2終了receiptまで確認したが、scheduledForは前日であり、当日の20/21時calendarは未受入。保存Clef104社との公開identity照合は37社、残67社は現在入力の再資格化待ちで、全20機能の完了時刻は未確定である。RAWの通常inspectはcursor20,411/残58,421、hosted独立枠の単発pilot69は速度改善未受入。全体受入件数とcursor、Worker最新版と凍結Mac版、原典HOLDと未実装ロジックを分けて追跡する。
+
 ## 実行先と現在の例外
 
 | 処理 | 決定的な処理 | 実行先と制約 |

@@ -1,8 +1,10 @@
-# 全20機能の復旧状況 — 10月17日16:00 JST／17:29・18:21追記
+# 全20機能の復旧状況 — 10月17日16:00 JST／17:29・18:21・19:35追記
 
 追跡: [#348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)。[当初の機能別監査](feature-gap-audit-20261014.md)と[受入台帳](recovery-acceptance-20261016.md)の保存証拠を集約した時点記録。全サービスを16時に一括再照会した結果ではない。全20機能の完了には未到達で、原典にない値を埋めない。
 
-## 機能別の受入と残件
+最新の追加受入は[19:35 JSTの記録](#1935-jstの追加受入と通常macへの配備)を参照。次の20項目表は16:00時点の履歴で、後続の時点記録を上書きしない。
+
+## 機能別の受入と残件（16:00時点）
 
 | # | 機能 | 確認済みの範囲 | 残件・次の処理 |
 |---|---|---|---|
@@ -14,7 +16,7 @@
 | 6 | EDINET継続取得・識別 | 保存本文3,666社。保存原本の主体・期末・DEI照合を共通化 | 最新catchupの識別保留・対象HOLD21と、後続取込失敗を別照合 |
 | 7 | 有報39項目 | 固定3,666社の本文39項目を回収。原要素自体の不在23件を区別 | 本文補足DBの同期は下記14の有限処理で継続 |
 | 8 | 受注・海外売上 | 受注40文書236数値、海外100文書601数値を全6表・原本・両物理ファイルで受入 | 受注72文書243数値、海外66文書392数値。競合する本文writerの閉鎖後に通常CLIで進める |
-| 9 | TDnet・IR PDF | 381原本の物理保管等を受入 | 旧1447 PDFなど失われた原本は未取得を保持。公式代替原本と元pointerを同一視しない。最新EDINET後続失敗も残る |
+| 9 | TDnet・IR PDF | 381原本の物理保管等を受入 | 銘柄1447/SAAFの旧PDF1件は未取得を保持。公式代替原本と元pointerを同一視しない。最新EDINET後続失敗も残る |
 | 10 | VWAP日足 | 旧10/14の原本4件を限定復旧 | 残3原本HOLDと最新通常日足の全量完了を別確認 |
 | 11 | VWAP 5分足 | 固定suffix1,856中1,399銘柄をR2全bytes・ETag・実SDK metadata・物理summaryまで受入 | 残457＝7531原本HOLD＋未受入456。新有限処理は18:18:51 JSTまで、旧期限は延長しない |
 | 12 | 信用残・日証金需給 | 保存済み4,247/4,349行と通常取得を確認 | 最新10/16 runの基準日・全件数、旧20銘柄の掲載対象外を照合 |
@@ -26,6 +28,46 @@
 | 18 | 有価証券保有明細 | 原本列1,667行115文書を全値・全原表・物理PRE/POSTで受入。1911のunknown行は通常の保全置換で閉鎖 | 次の固定範囲を通常publisherで継続。新規価格資格0、単位HOLD5,362行。分割前期末株数の明示根拠8社と、候補28行を価格確定へ読み替えない |
 | 19 | API・MCP | JSS private strict v1/v2/v3を配備、実コード・6bindings・health200・未認証401を確認 | 既存キーはCloudflareのみ。実認証付きv2/v3 payloadの通し受入は未完。鍵の取得・新規発行・変更はしていない |
 | 20 | 監視・Notion案内 | coverage/receipt監視、現行カタログ89blocks/5views等を反映 | 最新正常定時の終了receipt、Mac配備版と次20/21時、翌朝readcheckを別確認。配備成功だけで全機能完了にしない |
+
+## 19:35 JSTの追加受入と通常Macへの配備
+
+16:00・17:29・18:21の記録は履歴として保持する。以下は保存済みroot最終証跡の更新であり、全サービスの同時再照会ではない。全20機能は未完で、全体の完了日時・完了率は未確定。
+
+| 項目 | この時点の受入 | 残件・受入の境界 |
+|---|---:|---|
+| 本文補足の有限機械同期 | 1,450/2,417社 | 残967社で有限chainは自然終了。後述の通常実行110社を、この固定残数から重複照合なしに差し引かない |
+| 保有明細 | 2,826行・218文書 | 第19範囲まで原本列・全props・物理PRE/POSTを受入し、照合済み境界で停止。新規価格資格0 |
+| 受注 | 固定112文書・479数値 | 固定cohortの全段階を終了。別途除外した65文書や、全開示形式の網羅は含まない |
+| 海外売上 | 140/166文書・842/993数値 | 残26文書・151数値。第2段階までの受入を、未実施後続の成功へ広げない |
+| VWAP 5分足 | 固定suffix 1,854/1,856銘柄 | 全196処理・親子終端を照合。残7531/9311は当該実応答の有効バー欠測HOLD。永久欠測とは判定しない |
+| 保存済みClef結果の公開 | 37/104社 | 先行修復3625の1社＋通常実行36社。残67＝doc変更65＋同一docの根拠HOLD6038/9344。将来の公開には現在入力の再資格化が必要 |
+| 競合企業の通常準備 | 今回5社中ready1・HOLD4 | 原本gzipの物理保存まで確認。モデル・競合relation・schema書込み0で、意味判定の公開完了ではない |
+| RAW | 通常inspectでcursor20,411・残58,421件 | 全体受入18,412/78,832との未集約差は保持。pool ordinal69/200の単発pilotがLIVE、continue0。新しいhosted枠の速度改善は未受入 |
+
+Mac事業タグの通常installerでaccepted `4a66929c`を別versioned runtimeへ配備し、RunAtLoadを1回実行した。19:02:37〜19:26:12 JSTのlocal終了receiptとR2全bytesが一致し、親子終端・kernel解放・publication journalのreadyを確認した。ただし`scheduledFor`は**10/16 20:00**であり、**10/17の実20時calendarの受入は0**である。Yutai plistの切替えとGitHub監視secretの更新は未実施。現在の20時処理が実際に終端した後、21時まで通常30分と照合余裕が残る場合だけ別の有限releaseを判断する。
+
+初回の通常mainは20分18.683秒で859/3,687社を訪問し、skip712・retag36・sync_text110・create_row1を記録した。create648Aは資格HOLD行で、意味判定の完成ではない。Clef新規forward0・保存出力再利用38・外部モデル0、Notion2,213要求・429/一時retry0。6038/9344は既存の新根拠が結果不明のため保持し、再送していない。後段の通常prepare-onlyは5社の入力を原本gzipへ保存し、ready1/HOLD4、Notion52要求だった。今回の所要を次20/21時や全量完走の保証にしない。
+
+旧104社の保存入力と通常durable completionのcode/doc/target/source identityを通信0で照合した結果、通常semantic36社はすべて旧集合内だった。3625と合わせた残67社には旧モデル69bindingが対応するが、現在raw入力・最新根拠の資格を新たに確認したわけではない。旧103社plan、モデル出力、旧STOPを保持し、実20時の更新後に同じ通常plannerで再資格化する。今回のread-only交差監査を新しい公開許可として使わない。
+
+RAWの残58,421件を、旧500件/3,161.511秒と同じ速度で進める場合は約4〜5日相当となる。これは旧観測による条件付き計算であり、現在pilot69の実測でも全体ETAでもない。新しい通常hosted独立枠はAPI側0.25rps以下を維持するが、pilotの終端・保存原本・費用を照合するまで速度改善率を採用しない。旧poolのACK未知・停止証跡は残し、新poolや自動continuationで回避しない。料金の含有量・実行分数無料の範囲と保存・他用途・ローカル電力等の別費用は、17:29の区別を維持する。
+
+[#490](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/490)の限定option診断/明示公開復旧、[#491](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/491)のRAW hosted枠、[#492](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/492)のsplitを跨ぐ指標HOLD、[#493](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/493)の明示普通株消却診断は、各exact CIと実Cloudflare配信を確認した。最新Workerは`54097f6d`、version `e04093aa-d59d-4f0c-bb7f-25495006f237`。Mac実行版`4a66929c`とは区別する。#492は受領OHLCV/adjcloseを変更せず派生指標だけHOLD、#493は報告日・明記株数だけを観測し、法的効力日・市場落日・価格係数を確定しない。全権利イベント台帳、増資/払込/行使と一株指標の適用、過去調整系列の訂正は未完である。旧5,362行のHOLDをすべて単位欠測と断定せず、価格basis/単位等の現在内訳は未再確定として保持する。
+
+機能9の「1447」は件数ではなく銘柄1447/SAAFを指す。物理保管381件とは別に、旧PDF1件が取得不能で、公式の差替PDF374,068Bは別原本として保管済み。元pointerはNULLを保持し、差替原本を旧PDFへ付け替えない。[既存の原本照合記録](feature-recovery-20261014.md#pr-352後の本番検証)を参照。
+
+残件の分類は既存20項目を引き継ぐ。通常共有機構があり補完・最新定時受入が必要な項目、未対応財務要素・表形式・優待tier/併用・権利適用等の本番ロジックが残る項目、原本や公式資格が欠け現入力では埋められない項目は重複し得る。コード配備・固定cohortの成功・HOLDの正確な保存だけで、全機能完了へ数えない。 画像PDFは既存の[pipelineのPDF変換](../../pipeline/src/jp_stock_pipeline/convert/pdf_to_text.py)・[IRのテキスト抽出](../../services/ir-catalog/src/services/pdf-sentiment/extract-text.ts)でOCRを意図的に対象外としてunknownを保持する設計であり、原本そのものの欠測とも区別する。OCRによる値の補完を今回の実装予定へ追加していない。
+
+追加の私有最終証跡（リンク先はGit対象外。raw本文・署名URL・秘密値はGitへ保存しない）:
+
+- [保有第19範囲](../../tmp/feature-audit-20261017/holdings-next12-rate050-proposal-v1/actual-next12-v2/range-19/root-final-acceptance-v1.json): `d9e11498ae0adf2a3fb66c5e479b289cc9982f502eb2c12f55631d7c4744e57d`。
+- [受注112文書の終端](../../tmp/feature-audit-20261017/orders-remaining52-normal-operation-v1/stage-03/root-final-acceptance-v1.json): `987d5aa7092295bb37b8f4ddbc67cecd45ab1455eea115c2971437a490ba2082`。
+- [海外140文書](../../tmp/feature-audit-20261017/overseas-remaining66-normal-operation-v1/stage-02/root-final-acceptance-v1.json): `9fa579357e3f46afbe787b056f357a001afa14029203466243c3f264be25f790`。
+- [VWAP全196終端・固定1,854](../../tmp/feature-audit-20261017/vwap-intra-remaining196-operation-v2/batch-04/root-final-acceptance-v1.json): `918247803cf83b5f99727553cd2a6fd6ff1a21ebb895839b4d2da32bbb50e368`。
+- [Mac初回通常実行のroot受入](../../tmp/feature-audit-20261017/mac-main4a66929c-cutover-v1/root-biztag-first-rollout-acceptance.json): `d385271508fc16dc5154f242b312af2dc8e42853a383b8800f3ec6dc2668ce9a`。
+- [旧104入力との独立交差再生](../../tmp/feature-audit-20261017/mac4a-old104-publication-intersection-v1/root-result-v1.json): `5b7fffd8b56b97d5811263fafa020e8d048854f13a26c972f43c3bbda02c23cf`。
+- [RAW通常inspect68](../../tmp/feature-audit-20261017/raw66-normal-inspect-github-v1/root-independent-inspect68-acceptance-v1.json): `a428875732a5d95ee6aad924d69d7196b41cfd8a2148b59e6330223ea5970c90`。pilot69は`raw-hosted-main02-single-pilot-v1/`の単発記録を別保持。
+- [#490](../../tmp/feature-audit-20261017/continuation/pr490-root-final-review.json): `b88fcaa724021ae9e3ca8da7f51cc668eec80a3c4efc72b7595d61b2132a224d`、[#491](../../tmp/feature-audit-20261017/continuation/pr491-root-final-review.json): `6ac659349f1a438e5dff8efbabb2a6751e55f9bed4175b593a3d3f723484c0d3`、[#492](../../tmp/feature-audit-20261017/continuation/pr492-root-final-review.json): `4bda7c4e7dda028610997e2904be0126db3407356f481ca4237e6bac519da394`、[#493](../../tmp/feature-audit-20261017/continuation/pr493-root-final-review.json): `e082307eceb74d0d18f645c8379d2ea431cd29db2b5e4b3e025c6132d182eb89`。
 
 ## 18:21 JSTの追加受入と停止
 
