@@ -9,6 +9,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ## 2026-10-17
 
+- 定時株式syncにJPX配当落・権利落等の現在掲載版を最大5XLSまで共通原本保管・全SHA読戻しする経路を追加。欠測は独立診断へ残し、価格/株数の補正資格へは使わない。[実原本・費用・未受入範囲](test-logs/jpx-ex-rights-custody-20261017.md)。URL設定と本番物理受入は別途。
 - 保有明細の共有schema読取は、全定義とIDを保ったまま宣言した3項目だけを返す。応答ごとの`request_id`による誤停止を直し、[実208Aの全応答とschema変更時のSTOP](test-logs/holdings-schema-response-shape-20261017.md)を検証した。元READ停止と未実施の4行訂正は別受入のまま。
 - 本番作業: 10/17実20時のMac正常終端・両4a rolloutと監視期待版の1回更新、RAW500件の実測と元pool内継続を記録。21時の定刻・全量補完・権利/優待残件は別受入とする。[20:35状況](test-logs/recovery-functional-status-20261017.md#2035-jstの実20時受入と後続補完)。
 - Mac定時処理の既存installerに`install-next`を追加。20時・21時の予定と実行条件を保ち、`RunAtLoad=false`で次のcalendarだけを待つ。通常`install`の即時起動は維持し、稼働runtimeの切替・bootstrapは別受入。

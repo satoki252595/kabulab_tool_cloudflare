@@ -40,6 +40,8 @@ export const sharedEnv = {
    * 拒否する。Worker 自身は CRON_SECRET のみを持ち、意図どおり直接取得する。
    */
   YAHOO_PROXY_BASE: () => optional("YAHOO_PROXY_BASE"),
+  /** JPX配当落・権利落等の公式index。未設定は独立原本診断をincompleteにする。 */
+  JPX_EX_RIGHTS_URL: () => required("JPX_EX_RIGHTS_URL"),
   /**
    * デプロイ済み Worker のベース URL (例 https://kabulab-cf.<sub>.workers.dev)。
    * Node ローカルの CLI (scripts/moneyflow/ingest.ts・scripts/sync/yuho-edinet.ts 等)
