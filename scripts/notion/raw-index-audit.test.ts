@@ -60,15 +60,17 @@ describe("independent RAW reread (actual saved 8566 bytes, declared remote trans
     const nonEdinet = { ...saved.item, source: "TDnet" as const, docId: null };
     expect(qualifyRawAuditItem(nonEdinet, expectedRawIndex(nonEdinet, f.io.rawBucket, f.rows[0]!.r2_key), f.io.rawBucket, { sha256: nonEdinet.sha256, sizeBytes: body.length }).semanticIdentity).toBe("doc_id_not_applicable");
   });
-  it.each(["missing_index", "missing_body", "wrong_hash", "wrong_metadata"])("%s is explicit integrity HOLD, never numeric/metadata repair", async fault => {
+  it.each(["missing_index", "missing_body", "wrong_hash", "wrong_metadata", "doc_mismatch"])("%s is explicit integrity HOLD, never numeric/metadata repair", async fault => {
     const f = fixture();
     if (fault === "missing_index") f.rows.length = 0;
     else if (fault === "missing_body") f.objects.delete(f.rows[0]!.r2_key);
     else if (fault === "wrong_hash") f.objects.set(f.rows[0]!.r2_key, Buffer.from(body).reverse());
+    else if (fault === "doc_mismatch") f.rows[0]!.doc_id = "S100YIAY"; // Different actual 7911 fixture ID, declared binding fault.
     else f.rows[0]!.scope = "DECLARED_MISMATCH";
     const result = await auditRawIndex(f.opts, f.io);
     expect(result).toMatchObject({ status: "complete", integrityAccepted: false, checkpoint: { integrityHolds: 1 } });
-    if (["missing_index", "wrong_metadata"].includes(fault)) expect(f.calls.some(call => call.startsWith("GET:raw/"))).toBe(false);
+    if (["missing_index", "wrong_metadata", "doc_mismatch"].includes(fault)) expect(f.calls.some(call => call.startsWith("GET:raw/"))).toBe(false);
+    if (fault === "doc_mismatch") expect(f.records.find(r => (r as { phase: string }).phase === "item")).toMatchObject({ semanticIdentity: "hold", semanticReasons: ["edinet_doc_id_mismatch"] });
   });
   it("normal partial resume pins source/manifest/whole receipt and carries read bytes, requests, elapsed time", async () => {
     const f = fixture(true), first = await auditRawIndex(f.opts, f.io), prior = f.receipt();

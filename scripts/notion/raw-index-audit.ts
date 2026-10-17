@@ -38,6 +38,7 @@ export function qualifyRawAuditItem(item: RawItem, row: RawIndexRow | null, buck
     if (body === null) integrityReasons.push("raw_missing_or_not_read");
     else if (body.sha256 !== item.sha256 || body.sizeBytes !== item.sizeBytes) integrityReasons.push("raw_sha_or_size_mismatch");
     if (item.source === "EDINET" && (row.doc_id === null || item.docId === null)) semanticReasons.push("edinet_doc_id_unproven");
+    if (item.source === "EDINET" && row.doc_id !== null && item.docId !== null && row.doc_id !== item.docId) semanticReasons.push("edinet_doc_id_mismatch");
     const expected = expectedRawIndex(item, bucket, row.r2_key);
     if (row.first_fetched_at !== expected.first_fetched_at || row.last_fetched_at !== expected.last_fetched_at)
       semanticReasons.push("historical_fetch_clocks_preserved_not_reconstructed");
