@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { guardedHoldingsMutation, inspectPendingHoldingPatch, writeHoldingsArtifact } from "./shareholdings.js";
+import { guardedHoldingsMutation, inspectPendingHoldingPatch, writeHoldingsArtifact, claimHoldingPatchReplacement } from "./shareholdings.js";
 import { parseShareholdingsData } from "../../services/yuho-quant/src/services/edinet/shareholdings.js";
 import { unzip } from "../../services/yuho-quant/src/services/edinet/zip.js";
 import { holdingProperties, inspectHoldingPatch } from "../../src/shared/notion-archive/shareholdings.js";
@@ -41,6 +41,15 @@ describe("normal pending-patch read-only CLI", () => {
     const paths = inputs(), pendingBytes = fs.readFileSync(pending()); fs.appendFileSync(paths.request, " ");
     await expect(inspectPendingHoldingPatch(paths)).rejects.toThrow(); expect(inspectHoldingPatch).not.toHaveBeenCalled();
     expect(fs.readFileSync(pending()).equals(pendingBytes)).toBe(true); expect(fs.existsSync(paths.out)).toBe(false);
+  });
+  it("canonical旧IDのfsync latchは別output/PREでも再送を拒否し元bytesを保持する", () => {
+    const state = join(dir, "replacement-state"), native = vi.fn(); vi.stubGlobal("fetch", native);
+    const oldId = JSON.parse(fs.readFileSync(new URL("unknown-before.json", fixture), "utf8")).id;
+    claimHoldingPatchReplacement(state, { oldId, out: "first-output" });
+    const original = fs.readFileSync(join(state, "replacement-started.json"));
+    expect(() => claimHoldingPatchReplacement(state, { oldId, out: "different-output" })).toThrow();
+    expect(fs.readFileSync(join(state, "replacement-started.json")).equals(original)).toBe(true);
+    expect(native).not.toHaveBeenCalled(); expect(vi.mocked(fs.fsyncSync).mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 });
 vi.mock("../../services/yuho-quant/src/services/edinet/zip.js", () => ({ unzip: vi.fn() }));

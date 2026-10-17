@@ -1,0 +1,24 @@
+{
+  "description": "Actual saved1911 full legacy PRE bytes and full44 current period business/identity projection. No new source HTTP. The45 source rows correspond to42 current pages plus2 unmatched old rows;3 source rows are not yet created.",
+  "legacyPre": {
+    "source": "tmp/feature-audit-20261017/holdings-next8h-rate075-pure-v1/actual-remaining17-v3/range-05/native/response-477.body",
+    "sourceSha256": "a21ff85fc1b86a85024d5c2fab80d710192eff665d7fd6cde59c8b65789da157",
+    "fixture": "legacy-pre.json",
+    "fixtureSha256": "a21ff85fc1b86a85024d5c2fab80d710192eff665d7fd6cde59c8b65789da157",
+    "bytes": 172804,
+    "rows": 40,
+    "changes": []
+  },
+  "currentPeriod": {
+    "source": "tmp/feature-audit-20261017/holdings-range05-stop-readonly-v1/fresh-read-v1/holding-periods.json",
+    "sourceSha256": "4d358946f86e942be1931477184e888136e1d77aca6afe87b89e701b20ceb57d",
+    "fixture": "period-after31.json",
+    "fixtureSha256": "5d79ca8d3a87e16207f8d1184d0c97e7e40d173760798b0c2630ed7a94119fed",
+    "rows": 44,
+    "changes": [
+      "Select only stockCode1911 source entry",
+      "Retain exactly object/id/parent/archived/in_trash/created_time/last_edited_time/properties for every page; other transport/UI fields omitted",
+      "All retained values unchanged; JSON serialization changed"
+    ]
+  }
+}
