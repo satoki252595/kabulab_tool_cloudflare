@@ -37,12 +37,29 @@ export type BenefitHoldingStructure = {
     | { holdingPeriod: "1年以上"; benefit: { kind: "admission_tickets"; quantity: number; unit: "枚" } };
 };
 
+/** 掲載の2期間と名簿定義。株数・名義・本人への適用や権利日は確定しない。 */
+export type BenefitRecordTierStructure = {
+  status: "literal_parsed";
+  rule: "holding-record-tiers-v1";
+  sourceSha256: string;
+  applicability: "unverified";
+  ast: {
+    benefitKind: "quo_card";
+    tiers: [
+      { ordinal: 1; holdingPeriod: string; listedYen: number; notation: "相当" | "分" },
+      { ordinal: 2; holdingPeriod: string; listedYen: number; notation: "相当" | "分" },
+    ];
+    registryDefinition: { continuousHoldingPeriod: string; minimumEntries: number; entryMeaning: "listed_or_recorded" };
+    shipment: { month: number; part: "上旬" | "中旬" | "下旬"; frequency: "annual"; status: "planned" };
+  };
+};
+
 export type PublicBenefitFacts = ({ version: 1 } | { version: 2; conditionStructure: BenefitConditionStructure }
-  | { version: 3; conditionStructure: BenefitHoldingStructure }) & {
+  | { version: 3; conditionStructure: BenefitHoldingStructure } | { version: 4; conditionStructure: BenefitRecordTierStructure }) & {
   sourceGroup: string;
   /** 掲載表記の検出。必要条件・適用対象を確認済みという意味ではない。 */
   holding: boolean;
-  /** 掲載中の期間表記。v3の全文対応を除き特典との対応は未確定。本人・株数条件は未確認。 */
+  /** 掲載中の期間表記。v3/v4の全文対応を除き特典との対応は未確定。本人・株数条件は未確認。 */
   holdingPeriods: string[];
   /** 選択・抽選に関する掲載表記の検出。対象の確定ではない。 */
   choice: boolean;
@@ -89,9 +106,9 @@ export function parsePublicBenefitFacts(value: unknown, code?: string): PublicBe
   const raw: unknown = typeof value === "string" ? JSON.parse(value) : value;
   const version = typeof raw === "object" && raw !== null && "version" in raw ? raw.version : undefined;
   const facts = record(raw,
-    ["version", "sourceGroup", "holding", "holdingPeriods", "choice", "lottery", "application", "combination", "valueStatus", "qualifiedAmount", "valueReasons", "source", ...(version === 2 || version === 3 ? ["conditionStructure"] : [])]);
+    ["version", "sourceGroup", "holding", "holdingPeriods", "choice", "lottery", "application", "combination", "valueStatus", "qualifiedAmount", "valueReasons", "source", ...(version === 2 || version === 3 || version === 4 ? ["conditionStructure"] : [])]);
   const source = record(facts.source, ["listingUrl", "fetchedAt", "batchFetchedAt", "officialStatus", "officialUrl", "verifiedAt"]);
-  if ((facts.version !== 1 && facts.version !== 2 && facts.version !== 3) || typeof facts.sourceGroup !== "string" || !/^[0-9a-f]{16}$/.test(facts.sourceGroup) ||
+  if ((facts.version !== 1 && facts.version !== 2 && facts.version !== 3 && facts.version !== 4) || typeof facts.sourceGroup !== "string" || !/^[0-9a-f]{16}$/.test(facts.sourceGroup) ||
       [facts.holding, facts.choice, facts.lottery, facts.application].some(v => typeof v !== "boolean") ||
       !Array.isArray(facts.holdingPeriods) || facts.holdingPeriods.some(v => typeof v !== "string" || !/^(?:[0-9]+|半)(?:年|か月)(?:以上|未満|以下|超)$/.test(v)) ||
       (facts.holding === false && facts.holdingPeriods.length > 0) ||
@@ -144,6 +161,29 @@ export function parsePublicBenefitFacts(value: unknown, code?: string): PublicBe
       if (ast.holdingPeriod !== "1年以上" || benefit.unit !== "枚" || typeof benefit.quantity !== "number" || !Number.isSafeInteger(benefit.quantity) || benefit.quantity <= 0 ||
           facts.qualifiedAmount !== null || facts.valueStatus !== "unresolved") throw new Error("掲載期間と枚数の対応が不正です");
     } else throw new Error("掲載特典の種類が未対応です");
+  }
+  if (facts.version === 4) {
+    const structure = record(facts.conditionStructure, ["status", "rule", "sourceSha256", "applicability", "ast"]);
+    const ast = record(structure.ast, ["benefitKind", "tiers", "registryDefinition", "shipment"]);
+    if (structure.status !== "literal_parsed" || structure.rule !== "holding-record-tiers-v1" ||
+        typeof structure.sourceSha256 !== "string" || !/^[0-9a-f]{64}$/.test(structure.sourceSha256) || structure.applicability !== "unverified" ||
+        ast.benefitKind !== "quo_card" || !Array.isArray(ast.tiers) || ast.tiers.length !== 2 ||
+        facts.holding !== true || facts.choice !== false || facts.lottery !== false || facts.application !== false ||
+        facts.combination !== "unverified" || facts.valueStatus !== "unresolved" || facts.qualifiedAmount !== null ||
+        JSON.stringify(facts.valueReasons) !== JSON.stringify(["ambiguous_condition_tiers"])) throw new Error("掲載2期間の適用範囲が不正です");
+    const below = record(ast.tiers[0], ["ordinal", "holdingPeriod", "listedYen", "notation"]);
+    const above = record(ast.tiers[1], ["ordinal", "holdingPeriod", "listedYen", "notation"]);
+    const period = typeof below.holdingPeriod === "string" ? /^([1-9][0-9]*)年未満$/.exec(below.holdingPeriod) : null;
+    if (period === null || !Number.isSafeInteger(Number(period[1])) || above.holdingPeriod !== `${period[1]}年以上` ||
+        below.ordinal !== 1 || above.ordinal !== 2 || below.listedYen === above.listedYen || below.notation !== above.notation ||
+        ![below, above].every(tier => typeof tier.listedYen === "number" && Number.isSafeInteger(tier.listedYen) && tier.listedYen > 0 && ["相当", "分"].includes(tier.notation as string)) ||
+        JSON.stringify(facts.holdingPeriods) !== JSON.stringify([below.holdingPeriod, above.holdingPeriod])) throw new Error("掲載2期間と円額の対応が不正です");
+    const definition = record(ast.registryDefinition, ["continuousHoldingPeriod", "minimumEntries", "entryMeaning"]);
+    const shipment = record(ast.shipment, ["month", "part", "frequency", "status"]);
+    if (definition.continuousHoldingPeriod !== above.holdingPeriod || definition.entryMeaning !== "listed_or_recorded" ||
+        typeof definition.minimumEntries !== "number" || !Number.isSafeInteger(definition.minimumEntries) || definition.minimumEntries <= 0 ||
+        typeof shipment.month !== "number" || !Number.isInteger(shipment.month) || shipment.month < 1 || shipment.month > 12 ||
+        !["上旬", "中旬", "下旬"].includes(shipment.part as string) || shipment.frequency !== "annual" || shipment.status !== "planned") throw new Error("名簿定義・発送予定が不正です");
   }
   if (code !== undefined && source.listingUrl !== `https://minkabu.jp/stock/${code}/yutai`) {
     throw new Error("公開条件の銘柄と掲載出典が一致しません");

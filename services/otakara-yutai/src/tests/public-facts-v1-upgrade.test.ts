@@ -9,12 +9,14 @@ import { ROOT } from "../../../../src/shared/db/tests/source-scan.js";
 import type { D1BatchStatement } from "../../../../src/shared/db/d1-http-client.js";
 import { assertPublicFactsUpgradeReady, claimPublicFactsUpgrade, planPublicFactsV1Upgrade, parsePublicFactsUpgradeScope,
   planPublicFactsV1HoldingUpgrade, parsePublicFactsHoldingUpgradeScope,
+  planPublicFactsV1RecordTierUpgrade, parsePublicFactsRecordTierUpgradeScope,
   applyPublicFactsBackfillOnce, type PublicFactsPreimage, type PublicFactsUpgradeScope } from "../../data-scripts/backfill-public-facts.js";
 import { benefitKey } from "../../data-scripts/benefit-key.js";
 import { buildPublicBenefitFacts } from "../../data-scripts/public-facts.js";
 import { parsePublicBenefitFacts } from "../public-facts.js";
 import saved from "./fixtures/choice-list-saved15.json";
 import holdingSaved from "./fixtures/holding-period-saved4.json";
+import recordTierSaved from "./fixtures/record-tier-saved1.json";
 
 const sha = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 const source = (rows: PublicFactsPreimage[]) => rows.map(({ genreId, createdAt, publicFacts, ...value }) => {
@@ -51,6 +53,15 @@ function holdingRows(): PublicFactsPreimage[] {
   return rows;
 }
 const holdingScope = (rows: PublicFactsPreimage[]) => parsePublicFactsHoldingUpgradeScope({ ...scope(rows), kind: "single-holding-period-v1" });
+function recordTierRows(): PublicFactsPreimage[] {
+  // 全文文法/CASの境界専用。実原文の回帰は下のprivate保存入力で行う。
+  const description = '【種別："オリジナルQUOカード"】\n【1年未満保有株主】\n2,000円相当\n【1年以上保有株主】\n5,000円相当\n■継続保有期間について\n1年以上継続保有:株主名簿に3回以上記載または記録\n\n■贈呈時期\n毎年3月下旬発送予定';
+  const next = buildPublicBenefitFacts({ code: "7203", description, context: { minShares: [100], recordMonths: [3] }, fetchedAt: null, batchFetchedAt: null });
+  if (next.version !== 4) throw new Error("v4 producer required");
+  const { conditionStructure, ...fields } = next; void conditionStructure;
+  const rows = protocolRows(); rows[0] = { ...rows[0], description, publicFacts: JSON.stringify({ ...fields, version: 1 }) }; return rows;
+}
+const recordTierScope = (rows: PublicFactsPreimage[]) => parsePublicFactsRecordTierUpgradeScope({ ...scope(rows), kind: "holding-record-tiers-v1" });
 function database(rows: PublicFactsPreimage[]) {
   const db = new DatabaseSync(":memory:");
   db.exec("CREATE TABLE core_stocks(id INTEGER PRIMARY KEY,code TEXT,name TEXT,is_active INTEGER,instrument_type TEXT); CREATE TABLE yutai_benefits(id INTEGER PRIMARY KEY,stock_id INTEGER,genre_id INTEGER,description TEXT,short_summary TEXT,min_shares INTEGER,record_month INTEGER,record_date TEXT,estimated_value INTEGER,estimate_value_source TEXT,created_at INTEGER,updated_at INTEGER,public_facts TEXT)");
@@ -65,6 +76,57 @@ function database(rows: PublicFactsPreimage[]) {
 }
 
 describe("明示v1条件だけの有限更新", () => {
+  it("新record-tier modeだけが1群/1行のv4を全列CASで更新し、旧choice/holding入口を使わない", async () => {
+    const before = recordTierRows(), fixed = recordTierScope(before), plan = planPublicFactsV1RecordTierUpgrade(source(before), before, fixed);
+    expect(plan).toMatchObject({ groups: 1, targetRows: 1, codes: ["7203"] });
+    const next = parsePublicBenefitFacts(plan.expected[0].publicFacts)!;
+    expect(next).toMatchObject({ version: 4, qualifiedAmount: null, valueReasons: ["ambiguous_condition_tiers"], conditionStructure: { applicability: "unverified" } });
+    if (next.version !== 4) throw new Error("v4 required");
+    const { conditionStructure, ...fields } = next; void conditionStructure;
+    expect({ ...fields, version: 1 }).toEqual(parsePublicBenefitFacts(before[0].publicFacts));
+    expect(plan.expected[1]).toEqual(before[1]);
+    expect(() => planPublicFactsV1Upgrade(source(before), before, scope(before))).toThrow();
+    expect(() => planPublicFactsV1HoldingUpgrade(source(before), before, holdingScope(before))).toThrow();
+    expect(() => parsePublicFactsUpgradeScope(fixed)).toThrow();
+    expect(() => parsePublicFactsHoldingUpgradeScope(fixed)).toThrow();
+    const { db, read, send } = database(before);
+    try { const original = read(); await send(plan.statements); expect(read()).toEqual(original.map(row => ({ ...row, public_facts: plan.expected.find(v => v.id === row.id)!.publicFacts })));
+      const accepted = read(); await expect(send(plan.statements)).rejects.toThrow(); expect(read()).toEqual(accepted); }
+    finally { db.close(); }
+  });
+  it("record-tierの群/行/主体追加・原文/旧DTO差・既更新・全列driftをHTTP前又は原子rollbackで止める", async () => {
+    const before = recordTierRows(), fixed = recordTierScope(before), group = fixed.groups[0], native = vi.fn(); vi.stubGlobal("fetch", native);
+    for (const groups of [[group, { ...group, code: "1301", taskId: "a".repeat(16) }],
+      [{ ...group, rows: 2, recipients: [group.recipients[0], { ...group.recipients[0], minShares: 200 }] }]]) {
+      expect(() => parsePublicFactsRecordTierUpgradeScope({ ...fixed, groups })).toThrow();
+    }
+    const plan = planPublicFactsV1RecordTierUpgrade(source(before), before, fixed);
+    for (const first of [{ ...before[0], publicFacts: plan.expected[0].publicFacts },
+      { ...before[0], publicFacts: JSON.stringify({ ...JSON.parse(before[0].publicFacts!), qualifiedAmount: 2000 }) },
+      { ...before[0], description: before[0].description + "\n同一株主番号で連続記録" }]) {
+      const changed = [first, before[1]]; expect(() => planPublicFactsV1RecordTierUpgrade(source(changed), changed, fixed)).toThrow();
+    }
+    for (const column of ["genre_id", "description", "short_summary", "min_shares", "record_month", "record_date", "estimated_value", "estimate_value_source", "created_at", "updated_at", "public_facts"]) {
+      const { db, read, send } = database(before);
+      try { db.prepare(`UPDATE yutai_benefits SET ${column}=? WHERE id=2`).run(["description", "short_summary", "record_date", "estimate_value_source", "public_facts"].includes(column) ? "drift" : 9);
+        const drift = read(); await expect(send(plan.statements)).rejects.toThrow(); expect(read()).toEqual(drift); }
+      finally { db.close(); }
+    }
+    expect(native).not.toHaveBeenCalled();
+  });
+  const privateRecordTier = join(ROOT, "tmp/yutai-record-tier-proof-v1/saved1.private.json");
+  it.skipIf(!existsSync(privateRecordTier))("実1899保存1行を同じv4 planner/SQLへ通し、元全値と12月の権利月を保持する", async () => {
+    const bytes = readFileSync(privateRecordTier); expect(sha(bytes)).toBe(recordTierSaved.provenance.privateFixtureSha256);
+    const original = JSON.parse(bytes.toString()), before = original.rows as PublicFactsPreimage[];
+    expect(sha(before[0].description)).toBe(recordTierSaved.provenance.sourceSha256);
+    const plan = planPublicFactsV1RecordTierUpgrade(source(before), before, recordTierScope(before));
+    expect(plan.targetRows).toBe(1); expect(plan.expected[0]).toEqual({ ...before[0], publicFacts: expect.any(String) });
+    expect(parsePublicBenefitFacts(plan.expected[0].publicFacts)).toEqual({ ...recordTierSaved.oldFacts, version: 4, conditionStructure: recordTierSaved.expectedStructure });
+    const { db, read, send } = database(before);
+    try { const old = read(); await send(plan.statements); expect(read()).toEqual(old.map(row => ({ ...row, public_facts: plan.expected[0].publicFacts })));
+      expect(read()[0].record_month).toBe(12); expect(read()[0].record_date).toBeNull(); }
+    finally { db.close(); }
+  });
   it("明示holding modeだけがv3を扱い、choice scope/構造と混在しない", async () => {
     const before = holdingRows(), fixed = holdingScope(before), plan = planPublicFactsV1HoldingUpgrade(source(before), before, fixed);
     expect(plan).toMatchObject({ groups: 1, targetRows: 1, codes: ["7203"] });

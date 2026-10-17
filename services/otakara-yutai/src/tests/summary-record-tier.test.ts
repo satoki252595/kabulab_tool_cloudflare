@@ -68,11 +68,12 @@ describe("全文で対応した保有2tierと名簿記録条件の定型要約",
     expect(compile(description.replace("2,000円", "999,999,999,999,999円").replace("5,000円", "888,888,888,888,888円"))).toBeNull();
   });
 
-  it("公開DTOのtier対応・本人適用・評価額は未資格のまま保つ", () => {
+  it("掲載2期間と名簿定義は構造化し、本人適用と評価額は未資格のまま保つ", () => {
     const facts = buildPublicBenefitFacts({ code: "1899", description, context: { minShares: [200], recordMonths: [12] },
       fetchedAt: null, batchFetchedAt: null });
-    expect(facts).toMatchObject({ version: 2, qualifiedAmount: null, valueReasons: ["ambiguous_condition_tiers"],
-      holdingPeriods: ["1年未満", "1年以上"], combination: "unverified", conditionStructure: { status: "unparsed", ast: null } });
+    expect(facts).toMatchObject({ version: 4, qualifiedAmount: null, valueReasons: ["ambiguous_condition_tiers"],
+      holdingPeriods: ["1年未満", "1年以上"], combination: "unverified", conditionStructure: { status: "literal_parsed", applicability: "unverified",
+        ast: { registryDefinition: { continuousHoldingPeriod: "1年以上", minimumEntries: 3, entryMeaning: "listed_or_recorded" }, shipment: { month: 3, part: "下旬", status: "planned" } } } });
   });
 
   it.skipIf(!existsSync(privatePath))("保存実1899全文・1行を通常compilerと原子取込plannerへ通す", () => {
