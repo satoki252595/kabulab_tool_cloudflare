@@ -9,6 +9,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ## 2026-10-18
 
+- 固定RAW全量をLLMなしで独立に再読する有限read-only CLIを追加。全body SHA/サイズとSHA先限定の15列索引を検証し、legacy欠測・履歴時計HOLDと原本整合を分け、private receipt/費用/原期限を保った正常partial再開に限定する。[実保存入力と費用・未実施境界](test-logs/raw-independent-audit-20261018.md)。SSH移行・本番全量照合は別受入（Refs #515）。
 - 運用計画: RAW原本転送とLLMなしの独立最終照合をSSH先へ移す[準備条件と未実施境界](deterministic-production.md#raw転送最終照合のssh移行計画2026-10-18)を記録。既actorの自然終端・元pool/unknown保持を前提とし、資格情報移送・SSH writer・全量監査CLIは未実施/未実装。
 - 事業タグの明示emptyコードを全市場へ広げず拒否し、指定runの補足読取を既存OR filterへ絞る。全市場見直し材料は全量runだけ、関連付け先マスタは必要処理だけで取得する。[Sonnet候補の照合と保存50社の同値検証](test-logs/biztag-scoped-run-20261018.md)を記録し、通常HOLD・本文/根拠publisherを維持した（実補完・新runtime切替は別受入）。
 - 株式日次の業種集計で、当日削除・保持期限掃除・全業種の再挿入を共有D1 senderの一つのbatchへまとめる。集計値・順位・16行チャンクは維持し、途中失敗による部分表示を防ぐ。[停止・途中制約違反・応答不明の回帰](test-logs/sector-daily-atomic-20261018.md)を追加した。本番定時での受入は別途。
