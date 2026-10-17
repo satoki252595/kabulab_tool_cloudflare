@@ -45,9 +45,12 @@ beforeEach(() => {
   });
 });
 describe("発行株数観測の正常producerと保存reader", () => {
-  it("実6908の消却診断を同じRecoveryInfo PATCH/readbackへ渡し、追加取得/展開をしない", async () => {
-    const p = JSON.parse(readFileSync(new URL("../../../services/yuho-quant/src/tests/fixtures/issued-cancellation-6908-S100Z5N2.provenance.json", import.meta.url), "utf8"));
-    const actualZip = readFileSync(new URL("../../../services/yuho-quant/src/tests/fixtures/issued-cancellation-6908-S100Z5N2.zip", import.meta.url));
+  it.each([
+    ["issued-cancellation-6908-S100Z5N2", "reportedCancellations", { reportedCancelledShares: "122819" }],
+    ["issued-paid-5820-S100YG3G", "reportedPaidIssuance", { reportedPaymentDate: "2026-01-21", reportedIncreaseShares: "160000" }],
+  ] as const)("実%sの診断を同じRecoveryInfo PATCH/readbackへ渡し、追加取得/展開をしない", async (fixture, diagnostic, statement) => {
+    const p = JSON.parse(readFileSync(new URL(`../../../services/yuho-quant/src/tests/fixtures/${fixture}.provenance.json`, import.meta.url), "utf8"));
+    const actualZip = readFileSync(new URL(`../../../services/yuho-quant/src/tests/fixtures/${fixture}.zip`, import.meta.url));
     (page.properties as Record<string, unknown>).Key = { type: "title", title: [{ type: "text", text: { content: `${p.source.docId}:type1` }, plain_text: `${p.source.docId}:type1` }] };
     (page.properties as Record<string, unknown>).Metadata = rich(JSON.stringify(p.sourceMetadata));
     const zipReader = await import("../../../services/yuho-quant/src/services/edinet/zip.js");
@@ -55,7 +58,7 @@ describe("発行株数観測の正常producerと保存reader", () => {
     const unzip = vi.spyOn(zipReader, "unzip");
     const result = await publishVerifiedShareholdings({ source: p.source, ownerName: p.ownerName, zip: actualZip, archivePageId, maxRows: 0,
       observeIssuedShares: true, issuedSharesFilingDateEvidence: { rawSubmitDateTime: p.rawSubmitDateTime, provenance: "same-edinet-document" } });
-    expect(result.issuedSharesObservation!.reportedCancellations).toMatchObject({ status: "observed", statements: [{ reportedCancelledShares: "122819" }] });
+    expect(result.issuedSharesObservation![diagnostic]).toMatchObject({ status: "observed", statements: [statement] });
     const props = page.properties as Record<string, ReturnType<typeof rich>>;
     const info = JSON.parse(props["保有明細再開情報"].rich_text.map(x => x.plain_text).join(""));
     expect(info.issuedSharesObservation).toEqual(result.issuedSharesObservation);
