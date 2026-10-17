@@ -6,6 +6,7 @@ import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { runDailySync, runMarketContextSync } from "./daily.js";
 import * as dailyModule from "./daily.js";
 import * as jpLegModule from "./macro-jp-leg.js";
+import { collectOfficialRightsCustody } from "./rights-official-custody.js";
 import { r2GetVersion } from "../../scripts/vwap/lib/r2.js";
 const emptyJpStore: jpLegModule.MacroJpLegStore = { get: async () => null, put: async () => { throw new Error("test: unexpected PUT"); } };
 import type { OverlayCollectFn } from "./universe-overlay.js";
@@ -51,6 +52,7 @@ vi.mock("../shared/yahoo/client.js", async (original) => ({
   fetchChart: vi.fn(), fetchStockRawData: vi.fn(),
 }));
 vi.mock("../shared/yahoo/raw-custody.js", () => ({ archiveYahooRawBatch: vi.fn() }));
+vi.mock("./rights-official-custody.js", () => ({ collectOfficialRightsCustody: vi.fn() }));
 vi.mock("../shared/yahoo/nikkei-vi.js", async (original) => ({ ...await original<typeof import("../shared/yahoo/nikkei-vi.js")>(), fetchNikkeiVi: vi.fn() }));
 vi.mock("../../scripts/vwap/lib/r2.js", () => ({ r2GetVersion: vi.fn(), r2Put: vi.fn() }));
 vi.mock("../shared/notion-archive/index.js", async (original) => ({
@@ -67,6 +69,7 @@ const fxBytes = (name: string): Uint8Array => readFileSync(join(FX, name));
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.mocked(collectOfficialRightsCustody).mockResolvedValue({ family: "jpx-ex-rights", status: "incomplete", reason: "source", financialQualification: "unqualified", sourceCount: 1, completeSources: 0, archiveKey: null, archivePageId: null, physicalVerified: false, error: null });
   vi.mocked(r2GetVersion).mockResolvedValue(null);
   vi.mocked(archiveYahooRawBatch).mockResolvedValue({ pages: ["raw-page"], rawBytes: 1, compressedBytes: 1 });
   vi.useFakeTimers();
@@ -703,6 +706,11 @@ describe("SCHEDULED_DATE 検証 (CF scheduler 経由の一致確認のみ)", () 
       "日足を確認できません"
     );
     expect(fetchChart).toHaveBeenCalled();
+    expect(collectOfficialRightsCustody).not.toHaveBeenCalled();
+    const failureBatch = vi.mocked(recordPrimaryData).mock.calls.find(([input]) => input.key.startsWith("price-sync-batch-"))?.[0];
+    expect(failureBatch).toBeDefined();
+    const body = JSON.parse(new TextDecoder().decode(failureBatch!.files![0].bytes));
+    expect(body.officialRightsCustody).toBeUndefined(); // earlier quote STOP: JPX not started, not a retained/empty source.
   });
 
   it("scheduled-stocks の日付欠落・空・空白は fetch 前に落とす", async () => {

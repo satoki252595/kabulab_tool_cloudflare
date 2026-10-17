@@ -8,6 +8,8 @@
 
 ## 実行先と現在の例外
 
+JPX配当落・権利落等の短期掲載原本は、既存18時 `scheduled-stocks` の金融主要write・完了記録後の通常共有collectorでindex1＋最大5 XLSを共通Notion archiveへ物理保持する。公開 `JPX_EX_RIGHTS_URL` を型付き設定から必須参照し、未設定・欠測・保管不明は独立した `officialRightsCustody` 診断に残す。Yahooの価格資格・既存guardは代用せず、権利の法的日付・比率・普通株・金融適用も確定しない。[実原本・費用・未受入](test-logs/jpx-ex-rights-custody-20261017.md)を参照。本番URL設定/実取得/物理受入は別途で、capture実装を全権利対応とは数えない。
+
 | 処理 | 決定的な処理 | 実行先と制約 |
 |---|---|---|
 | 株価・需給・VWAP・資金フロー | 取得、原本資格、計算、保存、coverage検査 | Cloudflareで起動・監視、ActionsのNode/Pythonで実行。429・原本欠損・期限超過は未完として止める |
