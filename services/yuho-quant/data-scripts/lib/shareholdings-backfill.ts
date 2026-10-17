@@ -5,6 +5,7 @@ import { stocks } from "../../../../src/shared/db/core-schema.js";
 import { activeEquityCondition } from "../../../../src/shared/db/active-equity.js";
 import { yuhoDocuments } from "../../src/db/schema.js";
 import { parseStockCode } from "../../../../src/shared/jpx/stock-code.js";
+import { reportedLatestSelectionHold, REPORTED_DOCUMENT_HOLD_REASON } from "../../src/services/edinet/reported-changes.js";
 
 export async function selectLatestHoldingsDocuments(
   db: BaseSQLiteDatabase<"async", unknown, Record<string, unknown>>,
@@ -29,10 +30,12 @@ export async function selectLatestHoldingsDocuments(
     inArray(yuhoDocuments.stockId, candidates))).as("latest_holdings");
   const rows = await db.select({ stockId: latest.stockId, stockCode: sql<string>`${stocks.code}`, docId: latest.docId,
     edinetCode: latest.edinetCode, ownerName: latest.ownerName, fiscalYearEnd: latest.fiscalYearEnd, submittedAt: latest.submittedAt,
+    reportedHold: reportedLatestSelectionHold(latest.docId,latest.stockId,latest.fiscalYearEnd,latest.submittedAt),
   // NOT INDEXEDでもINTEGER PRIMARY KEYは使える。候補だけをrowidで引き、active全株を再走査しない。
   }).from(latest).innerJoin(sql`${stocks} NOT INDEXED`, eq(stocks.id, latest.stockId))
     .where(and(eq(latest.rank, 1), activeEquityCondition(), args.afterCode === null ? undefined : gt(stocks.code, args.afterCode),
       args.onlyCode === undefined ? undefined : eq(stocks.code, args.onlyCode)))
     .orderBy(asc(stocks.code)).limit(args.limit + 1);
-  return { rows: rows.slice(0, args.limit), more: rows.length > args.limit };
+  return { rows: rows.slice(0, args.limit).map(({ reportedHold, ...row }) => ({ ...row,
+    ...(reportedHold === 1 ? { reportedHoldReason: REPORTED_DOCUMENT_HOLD_REASON } : {}) })), more: rows.length > args.limit };
 }

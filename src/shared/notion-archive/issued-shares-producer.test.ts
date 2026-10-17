@@ -1,3 +1,5 @@
+import { createReportedSourceTestDb } from "./reported-source-test-db.js";
+const sourceDb = createReportedSourceTestDb().db;
 /** Actual saved ZIP through normal publisher/reader; Notion is a protocol boundary, no live HTTP. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
@@ -56,7 +58,7 @@ describe("発行株数観測の正常producerと保存reader", () => {
     const zipReader = await import("../../../services/yuho-quant/src/services/edinet/zip.js");
     const { publishVerifiedShareholdings } = await import("./shareholdings.js");
     const unzip = vi.spyOn(zipReader, "unzip");
-    const result = await publishVerifiedShareholdings({ source: p.source, ownerName: p.ownerName, zip: actualZip, archivePageId, maxRows: 0,
+    const result = await publishVerifiedShareholdings({ sourceDb, source: p.source, ownerName: p.ownerName, zip: actualZip, archivePageId, maxRows: 0,
       observeIssuedShares: true, issuedSharesFilingDateEvidence: { rawSubmitDateTime: p.rawSubmitDateTime, provenance: "same-edinet-document" } });
     expect(result.issuedSharesObservation![diagnostic]).toMatchObject({ status: "observed", statements: [statement] });
     const props = page.properties as Record<string, ReturnType<typeof rich>>;
@@ -69,7 +71,7 @@ describe("発行株数観測の正常producerと保存reader", () => {
     const zipReader = await import("../../../services/yuho-quant/src/services/edinet/zip.js");
     const { publishVerifiedShareholdings } = await import("./shareholdings.js");
     const unzip = vi.spyOn(zipReader, "unzip");
-    const result = await publishVerifiedShareholdings({ source, ownerName: "株式会社ラストワンマイル", zip, archivePageId, maxRows: 0, observeIssuedShares: true, issuedSharesFilingDateEvidence: filingDateEvidence });
+    const result = await publishVerifiedShareholdings({ sourceDb, source, ownerName: "株式会社ラストワンマイル", zip, archivePageId, maxRows: 0, observeIssuedShares: true, issuedSharesFilingDateEvidence: filingDateEvidence });
     expect(result).toMatchObject({ status: "held", parsed: 1 });
     expect(unzip).toHaveBeenCalledTimes(1);
     const expected = observeIssuedShares(zip, source, filingDateEvidence, unzip.mock.results[0].value!);
@@ -87,7 +89,7 @@ describe("発行株数観測の正常producerと保存reader", () => {
     if (mode === "unassigned") for (const [name, bytes] of entries) if (name.endsWith(".xbrl")) entries.set(name, Buffer.from(bytes.toString("utf8").replace(/(<[^:<>]+:SecurityCodeDEI\b[^>]*>)92520(<\/[^:<>]+:SecurityCodeDEI>)/, (_all, before, after) => `${before}00000${after}`)));
     vi.spyOn(zipReader, "unzip").mockReturnValue(entries);
     const { publishVerifiedShareholdings } = await import("./shareholdings.js");
-    const result = await publishVerifiedShareholdings({ source: mode === "mismatch" ? { ...source, stockCode: "7203" } : source, ownerName: "株式会社ラストワンマイル", zip, archivePageId, maxRows: 100, observeIssuedShares });
+    const result = await publishVerifiedShareholdings({ sourceDb, source: mode === "mismatch" ? { ...source, stockCode: "7203" } : source, ownerName: "株式会社ラストワンマイル", zip, archivePageId, maxRows: 100, observeIssuedShares });
     expect(result).toMatchObject({ status: "held", parsed: 0, issuedSharesObservation: { status: "held", sourceQualification: { status: "held" } } });
     expect(result.issuedSharesObservation!.reason).not.toBeNull(); expect(notionRequest).toHaveBeenCalledTimes(5);
     expect(vi.mocked(notionRequest).mock.calls.filter(([method, path]) => method === "POST" && !path.endsWith("/query") || path.startsWith("/databases/") && method !== "GET" && !path.endsWith("/query"))).toHaveLength(0);
@@ -99,7 +101,7 @@ describe("発行株数観測の正常producerと保存reader", () => {
     const full = vi.spyOn(observer, "observeIssuedShares").mockImplementation(() => { throw new Error("full observation forbidden"); });
     const unzip = vi.spyOn(zipReader, "unzip");
     const { publishVerifiedShareholdings } = await import("./shareholdings.js");
-    const result = await publishVerifiedShareholdings({ source, ownerName: "株式会社ラストワンマイル", zip, archivePageId, maxRows: 0 });
+    const result = await publishVerifiedShareholdings({ sourceDb, source, ownerName: "株式会社ラストワンマイル", zip, archivePageId, maxRows: 0 });
     expect(result.issuedSharesObservation).toMatchObject({ status: "not-observed", sourceQualification: { status: "verified" }, observations: null, candidateCount: null });
     expect(result.issuedSharesObservation!.reason).toContain("有効化していません");
     expect(full).not.toHaveBeenCalled(); expect(unzip).toHaveBeenCalledTimes(1); expect(notionRequest).toHaveBeenCalledTimes(6);

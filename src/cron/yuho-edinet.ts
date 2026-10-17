@@ -17,6 +17,7 @@ import type { createD1HttpBatchSender } from "../shared/db/d1-http-client.js";
 import type { Database } from "../../services/yuho-quant/src/db/client.js";
 import { loadIngestCodeToId } from "../shared/db/active-equity.js";
 import { captureListSnapshot, readListSnapshot, EdinetListQualificationError } from "../../services/yuho-quant/src/services/edinet/list-snapshot.js";
+import { buildReportedChanges, recordReportedChanges, reportedStandaloneHold, ReportedDocumentHoldError } from "../../services/yuho-quant/src/services/edinet/reported-changes.js";
 import { enqueueDates, progressQueue, progressContents, progressSummary, saveProgress, jstDate, type PendingDocument } from "../../services/yuho-quant/src/services/edinet/catchup-progress.js";
 import { EdinetListFetchError, EdinetDocumentFetchError } from "../../services/yuho-quant/src/services/edinet/client.js";
 import {
@@ -136,12 +137,18 @@ export async function runYuhoEdinetCatchup(
   const ingestErrors: string[] = [];
 
   const overBudget = () => Date.now() - startedAt > TIME_BUDGET_MS || pastDeadline();
+  const recordChanges = async (list: Parameters<typeof recordReportedChanges>[1], snapshot: Parameters<typeof recordReportedChanges>[2]) => {
+    const observed = await recordReportedChanges(db, list, snapshot, overBudget);
+    for (const [key, count] of Object.entries(observed)) {
+      if (count > 0) byStatus[`edinet_reported:${key}`] = (byStatus[`edinet_reported:${key}`] ?? 0) + count;
+    }
+  };
   // EDINET completedとは独立。既知保留をNotion保存ZIPから優先再開し、源GETは0。
   // shard同時実行は保有明細writerを競合させないため、定期main runだけが再開する。
   const holdingsBudget = { remainingRows: 100 };
   let holdingsPending = false;
   if (!shard) {
-    const resumed = await resumePendingShareholdings({ maxRows: holdingsBudget.remainingRows, shouldStop: overBudget,
+    const resumed = await resumePendingShareholdings({ sourceDb: db, maxRows: holdingsBudget.remainingRows, shouldStop: overBudget,
       observeIssuedShares: producer?.observeIssuedShares });
     holdingsBudget.remainingRows -= resumed.usedRows;
     holdingsPending = resumed.pending || resumed.held > 0;
@@ -187,6 +194,11 @@ export async function runYuhoEdinetCatchup(
         const captured = await captureListSnapshot(date);
         list = captured.list;
         snapshot = captured.snapshot;
+        if (buildReportedChanges(list,snapshot).length>0) {
+          // 原保管完了後・新観測INSERT前に、その実snapshotを@listのまま永続化する。
+          row=await saveProgress(db,row,{snapshot:JSON.stringify(snapshot),inFlightDocId:"@list",finished:false,sealed:false});
+        }
+        await recordChanges(list, snapshot);
       } catch (error) {
         if (error instanceof EdinetListFetchError) {
           // 副作用のない源GET未完は次の定期runで再開。今のrunでは再送しない。
@@ -206,6 +218,11 @@ export async function runYuhoEdinetCatchup(
     } else {
       console.info(`[yuho-edinet] 保存 list 再開 ${date}`);
       list = await readListSnapshot(snapshot);
+      if (buildReportedChanges(list, snapshot).length > 0) {
+        row = await saveProgress(db, row, { inFlightDocId: "@list" });
+        await recordChanges(list, snapshot);
+        row = await saveProgress(db, row, { inFlightDocId: null });
+      }
     }
     const targets = list.results.filter((doc) => isAnnualSecuritiesReport(doc) &&
       (!shard || hashDocId(doc.docID) % shard.of === shard.part));
@@ -239,6 +256,10 @@ export async function runYuhoEdinetCatchup(
       const putPending = (reason: PendingDocument["reason"]) => {
         pending = [...pending.filter((p) => p.docId !== doc.docID), {docId: doc.docID, reason}];
       };
+      if (reportedStandaloneHold(doc)) {
+        putPending("reported_document_state");
+        continue;
+      }
       if (code === null) {
         putPending("identity_unresolved");
         continue;
@@ -267,6 +288,13 @@ export async function runYuhoEdinetCatchup(
           archiveToNotion: true, custody: custodyByDoc.get(doc.docID), d1HttpBatch, holdingsBudget,
           observeIssuedShares: producer?.observeIssuedShares});
       } catch (error) {
+        if (error instanceof ReportedDocumentHoldError) {
+          putPending("reported_document_state");
+          row = await saveProgress(db, row, { completedIds: JSON.stringify(completed),
+            pendingIds: JSON.stringify(pending), inFlightDocId: null });
+          console.warn(`[yuho-edinet] EDINET状態HOLD ${date} docID=${doc.docID}`);
+          continue;
+        }
         if (error instanceof ExistingTextReadbackMismatchError) {
           putPending("text_readback_mismatch");
           row = await saveProgress(db, row, {completedIds: JSON.stringify(completed),
@@ -343,7 +371,7 @@ export async function runYuhoEdinetCatchup(
   if (pastDeadline()) reachedCap = true;
   if (!shard && holdingPriceSourceLoader && !pastDeadline()) {
     const priceStarted = Date.now();
-    const prices = await resumePendingShareholdingsPrices({ maxRows: 100,
+    const prices = await resumePendingShareholdingsPrices({ sourceDb: db, maxRows: 100,
       shouldStop: () => Date.now() - priceStarted > TIME_BUDGET_MS || pastDeadline(),
       budget: { remainingChunks: 116, remainingBytes: 256 * 1024 * 1024 }, loadSources: holdingPriceSourceLoader });
     if (prices.resumed > 0) byStatus["holdings_price:resumed"] = prices.resumed;

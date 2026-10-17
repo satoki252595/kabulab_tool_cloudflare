@@ -16,6 +16,7 @@ import { readStockTextRow } from "../../../../src/shared/notion-archive/index.js
 import type { Database } from "../db/client.js";
 import { yuhoDocuments, textSections } from "../db/schema.js";
 import type { TextSectionKey } from "./edinet/text-sections.js";
+import { reportedDocumentHold, reportedLatestAnnualHoldDocId, reportedQualifiedTextHoldDocId, ReportedDocumentHoldError } from "./edinet/reported-changes.js";
 
 export interface LatestTextSection {
   sectionKey: TextSectionKey;
@@ -43,6 +44,9 @@ export async function getLatestTextSections(
       docId: yuhoDocuments.docId,
       submittedAt: yuhoDocuments.submittedAt,
       notionDocPageId: yuhoDocuments.notionDocPageId,
+      reportedHold: reportedDocumentHold(yuhoDocuments.docId),
+      latestReportedHoldDocId: reportedLatestAnnualHoldDocId(textSections.stockId, textSections.fiscalYearEnd),
+      qualifiedReportedHoldDocId: reportedQualifiedTextHoldDocId(textSections.stockId,textSections.fiscalYearEnd),
     })
     .from(textSections)
     .innerJoin(
@@ -64,6 +68,11 @@ export async function getLatestTextSections(
     latest.set(r.sectionKey, r);
   }
   if (latest.size === 0) return [];
+  for (const row of latest.values()) {
+    if (row.reportedHold === 1) throw new ReportedDocumentHoldError(row.docId);
+    if (row.latestReportedHoldDocId !== null) throw new ReportedDocumentHoldError(row.latestReportedHoldDocId);
+    if (row.qualifiedReportedHoldDocId !== null) throw new ReportedDocumentHoldError(row.qualifiedReportedHoldDocId);
+  }
 
   // 2) 通単位で Notion 行を読む (同一通は 1 回だけ)。
   const byDoc = new Map<string, string>();

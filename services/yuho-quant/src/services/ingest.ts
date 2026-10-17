@@ -58,7 +58,8 @@ import {
   extractTextSections,
   type TextParseStatus,
 } from "./edinet/text-sections.js";
-import { resolveReportPeriodEnd, type EdinetDoc } from "./edinet/types.js";
+import { resolveReportPeriodEnd, parseSubmitDateTime, type EdinetDoc } from "./edinet/types.js";
+import { reportedDocumentMetadata, reportedStandaloneHold, assertReportedDocumentUsable, ReportedDocumentHoldError, reportedDocumentAtomicGuard } from "./edinet/reported-changes.js";
 
 // 受注開示判定の語はパーサと単一定義を共有 (RX_ORDER_KEYWORD)。CSV(type=5)
 // は全テキストブロックを平坦化して含むので、受注が開示されていれば必ず
@@ -115,15 +116,6 @@ import { toOverseasSaveRows } from "./overseas-save-rows.js";
 import { toOrderSaveRows } from "./order-save-rows.js";
 import { serializeOverseasOmission } from "./overseas-omission.js";
 import { sha256HexBytes } from "../../../../src/shared/sha256.js";
-
-/** "2024-06-27 15:30" / "2024-06-27" を Date 化 (JST 表記をそのまま) */
-function parseSubmitDateTime(s: string): Date {
-  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/);
-  if (!m) throw new Error(`submitDateTime 形式が不正: ${s}`);
-  const [, y, mo, d, hh, mm] = m;
-  return new Date(Date.UTC(+y, +mo - 1, +d, hh ? +hh : 0, mm ? +mm : 0));
-}
-
 
 /** 配列を size 件ずつに分割する（D1 の bind 変数上限対策） */
 function chunk<T>(arr: T[], size: number): T[][] {
@@ -207,6 +199,8 @@ export async function ingestDocument(
     );
   }
 
+  if (reportedStandaloneHold(doc)) throw new ReportedDocumentHoldError(doc.docID);
+
   const existing = await db
     .select({
       id: yuhoDocuments.id,
@@ -221,6 +215,7 @@ export async function ingestDocument(
     .from(yuhoDocuments)
     .where(eq(yuhoDocuments.docId, doc.docID))
     .limit(1);
+  await assertReportedDocumentUsable(db, doc.docID);
   const existsInDb = existing.length > 0;
 
   // Notion 記録は DB 取込とは独立に冪等。DB は取込済でも Notion 未記録なら
@@ -506,6 +501,7 @@ export async function ingestDocument(
       periodStart: doc.periodStart,
       periodEnd,
       submitDateTime: doc.submitDateTime,
+      ...reportedDocumentMetadata(doc),
       parseStatus,
       honbunFile,
       factCount: deduped.length,
@@ -550,7 +546,7 @@ export async function ingestDocument(
           zipSha256: await sha256HexBytes(new Uint8Array(xbrlZip)),
           omission: overseasOmission });
       }
-      const holdings = await publishVerifiedShareholdings({ source: { docId: doc.docID, stockCode,
+      const holdings = await publishVerifiedShareholdings({ sourceDb: db, source: { docId: doc.docID, stockCode,
         edinetCode: doc.edinetCode, fiscalYearEnd: periodEnd }, ownerName: doc.filerName, zip: xbrlZip,
         archivePageId: archivedType1.pageId, maxRows: 100, budget: args.holdingsBudget,
         observeIssuedShares: args.observeIssuedShares,
@@ -660,10 +656,11 @@ export async function ingestDocument(
       // 本文ありの索引はNotion全文verify後、pointerと同一batchで置換する。
       ...(sections.length === 0 ? [db.delete(textSections).where(eq(textSections.documentId, docIdSubquery))] : []),
     ];
+    if (statements.length >= 1000) throw new Error("[ingest] reported guardを含むD1 batch文数が上限を超えました");
     if (d1HttpBatch !== undefined) {
       // 同一 builders を toSQL 化して送る (対象外の束縛値は送らず throw)。
       // per-statement フォールバックはしない。
-      await d1HttpBatch(toD1BatchStatements(statements));
+      await d1HttpBatch(toD1BatchStatements([reportedDocumentAtomicGuard(db, doc.docID), ...statements]));
     } else {
       // db.batch の受け口は非空タプル要求。先頭 upsert の存在を
       // 実行時に強制する (chunk が空でも upsert+delete 3 文は残る)。
@@ -673,7 +670,7 @@ export async function ingestDocument(
           "[ingest] D1 batch 文が 0 件です (upsert 先頭の不変条件違反)。書込の前に止めます。"
         );
       }
-      await db.batch([first, ...rest]);
+      await db.batch([reportedDocumentAtomicGuard(db, doc.docID), first, ...rest]);
     }
   }
 

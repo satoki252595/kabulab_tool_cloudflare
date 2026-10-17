@@ -176,6 +176,9 @@ function planOne(
     row,
   };
 
+  if (latest.reportedHoldReason !== undefined) {
+    return { ...base, kind: "skip", qualificationHeld: true, reason: latest.reportedHoldReason };
+  }
   if (eligibility?.heldCodes.has(latest.stockCode) === true) {
     return { ...base, kind: "skip", qualificationHeld: true, reason: "母集団の上場資格が HOLD。保存済み結果を保持し、新規・既存とも機械判定に置き換えない" };
   }

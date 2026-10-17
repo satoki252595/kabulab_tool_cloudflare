@@ -216,6 +216,9 @@ TABLE_LICENSE: dict[str, TableLicense] = {
     "yuho_order_facts": _uniform(LicenseTag.COMMERCIAL_OK, "EDINET（金融庁）", _CHILD),
     "yuho_overseas_facts": _uniform(LicenseTag.COMMERCIAL_OK, "EDINET（金融庁）", _CHILD),
     "yuho_text_sections": _uniform(LicenseTag.COMMERCIAL_OK, "EDINET（金融庁）", _CHILD),
+    "yuho_edinet_reported_changes": _uniform(
+        LicenseTag.COMMERCIAL_OK, "EDINET（金融庁）", f"{_CHILD} / 原一覧の報告状態・親書類ID（関係未資格）"
+    ),
     "yuho_edinet_catchup_progress": _operational(
         "EDINET日/文書checkpoint。原本文を持たず、保管参照・SHA・完了/保留状態を保持"
     ),

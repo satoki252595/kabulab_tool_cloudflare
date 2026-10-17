@@ -40,6 +40,12 @@ export const edinetDocSchema = z.object({
   /** 歴史一覧で欠けても補作しない。NULLコードの新しい資格には実0を要求。 */
   docInfoEditStatus: z.optional(z.string()),
   disclosureStatus: z.optional(z.string()),
+  /** 原一覧の親ID。欠落と明示nullを区別し、親の金融値を継承しない。 */
+  parentDocID: z.optional(z.nullable(z.string())),
+  /** 原一覧の操作時計。提出/法的効力/市場日付へ読み替えない。 */
+  opeDateTime: z.optional(z.nullable(z.string())),
+  /** 原典のliteral flag。金融値・親関係の資格とは別。 */
+  legalStatus: z.optional(z.string()),
 });
 
 export type EdinetDoc = z.infer<typeof edinetDocSchema>;
@@ -66,14 +72,25 @@ export type EdinetListResponse = z.infer<typeof edinetListResponseSchema>;
  * 「有価証券報告書（内国投資信託受益証券）」(ord 030 / form 07A000) 等の
  * 非事業会社の開示を確実に除外する (実 EDINET で確認)。
  */
-export function isAnnualSecuritiesReport(doc: EdinetDoc): boolean {
+export function hasAnnualSecuritiesReportForm(doc: EdinetDoc): boolean {
   return (
-    doc.withdrawalStatus !== "1" &&
     doc.ordinanceCode === "010" &&
     (doc.docTypeCode === "120" || doc.docTypeCode === "130") &&
     (doc.formCode === "030000" || doc.formCode === "030001" ||
       doc.formCode === "040000" || doc.formCode === "040001")
   );
+}
+
+export function isAnnualSecuritiesReport(doc: EdinetDoc): boolean {
+  return doc.withdrawalStatus !== "1" && hasAnnualSecuritiesReportForm(doc);
+}
+
+/** 既存通常ingestと同じ提出時計の保存表現。法的効力日や実UTCへの換算ではない。 */
+export function parseSubmitDateTime(s: string): Date {
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/);
+  if (!m) throw new Error(`submitDateTime 形式が不正: ${s}`);
+  const [, y, mo, d, hh, mm] = m;
+  return new Date(Date.UTC(+y, +mo - 1, +d, hh ? +hh : 0, mm ? +mm : 0));
 }
 
 /**

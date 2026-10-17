@@ -9,6 +9,7 @@ import {
   screenOrderGrowth,
 } from "../services/order-query.js";
 import {
+  getOverseasTrend,
   listSectorsWithOverseas,
   screenOverseasGrowth,
 } from "../services/overseas-query.js";
@@ -190,6 +191,33 @@ afterEach(() => {
 });
 
 describe("p_yuho_growth の再生成 (L-51/K4b)", () => {
+  it("宣言reported-state faultは最新選択後に海外数値をHOLDし、保存投影は書き換えず別会社を保つ", async () => {
+    const before = sqlite.prepare("select * from p_yuho_growth order by stock_id").all();
+    const oldScreen = await screenOverseasGrowth(db, { minYears: 2, limit: 100 });
+    const doc = sqlite.prepare("select doc_id from yuho_documents where stock_id=1 order by submitted_at desc limit 1").get() as { doc_id: string };
+    sqlite.prepare("insert into yuho_edinet_reported_changes (source_page_id,seq_number,source_raw_sha256,doc_id,parent_doc_id,reported_state,observation_json) values(?,?,?,?,?,?,?)").run(
+      "declared-protocol-source", 1, "declared-not-original-SHA", doc.doc_id, null, "reported_withdrawal", "{\"protocolFaultOnExistingTestCohort\":true}");
+    const trend = await getOverseasTrend(db, 1);
+    expect(trend?.points).toHaveLength(5);
+    for (const point of trend!.points) {
+      expect(point.overseasYen).toBeNull(); expect(point.totalYen).toBeNull(); expect(point.domesticYen).toBeNull(); expect(point.ratioPct).toBeNull();
+      expect(point.reportedHoldReason).toContain("取下げ"); expect(point.regions.every(region => region.yen === null && region.ratioPct === null)).toBe(true);
+    }
+    const screen = await screenOverseasGrowth(db, { minYears: 2, limit: 100 });
+    expect(screen.rows.some(row => row.code === "7203")).toBe(false);
+    expect(screen.rows).toEqual(oldScreen.rows.filter(row => row.code !== "7203"));
+    expect(sqlite.prepare("select * from p_yuho_growth order by stock_id").all()).toEqual(before);
+  });
+
+  it("宣言した旧source状態は同FYの新しい独立130の受注投影を巻き込まない", async () => {
+    sqlite.exec("update yuho_documents set doc_type_code='130' where stock_id=2 and submitted_at=1760000000");
+    const old = await screenOrderGrowth(db, { metric: "orders", minYears: 2, limit: 100 });
+    const doc = sqlite.prepare("select doc_id from yuho_documents where stock_id=2 order by submitted_at asc limit 1").get() as { doc_id: string };
+    sqlite.prepare("insert into yuho_edinet_reported_changes (source_page_id,seq_number,source_raw_sha256,doc_id,parent_doc_id,reported_state,observation_json) values(?,?,?,?,?,?,?)").run(
+      "declared-protocol-source", 1, "declared-not-original-SHA", doc.doc_id, null, "reported_withdrawal", "{\"protocolFaultOnExistingTestCohort\":true}");
+    const fresh = await screenOrderGrowth(db, { metric: "orders", minYears: 2, limit: 100 });
+    expect(fresh).toEqual(old); expect(fresh.rows.find(row => row.code === "1001")?.latestOrdersYen).toBe(121);
+  });
   it("ファクトのある 4 銘柄ぶん行を作る (非普通株も。画面側で落とす)", async () => {
     const r = await rebuildYuhoGrowthProjection(db);
     expect(r.stocks).toBe(4);

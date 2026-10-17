@@ -16,6 +16,22 @@ Cloudflare D1 (`kabulab-cf`) 用のスキーマ生成物。生成は
 
 ## 適用先が 2 系統あることに注意
 
+### 0032 — EDINETの報告状態観測（2026-10-17 本番schema適用済み）
+
+`0032_edinet_reported_changes.sql`は10列の観測表とdoc/stock-period索引の追加だけ。
+元Notion一覧ページ＋seqを主キーに、raw SHA・原報告とsnapshotを保持する。
+既存金融値・projection・株数・価格をUPDATEしない。
+
+**本番D1 `kabulab-cf`へ固定SQLを1回適用し、全schema/indexの
+物理PRE/POSTと既存表へのDML0・新10列/nullable3/PK/索引/空表をroot受入してからコードPRをmergeする。**
+公開readguardが新表を参照するため、table未作成のまま自動CF deployへ進めない。
+ACK不明の再送やmissing-table fallbackをしない。rollbackでも原観測表をDROPしない。
+対象/費用/未適用範囲は[検証記録](../../docs/test-logs/edinet-reported-lineage-20261017.md)を参照。
+10/17のroot単発batchで空表と索引を追加し、旧catalog全同値/新0行/物理PREPOSTを受入済み。
+固定SQL644B SHA `28da5b93381228aa0f5f9b435086083c2a73ed94c6130389da24d37ba9d6d017`。
+元producerのCOLLECTED後controller exit13と別saved-only監査の区別は検証記録に残す。
+既存観測の取込・コード配備・定期受入をschema適用済みから推定しない。
+
 ### 0031 — 同一指標snapshotの調整済み終値（2026-10-16 本番適用済み）
 
 `0031_stock_adjusted_point.sql`は`swing_stock_indicators.latest_adjclose`のnullable REAL

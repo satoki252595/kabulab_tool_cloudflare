@@ -152,6 +152,7 @@ describe("固定開始日の型付き環境変数", () => {
 
 describe("最新有報の決定的な選択", () => {
   function latestFixture() {
+    sqlite.exec(readFileSync(new URL("../../../../drizzle/d1/0032_edinet_reported_changes.sql", import.meta.url), "utf8"));
     sqlite.exec(`CREATE TABLE core_stocks(id INTEGER, code TEXT, name TEXT, sector33 TEXT, is_active INTEGER, instrument_type TEXT);
       CREATE TABLE yuho_documents(id INTEGER, stock_id INTEGER, doc_id TEXT, doc_type_code TEXT, period_end TEXT, submitted_at INTEGER, notion_doc_page_id TEXT, text_parse_status TEXT);
       INSERT INTO core_stocks VALUES(1,'1414','ショーボンドホールディングス',NULL,1,'equity');
@@ -165,6 +166,15 @@ describe("最新有報の決定的な選択", () => {
     expect(latest[0].doc?.docId).toBe("S100Z5EY");
     expect(latest[0].doc?.notionDocPageId).toBe("correction");
     expect(queries).toHaveLength(2); expect(fetch).not.toHaveBeenCalled();
+  });
+  it("宣言した旧doc取下げfaultは同FYの独立した最新130を保留しない（SQL自己相関の負例）", async () => {
+    latestFixture();
+    sqlite.prepare("insert into yuho_edinet_reported_changes (source_page_id,seq_number,source_raw_sha256,doc_id,parent_doc_id,reported_state,observation_json) values(?,?,?,?,?,?,?)").run(
+      "declared-source", 1, "declared-not-original-SHA", "S100Z3O3", null, "reported_withdrawal", "{\"protocolFault\":true}");
+    const latest = await loadLatestDocs(db());
+    expect(latest[0].doc?.docId).toBe("S100Z5EY");
+    expect(latest[0].reportedHoldReason).toBeUndefined();
+    await expect(assertLatestDocCurrent(db(), "1414", latest[0].doc!)).resolves.toBeUndefined();
   });
   it("write直前は対象1社の1 SELECTで最新doc/期末/本文pointerを照合する", async () => {
     latestFixture(); const expected = (await loadLatestDocs(db()))[0].doc!; queries=[];

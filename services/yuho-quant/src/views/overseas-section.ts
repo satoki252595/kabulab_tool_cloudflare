@@ -9,6 +9,7 @@ import type {
   OverseasTrend,
   OverseasYearPoint,
 } from "../services/overseas-query.js";
+import { REPORTED_DOCUMENT_HOLD_REASON } from "../services/edinet/reported-changes.js";
 
 function oku(yen: number | null): string {
   if (yen === null) return "—";
@@ -22,6 +23,7 @@ function pctStr(v: number | null): string {
 }
 
 const PARSE_STATUS_LABEL: Record<string, string> = {
+  reported_document_hold: "保留（提出書類の取下げ・状態変更を確認）",
   ok_geo_rows: "構造化済 (地域別売上・地域=行)",
   ok_geo_cols: "構造化済 (地域別売上・地域=列)",
   geo_present_unstructured: "未対応 (地域別売上はあるが構造を判定できず)",
@@ -72,7 +74,7 @@ function trendChart(points: OverseasYearPoint[]): string {
       if (!comparable(p)) {
         const phW = barW + 6;
         const phY = padT + innerH * 0.6;
-        const missing = p.overseasYen === null && p.totalYen === null ? "データなし"
+        const missing = p.reportedHoldReason !== undefined ? "保留" : p.overseasYen === null && p.totalYen === null ? "データなし"
           : p.overseasYen === null ? "海外売上未取得" : p.totalYen === null ? "売上合計未取得" : "原典要確認";
         return `<rect x="${cx - phW / 2}" y="${phY}" width="${phW}" height="${innerH * 0.4}" fill="none" stroke="var(--border-soft)" stroke-width="1.5" stroke-dasharray="4 3"/>
 <text x="${cx}" y="${phY + innerH * 0.2 + 4}" text-anchor="middle" font-family="var(--font-mono)" font-size="10" fill="var(--text-muted)">${missing}</text>${label}`;
@@ -180,6 +182,11 @@ export function overseasSection(trend: OverseasTrend | null): string {
   }
   const { points, documents, hasStructuredData } = trend;
   const latestDoc = documents[0];
+  const latestReportedHold = latestDoc?.overseasParseStatus === "reported_document_hold";
+  const reportedHolds = points.filter(point => point.reportedHoldReason !== undefined)
+    .map(point => `<div class="notice">${h(point.fiscalYearEnd)}: ${h(point.reportedHoldReason!)}</div>`).join("") +
+    (latestReportedHold && !points.some(point => point.fiscalYearEnd === latestDoc.periodEnd && point.reportedHoldReason !== undefined)
+      ? `<div class="notice">${h(latestDoc.periodEnd)}: ${latestDoc.origin === "reported_observation" ? `${termTip("提出書類一覧で確認", "金融庁の提出書類一覧にある状態だけを確認した記録です。本文や財務数値を取得・確認したことを意味しません。")} — ` : ""}${h(REPORTED_DOCUMENT_HOLD_REASON)}</div>` : "");
   const latestStatus = latestDoc?.overseasParseStatus ?? null;
   const omission = latestDoc?.overseasOmission;
   const omissionNotice = omission === undefined || omission === null ? "" :
@@ -191,7 +198,7 @@ export function overseasSection(trend: OverseasTrend | null): string {
     </details></div>`;
 
   if (hasStructuredData) {
-    const latest = [...points].reverse().find((p) => p.overseasYen !== null);
+    const latest = !latestReportedHold && points.at(-1)?.reportedHoldReason === undefined ? [...points].reverse().find((p) => p.overseasYen !== null) : undefined;
     const summary = latest
       ? `<div class="latest-stat">
       <div><span class="lbl">最新 ${h(latest.fiscalYearEnd)}</span></div>
@@ -200,7 +207,7 @@ export function overseasSection(trend: OverseasTrend | null): string {
       <div><span class="lbl">${termTip("連結売上高", "親会社＋子会社を合算した会社全体の売上高。海外売上高比率の分母です。")}</span><span class="val">${oku(latest.totalYen)}<small> 億円</small></span></div>
     </div>`
       : "";
-    return `${heading}${omissionNotice}${summary}${trendChart(points)}
+    return `${heading}${reportedHolds}${omissionNotice}${summary}${trendChart(points)}
   <div class="section-label">YEARLY — 最大5年 (地域別内訳付き)</div>
   <div class="table-wrap">${yearTable(points)}</div>`;
   }
@@ -208,6 +215,6 @@ export function overseasSection(trend: OverseasTrend | null): string {
     latestStatus !== null
       ? (PARSE_STATUS_LABEL[latestStatus] ?? latestStatus)
       : "海外売上の取込はこれからです";
-  return `${heading}${omissionNotice}<div class="notice"><strong>海外（地域別）売上の構造化データはありません。</strong>
+  return `${heading}${reportedHolds}${omissionNotice}<div class="notice"><strong>海外（地域別）売上の構造化データはありません。</strong>
     <span class="st">${h(label)} — 開示の有無や未対応の理由は原典をご確認ください</span></div>`;
 }

@@ -9,6 +9,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ## 2026-10-17
 
+- EDINET原一覧の親書類・操作時計・報告状態を保持し、取下げ/未資格状態を通常writerと公開financialで理由付き保留する。未取込の報告も完全な主体/期末資格だけを扱い、正常な独立訂正原表と旧数値を保持。[保存原本・全caller・追加費用](test-logs/edinet-reported-lineage-20261017.md)を検証し、新D1空表schemaはmain merge/deploy前に別受入した（観測取込/公開guard配備/定期受入は未実施）。
 - 保有明細の共有schema読取は、全定義とIDを保ったまま宣言した3項目だけを返す。応答ごとの`request_id`による誤停止を直し、[実208Aの全応答とschema変更時のSTOP](test-logs/holdings-schema-response-shape-20261017.md)を検証した。元READ停止と未実施の4行訂正は別受入のまま。
 - 本番作業: 10/17実20時のMac正常終端・両4a rolloutと監視期待版の1回更新、RAW500件の実測と元pool内継続を記録。21時の定刻・全量補完・権利/優待残件は別受入とする。[20:35状況](test-logs/recovery-functional-status-20261017.md#2035-jstの実20時受入と後続補完)。
 - Mac定時処理の既存installerに`install-next`を追加。20時・21時の予定と実行条件を保ち、`RunAtLoad=false`で次のcalendarだけを待つ。通常`install`の即時起動は維持し、稼働runtimeの切替・bootstrapは別受入。

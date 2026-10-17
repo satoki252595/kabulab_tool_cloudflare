@@ -19,6 +19,7 @@ import {
   yuhoDocuments,
 } from "../../src/db/schema.js";
 import { EdinetNotFoundError, EdinetDocumentFetchError, EdinetDocumentArchiveError } from "../../src/services/edinet/client.js";
+import { reportedDocumentMetadata, reportedStandaloneHold, assertReportedDocumentUsable, ReportedDocumentHoldError, reportedDocumentAtomicGuard } from "../../src/services/edinet/reported-changes.js";
 import { parseEdinetCsvZip } from "../../src/services/edinet/csv.js";
 import {
   parseOrderData,
@@ -223,6 +224,8 @@ export async function processMissingDoc(
         (!isUnassignedEdinetSecCode(doc.secCode) && secCodeToTicker(doc.secCode) !== input.stockCode))) {
       throw new Error("本文補完の明示銘柄コードが原本と不一致");
     }
+    if (reportedStandaloneHold(doc)) throw new ReportedDocumentHoldError(doc.docID);
+    await assertReportedDocumentUsable(db, doc.docID);
     // 有報として最低限必要なメタが欠ける異常エントリは捏造せず明示スキップ
     // (ingest.ts の skipped_invalid_meta と同じ。ルール2)。
     if (!doc.filerName || !doc.docTypeCode || !doc.edinetCode || !doc.submitDateTime) {
@@ -347,6 +350,7 @@ export async function processMissingDoc(
       filerName: doc.filerName, docTypeCode: doc.docTypeCode,
       docDescription: doc.docDescription, periodStart: doc.periodStart,
       periodEnd, submitDateTime: doc.submitDateTime,
+      ...reportedDocumentMetadata(doc),
       parseStatus, honbunFile, factCount: deduped.length,
       overseasParseStatus, overseasHonbunFile, overseasFactCount: overseasFacts.length,
       ...(overseasOmission === undefined ? {} : { overseasOmission }),
@@ -389,7 +393,8 @@ export async function processMissingDoc(
       sections,
       deferText: sections.length > 0,
     });
-    await deps.d1HttpBatch(toD1BatchStatements(statements));
+    if (statements.length >= 1000) throw new Error("[missing] reported guardを含むD1 batch文数が上限を超えました");
+    await deps.d1HttpBatch(toD1BatchStatements([reportedDocumentAtomicGuard(db, doc.docID), ...statements]));
     // 行 id は batch から取り出さない (ingest.ts と同一方針)。本文保管と
     // ポインタ書戻しに要るため docId 冪等 SELECT で解決する (読取のみ)。
     const idRow = await db

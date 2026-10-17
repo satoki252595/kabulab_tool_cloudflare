@@ -38,9 +38,10 @@ import {
 } from "../src/services/edinet/archive.js";
 import {
   downloadDocument,
-  listDocuments,
 } from "../src/services/edinet/client.js";
 import type { EdinetDoc } from "../src/services/edinet/types.js";
+import { captureListSnapshot } from "../src/services/edinet/list-snapshot.js";
+import { recordReportedChanges } from "../src/services/edinet/reported-changes.js";
 import { isAnnualSecuritiesReport, isUnassignedEdinetSecCode } from "../src/services/edinet/types.js";
 import { loadEdinetTickerMap } from "../src/services/edinet/identity.js";
 import { backupDocTextToNotion } from "../src/services/text-backup.js";
@@ -115,10 +116,13 @@ for (const date of eachDay(fromArg, toArg)) {
   if (target >= limit) break;
   let listed: EdinetDoc[];
   try {
-    listed = (await listDocuments(date)).results;
+    const captured = await captureListSnapshot(date);
+    await recordReportedChanges(db, captured.list, captured.snapshot, () => false);
+    listed = captured.list.results;
   } catch (e) {
-    console.warn(`[missing] list 失敗 ${date}: ${(e as Error).message} (スキップ)`);
-    continue;
+    // 原一覧の物理保管/変更観測はwriter。未知ACKをread失敗と混ぜて次の日へ進めない。
+    console.error(`[missing] list/報告状態の保存未完 ${date} (再送なし)`);
+    throw e;
   }
   // 既存扱いスキップは「完成済み」に限定する。type 保管完成は日ごとに
   // 一括取得し run 内メモへ足す (通ごとの照会はしない)。適用は純粋関数で

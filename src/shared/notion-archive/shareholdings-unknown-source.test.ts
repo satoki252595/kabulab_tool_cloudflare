@@ -1,3 +1,5 @@
+import { createReportedSourceTestDb } from "./reported-source-test-db.js";
+const sourceDb = createReportedSourceTestDb().db;
 /** Real source snapshots; the restartable healthy checkpoint is an explicitly declared test mutation. */
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -22,7 +24,7 @@ const rt = (content: string) => [{ type: "text", text: { content }, plain_text: 
 const sameId = (a: string, b: string) => a.replaceAll("-", "") === b.replaceAll("-", "");
 let unknown: ReturnType<typeof read>, healthy: ReturnType<typeof read>, queued: boolean, unknownPages: ReturnType<typeof read>[];
 let mutations: Array<{ path: string; body: unknown }>, unknownGets: number, fault: string | undefined;
-const options = { maxRows: 100, shouldStop: () => false };
+const options = { sourceDb, maxRows: 100, shouldStop: () => false };
 beforeEach(() => {
   vi.clearAllMocks(); unknown = read("1911-source-unknown.json"); healthy = read("1897-source-complete.json"); queued = true;
   // Original1897 is complete. Only these two checkpoint fields are deliberately changed for normal-resume testing.
@@ -118,20 +120,20 @@ describe("normal unknown source isolation", () => {
     expect(unknownGets).toBe(2); expect(mutations).toEqual([]);
   });
   it("the same-source publisher still refuses unknown before any holding mutation", async () => {
-    await expect(publishVerifiedShareholdings({ source: info(unknown).source, ownerName: info(unknown).ownerName,
+    await expect(publishVerifiedShareholdings({ sourceDb, source: info(unknown).source, ownerName: info(unknown).ownerName,
       zip: readFileSync(new URL("../../../services/yuho-quant/src/tests/fixtures/holdings-pending1911/1911-S100Y1XP.zip", import.meta.url)), archivePageId: unknown.id, maxRows: 1 })).rejects.toThrow("前回結果が未確定");
     expect(mutations).toEqual([]);
   });
   it("a revised document and different archive cannot bypass the same-issuer/FY guard", async () => {
     const original = info(unknown);
-    await expect(publishVerifiedShareholdings({ source: { ...original.source, docId: `${original.source.docId.slice(0, -1)}Q` }, ownerName: original.ownerName,
+    await expect(publishVerifiedShareholdings({ sourceDb, source: { ...original.source, docId: `${original.source.docId.slice(0, -1)}Q` }, ownerName: original.ownerName,
       zip: readFileSync(new URL("../../../services/yuho-quant/src/tests/fixtures/holdings-pending1911/1911-S100Y1XP.zip", import.meta.url)), archivePageId: healthy.id, maxRows: 1 })).rejects.toThrow("同じ提出会社・期末");
     expect(mutations).toEqual([]); expect(unknownGets).toBe(0); expect(listPageFiles).not.toHaveBeenCalled();
   });
   it("a different FY reaches its own source-identity gate, rather than colliding with1911's period", async () => {
     const original = info(unknown);
     // Declared input mutation, not a fabricated historical filing. Its mismatched actual archive must still STOP.
-    await expect(publishVerifiedShareholdings({ source: { ...original.source, docId: `${original.source.docId.slice(0, -1)}Q`, fiscalYearEnd: "2024-12-31" }, ownerName: original.ownerName,
+    await expect(publishVerifiedShareholdings({ sourceDb, source: { ...original.source, docId: `${original.source.docId.slice(0, -1)}Q`, fiscalYearEnd: "2024-12-31" }, ownerName: original.ownerName,
       zip: readFileSync(new URL("../../../services/yuho-quant/src/tests/fixtures/holdings-pending1911/1911-S100Y1XP.zip", import.meta.url)), archivePageId: healthy.id, maxRows: 1 })).rejects.toThrow("S100XT0W");
     expect(vi.mocked(notionRequest).mock.calls.some(([method, path]) => method === "GET" && path === `/pages/${healthy.id}`)).toBe(true);
     expect(mutations).toEqual([]);

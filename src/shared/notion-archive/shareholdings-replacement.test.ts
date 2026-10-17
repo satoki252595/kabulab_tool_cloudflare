@@ -1,3 +1,5 @@
+import { createReportedSourceTestDb } from "./reported-source-test-db.js";
+const sourceDb = createReportedSourceTestDb().db;
 /** Actual1911 business values; new IDs/response clocks below are declared transport protocol mutations. */
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -115,7 +117,7 @@ describe("actual1911 normal constructive unknown replacement", () => {
     expect(page.properties["保有明細状態"].select.name).toBe("再開待ち"); expect(checkpoint().sourceNextHoldingOffset).toBe(0); expect(checkpoint().sourceQueueVersion).toBe(2);
     expect(page.properties["保有価格状態"].select).toBeNull();
     const originalWrites = writes.length;
-    const published = await publishVerifiedShareholdings({ source, ownerName, archivePageId: page.id, zip: input.zip, maxRows: 45 });
+    const published = await publishVerifiedShareholdings({ sourceDb, source, ownerName, archivePageId: page.id, zip: input.zip, maxRows: 45 });
     expect(published).toMatchObject({ status: "published", parsed: 45, unchanged: 32, updated: 10, created: 3 });
     expect(rows).toHaveLength(47); expect(checkpoint().sourceNextHoldingOffset).toBe(45); expect(checkpoint().patchResolution.legacyPost).toBeDefined();
     expect(page.properties["保有明細状態"].select.name).toBe("明細原本照合済");
@@ -125,13 +127,13 @@ describe("actual1911 normal constructive unknown replacement", () => {
     const mapping = JSON.parse(Buffer.from(final.bytes).toString()).mapping; expect(mapping).toHaveLength(40); expect(mapping.find((v: { oldId: string }) => v.oldId === oldId).newId).toBe(result.newId);
     expect(globalThis.fetch).not.toHaveBeenCalled();
     const beforeReplay = writes.length, archiveCount = archives.size;
-    expect(await publishVerifiedShareholdings({ source, ownerName, archivePageId: page.id, zip: input.zip, maxRows: 45 })).toMatchObject({ status: "published", parsed: 0 });
+    expect(await publishVerifiedShareholdings({ sourceDb, source, ownerName, archivePageId: page.id, zip: input.zip, maxRows: 45 })).toMatchObject({ status: "published", parsed: 0 });
     expect(writes).toHaveLength(beforeReplay); expect(archives.size).toBe(archiveCount);
   });
   it("ordinary scheduled row budgets keep v2 and original40 proof until the final10/10/10/10/5 window", async () => {
     const input = args(); await replaceUnknownHoldingPatch(input); const replacedWrites = writes.length;
     for (const end of [10, 20, 30, 40, 45]) {
-      const result = await publishVerifiedShareholdings({ source, ownerName, archivePageId: page.id, zip: input.zip, maxRows: 10 });
+      const result = await publishVerifiedShareholdings({ sourceDb, source, ownerName, archivePageId: page.id, zip: input.zip, maxRows: 10 });
       expect(checkpoint().sourceQueueVersion).toBe(2); expect(checkpoint().sourceNextHoldingOffset).toBe(end);
       expect(result.status).toBe(end === 45 ? "published" : "held");
       expect(page.properties["保有価格状態"].select).toEqual(end === 45 ? { name: "再開待ち" } : null);
@@ -147,7 +149,7 @@ describe("actual1911 normal constructive unknown replacement", () => {
     // Declared delayed-commit protocol, not an assertion that the actual unknown ACK has been recovered.
     applyProperties(old, JSON.parse(JSON.stringify(qualifyHoldingPatchJournal(input.journal).changed)));
     expect(old.archived).toBe(true); expect(rows.find((v: { id: string }) => v.id === result.newId)).toEqual(replacement);
-    await expect(publishVerifiedShareholdings({ source, ownerName, archivePageId: page.id, zip: input.zip, maxRows: 45 })).resolves.toMatchObject({ updated: 10, created: 3, unchanged: 32 });
+    await expect(publishVerifiedShareholdings({ sourceDb, source, ownerName, archivePageId: page.id, zip: input.zip, maxRows: 45 })).resolves.toMatchObject({ updated: 10, created: 3, unchanged: 32 });
   });
   it("a second real issuer unknown does not block the isolated target replacement", async () => {
     const other = JSON.parse(readFileSync(new URL("../../../services/yuho-quant/src/tests/fixtures/holdings-unknown-source/1897-source-complete.json", import.meta.url), "utf8"));
@@ -166,7 +168,7 @@ describe("actual1911 normal constructive unknown replacement", () => {
     if (value === "v2-without-resolution") delete info.patchResolution;
     if (value === "unsupported-version") info.sourceQueueVersion = 3;
     applyProperties(page, { "保有明細再開情報": { rich_text: [{ type: "text", text: { content: JSON.stringify(info) } }] } });
-    const count = writes.length; await expect(publishVerifiedShareholdings({ source, ownerName, archivePageId: page.id, zip: args().zip, maxRows: 45 })).rejects.toThrow(); expect(writes).toHaveLength(count);
+    const count = writes.length; await expect(publishVerifiedShareholdings({ sourceDb, source, ownerName, archivePageId: page.id, zip: args().zip, maxRows: 45 })).rejects.toThrow(); expect(writes).toHaveLength(count);
   });
   it.each(["retire-unknown", "create-unknown", "physical-post"])("%s stops at its first ambiguous operation without source requeue or later writes", async value => {
     fault = value; const original = structuredClone(page);
@@ -176,7 +178,7 @@ describe("actual1911 normal constructive unknown replacement", () => {
   });
   it("final original40 physical POST failure preserves unknown source and never enables the price queue", async () => {
     await replaceUnknownHoldingPatch(args()); fault = "legacy-post";
-    await expect(publishVerifiedShareholdings({ source, ownerName, archivePageId: page.id, zip: args().zip, maxRows: 45 })).rejects.toThrow("legacy POST unknown");
+    await expect(publishVerifiedShareholdings({ sourceDb, source, ownerName, archivePageId: page.id, zip: args().zip, maxRows: 45 })).rejects.toThrow("legacy POST unknown");
     expect(page.properties["保有明細状態"].select.name).toBe("実行中（結果未確定）"); expect(page.properties["保有価格状態"].select).toBeNull();
   });
   it("old unmatched extra drift stops the ordinary publisher before any holding/source DML", async () => {
@@ -184,7 +186,7 @@ describe("actual1911 normal constructive unknown replacement", () => {
     const knownIds = new Set(JSON.parse(bytes("legacy-pre.json").toString()).rows.map((v: { id: string }) => v.id));
     const extra = rows.find((v: ReturnType<typeof read>) => !knownIds.has(v.id) && v.properties["原本照合済"].checkbox === false);
     extra.properties["旧抽出株数（単位未確認）"].number++; const priorWrites = writes.length;
-    await expect(publishVerifiedShareholdings({ source, ownerName, archivePageId: page.id, zip: args().zip, maxRows: 45 })).rejects.toThrow(); expect(writes).toHaveLength(priorWrites);
+    await expect(publishVerifiedShareholdings({ sourceDb, source, ownerName, archivePageId: page.id, zip: args().zip, maxRows: 45 })).rejects.toThrow(); expect(writes).toHaveLength(priorWrites);
   });
   it.each(["request-sha", "body-unarchive", "legacy-sha", "source-facts", "old-value-drift", "before-custom-type"])("%s cannot authorize the replacement", async value => {
     const input = args();

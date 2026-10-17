@@ -12,6 +12,7 @@ import {
 import type { Database } from "../../src/db/client.js";
 import * as schema from "../../src/db/schema.js";
 import { rebuildYuhoGrowthProjection } from "../../src/services/projection.js";
+import { reportedDocumentAtomicGuard } from "../../src/services/edinet/reported-changes.js";
 import {
   validateOverseasSaveSet,
   type OverseasExtraction,
@@ -378,8 +379,10 @@ async function buildAtomic(
         ),
       );
     }
+    const statements = [...assertions, ...toD1BatchStatements([reportedDocumentAtomicGuard(buildDb, target.docId)]), ...facts, ...projection];
+    assert(statements.length <= 1000, "reported guardを含むD1 batch文数が上限を超えました");
     return {
-      statements: [...assertions, ...facts, ...projection],
+      statements,
       expected,
       factStatements: facts.length,
       projectionStatements: projection.length,

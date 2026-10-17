@@ -80,7 +80,8 @@ function proxyDb(respond: (sql: string) => unknown[][]) {
   const calls: ProxyCall[] = [];
   const db = drizzleProxy(async (sqlStr, _params, method) => {
     calls.push({ sql: sqlStr, method });
-    return { rows: respond(sqlStr) };
+    // Declared empty reported-observation table; actual SQL/SQLite qualification is covered separately.
+    return { rows: sqlStr.includes("yuho_edinet_reported_changes") ? [[0]] : respond(sqlStr) };
   });
   return { db, calls };
 }
@@ -233,11 +234,13 @@ describe("T4: 原子失敗 (単一 batch・部分書込なし・再送なし・�
       // 単一 batch で再送なし。
       expect(sender.calls).toHaveLength(1);
       const batch = sender.calls[0];
-      // 先頭が文書 upsert (batch 内包の証明) + delete 3 文。facts 0 件で insert 無し。
-      expect(batch.length).toBe(4);
-      expect(batch[0].sql).toMatch(/^insert into [`"]?yuho_documents/i);
-      expect(batch[0].sql).toMatch(/on conflict/i);
-      for (const st of batch.slice(1)) {
+      // exact-doc状態の同transaction検査 + 文書upsert + delete3。facts0件でも検査を省略しない。
+      expect(batch.length).toBe(5);
+      expect(batch[0].sql).toMatch(/^select json\(case when \(exists/i);
+      expect(batch[0].params).toEqual([annualDoc().docID]);
+      expect(batch[1].sql).toMatch(/^insert into [`"]?yuho_documents/i);
+      expect(batch[1].sql).toMatch(/on conflict/i);
+      for (const st of batch.slice(2)) {
         expect(st.sql).toMatch(/^delete from/i);
         // documentId は docId サブクエリ参照 (JS の id 受け渡しなし)。
         expect(st.sql.toLowerCase()).toContain("select");

@@ -1,3 +1,5 @@
+import { createReportedSourceTestDb } from "./reported-source-test-db.js";
+const sourceDb = createReportedSourceTestDb().db;
 /** Actual208A values; signed URLs and mutation response envelopes are declared protocol projections. */
 import { readFileSync, writeFileSync, mkdtempSync, existsSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -129,7 +131,7 @@ describe("実208Aの明示主体保留", () => {
     expect(writes.length).toBe(kind === "physical-PRE" || kind === "drift-after-PRE" ? 0 : kind === "source-PATCH" || kind === "physical-POST" ? 5 : 1);
   });
   it("自動publisherは完了sourceを保留へ降格しない", async () => {
-    await expect(publishVerifiedShareholdings({ source: fixture.source, ownerName: fixture.ownerName, archivePageId: page.id, zip: bytes("208A-S100Z0JO.zip"), maxRows: 4 }))
+    await expect(publishVerifiedShareholdings({ sourceDb, source: fixture.source, ownerName: fixture.ownerName, archivePageId: page.id, zip: bytes("208A-S100Z0JO.zip"), maxRows: 4 }))
       .rejects.toThrow("確定sourceを解析保留で戻しません");
     expect(writes).toHaveLength(0); expect(archives).toHaveLength(0);
   });
