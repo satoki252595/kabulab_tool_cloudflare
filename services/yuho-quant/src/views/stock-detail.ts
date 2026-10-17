@@ -4,6 +4,7 @@ import { termTip } from "../../../../src/shared/term-tip.js";
 import { publicStockMetaLabel } from "../../../../src/shared/db/public-columns.js";
 import type { OrderTrend, OrderYearPoint } from "../services/order-query.js";
 import type { OverseasTrend } from "../services/overseas-query.js";
+import { REPORTED_DOCUMENT_HOLD_REASON } from "../services/edinet/reported-changes.js";
 import {
   overseasSection,
   OVERSEAS_SECTION_STYLES,
@@ -20,6 +21,7 @@ function oku(yen: number | null): string {
 }
 
 const PARSE_STATUS_LABEL: Record<string, string> = {
+  reported_document_hold: "保留（提出書類の取下げ・状態変更を確認）",
   ok_pattern_a: "構造化済 (受注高/受注残高セグメント表)",
   ok_pattern_b: "構造化済 (建設業 完成工事表)",
   ok_pattern_c: "構造化済 (設備/建設 完成工事高 区分別表)",
@@ -77,7 +79,7 @@ function trendChart(points: OrderYearPoint[]): string {
         const phX = cx - phW / 2;
         const phY = padT + innerH * 0.6;
         return `<rect x="${phX}" y="${phY}" width="${phW}" height="${innerH * 0.4}" fill="none" stroke="var(--border-soft)" stroke-width="1.5" stroke-dasharray="4 3"/>
-<text x="${cx}" y="${phY + innerH * 0.2 + 4}" text-anchor="middle" font-family="var(--font-mono)" font-size="10" fill="var(--text-muted)">未開示</text>${label}`;
+<text x="${cx}" y="${phY + innerH * 0.2 + 4}" text-anchor="middle" font-family="var(--font-mono)" font-size="10" fill="var(--text-muted)">${p.reportedHoldReason === undefined ? "未開示" : "保留"}</text>${label}`;
       }
       const oH = ((p.totalOrdersYen ?? 0) / max) * innerH;
       const bH = ((p.totalBacklogYen ?? 0) / max) * innerH;
@@ -152,6 +154,11 @@ export function stockDetailPage(
   const { stock, points, documents, hasStructuredData } = trend;
 
   const latestDoc = documents[0];
+  const latestReportedHold = latestDoc?.parseStatus === "reported_document_hold";
+  const reportedHolds = points.filter(point => point.reportedHoldReason !== undefined)
+    .map(point => `<div class="notice">${h(point.fiscalYearEnd)}: ${h(point.reportedHoldReason!)}</div>`).join("") +
+    (latestReportedHold && !points.some(point => point.fiscalYearEnd === latestDoc.periodEnd && point.reportedHoldReason !== undefined)
+      ? `<div class="notice">${h(latestDoc.periodEnd)}: ${latestDoc.origin === "reported_observation" ? `${termTip("提出書類一覧で確認", "金融庁の提出書類一覧にある状態だけを確認した記録です。本文や財務数値を取得・確認したことを意味しません。")} — ` : ""}${h(REPORTED_DOCUMENT_HOLD_REASON)}</div>` : "");
   const statusPill = latestDoc
     ? `<span class="pill">${h(PARSE_STATUS_LABEL[latestDoc.parseStatus] ?? latestDoc.parseStatus)}</span>`
     : `<span class="pill">有報未取得</span>`;
@@ -159,9 +166,9 @@ export function stockDetailPage(
   let main: string;
   if (hasStructuredData) {
     // 最新 (= 末尾) で値が取れている年のサマリを冒頭に出す
-    const latest = [...points].reverse().find(
+    const latest = !latestReportedHold && points.at(-1)?.reportedHoldReason === undefined ? [...points].reverse().find(
       (p) => p.totalOrdersYen !== null || p.totalBacklogYen !== null
-    );
+    ) : undefined;
     const summary = latest
       ? `<div class="latest-stat">
       <div><span class="lbl">最新 ${h(latest.fiscalYearEnd)}</span></div>
@@ -169,24 +176,24 @@ export function stockDetailPage(
       <div><span class="lbl">${termTip("受注残高", "期末時点で受注済みだがまだ売上になっていない注文の残高。先々の売上の裏付け。")}</span><span class="val">${oku(latest.totalBacklogYen)}<small> 億円</small></span></div>
     </div>`
       : "";
-    main = `${summary}${trendChart(points)}
+    main = `${reportedHolds}${summary}${trendChart(points)}
   <div class="section-label">YEARLY — 最大5年 (セグメント内訳付き)</div>
   <div class="table-wrap">${yearTable(points)}</div>`;
   } else if (documents.length === 0) {
     main = `<div class="notice"><strong>この銘柄の有価証券報告書はまだ取り込まれていません。</strong>
     <span class="st">backfill 未実施、または EDINET に対象期間の有報がありません</span></div>`;
   } else {
-    main = `<div class="notice"><strong>受注高 / 受注残高 の構造化データはありません。</strong>
+    main = `${reportedHolds}<div class="notice"><strong>受注高 / 受注残高 の構造化データはありません。</strong>
     <span class="st">${h(PARSE_STATUS_LABEL[latestDoc.parseStatus] ?? latestDoc.parseStatus)} — 受注生産でない、または開示形式が現行パーサ未対応</span></div>`;
   }
 
   const docList = documents.length
-    ? `<div class="section-label">SOURCE — 取り込んだ有報</div>
+    ? `<div class="section-label">SOURCE — ${documents.some(doc => doc.origin === "reported_observation") ? "提出書類と一覧の確認記録" : "取り込んだ有報"}</div>
   <div class="table-wrap"><table><thead><tr><th>会計期末</th><th>種別</th><th>提出日</th><th>EDINET docID</th><th>構造化結果</th></tr></thead><tbody>
   ${documents
     .map(
       (d) =>
-        `<tr><td>${h(d.periodEnd)}</td><td>${d.docTypeCode === "130" ? "訂正有報" : "有報"}</td><td>${h(d.submittedAt.toISOString().slice(0, 10))}</td><td class="muted">${h(d.docId)}</td><td>${h(PARSE_STATUS_LABEL[d.parseStatus] ?? d.parseStatus)}</td></tr>`
+        `<tr><td>${h(d.periodEnd)}</td><td>${d.origin === "reported_observation" ? termTip("提出書類一覧で確認", "金融庁の提出書類一覧にある状態だけを確認した記録です。本文や財務数値を取得・確認したことを意味しません。") : d.docTypeCode === "130" ? "訂正有報" : "有報"}</td><td>${h(d.submittedAt.toISOString().slice(0, 10))}</td><td class="muted">${h(d.docId)}</td><td>${h(PARSE_STATUS_LABEL[d.parseStatus] ?? d.parseStatus)}</td></tr>`
     )
     .join("")}
   </tbody></table></div>`

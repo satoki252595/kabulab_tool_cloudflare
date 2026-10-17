@@ -1,5 +1,6 @@
 /** 保有明細の唯一のNotion入口。旧推定値は残し、原表で確定した列だけを公開する。 */
 import assert from "node:assert/strict";
+import { assertReportedDocumentUsable, ReportedDocumentHoldError, type ReportedSourceDb } from "../../../services/yuho-quant/src/services/edinet/reported-changes.js";
 import { AssertionError } from "node:assert";
 import { createHash } from "node:crypto";
 import { parseShareholdingsData, verifySavedHoldingsSource, verifyHoldingsSourceEntries, type Shareholding, type ShareholdingsSource, type ShareholdingsExtraction, type ShareholdingsNotApplicable } from "../../../services/yuho-quant/src/services/edinet/shareholdings.js";
@@ -682,6 +683,8 @@ export async function quarantineSavedHoldingSource(args: {
   return { status: "quarantined", rows: 4, pre, post, pricesAccepted: 0 };
 }
 interface PublishHoldingsArgs {
+  /** source/priceとも同じ通常D1の原一覧状態を必須照合し、古いqueueの迂回を防ぐ。 */
+  sourceDb: ReportedSourceDb;
   source: ShareholdingsSource; ownerName: string; zip: Buffer; archivePageId: string; maxRows: number;
   budget?: ShareholdingsBudget;
   /** Actions/Node正常入口だけ明示有効。Worker adminは未測定full診断を起動しない。 */
@@ -720,6 +723,14 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
   assert.ok(args.ownerName.trim().length > 0);
   if (args.budget) assert.ok(Number.isSafeInteger(args.budget.remainingRows) && args.budget.remainingRows >= 0 && args.budget.remainingRows <= 100);
   const maxRows = Math.min(100, args.budget ? Math.min(args.maxRows, args.budget.remainingRows) : args.maxRows);
+  const checkReported = async (reserved: number, parsed: number): Promise<PublishHoldingsResult | undefined> => {
+    try { await assertReportedDocumentUsable(args.sourceDb, args.source.docId); }
+    catch (error) {
+      if (!(error instanceof ReportedDocumentHoldError)) throw error;
+      if (args.budget) args.budget.remainingRows += reserved; // 既知READ-only HOLDだけを返す。未知は予約保持。
+      return { status: "held", parsed, reason: error.message };
+    }
+  };
   const hold = async (reason: string, parsed: number, retry: boolean, pricePreflight = false,
     notApplicable?: ShareholdingsNotApplicable): Promise<PublishHoldingsResult> => {
     assert.ok(notApplicable === undefined || !pricePhase, "既存価格queueを明示不該当へ付け替えません");
@@ -729,6 +740,7 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
       ...(notApplicable === undefined ? {} : { reasonCode: "explicit_not_applicable", notApplicable }) };
   };
   if (args.zip.length > HOLDINGS_ZIP_MAX_BYTES) {
+    const reported = await checkReported(0, 0); if (reported) return reported;
     if (!pricePhase) await assertNoUnknownHoldingPeriod(args.source, args.archivePageId);
     return hold("1原本20MiBの解析予算を超えています", 0, false);
   }
@@ -748,6 +760,7 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
   // Keep the shared run reservation synchronous, before the new source guard's first await.
   const reservedRows = parsed.status === "ok" && parsed.holderScope === "filer_only" ? Math.min(maxRows, parsed.holdings.length) : 0;
   if (args.budget) args.budget.remainingRows -= reservedRows;
+  const reported = await checkReported(reservedRows, parsed.holdings.length); if (reported) return reported;
   if (!pricePhase) await assertNoUnknownHoldingPeriod(args.source, args.archivePageId);
   // 明示不該当は未対応表と区別するが、空配列成功や価格queueへ変換しない。
   if (parsed.status === "explicit_not_applicable") {
@@ -1359,6 +1372,7 @@ async function recordRecoveryInfo(archivePageId: string, info: RecoveryInfo, sta
 
 /** 原本完了とは独立。保存ZIP・限定snapshotだけで価格列を追記し、未知は再送しない。 */
 export async function resumePendingShareholdingsPrices(args: {
+  sourceDb: ReportedSourceDb;
   maxRows: number; shouldStop: () => boolean; loadSources: HoldingPriceSourceLoader;
   budget: HoldingPriceBudget;
 }): Promise<{ usedRows: number; resumed: number; held: number; pending: boolean }> {
@@ -1391,6 +1405,12 @@ export async function resumePendingShareholdingsPrices(args: {
     assert.equal(info.priceQueueVersion, 1);
     assert.ok(Number.isSafeInteger(info.nextHoldingOffset) && info.nextHoldingOffset! >= 0 && info.nextHoldingOffset! <= info.parsed);
     assert.ok(Number.isSafeInteger(info.unavailableRows) && info.unavailableRows! >= 0 && info.unavailableRows! <= info.nextHoldingOffset!);
+    // 既知の状態HOLDは価格のunknown markerより前に分離する。queueや旧値は変更しない。
+    try { await assertReportedDocumentUsable(args.sourceDb, info.source.docId); }
+    catch (error) {
+      if (error instanceof ReportedDocumentHoldError) { result.held++; continue; }
+      throw error;
+    }
     let saved: Awaited<ReturnType<typeof readSavedHoldingsZip>>;
     let sources: Awaited<ReturnType<HoldingPriceSourceLoader>>;
     try {
@@ -1419,7 +1439,7 @@ export async function resumePendingShareholdingsPrices(args: {
       throw error;
     }
     assert.equal(saved.status, "ready"); assert.equal(sources.status, "ready");
-    const outcome = await publishHoldings({ source: info.source, ownerName: info.ownerName, zip: saved.bytes,
+    const outcome = await publishHoldings({ sourceDb: args.sourceDb, source: info.source, ownerName: info.ownerName, zip: saved.bytes,
       archivePageId: page.id, maxRows: args.maxRows - result.usedRows, valuationSources: sources }, { snapshotId: sources.snapshotId, info });
     if (outcome.status === "published") { result.usedRows += outcome.parsed; result.resumed++; if (outcome.pending) result.pending = true; else if (outcome.unavailable! > 0) result.held++; }
     else if (outcome.pending) result.pending = true;
@@ -1498,7 +1518,7 @@ async function assertNoUnknownHoldingPeriod(source: ShareholdingsSource, archive
 }
 
 /** EDINET完了checkpointとは独立した既知HOLDだけを再開し、資格済み未知sourceは隔離して保持する。 */
-export async function resumePendingShareholdings(args: { maxRows: number; shouldStop: () => boolean; observeIssuedShares?: true }): Promise<{
+export async function resumePendingShareholdings(args: { sourceDb: ReportedSourceDb; maxRows: number; shouldStop: () => boolean; observeIssuedShares?: true }): Promise<{
   usedRows: number; resumed: number; held: number; pending: boolean; unknownSources?: UnknownHoldingsSource[];
 }> {
   assert.ok(Number.isSafeInteger(args.maxRows) && args.maxRows >= 0 && args.maxRows <= 100);
@@ -1546,7 +1566,7 @@ export async function resumePendingShareholdings(args: { maxRows: number; should
     if (saved.status === "held") { result.held++; continue; }
     assert.equal(saved.archivePageId.replaceAll("-", ""), page.id.replaceAll("-", ""));
     assert.equal(saved.bytes.length, info.zipBytes); assert.equal(saved.sha256, info.zipSha256);
-    const outcome = await publishVerifiedShareholdings({ source: info.source, ownerName: info.ownerName, zip: saved.bytes,
+    const outcome = await publishVerifiedShareholdings({ sourceDb: args.sourceDb, source: info.source, ownerName: info.ownerName, zip: saved.bytes,
       archivePageId: page.id, maxRows: args.maxRows - result.usedRows, observeIssuedShares: args.observeIssuedShares,
       issuedSharesFilingDateEvidence: typeof saved.metadata.submitDateTime === "string"
         ? { rawSubmitDateTime: saved.metadata.submitDateTime, provenance: "saved-archive-metadata" } : null });

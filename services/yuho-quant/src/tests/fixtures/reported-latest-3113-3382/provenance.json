@@ -1,0 +1,11 @@
+{
+  "source": "retained accepted normal PRE-capsule.json.gz",
+  "wholeOriginalGzipSha256": "ac3b150374f5c88b73581d35bc6ee789acc323ee279419a026ad9b13b472357a",
+  "projection": "unchanged full six-table rows selected by actual core_stocks.code 3113/3382; cannot rederive whole original SHA from subset",
+  "snapshotSha256": "035294070f6af25934212052e1f83381d79e5b646640533e31d0eb2c9abdaf0c",
+  "stockCodes": [
+    "3113",
+    "3382"
+  ],
+  "reportedStateFaults": "No withdrawal observed for these companies; tests explicitly mutate the reported-state table and remove latest facts as protocol faults. Original source rows/financial values are retained."
+}

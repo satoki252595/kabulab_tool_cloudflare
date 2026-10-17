@@ -5,6 +5,17 @@ import { ingestDocument } from "../src/services/ingest.js";
 vi.mock("../../../src/shared/db/d1-http-client.js", () => ({createD1HttpDb: vi.fn(() => ({})), createD1HttpBatchSender: vi.fn(() => vi.fn())}));
 vi.mock("../../../src/shared/db/active-equity.js", () => ({loadIngestCodeToId: vi.fn(async () => new Map([["7203", 1]]))}));
 vi.mock("../src/services/edinet/client.js", () => ({listDocuments: vi.fn()}));
+vi.mock("../src/services/edinet/list-snapshot.js", async () => {
+  const original = await vi.importActual<typeof import("../src/services/edinet/list-snapshot.js")>("../src/services/edinet/list-snapshot.js");
+  const client = await import("../src/services/edinet/client.js");
+  // Declared unit transport only; physical/raw qualification has separate list-snapshot regressions.
+  return {...original, captureListSnapshot: vi.fn(async (date: string) => ({
+    list: await client.listDocuments(date),
+    snapshot: {date, pageId: "00000000-0000-4000-8000-000000000001", filename: `edinet-list-${date}.json.gz`,
+      gzipSha256: "0".repeat(64), rawSha256: "0".repeat(64), rawBytes: 1, httpStatus: 200, qualified: true,
+      fetchedAt: new Date().toISOString()},
+  }))};
+});
 vi.mock("../src/services/ingest.js", () => ({ingestDocument: vi.fn()}));
 beforeEach(() => vi.clearAllMocks());
 it("two workers halt new claims, await already-started doc, then reject without next day/completion", async () => {
@@ -16,7 +27,8 @@ it("two workers halt new claims, await already-started doc, then reject without 
   let fail!: (e: Error) => void, finish!: (value: never) => void;
   const first = new Promise<never>((_, reject) => {fail = reject;});
   const second = new Promise<never>(resolve => {finish = resolve;});
-  vi.mocked(listDocuments).mockResolvedValue({results: [1, 2, 3].map(n => ({docID: `control-${n}`, secCode: "72030", ordinanceCode: "010", docTypeCode: "120", formCode: "030000"}))} as never);
+  vi.mocked(listDocuments).mockResolvedValue({metadata: {status: "200", resultset: {count: 3}},
+    results: [1, 2, 3].map(n => ({docID: `control-${n}`, secCode: "72030", ordinanceCode: "010", docTypeCode: "120", formCode: "030000", withdrawalStatus: "0"}))} as never);
   vi.mocked(ingestDocument).mockReturnValueOnce(first).mockReturnValueOnce(second);
   let settled = false;
   try {

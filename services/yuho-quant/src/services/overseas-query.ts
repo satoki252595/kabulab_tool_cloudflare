@@ -17,9 +17,10 @@ import {
 } from "../../../../src/shared/db/public-columns.js";
 import { activeEquityCondition } from "../../../../src/shared/db/active-equity.js";
 import { yuhoGrowthProjection } from "../../../../src/shared/db/projection-schema.js";
-import { yuhoDocuments, overseasSalesFacts } from "../db/schema.js";
+import { yuhoDocuments, overseasSalesFacts, edinetReportedChanges } from "../db/schema.js";
 import type { StockHit } from "./order-query.js";
 import { parseOverseasOmission, type OverseasOmissionRecord } from "./overseas-omission.js";
+import { reportedDocumentHold, reportedFinancialSourceHold, reportedGrowthHold, reportedUnrepresentedDocumentHold, REPORTED_DOCUMENT_HOLD_REASON } from "./edinet/reported-changes.js";
 
 /** 海外売上の表示でも受注と同じ最大年数 (受注側 MAX_YEARS と一致) */
 const MAX_YEARS = 5;
@@ -27,6 +28,7 @@ const MAX_YEARS = 5;
 // 検索 (searchStocks) と StockHit は受注側 order-query と共通 (再定義しない)。
 
 export interface OverseasYearPoint {
+  reportedHoldReason?: string;
   fiscalYearEnd: string;
   isConsolidated: boolean | null;
   unitLabel: string;
@@ -52,6 +54,7 @@ export interface OverseasTrend {
     /** 当該有報の海外売上 構造化結果。未取込(受注のみの旧レコード)は null */
     overseasParseStatus: string | null;
     overseasOmission: OverseasOmissionRecord | null;
+    origin?: "reported_observation";
   }>;
   /** 古い→新しい順。最大 MAX_YEARS 年 */
   points: OverseasYearPoint[];
@@ -100,10 +103,22 @@ export async function getOverseasTrend(
       docTypeCode: yuhoDocuments.docTypeCode,
       overseasParseStatus: yuhoDocuments.overseasParseStatus,
       overseasOmissionJson: yuhoDocuments.overseasOmissionJson,
+      reportedHold: reportedDocumentHold(yuhoDocuments.docId),
+      observedOnly: sql<number>`0`,
+      sortId:sql<number>`${yuhoDocuments.id}`.as("sort_id"),
     })
     .from(yuhoDocuments)
     .where(eq(yuhoDocuments.stockId, stockId))
-    .orderBy(desc(yuhoDocuments.submittedAt));
+    .unionAll(db.selectDistinct({
+      docId:edinetReportedChanges.docId,edinetCode:sql<string>`json_extract(${edinetReportedChanges.observationJson},'$.doc.edinetCode')`,periodEnd:sql<string>`${edinetReportedChanges.periodEnd}`,
+      submittedAt:sql<Date>`${edinetReportedChanges.submittedAt}`,docTypeCode:sql<string>`json_extract(${edinetReportedChanges.observationJson},'$.doc.docTypeCode')`,
+      overseasParseStatus:sql<string|null>`'reported_document_hold'`,overseasOmissionJson:sql<string|null>`null`,reportedHold:sql<number>`1`,
+      observedOnly:sql<number>`1`,sortId:sql<number>`0`,
+    }).from(edinetReportedChanges).where(and(eq(edinetReportedChanges.stockId,stockId),
+      sql`${edinetReportedChanges.periodEnd} is not null and ${edinetReportedChanges.submittedAt} is not null`,
+      sql`${edinetReportedChanges.reportedState}<>'unqualified_relation'`,
+      sql`not exists(select 1 from yuho_documents known where known.doc_id=${edinetReportedChanges.docId})`)))
+    .orderBy(desc(sql`period_end`),desc(sql`submitted_at`),desc(sql`sort_id`));
 
   const rows = await db
     .select({
@@ -115,6 +130,8 @@ export async function getOverseasTrend(
       salesYen: overseasSalesFacts.salesYen,
       ratioPct: overseasSalesFacts.ratioPct,
       submittedAt: yuhoDocuments.submittedAt,
+      reportedHold: reportedFinancialSourceHold(yuhoDocuments.docId),
+      newerHold: reportedUnrepresentedDocumentHold("overseas", overseasSalesFacts.stockId, overseasSalesFacts.fiscalYearEnd, overseasSalesFacts.fiscalYearEnd),
     })
     .from(overseasSalesFacts)
     .innerJoin(
@@ -147,6 +164,7 @@ export async function getOverseasTrend(
       };
       byYear.set(r.fiscalYearEnd, p);
     }
+    if (r.reportedHold === 1 || r.newerHold === 1) p.reportedHoldReason = REPORTED_DOCUMENT_HOLD_REASON;
     if (r.regionKind === "overseas_total") {
       p.overseasYen = r.salesYen;
     } else if (r.regionKind === "total") {
@@ -162,6 +180,11 @@ export async function getOverseasTrend(
 
   // 比率 = 海外売上高 / 連結売上高 (どちらか欠損なら null = 作らない)
   for (const p of byYear.values()) {
+    if (p.reportedHoldReason !== undefined) {
+      p.overseasYen = null; p.totalYen = null; p.domesticYen = null; p.ratioPct = null;
+      p.regions = p.regions.map(region => ({ ...region, yen: null, ratioPct: null }));
+      continue;
+    }
     if (p.overseasYen !== null && p.totalYen !== null && p.totalYen > 0) {
       p.ratioPct = +((p.overseasYen / p.totalYen) * 100).toFixed(1);
     }
@@ -179,8 +202,9 @@ export async function getOverseasTrend(
       periodEnd: d.periodEnd,
       submittedAt: d.submittedAt,
       docTypeCode: d.docTypeCode,
-      overseasParseStatus: d.overseasParseStatus,
-      overseasOmission: parseOverseasOmission(d.overseasOmissionJson, d),
+      overseasParseStatus: d.reportedHold === 1 ? "reported_document_hold" : d.overseasParseStatus,
+      overseasOmission: d.reportedHold === 1 ? null : parseOverseasOmission(d.overseasOmissionJson, d),
+      ...(d.observedOnly===1?{origin:"reported_observation" as const}:{}),
     })),
     points,
     hasStructuredData: points.some((p) => p.overseasYen !== null),
@@ -328,6 +352,7 @@ export async function screenOverseasGrowth(
   const bucket = opts.region ? REGION_BUCKETS[opts.region] : undefined;
 
   const conds = [
+    sql`not ${reportedGrowthHold("overseas", p.stockId, p.ovsFirstFy, p.ovsLastFy)}`,
     gte(p.ovsYears, opts.minYears),
     // 直近比率が算出不能な銘柄は順位付け不能 → 除外 (架空値を作らない)
     isNotNull(p.ovsLatestRatioPct),
@@ -490,6 +515,7 @@ export async function listSectorsWithOverseas(db: Database): Promise<string[]> {
     .where(
       and(
         eq(yuhoGrowthProjection.ovsHasOverseasTotal, true),
+        sql`not ${reportedGrowthHold("overseas", yuhoGrowthProjection.stockId, yuhoGrowthProjection.ovsFirstFy, yuhoGrowthProjection.ovsLastFy)}`,
         activeEquityCondition()
       )
     );

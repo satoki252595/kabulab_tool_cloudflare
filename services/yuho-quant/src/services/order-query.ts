@@ -16,7 +16,8 @@ import {
 } from "../../../../src/shared/db/public-columns.js";
 import { activeEquityCondition } from "../../../../src/shared/db/active-equity.js";
 import { yuhoGrowthProjection } from "../../../../src/shared/db/projection-schema.js";
-import { yuhoDocuments, orderFacts } from "../db/schema.js";
+import { yuhoDocuments, orderFacts, edinetReportedChanges } from "../db/schema.js";
+import { reportedDocumentHold, reportedFinancialSourceHold, reportedGrowthHold, reportedUnrepresentedDocumentHold, REPORTED_DOCUMENT_HOLD_REASON } from "./edinet/reported-changes.js";
 
 /** サービスで表示する最大年数 (EDINET 取得可能な過去分の上限と整合) */
 export const MAX_YEARS = 5;
@@ -75,6 +76,7 @@ export interface OrderYearPoint {
   /** 全社合計 (segment_kind='total')。無ければ null */
   totalOrdersYen: number | null;
   totalBacklogYen: number | null;
+  reportedHoldReason?: string;
   /** セグメント別内訳 (segment_kind='segment' のみ) */
   segments: Array<{
     name: string;
@@ -92,6 +94,7 @@ export interface OrderTrend {
     submittedAt: Date;
     docTypeCode: string;
     parseStatus: string;
+    origin?: "reported_observation";
   }>;
   /** 古い→新しい順。最大 MAX_YEARS 年 */
   points: OrderYearPoint[];
@@ -144,10 +147,21 @@ export async function getOrderTrend(
       submittedAt: yuhoDocuments.submittedAt,
       docTypeCode: yuhoDocuments.docTypeCode,
       parseStatus: yuhoDocuments.parseStatus,
+      reportedHold: reportedDocumentHold(yuhoDocuments.docId),
+      observedOnly: sql<number>`0`,
+      sortId: sql<number>`${yuhoDocuments.id}`.as("sort_id"),
     })
     .from(yuhoDocuments)
     .where(eq(yuhoDocuments.stockId, stockId))
-    .orderBy(desc(yuhoDocuments.submittedAt));
+    .unionAll(db.selectDistinct({
+      docId:edinetReportedChanges.docId, periodEnd:sql<string>`${edinetReportedChanges.periodEnd}`,
+      submittedAt:sql<Date>`${edinetReportedChanges.submittedAt}`, docTypeCode:sql<string>`json_extract(${edinetReportedChanges.observationJson},'$.doc.docTypeCode')`,
+      parseStatus:sql<string>`'reported_document_hold'`, reportedHold:sql<number>`1`, observedOnly:sql<number>`1`, sortId:sql<number>`0`,
+    }).from(edinetReportedChanges).where(and(eq(edinetReportedChanges.stockId,stockId),
+      sql`${edinetReportedChanges.periodEnd} is not null and ${edinetReportedChanges.submittedAt} is not null`,
+      sql`${edinetReportedChanges.reportedState}<>'unqualified_relation'`,
+      sql`not exists(select 1 from yuho_documents known where known.doc_id=${edinetReportedChanges.docId})`)))
+    .orderBy(desc(sql`period_end`),desc(sql`submitted_at`),desc(sql`sort_id`));
 
   const rows = await db
     .select({
@@ -159,6 +173,8 @@ export async function getOrderTrend(
       ordersYen: orderFacts.ordersReceivedYen,
       backlogYen: orderFacts.orderBacklogYen,
       submittedAt: yuhoDocuments.submittedAt,
+      reportedHold: reportedFinancialSourceHold(yuhoDocuments.docId),
+      newerHold: reportedUnrepresentedDocumentHold("orders", orderFacts.stockId, orderFacts.fiscalYearEnd, orderFacts.fiscalYearEnd),
     })
     .from(orderFacts)
     .innerJoin(yuhoDocuments, eq(orderFacts.documentId, yuhoDocuments.id))
@@ -186,6 +202,7 @@ export async function getOrderTrend(
       };
       byYear.set(r.fiscalYearEnd, p);
     }
+    if (r.reportedHold === 1 || r.newerHold === 1) p.reportedHoldReason = REPORTED_DOCUMENT_HOLD_REASON;
     if (r.segmentKind === "total") {
       p.totalOrdersYen = r.ordersYen;
       p.totalBacklogYen = r.backlogYen;
@@ -196,6 +213,12 @@ export async function getOrderTrend(
         backlogYen: r.backlogYen,
       });
     }
+  }
+
+  // 選択後の原表が未資格なら同年度の部分合算もしない。原ファクトと旧提出は保持する。
+  for (const p of byYear.values()) if (p.reportedHoldReason !== undefined) {
+    p.totalOrdersYen = null; p.totalBacklogYen = null;
+    p.segments = p.segments.map(segment => ({ ...segment, ordersYen: null, backlogYen: null }));
   }
 
   const points = [...byYear.values()]
@@ -209,7 +232,8 @@ export async function getOrderTrend(
       periodEnd: d.periodEnd,
       submittedAt: d.submittedAt,
       docTypeCode: d.docTypeCode,
-      parseStatus: d.parseStatus,
+      parseStatus: d.reportedHold === 1 ? "reported_document_hold" : d.parseStatus,
+      ...(d.observedOnly===1?{origin:"reported_observation" as const}:{}),
     })),
     points,
     hasStructuredData: points.length > 0,
@@ -319,6 +343,7 @@ export async function screenOrderGrowth(
   const metricCol =
     opts.metric === "orders" ? p.ordOrdersCagr : p.ordBacklogCagr;
   const conds = [
+    sql`not ${reportedGrowthHold("orders", p.stockId, p.ordFirstFy, p.ordLastFy)}`,
     gte(p.ordYears, opts.minYears),
     isNotNull(metricCol),
     activeEquityCondition(),
@@ -404,7 +429,8 @@ export async function listSectorsWithOrders(
     .from(yuhoGrowthProjection)
     .innerJoin(stocks, eq(yuhoGrowthProjection.stockId, stocks.id))
     .where(
-      and(gte(yuhoGrowthProjection.ordYears, 1), activeEquityCondition())
+      and(gte(yuhoGrowthProjection.ordYears, 1), activeEquityCondition(),
+        sql`not ${reportedGrowthHold("orders", yuhoGrowthProjection.stockId, yuhoGrowthProjection.ordFirstFy, yuhoGrowthProjection.ordLastFy)}`)
     );
   return rows
     .map((r) => r.sector)

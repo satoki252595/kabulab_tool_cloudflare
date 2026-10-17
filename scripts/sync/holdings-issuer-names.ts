@@ -33,6 +33,7 @@ export function createHoldingOfficialNamesLoader() {
         const stopped = timeLimit(); if (stopped) return stopped;
         saved = (async () => {
           const row = await latest(target.identity);
+          if (row?.reportedHoldReason !== undefined) return { status: "held" as const, reasonCode: "issuer_source_unavailable" as const, reason: row.reportedHoldReason };
           if (row === undefined || row.edinetCode !== target.identity.edinetCode || exactLegalName(row.ownerName) !== exactLegalName(target.identity.legalName)) return { status: "held" as const, reasonCode: "issuer_source_unavailable" as const, reason: "公式英字名の最新issuer/証券主体が一致しません" };
           const source = { docId: row.docId, stockCode: row.stockCode, edinetCode: row.edinetCode, fiscalYearEnd: row.fiscalYearEnd };
           const stopped = timeLimit(); if (stopped) return stopped;

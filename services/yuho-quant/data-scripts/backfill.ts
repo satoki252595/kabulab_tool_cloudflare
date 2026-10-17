@@ -46,7 +46,8 @@ import type { Database } from "../src/db/client.js";
 import { inArray } from "drizzle-orm";
 import { loadIngestCodeToId } from "../../../src/shared/db/active-equity.js";
 import { yuhoDocuments } from "../src/db/schema.js";
-import { listDocuments } from "../src/services/edinet/client.js";
+import { captureListSnapshot } from "../src/services/edinet/list-snapshot.js";
+import { recordReportedChanges } from "../src/services/edinet/reported-changes.js";
 import {
   isAnnualSecuritiesReport,
   secCodeToTicker,
@@ -165,7 +166,9 @@ export async function main(): Promise<void> {
     scannedDays++;
     let list;
     try {
-      list = await listDocuments(date);
+      const captured = await captureListSnapshot(date);
+      list = captured.list;
+      await recordReportedChanges(db, list, captured.snapshot, () => false);
     } catch {
       // 一覧取得に失敗した日は次の日へ進まず停止。
       console.error(`[backfill] list 失敗 ${date}: 取得失敗 (再送なし)`);

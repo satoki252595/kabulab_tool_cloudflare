@@ -225,6 +225,13 @@
       "when": 1792160650843,
       "tag": "0031_stock_adjusted_point",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1792242778761,
+      "tag": "0032_edinet_reported_changes",
+      "breakpoints": true
     }
   ]
 }

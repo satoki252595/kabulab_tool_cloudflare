@@ -169,8 +169,11 @@ function createD1(
       sqlite.exec("BEGIN");
       try {
         const out = stmts.map((s) => {
-          const r = sqlite.prepare(s._testSql).run(...spread(s._testParams));
+          const statement = sqlite.prepare(s._testSql);
+          if (statement.columns().length > 0) return { success: true, results: statement.all(...spread(s._testParams)), meta: {} };
+          const r = statement.run(...spread(s._testParams));
           return {
+            results: [],
             success: true,
             meta: { changes: Number(r.changes), last_row_id: Number(r.lastInsertRowid) },
           };

@@ -39,7 +39,9 @@ vi.mock("../../services/yuho-quant/src/services/edinet/list-snapshot.js", async 
   const original = await vi.importActual<typeof import("../../services/yuho-quant/src/services/edinet/list-snapshot.js")>("../../services/yuho-quant/src/services/edinet/list-snapshot.js");
   const saved = new Map<string, unknown>();
   return {...original, captureListSnapshot: vi.fn(async (date: string) => {
-    const list = await client.listDocuments(date);
+    const fixture = await client.listDocuments(date);
+    // Declared protocol envelope: older tests supplied results only; production captures the full typed HTTP body.
+    const list = {...fixture, metadata: { status: "200", resultset: { count: fixture.results.length } }};
     const pageId = `00000000-0000-4000-8000-${date.replaceAll("-", "").padStart(12,"0")}`;
     saved.set(pageId, list);
     return {list, snapshot: {date, pageId, filename: `edinet-list-${date}.json.gz`,
@@ -103,6 +105,8 @@ beforeEach(() => {
 });
 
 const annualDoc = (code: string) => ({
+  seqNumber: 1,
+  withdrawalStatus: "0",
   docID: `S100${code}`,
   secCode: `${code}0`,
   ordinanceCode: "010",
@@ -206,7 +210,7 @@ describe("catchup 応答契約: 実失敗だけ非 2xx", () => {
     vi.mocked(listDocuments).mockResolvedValue({ results: [] } as never);
     vi.mocked(resumePendingShareholdingsPrices).mockResolvedValueOnce({ usedRows: 10, resumed: 1, held: 1, pending: true });
     const result = await runCatchup(undefined, loader);
-    expect(resumePendingShareholdingsPrices).toHaveBeenLastCalledWith({ maxRows: 100, shouldStop: expect.any(Function),
+    expect(resumePendingShareholdingsPrices).toHaveBeenLastCalledWith({ sourceDb: db, maxRows: 100, shouldStop: expect.any(Function),
       budget: { remainingChunks: 116, remainingBytes: 256 * 1024 * 1024 }, loadSources: loader });
     expect(vi.mocked(rebuildYuhoGrowthProjection).mock.invocationCallOrder.at(-1)).toBeLessThan(vi.mocked(resumePendingShareholdingsPrices).mock.invocationCallOrder.at(-1)!);
     expect(result.byStatus).toMatchObject({ "holdings_price:resumed": 1, "holdings_price:requires_review": 1, "holdings_price:pending": 1 });
@@ -353,6 +357,51 @@ describe("catchup 応答契約: 実失敗だけ非 2xx", () => {
     vi.mocked(listDocuments).mockResolvedValue({results: []} as never);
     await runCatchup();
     expect(rebuildYuhoGrowthProjection).toHaveBeenCalledExactlyOnceWith(db);
+  });
+
+  it("宣言した提出状態変更は物理capture後に観測保存し、金融ingest前の理由付きpendingへ分ける", async () => {
+    vi.mocked(listDocuments).mockResolvedValueOnce({ results: [{ ...annualDoc("7203"), docInfoEditStatus: "1" }] } as never)
+      .mockResolvedValue({ results: [] } as never);
+    const result = await runCatchup();
+    expect(result.byStatus).toMatchObject({ "edinet_reported:observations": 1, "edinet_reported:held": 1 });
+    expect(result.pendingDocuments).toBe(1); expect(ingestDocument).not.toHaveBeenCalled();
+    const row = sqlite.prepare("select doc_id,reported_state,observation_json from yuho_edinet_reported_changes").get();
+    expect(row).toMatchObject({ doc_id: "S1007203", reported_state: "reported_status_unqualified" });
+    const observation = JSON.parse(row!.observation_json as string);
+    expect(observation.doc.docInfoEditStatus).toBe("1"); expect(observation.source.qualified).toBe(true);
+    expect(observation.chainApplication).toBe("not_applied");
+  });
+
+  it("実withdrawn null型/提出者行もfilter前に保持し、親IDを金融失効へ読み替えない", async () => {
+    const fixture = JSON.parse(readFileSync(join(ROOT, "services/yuho-quant/src/tests/fixtures/edinet-reported-lineage.json"), "utf8"));
+    const original = fixture.entries.find((entry: { original: { docID: string } }) => entry.original.docID === "S100YRSP").original;
+    vi.mocked(listDocuments).mockResolvedValueOnce({ results: [original] } as never).mockResolvedValue({ results: [] } as never);
+    const result = await runCatchup(); expect(result.byStatus["edinet_reported:held"]).toBe(1);
+    expect(sqlite.prepare("select doc_id,parent_doc_id,reported_state from yuho_edinet_reported_changes").get()).toEqual({
+      doc_id: "S100YRSP", parent_doc_id: "S100VVJZ", reported_state: "reported_withdrawal" });
+    expect(ingestDocument).not.toHaveBeenCalled(); expect(sqlite.prepare("select count(*) as n from yuho_documents").get()).toEqual({ n: 0 });
+  });
+
+  it("実SQLite観測INSERT後の宣言ACK消失は@listを保持し、次runへ同原本送信を継続しない", async () => {
+    vi.mocked(listDocuments).mockResolvedValueOnce({ results: [{ ...annualDoc("7203"), docInfoEditStatus: "1" }] } as never);
+    let inserts = 0;
+    db = drizzle(async (query, args, method) => {
+      const stmt = sqlite.prepare(query), params = args as (string | number | null)[];
+      if (method === "run") {
+        stmt.run(...params);
+        if (query.startsWith('insert into "yuho_edinet_reported_changes"')) { inserts++; throw new Error("declared reported INSERT ACK unknown"); }
+        return { rows: [] };
+      }
+      const rows = (stmt.all(...params) as Record<string, unknown>[]).map(row => Object.values(row));
+      return { rows: method === "get" ? rows[0] : rows };
+    });
+    const result = await runCatchup(); expect(result.listErrors).toHaveLength(1); expect(inserts).toBe(1);
+    const retained=sqlite.prepare("select in_flight_doc_id,snapshot from yuho_edinet_catchup_progress where in_flight_doc_id is not null").get()!;
+    expect(retained.in_flight_doc_id).toBe("@list");
+    expect(JSON.parse(retained.snapshot as string)).toEqual((await vi.mocked(captureListSnapshot).mock.results[0].value).snapshot);
+    const requests = vi.mocked(captureListSnapshot).mock.calls.length;
+    await expect(runCatchup()).rejects.toThrow("in-flight");
+    expect(captureListSnapshot).toHaveBeenCalledTimes(requests); expect(ingestDocument).not.toHaveBeenCalled();
   });
 
   it("positive: 母集団外あり・失敗なし → errors 空・200", async () => {

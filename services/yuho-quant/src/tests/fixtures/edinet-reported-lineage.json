@@ -1,0 +1,189 @@
+{
+  "provenance": "Unmodified selected rows from retained EDINET API v2 original date lists. Full raw bodies remain private; whole-source SHA cannot be re-derived from this excerpt. Fault changes in tests are declared separately.",
+  "entries": [
+    {
+      "source": {
+        "date": "2026-07-03",
+        "rawSha256": "01b179721091640cdb16251932ff0b24ace0220e298fba49ba8beeb3d6647ae4",
+        "rawBytes": 271846,
+        "retainedArchive": [
+          {
+            "pageId": "392d74ff84cd819c9814d814df41d67b",
+            "filename": "edinet_documents_list_ALL_20260703.json"
+          }
+        ],
+        "selection": "Exactly one results row by docID; no transport or business field removed",
+        "docId": "S100YOCW"
+      },
+      "original": {
+        "seqNumber": 8,
+        "docID": "S100YOCW",
+        "edinetCode": "E05236",
+        "secCode": "43230",
+        "JCN": "3120001072817",
+        "filerName": "日本システム技術株式会社",
+        "fundCode": null,
+        "ordinanceCode": "010",
+        "formCode": "030001",
+        "docTypeCode": "130",
+        "periodStart": null,
+        "periodEnd": null,
+        "submitDateTime": "2026-07-03 09:01",
+        "docDescription": "訂正有価証券報告書－第54期(2025/04/01－2026/03/31)",
+        "issuerEdinetCode": null,
+        "subjectEdinetCode": null,
+        "subsidiaryEdinetCode": null,
+        "currentReportReason": null,
+        "parentDocID": "S100YI5H",
+        "opeDateTime": null,
+        "withdrawalStatus": "0",
+        "docInfoEditStatus": "0",
+        "disclosureStatus": "0",
+        "xbrlFlag": "1",
+        "pdfFlag": "1",
+        "attachDocFlag": "0",
+        "englishDocFlag": "0",
+        "csvFlag": "1",
+        "legalStatus": "1"
+      }
+    },
+    {
+      "source": {
+        "date": "2026-07-23",
+        "rawSha256": "24b2091293ca5eeb9946212ed8e146b937a8ea9ca82528e92473c8fcd1ea300a",
+        "rawBytes": 294612,
+        "retainedArchive": [
+          {
+            "pageId": "3a6d74ff84cd81d49ab9fa0e0868233a",
+            "filename": "edinet_documents_list_ALL_20260723.json"
+          }
+        ],
+        "selection": "Exactly one results row by docID; no transport or business field removed",
+        "docId": "S100YRSP"
+      },
+      "original": {
+        "seqNumber": 176,
+        "docID": "S100YRSP",
+        "edinetCode": null,
+        "secCode": null,
+        "JCN": null,
+        "filerName": null,
+        "fundCode": null,
+        "ordinanceCode": null,
+        "formCode": null,
+        "docTypeCode": null,
+        "periodStart": null,
+        "periodEnd": null,
+        "submitDateTime": "2026-07-23 11:26",
+        "docDescription": null,
+        "issuerEdinetCode": null,
+        "subjectEdinetCode": null,
+        "subsidiaryEdinetCode": null,
+        "currentReportReason": null,
+        "parentDocID": "S100VVJZ",
+        "opeDateTime": null,
+        "withdrawalStatus": "1",
+        "docInfoEditStatus": "0",
+        "disclosureStatus": "0",
+        "xbrlFlag": "0",
+        "pdfFlag": "0",
+        "attachDocFlag": "0",
+        "englishDocFlag": "0",
+        "csvFlag": "0",
+        "legalStatus": "0"
+      }
+    },
+    {
+      "source": {
+        "date": "2026-07-27",
+        "rawSha256": "e4e50e29976a99f124fe216d229040f59c4e46dcd7f3b13ba8deabda9ee6c6bb",
+        "rawBytes": 219590,
+        "retainedArchive": [
+          {
+            "pageId": "3aad74ff84cd81b0bcdbecf086be2915",
+            "filename": "edinet_documents_list_ALL_20260727.json"
+          }
+        ],
+        "selection": "Exactly one results row by docID; no transport or business field removed",
+        "docId": "S100YSGA"
+      },
+      "original": {
+        "seqNumber": 209,
+        "docID": "S100YSGA",
+        "edinetCode": "E00394",
+        "secCode": "25020",
+        "JCN": "6010601036386",
+        "filerName": "アサヒグループホールディングス株式会社",
+        "fundCode": null,
+        "ordinanceCode": "010",
+        "formCode": "030000",
+        "docTypeCode": "120",
+        "periodStart": "2025-01-01",
+        "periodEnd": "2025-12-31",
+        "submitDateTime": "2026-07-27 16:30",
+        "docDescription": "有価証券報告書－第102期(2025/01/01－2025/12/31)",
+        "issuerEdinetCode": null,
+        "subjectEdinetCode": null,
+        "subsidiaryEdinetCode": null,
+        "currentReportReason": null,
+        "parentDocID": null,
+        "opeDateTime": null,
+        "withdrawalStatus": "0",
+        "docInfoEditStatus": "0",
+        "disclosureStatus": "0",
+        "xbrlFlag": "1",
+        "pdfFlag": "1",
+        "attachDocFlag": "1",
+        "englishDocFlag": "0",
+        "csvFlag": "1",
+        "legalStatus": "1"
+      }
+    },
+    {
+      "source": {
+        "date": "2026-08-12",
+        "rawSha256": "abfabd667ebcfceba4a6bd5639f0ac53343778b055dcb6d2e3e68cae6168ea9b",
+        "rawBytes": 282610,
+        "retainedArchive": [
+          {
+            "pageId": "3bad74ff84cd81bea6aacdfed52107f6",
+            "filename": "edinet_documents_list_ALL_20260812.json"
+          }
+        ],
+        "selection": "Exactly one results row by docID; no transport or business field removed",
+        "docId": "S100YVTZ"
+      },
+      "original": {
+        "seqNumber": 133,
+        "docID": "S100YVTZ",
+        "edinetCode": "E00394",
+        "secCode": "25020",
+        "JCN": "6010601036386",
+        "filerName": "アサヒグループホールディングス株式会社",
+        "fundCode": null,
+        "ordinanceCode": "010",
+        "formCode": "030001",
+        "docTypeCode": "130",
+        "periodStart": null,
+        "periodEnd": null,
+        "submitDateTime": "2026-08-12 11:30",
+        "docDescription": "訂正有価証券報告書－第102期(2025/01/01－2025/12/31)",
+        "issuerEdinetCode": null,
+        "subjectEdinetCode": null,
+        "subsidiaryEdinetCode": null,
+        "currentReportReason": null,
+        "parentDocID": "S100YSGA",
+        "opeDateTime": null,
+        "withdrawalStatus": "0",
+        "docInfoEditStatus": "0",
+        "disclosureStatus": "0",
+        "xbrlFlag": "1",
+        "pdfFlag": "1",
+        "attachDocFlag": "1",
+        "englishDocFlag": "0",
+        "csvFlag": "1",
+        "legalStatus": "1"
+      }
+    }
+  ]
+}

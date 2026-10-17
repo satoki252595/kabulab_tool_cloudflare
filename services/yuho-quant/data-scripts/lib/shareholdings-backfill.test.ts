@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { readFileSync } from "node:fs";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { describe, expect, it } from "vitest";
 import { selectLatestHoldingsDocuments } from "./shareholdings-backfill.js";
@@ -6,6 +7,7 @@ import { selectLatestHoldingsDocuments } from "./shareholdings-backfill.js";
 describe("保有明細backfillの最新有報選択", () => {
   it("最新会計期末を優先し、同一期末の訂正を日時/PKで確定、active普通株の母集団とcursorを守る", async () => {
     const sqlite = new DatabaseSync(":memory:");
+    sqlite.exec(readFileSync(new URL("../../../../drizzle/d1/0032_edinet_reported_changes.sql", import.meta.url), "utf8"));
     sqlite.exec(`CREATE TABLE core_stocks (id INTEGER PRIMARY KEY, code TEXT, is_active INTEGER, instrument_type TEXT);
       CREATE UNIQUE INDEX core_stocks_code_unique ON core_stocks (code);
       CREATE TABLE yuho_documents (id INTEGER PRIMARY KEY, stock_id INTEGER, doc_id TEXT, edinet_code TEXT, filer_name TEXT, period_end TEXT, submitted_at INTEGER, doc_type_code TEXT);

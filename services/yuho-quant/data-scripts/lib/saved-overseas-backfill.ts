@@ -16,6 +16,7 @@ import { join, resolve, dirname } from "node:path";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { z } from "zod";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
+import { reportedDocumentsHoldQuery, assertReportedDocumentsResult } from "../../src/services/edinet/reported-changes.js";
 import {
   assertD1SingleQueryResponse,
   createD1HttpBatchSender,
@@ -386,19 +387,19 @@ const snapshotSql = (table: (typeof tables)[number], ids: number[]) => ({
 });
 export function savedReadQueries(
   cohort: SourceCohort,
-): Array<{ sql: string; params: number[] }> {
+): Array<{ sql: string; params: (number | string)[] }> {
   const ids = cohort.items.map((item) => item.stockId),
     groups = [ids.slice(0, 10), ids.slice(10)].filter(
       (group) => group.length > 0,
     );
-  return tables.flatMap((table) => [
+  return [reportedDocumentsHoldQuery(cohort.items.map(item => item.docId)), ...tables.flatMap((table) => [
     { sql: `PRAGMA table_info(${table})`, params: [] },
     ...[...groups, ...ids.map((value) => [value])].map((group) =>
       snapshotSql(table, group),
     ),
-  ]);
+  ])];
 }
-async function query(sql: string, params: number[]): Promise<Row[]> {
+async function query(sql: string, params: (number | string)[]): Promise<Row[]> {
   const response = await fetch(d1HttpQueryUrl(), {
     method: "POST",
     headers: {
@@ -417,6 +418,10 @@ async function query(sql: string, params: number[]): Promise<Row[]> {
           (typeof value === "number" && Number.isFinite(value)),
       );
   return rows as Row[];
+}
+async function assertCurrentReported(items: SavedOverseasItem[]): Promise<void> {
+  const ids = items.map(item => item.docId), q = reportedDocumentsHoldQuery(ids);
+  assertReportedDocumentsResult(ids, await query(q.sql, q.params));
 }
 async function snapshot(items: SavedOverseasItem[]): Promise<Snapshot> {
   assert(items.length > 0 && items.length <= 20);
@@ -1250,6 +1255,9 @@ async function runSaved(
   const io = installGuard(options, cohort, options.outDir, ancestor, kind);
   let phase = "fresh PRE";
   try {
+    // The six-table local replay is not a qualification of the production observation table.
+    // Bind the current fixed set with one real indexed D1 read before any Notion PRE/archive.
+    await assertCurrentReported(cohort.items);
     if (options.mode === "apply") {
       assert(options.capsuleSha256);
       reserveSavedClaims(cohort, {

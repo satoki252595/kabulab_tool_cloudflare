@@ -50,6 +50,25 @@ export const edinetCatchupProgress = sqliteTable("yuho_edinet_catchup_progress",
   index("yuho_edinet_progress_queue_idx").on(t.scope, t.finished, t.sealed, t.date),
 ]);
 
+/** 原日付一覧の変更観測。親の資格・金融値への適用とは分離し、null提出者も残す。 */
+export const edinetReportedChanges = sqliteTable("yuho_edinet_reported_changes", {
+  sourcePageId: text("source_page_id").notNull(),
+  seqNumber: integer("seq_number").notNull(),
+  sourceRawSha256: text("source_raw_sha256").notNull(),
+  docId: text("doc_id").notNull(),
+  parentDocId: text("parent_doc_id"),
+  reportedState: text("reported_state").notNull(),
+  observationJson: text("observation_json").notNull(),
+  /** 完全な原報告と通常identityの両mapが一致した場合だけの報告投影。未取込factsではない。 */
+  stockId: integer("stock_id"),
+  periodEnd: text("period_end"),
+  submittedAt: integer("submitted_at", { mode: "timestamp" }),
+}, (t) => [
+  primaryKey({ columns: [t.sourcePageId, t.seqNumber] }),
+  index("yuho_edinet_reported_doc_idx").on(t.docId),
+  index("yuho_edinet_reported_stock_period_idx").on(t.stockId, t.periodEnd, t.submittedAt),
+]);
+
 /**
  * 取り込んだ有価証券報告書 1 通 = 1 行。docId が EDINET 上の一意キーで、
  * これを unique にして冪等な再取り込みを保証する。

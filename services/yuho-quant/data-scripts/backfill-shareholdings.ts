@@ -60,6 +60,11 @@ export async function prepareLatestHoldings(args: { limit: number; afterCode: st
     const source: ShareholdingsSource = { docId: row.docId, stockCode: row.stockCode, edinetCode: row.edinetCode, fiscalYearEnd: row.fiscalYearEnd };
     const path = join(args.dir, `${row.stockCode}-${row.docId}.item.json`);
     if (existsSync(path)) { const item = read(path) as Item; assert.deepEqual(item.source, source); assert.equal(item.parserSourceSha256, PARSER_SOURCE_SHA256, "旧parserのitemは未受入です。保存ZIPから別planへ再解析してください"); assert.equal(item.issuedSharesSourceSha256, ISSUED_SOURCE_SHA256, "旧observerのitemは別planへ再準備してください"); items.push(item); continue; }
+    if (row.reportedHoldReason !== undefined) {
+      const item: Item = { source, ownerName: row.ownerName, status: "held", reason: row.reportedHoldReason, parsedRows: 0,
+        parserSourceSha256: PARSER_SOURCE_SHA256, issuedSharesSourceSha256: ISSUED_SOURCE_SHA256 };
+      save(path, item); items.push(item); continue;
+    }
     const saved = await readSavedHoldingsZip(source, undefined, { observeIssuedShares: true });
     let item: Item;
     if (saved.status === "held") item = { source, ownerName: row.ownerName, status: "held", reason: saved.reason, parsedRows: 0 };
@@ -143,6 +148,7 @@ export async function applyLatestHoldings(dir: string, maxRows: number): Promise
         const fresh = await selectLatestHoldingsDocuments(db, { ...plan.selection, onlyCode: item.source.stockCode });
         const latest = fresh.rows.find(row => row.stockCode === item.source.stockCode);
         assert.ok(latest, "対象銘柄が最新有報集合から消えています");
+        assert.equal(latest.reportedHoldReason, undefined, latest.reportedHoldReason);
         assert.deepEqual({ docId: latest.docId, stockCode: latest.stockCode, edinetCode: latest.edinetCode, fiscalYearEnd: latest.fiscalYearEnd },
           item.source, "最新有報・発行体・期末が準備時から変化しました。再準備してください");
         assert.equal(latest.ownerName, item.ownerName, "提出会社名が準備時から変化しました。再準備してください");
@@ -175,7 +181,7 @@ export async function applyLatestHoldings(dir: string, maxRows: number): Promise
       // 原本の物理読戻し中に新有報へ切り替わった場合も、公開前に止める。
       await assertLatest();
       const windowRows = explicitAbsence ? 0 : Math.min(100, maxRows - usedRows);
-      const result = await publishVerifiedShareholdings({ source: item.source, ownerName: item.ownerName, zip,
+      const result = await publishVerifiedShareholdings({ sourceDb: db, source: item.source, ownerName: item.ownerName, zip,
         observeIssuedShares: true, issuedSharesFilingDateEvidence: typeof item.sourceMetadata?.submitDateTime === "string"
           ? { rawSubmitDateTime: item.sourceMetadata.submitDateTime, provenance: "saved-archive-metadata" } : null,
         archivePageId, maxRows: windowRows, valuationSources: evidence });

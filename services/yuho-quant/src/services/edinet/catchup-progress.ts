@@ -8,6 +8,7 @@ import { listSnapshotSchema } from "./list-snapshot.js";
 const idsSchema = z.array(z.string());
 const pendingSchema = z.array(z.object({docId: z.string(), reason: z.enum([
   "identity_unresolved", "metadata_unresolved", "parse_error", "text_readback_mismatch",
+  "reported_document_state",
 ])}));
 export type PendingDocument = z.infer<typeof pendingSchema>[number];
 export type Progress = typeof table.$inferSelect;
@@ -98,6 +99,7 @@ export async function progressSummary(db: Database, scope: string, today: string
       metadata_unresolved: pendingCount("metadata_unresolved"),
       parse_error: pendingCount("parse_error"),
       text_readback_mismatch: pendingCount("text_readback_mismatch"),
+      reported_document_state: pendingCount("reported_document_state"),
     },
   }).from(table).where(eq(table.scope, scope));
   if (rows.length !== 1) throw new Error("EDINET checkpoint summary 不正");

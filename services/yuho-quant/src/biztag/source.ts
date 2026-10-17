@@ -22,6 +22,7 @@ import { stocks } from "../../../../src/shared/db/core-schema.js";
 import { listingOfficialEvents, universeOverlayState } from "../../../../src/shared/db/universe-events.js";
 import { parseStockCode } from "../../../../src/shared/jpx/stock-code.js";
 import { yuhoDocuments } from "../db/schema.js";
+import { reportedLatestSelectionHold, REPORTED_DOCUMENT_HOLD_REASON } from "../services/edinet/reported-changes.js";
 import { assertBiztagDate } from "../env.js";
 import { todayJst } from "./date-jst.js";
 
@@ -29,6 +30,8 @@ export interface LatestDoc {
   stockCode: string;
   companyName: string;
   sector33: string | null;
+  /** 最新候補を先に固定してから保留する。旧有報へ戻さない。 */
+  reportedHoldReason?: string;
   doc: null | {
     docId: string;
     docTypeCode: "120" | "130";
@@ -163,6 +166,7 @@ interface DocRow {
   submittedAt: Date;
   notionDocPageId: string | null;
   textParseStatus: string | null;
+  reportedHold: number;
 }
 
 function isLater(a: DocRow, b: DocRow): boolean {
@@ -195,6 +199,7 @@ export async function loadLatestDocs(db: BiztagSourceDb): Promise<LatestDoc[]> {
       submittedAt: yuhoDocuments.submittedAt,
       notionDocPageId: yuhoDocuments.notionDocPageId,
       textParseStatus: yuhoDocuments.textParseStatus,
+      reportedHold: reportedLatestSelectionHold(yuhoDocuments.docId,yuhoDocuments.stockId,yuhoDocuments.periodEnd,yuhoDocuments.submittedAt),
     })
     .from(yuhoDocuments)
     .where(
@@ -218,6 +223,7 @@ export async function loadLatestDocs(db: BiztagSourceDb): Promise<LatestDoc[]> {
       stockCode: s.code,
       companyName: s.name,
       sector33: s.sector33,
+      ...(doc?.reportedHold === 1 ? { reportedHoldReason: REPORTED_DOCUMENT_HOLD_REASON } : {}),
       doc: doc
         ? {
             docId: doc.docId,
@@ -243,10 +249,12 @@ export async function assertLatestDocCurrent(
     docId: yuhoDocuments.docId, docTypeCode: yuhoDocuments.docTypeCode,
     periodEnd: yuhoDocuments.periodEnd, submittedAt: yuhoDocuments.submittedAt,
     notionDocPageId: yuhoDocuments.notionDocPageId, textParseStatus: yuhoDocuments.textParseStatus,
+    reportedHold: reportedLatestSelectionHold(yuhoDocuments.docId,yuhoDocuments.stockId,yuhoDocuments.periodEnd,yuhoDocuments.submittedAt),
   }).from(yuhoDocuments).innerJoin(stocks, eq(yuhoDocuments.stockId, stocks.id)).where(and(
     activeEquityCondition(), eq(stocks.code, stockCode), inArray(yuhoDocuments.docTypeCode, DOC_TYPE_CODES)
   )).orderBy(desc(yuhoDocuments.periodEnd), desc(yuhoDocuments.submittedAt), desc(yuhoDocuments.id)).limit(1);
   const actual = rows[0];
+  if (actual?.reportedHold === 1) throw new Error(REPORTED_DOCUMENT_HOLD_REASON);
   if (rows.length !== 1 || actual.docId !== expected.docId || actual.docTypeCode !== expected.docTypeCode ||
       actual.periodEnd !== expected.periodEnd || actual.submittedAt.toISOString() !== expected.submittedAt ||
       actual.notionDocPageId !== expected.notionDocPageId || actual.textParseStatus !== expected.textParseStatus) {

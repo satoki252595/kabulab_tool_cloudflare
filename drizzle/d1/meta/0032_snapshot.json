@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "03394680-5364-4b9b-a7f6-bf950d2636fe",
-  "prevId": "7a788243-e47e-4042-9c03-a9be2cafc92b",
+  "id": "222b291f-f7fb-463f-bafc-3268256fd2ea",
+  "prevId": "03394680-5364-4b9b-a7f6-bf950d2636fe",
   "tables": {
     "core_stock_annual_financials": {
       "name": "core_stock_annual_financials",
@@ -878,6 +878,111 @@
             "date"
           ],
           "name": "yuho_edinet_catchup_progress_scope_date_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "yuho_edinet_reported_changes": {
+      "name": "yuho_edinet_reported_changes",
+      "columns": {
+        "source_page_id": {
+          "name": "source_page_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "seq_number": {
+          "name": "seq_number",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "source_raw_sha256": {
+          "name": "source_raw_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "doc_id": {
+          "name": "doc_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "parent_doc_id": {
+          "name": "parent_doc_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "reported_state": {
+          "name": "reported_state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "observation_json": {
+          "name": "observation_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "stock_id": {
+          "name": "stock_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "period_end": {
+          "name": "period_end",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "submitted_at": {
+          "name": "submitted_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "yuho_edinet_reported_doc_idx": {
+          "name": "yuho_edinet_reported_doc_idx",
+          "columns": [
+            "doc_id"
+          ],
+          "isUnique": false
+        },
+        "yuho_edinet_reported_stock_period_idx": {
+          "name": "yuho_edinet_reported_stock_period_idx",
+          "columns": [
+            "stock_id",
+            "period_end",
+            "submitted_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "yuho_edinet_reported_changes_source_page_id_seq_number_pk": {
+          "columns": [
+            "source_page_id",
+            "seq_number"
+          ],
+          "name": "yuho_edinet_reported_changes_source_page_id_seq_number_pk"
         }
       },
       "uniqueConstraints": {},

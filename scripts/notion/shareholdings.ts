@@ -165,6 +165,7 @@ export async function quarantineSavedHoldings(inputPath: string, out: string): P
     const assertLatestSource = async () => {
       assertInputsAndOrder(); const selected = await selectLatestHoldingsDocuments(db, { limit: 1, afterCode: null, onlyCode: source.stockCode });
       assert.equal(selected.rows.length, 1); const latest = selected.rows[0];
+      assert.equal(latest.reportedHoldReason, undefined, latest.reportedHoldReason);
       assert.deepEqual({ docId: latest.docId, stockCode: latest.stockCode, edinetCode: latest.edinetCode, fiscalYearEnd: latest.fiscalYearEnd }, source);
       assert.equal(latest.ownerName, input.ownerName); assertInputsAndOrder();
     };
@@ -201,6 +202,7 @@ export async function resolvePendingHoldingPatch(inputPath: string, out: string)
     const assertLatestSource = async () => {
       assertInputs(); const selected = await selectLatestHoldingsDocuments(db, { limit: 1, afterCode: null, onlyCode: source.stockCode });
       assert.equal(selected.rows.length, 1); const latest = selected.rows[0];
+      assert.equal(latest.reportedHoldReason, undefined, latest.reportedHoldReason);
       assert.deepEqual({ docId: latest.docId, stockCode: latest.stockCode, edinetCode: latest.edinetCode, fiscalYearEnd: latest.fiscalYearEnd }, source);
       assert.equal(latest.ownerName, input.ownerName); assertInputs();
     };
