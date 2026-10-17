@@ -40,7 +40,7 @@
  */
 
 import { sql, eq, and, or, gte, lte, lt, asc, isNull, inArray } from "drizzle-orm";
-import { createD1HttpBatchSender, createD1HttpDb } from "../shared/db/d1-http-client.js";
+import { createD1HttpBatchSender, createD1HttpDb, toD1BatchStatements } from "../shared/db/d1-http-client.js";
 import { publicSectorColumn } from "../shared/db/public-columns.js";
 import { activeEquityCondition } from "../shared/db/active-equity.js";
 import {
@@ -392,7 +392,7 @@ const FLUSH_ROWS_PER_STATEMENT = {
   /** モメンタム投影: 6 列 × 16 = 96 */
   momentum: 16,
 } as const;
-/** sector_daily insert の bind 上限対策 (6 列なので 16 行/文) */
+/** sector_daily insert は明示 5 列 × 16 行 = 80 bind。既存 16 行チャンクを維持。 */
 const SECTOR_CHUNK = 16;
 /** prune の DELETE 1 文に載せる stock_id 数 (bind 上限 100: ids + retention で余裕を取る) */
 const OHLCV_PRUNE_ID_CHUNK = 50;
@@ -1448,7 +1448,7 @@ async function runDailySyncAndRecord(
 
   // Phase 3a.5: 過去行不存在の存在確認 (F-09 #163)。各 snap の保持 90 本窓内
   // の watermark 以前日を 1 文で問い合わせ、FlushItem へ載せる。
-  // 候補なし (通常時) は問合せ自体を出さない。
+  // 通常日も保持 90 本内の既存確認対象を問い合わせる。空時だけ問い合わせ 0、100 bind チャンク。
   {
     const probes: OhlcvGapProbe[] = pending.flatMap((p) =>
       collectOhlcvGapCandidates(p.snap.ohlcv6mo, p.existingMaxDate, p.correctionDates).map(
@@ -1668,7 +1668,7 @@ async function runDailySyncAndRecord(
         "sector_daily は前回値を保持します。"
     );
   } else {
-    await aggregateSectorDaily(db, sectorTradingDate, assertStockDeadline);
+    await aggregateSectorDaily(db, sectorTradingDate, createD1HttpBatchSender(), assertStockDeadline);
   }
 
   // -----------------------------------------------------------------
@@ -1862,6 +1862,7 @@ export async function loadIndicatorsMaxLatestDate(db: Db): Promise<string | null
 export async function aggregateSectorDaily(
   db: Db,
   today: string,
+  sendBatch: ReturnType<typeof createD1HttpBatchSender>,
   beforeWrite?: () => void
 ): Promise<number | null> {
   const [{ activeCount }] = await db
@@ -1908,23 +1909,21 @@ export async function aggregateSectorDaily(
       })
     )
   );
-  // 当日分の書き直し + 30 日より古い行の破棄 (L-53。読み手は最新日だけ見る)。
+  // 当日分の書き直し + 30 日より古い行の破棄 (L-53。公開 reader は macro.date を読む)。
   // 基準は引数の today (Date.now ではない。テストで固定できる)。
   const retentionCutoff = new Date(
     new Date(`${today}T00:00:00Z`).getTime() - 30 * 24 * 60 * 60 * 1000
   )
     .toISOString()
     .split("T")[0];
-  beforeWrite?.();
-  await db.delete(swingSchema.sectorDaily).where(
+  const builders: Parameters<typeof toD1BatchStatements>[0] = [db.delete(swingSchema.sectorDaily).where(
     or(
       eq(swingSchema.sectorDaily.date, today),
       lt(swingSchema.sectorDaily.date, retentionCutoff)
     )
-  );
+  )];
   for (let i = 0; i < sectorAggs.length; i += SECTOR_CHUNK) {
-    beforeWrite?.();
-    await db.insert(swingSchema.sectorDaily).values(
+    builders.push(db.insert(swingSchema.sectorDaily).values(
       sectorAggs.slice(i, i + SECTOR_CHUNK).map((a) => ({
         date: today,
         sector: a.sector,
@@ -1932,8 +1931,16 @@ export async function aggregateSectorDaily(
         stockCount: a.stockCount,
         rank1d: a.rank1d,
       }))
-    );
+    ));
   }
+  // 全文を先に資格化して単一 batch。削除 ACK 後の期限/INSERT 失敗で部分公開しない。
+  // unknown は sender が throw し、個別文へのフォールバックや再送は行わない。
+  const statements = toD1BatchStatements(builders);
+  if (statements.length > 1000 || statements.some((statement) => statement.params.length > 100)) {
+    throw new Error("セクター集計 batch が D1 の文数/束縛値上限を超えています。書込みは行いません。");
+  }
+  beforeWrite?.();
+  await sendBatch(statements);
   return sectorAggs.length;
 }
 

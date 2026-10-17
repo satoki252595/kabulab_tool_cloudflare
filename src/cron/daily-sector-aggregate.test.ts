@@ -22,7 +22,7 @@
  * 「同じ日付に同じ業種を 2 行書かない」を保証していて、それを本番と同じ形で
  * 効かせたいから。
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -34,6 +34,8 @@ import * as swingSchema from "../../services/swing-trading/src/db/schema.js";
 import * as projectionSchema from "../shared/db/projection-schema.js";
 import { PUBLISH_JPX_DERIVED_COLUMNS } from "../shared/db/public-columns.js";
 import { aggregateSectorDaily, loadIndicatorsMaxLatestDate } from "./daily.js";
+import type { D1BatchStatement } from "../shared/db/d1-http-client.js";
+import { makeTxBatchSender } from "./tests/overlay-test-sender.js";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const TODAY = "2026-09-14";
@@ -50,6 +52,13 @@ function applyD1Migrations(target: DatabaseSync): void {
 
 let sqlite: DatabaseSync;
 let executed: string[];
+let batches: (readonly D1BatchStatement[])[];
+
+/** 宣言したローカル SQL protocol。実 D1 の応答/原子性の再受入とは区別する。 */
+async function sendLocalBatch(statements: readonly D1BatchStatement[]): Promise<void> {
+  batches.push(statements);
+  await makeTxBatchSender(sqlite, { sends: 0 })(statements);
+}
 
 /** createD1HttpDb と同じ sqlite-proxy 経路をローカル SQLite に向ける (ohlcv-prune.test.ts と同じ)。 */
 function makeProxyDb(target: DatabaseSync, log: string[]) {
@@ -125,6 +134,7 @@ beforeEach(() => {
   sqlite = new DatabaseSync(":memory:");
   applyD1Migrations(sqlite);
   executed = [];
+  batches = [];
 });
 
 afterEach(() => {
@@ -140,7 +150,7 @@ describe("aggregateSectorDaily の集約キー (PUBLISH_JPX_DERIVED_COLUMNS = fa
   it("発行 SQL は core_stocks.sector33 を読み、core_stocks.sector を読まない", async () => {
     seedStock({ id: 1, jpxSector: "番兵JPX業種A", sector33: "情報・通信業", pct1d: 1 });
 
-    await aggregateSectorDaily(db(), TODAY);
+    await aggregateSectorDaily(db(), TODAY, sendLocalBatch);
 
     const aggregateSelect = executed.find(
       (s) => s.includes('"swing_stock_indicators"') && s.startsWith("select")
@@ -155,7 +165,7 @@ describe("aggregateSectorDaily の集約キー (PUBLISH_JPX_DERIVED_COLUMNS = fa
     seedStock({ id: 2, jpxSector: "番兵JPX業種A", sector33: "情報・通信業", pct1d: 4 });
     seedStock({ id: 3, jpxSector: "番兵JPX業種B", sector33: "銀行業", pct1d: -1 });
 
-    const written = await aggregateSectorDaily(db(), TODAY);
+    const written = await aggregateSectorDaily(db(), TODAY, sendLocalBatch);
 
     expect(written).toBe(2);
     expect(savedRows(TODAY)).toEqual([
@@ -173,7 +183,7 @@ describe("aggregateSectorDaily の集約キー (PUBLISH_JPX_DERIVED_COLUMNS = fa
     seedStock({ id: 2, jpxSector: "番兵JPX業種REIT", sector33: null, pct1d: -2 });
     seedStock({ id: 3, jpxSector: null, sector33: null, pct1d: -4 });
 
-    await aggregateSectorDaily(db(), TODAY);
+    await aggregateSectorDaily(db(), TODAY, sendLocalBatch);
 
     expect(savedRows(TODAY)).toEqual([
       { sector: "情報・通信業", pct1d: 1, stockCount: 1, rank1d: 1 },
@@ -185,7 +195,7 @@ describe("aggregateSectorDaily の集約キー (PUBLISH_JPX_DERIVED_COLUMNS = fa
     seedStock({ id: 1, jpxSector: "番兵JPX業種A", sector33: "情報・通信業", pct1d: 1 });
     seedStock({ id: 2, jpxSector: "番兵JPX業種B", sector33: "銀行業", pct1d: 9, active: false });
 
-    await aggregateSectorDaily(db(), TODAY);
+    await aggregateSectorDaily(db(), TODAY, sendLocalBatch);
 
     expect(savedRows(TODAY).map((r) => r.sector)).toEqual(["情報・通信業"]);
   });
@@ -200,7 +210,7 @@ describe("aggregateSectorDaily の集約キー (PUBLISH_JPX_DERIVED_COLUMNS = fa
       .run();
     seedStock({ id: 1, jpxSector: "番兵JPX業種A", sector33: "情報・通信業", pct1d: 1 });
 
-    await aggregateSectorDaily(db(), TODAY);
+    await aggregateSectorDaily(db(), TODAY, sendLocalBatch);
 
     expect(savedRows("2026-09-11").map((r) => r.sector)).toEqual(["番兵JPX業種A"]);
     expect(savedRows(TODAY).map((r) => r.sector)).toEqual(["情報・通信業"]);
@@ -219,7 +229,7 @@ describe("aggregateSectorDaily の集約キー (PUBLISH_JPX_DERIVED_COLUMNS = fa
       .run();
     seedStock({ id: 1, jpxSector: "番兵JPX業種A", sector33: "情報・通信業", pct1d: 1 });
 
-    await aggregateSectorDaily(db(), TODAY);
+    await aggregateSectorDaily(db(), TODAY, sendLocalBatch);
 
     const dates = (
       sqlite.prepare("SELECT DISTINCT date AS d FROM swing_sector_daily").all() as Array<{ d: string }>
@@ -238,9 +248,10 @@ describe("aggregateSectorDaily の集約キー (PUBLISH_JPX_DERIVED_COLUMNS = fa
     seedStock({ id: 1, jpxSector: "番兵JPX業種A", sector33: "情報・通信業", pct1d: 1 });
     seedStock({ id: 2, jpxSector: "番兵JPX業種A", sector33: "情報・通信業" });
 
-    const written = await aggregateSectorDaily(db(), TODAY);
+    const written = await aggregateSectorDaily(db(), TODAY, sendLocalBatch);
 
     expect(written).toBeNull();
+    expect(batches).toEqual([]);
     expect(savedRows(TODAY).map((r) => r.sector)).toEqual(["前回値"]);
   });
 
@@ -253,7 +264,7 @@ describe("aggregateSectorDaily の集約キー (PUBLISH_JPX_DERIVED_COLUMNS = fa
     seedStock({ id: 4, jpxSector: null, sector33: null, pct1d: -5, instrumentType: "reit_fund" });
     seedStock({ id: 5, jpxSector: null, sector33: null, pct1d: -7, instrumentType: null });
 
-    await aggregateSectorDaily(db(), TODAY);
+    await aggregateSectorDaily(db(), TODAY, sendLocalBatch);
 
     const rows = savedRows(TODAY);
     expect(rows.find((r) => r.sector === "未分類")?.stockCount).toBe(1);
@@ -269,10 +280,67 @@ describe("aggregateSectorDaily の集約キー (PUBLISH_JPX_DERIVED_COLUMNS = fa
     seedStock({ id: 10, jpxSector: null, sector33: null, instrumentType: "reit_fund" });
     seedStock({ id: 11, jpxSector: null, sector33: null, instrumentType: "reit_fund" });
 
-    const written = await aggregateSectorDaily(db(), TODAY);
+    const written = await aggregateSectorDaily(db(), TODAY, sendLocalBatch);
 
     expect(written).toBe(1);
     expect(savedRows(TODAY).map((r) => [r.sector, r.stockCount])).toEqual([["情報・通信業", 9]]);
+  });
+});
+
+describe("全業種置換の単一 batch protocol", () => {
+  const sectors = ["水産・農林業", "鉱業", "建設業", "食料品", "繊維製品", "パルプ・紙",
+    "化学", "医薬品", "石油・石炭製品", "ゴム製品", "ガラス・土石製品", "鉄鋼",
+    "非鉄金属", "金属製品", "機械", "電気機器", "輸送用機器"];
+  const seedChunks = () => sectors.forEach((sector33, index) =>
+    seedStock({ id: index + 1, jpxSector: null, sector33, pct1d: index + 1 }));
+  const seedPrevious = () => {
+    sqlite.prepare("INSERT INTO swing_sector_daily (date, sector, pct_1d, stock_count, rank_1d) VALUES (?, '銀行業', 0.5, 10, 1)")
+      .run(TODAY);
+    sqlite.prepare("INSERT INTO swing_sector_daily (date, sector, pct_1d, stock_count, rank_1d) VALUES ('2026-08-01', '銀行業', 0.5, 10, 1)")
+      .run();
+  };
+  const fullRows = () => sqlite.prepare("SELECT * FROM swing_sector_daily ORDER BY id").all();
+
+  it("DELETE と 16+1 業種 INSERT を一度に送り、値/順位と束縛上限を保つ", async () => {
+    seedChunks();
+    const guard = vi.fn();
+    expect(await aggregateSectorDaily(db(), TODAY, sendLocalBatch, guard)).toBe(17);
+    expect(guard).toHaveBeenCalledTimes(1);
+    expect(batches).toHaveLength(1);
+    expect(batches[0].map((statement) => statement.params.length)).toEqual([2, 80, 5]);
+    expect(batches[0][0].sql).toMatch(/^delete /);
+    expect(savedRows(TODAY)).toEqual(sectors.slice().reverse().map((sector, index) => ({
+      sector, pct1d: 17 - index, stockCount: 1, rank1d: index + 1,
+    })));
+  });
+
+  it("送信直前の期限 STOP は DELETE を含めて無送信", async () => {
+    seedPrevious(); seedChunks(); const before = fullRows();
+    const sender = vi.fn(sendLocalBatch);
+    await expect(aggregateSectorDaily(db(), TODAY, sender, () => { throw new Error("declared deadline STOP"); }))
+      .rejects.toThrow("declared deadline STOP");
+    expect(sender).not.toHaveBeenCalled();
+    expect(fullRows()).toEqual(before);
+  });
+
+  it("第2 INSERT 位置の一意制約 fault は DELETE/保持期限掃除/第1 INSERT 全て rollback", async () => {
+    seedPrevious(); seedChunks(); const before = fullRows();
+    // 宣言した SQL fault: 第1 INSERT の再挿入で既存 unique(date,sector) 制約を発火。
+    const sender = vi.fn(async (statements: readonly D1BatchStatement[]) => {
+      await sendLocalBatch([statements[0], statements[1], statements[1], statements[2]]);
+    });
+    await expect(aggregateSectorDaily(db(), TODAY, sender)).rejects.toThrow(/UNIQUE constraint/);
+    expect(sender).toHaveBeenCalledTimes(1);
+    expect(fullRows()).toEqual(before);
+  });
+
+  it("応答不明は単一送信で throw、個別文実行や再送へ戻らない", async () => {
+    seedPrevious(); seedChunks();
+    const sender = vi.fn(async () => { throw new Error("declared transport unknown"); });
+    await expect(aggregateSectorDaily(db(), TODAY, sender)).rejects.toThrow("declared transport unknown");
+    expect(sender).toHaveBeenCalledTimes(1);
+    expect(executed.some((statement) => /^(delete|insert) /i.test(statement))).toBe(false);
+    // この transport fixture は SQL を実行しない。本番 unknown の rollback/未適用の証明ではない。
   });
 });
 
@@ -295,7 +363,7 @@ describe("行キーは実データの取引日 (F-06)", () => {
 
     const key = await loadIndicatorsMaxLatestDate(db());
     expect(key).toBe("2026-09-11");
-    await aggregateSectorDaily(db(), key!);
+    await aggregateSectorDaily(db(), key!, sendLocalBatch);
 
     expect(savedRows("2026-09-11").map((r) => r.sector)).toEqual(["情報・通信業"]);
     expect(savedRows(TODAY)).toEqual([]);

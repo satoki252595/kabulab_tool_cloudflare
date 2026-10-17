@@ -38,6 +38,7 @@ import { archiveYahooRawBatch } from "../shared/yahoo/raw-custody.js";
 import { collectOfficialRightsCustody, type OfficialRightsCustody } from "./rights-official-custody.js";
 import * as jpLegModule from "./macro-jp-leg.js";
 import { makeTxBatchSender } from "./tests/overlay-test-sender.js";
+import { createD1HttpBatchSender } from "../shared/db/d1-http-client.js";
 
 const fakeCollect: OverlayCollectFn = fakeOverlayCollect;
 
@@ -60,6 +61,10 @@ vi.mock("../shared/yahoo/client.js", async (original) => ({
   fetchStockRawData: vi.fn(),
 }));
 vi.mock("../shared/yahoo/raw-custody.js", () => ({ archiveYahooRawBatch: vi.fn() }));
+vi.mock("../shared/db/d1-http-client.js", async (original) => ({
+  ...await original<typeof import("../shared/db/d1-http-client.js")>(),
+  createD1HttpBatchSender: vi.fn(),
+}));
 vi.mock("./rights-official-custody.js", () => ({ collectOfficialRightsCustody: vi.fn() }));
 vi.mock("../shared/yahoo/nikkei-vi.js", () => ({ fetchNikkeiVi: vi.fn() }));
 vi.mock("../shared/notion-archive/index.js", async (original) => ({
@@ -271,6 +276,8 @@ let sqlite: DatabaseSync;
 
 function freshDb(): Db {
   sqlite = new DatabaseSync(":memory:");
+  // 共有 sender の通常 caller を同じ既存 SQLite batch protocol に接続する。
+  vi.mocked(createD1HttpBatchSender).mockImplementation(() => makeTxBatchSender(sqlite, { sends: 0 }));
   const dir = join(ROOT, "drizzle", "d1");
   for (const f of readdirSync(dir).filter((n) => /^\d{4}_.*\.sql$/.test(n)).sort()) {
     for (const stmt of readFileSync(join(dir, f), "utf-8").split("--> statement-breakpoint")) {
