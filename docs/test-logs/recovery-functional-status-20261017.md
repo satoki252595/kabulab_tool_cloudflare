@@ -16,7 +16,7 @@
 | 6 | EDINET継続取得・識別 | 保存本文3,666社。保存原本の主体・期末・DEI照合を共通化 | 最新catchupの識別保留・対象HOLD21と、後続取込失敗を別照合 |
 | 7 | 有報39項目 | 固定3,666社の本文39項目を回収。原要素自体の不在23件を区別 | 本文補足DBの同期は下記14の有限処理で継続 |
 | 8 | 受注・海外売上 | 受注40文書236数値、海外100文書601数値を全6表・原本・両物理ファイルで受入 | 受注72文書243数値、海外66文書392数値。競合する本文writerの閉鎖後に通常CLIで進める |
-| 9 | TDnet・IR PDF | 381原本の物理保管等を受入 | 旧1447 PDFなど失われた原本は未取得を保持。公式代替原本と元pointerを同一視しない。最新EDINET後続失敗も残る |
+| 9 | TDnet・IR PDF | 381原本の物理保管等を受入 | 銘柄1447/SAAFの旧PDF1件は未取得を保持。公式代替原本と元pointerを同一視しない。最新EDINET後続失敗も残る |
 | 10 | VWAP日足 | 旧10/14の原本4件を限定復旧 | 残3原本HOLDと最新通常日足の全量完了を別確認 |
 | 11 | VWAP 5分足 | 固定suffix1,856中1,399銘柄をR2全bytes・ETag・実SDK metadata・物理summaryまで受入 | 残457＝7531原本HOLD＋未受入456。新有限処理は18:18:51 JSTまで、旧期限は延長しない |
 | 12 | 信用残・日証金需給 | 保存済み4,247/4,349行と通常取得を確認 | 最新10/16 runの基準日・全件数、旧20銘柄の掲載対象外を照合 |
@@ -53,6 +53,8 @@ Mac事業タグの通常installerでaccepted `4a66929c`を別versioned runtime�
 RAWの残58,421件を、旧500件/3,161.511秒と同じ速度で進める場合は約4〜5日相当となる。これは旧観測による条件付き計算であり、現在pilot69の実測でも全体ETAでもない。新しい通常hosted独立枠はAPI側0.25rps以下を維持するが、pilotの終端・保存原本・費用を照合するまで速度改善率を採用しない。旧poolのACK未知・停止証跡は残し、新poolや自動continuationで回避しない。料金の含有量・実行分数無料の範囲と保存・他用途・ローカル電力等の別費用は、17:29の区別を維持する。
 
 [#490](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/490)の限定option診断/明示公開復旧、[#491](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/491)のRAW hosted枠、[#492](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/492)のsplitを跨ぐ指標HOLD、[#493](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/493)の明示普通株消却診断は、各exact CIと実Cloudflare配信を確認した。最新Workerは`54097f6d`、version `e04093aa-d59d-4f0c-bb7f-25495006f237`。Mac実行版`4a66929c`とは区別する。#492は受領OHLCV/adjcloseを変更せず派生指標だけHOLD、#493は報告日・明記株数だけを観測し、法的効力日・市場落日・価格係数を確定しない。全権利イベント台帳、増資/払込/行使と一株指標の適用、過去調整系列の訂正は未完である。旧5,362行のHOLDをすべて単位欠測と断定せず、価格basis/単位等の現在内訳は未再確定として保持する。
+
+機能9の「1447」は件数ではなく銘柄1447/SAAFを指す。物理保管381件とは別に、旧PDF1件が取得不能で、公式の差替PDF374,068Bは別原本として保管済み。元pointerはNULLを保持し、差替原本を旧PDFへ付け替えない。[既存の原本照合記録](feature-recovery-20261014.md#pr-352後の本番検証)を参照。
 
 残件の分類は既存20項目を引き継ぐ。通常共有機構があり補完・最新定時受入が必要な項目、未対応財務要素・表形式・優待tier/併用・権利適用等の本番ロジックが残る項目、原本や公式資格が欠け現入力では埋められない項目は重複し得る。コード配備・固定cohortの成功・HOLDの正確な保存だけで、全機能完了へ数えない。 画像PDFは既存の[pipelineのPDF変換](../../pipeline/src/jp_stock_pipeline/convert/pdf_to_text.py)・[IRのテキスト抽出](../../services/ir-catalog/src/services/pdf-sentiment/extract-text.ts)でOCRを意図的に対象外としてunknownを保持する設計であり、原本そのものの欠測とも区別する。OCRによる値の補完を今回の実装予定へ追加していない。
 
