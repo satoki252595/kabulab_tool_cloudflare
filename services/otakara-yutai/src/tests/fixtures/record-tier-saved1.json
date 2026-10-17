@@ -17,5 +17,65 @@
   ],
   "expectedSummary": "保有1年未満はQUOカード2,000円相当、1年以上は5,000円相当（継続・株主名簿3回以上）",
   "expectedValue": null,
-  "oldValueReason": "ambiguous_condition_tiers"
+  "oldValueReason": "ambiguous_condition_tiers",
+  "oldFacts": {
+    "version": 1,
+    "sourceGroup": "b461d16329ef774b",
+    "choice": false,
+    "holding": true,
+    "holdingPeriods": [
+      "1年未満",
+      "1年以上"
+    ],
+    "lottery": false,
+    "application": false,
+    "combination": "unverified",
+    "valueStatus": "unresolved",
+    "qualifiedAmount": null,
+    "valueReasons": [
+      "ambiguous_condition_tiers"
+    ],
+    "source": {
+      "listingUrl": "https://minkabu.jp/stock/1899/yutai",
+      "fetchedAt": null,
+      "batchFetchedAt": null,
+      "officialStatus": "not_verified",
+      "officialUrl": null,
+      "verifiedAt": null
+    }
+  },
+  "expectedStructure": {
+    "status": "literal_parsed",
+    "rule": "holding-record-tiers-v1",
+    "sourceSha256": "1d0b318a45b5c967ac66e2db3c793b6da54c1b9cd9264a71daf924478993bbdc",
+    "applicability": "unverified",
+    "ast": {
+      "benefitKind": "quo_card",
+      "tiers": [
+        {
+          "ordinal": 1,
+          "holdingPeriod": "1年未満",
+          "listedYen": 2000,
+          "notation": "相当"
+        },
+        {
+          "ordinal": 2,
+          "holdingPeriod": "1年以上",
+          "listedYen": 5000,
+          "notation": "相当"
+        }
+      ],
+      "registryDefinition": {
+        "continuousHoldingPeriod": "1年以上",
+        "minimumEntries": 3,
+        "entryMeaning": "listed_or_recorded"
+      },
+      "shipment": {
+        "month": 3,
+        "part": "下旬",
+        "frequency": "annual",
+        "status": "planned"
+      }
+    }
+  }
 }

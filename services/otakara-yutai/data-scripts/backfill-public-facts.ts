@@ -138,6 +138,8 @@ const UpgradeScope = z.strictObject({
 export type PublicFactsUpgradeScope = z.infer<typeof UpgradeScope>;
 const HoldingUpgradeScope = z.strictObject({ ...UpgradeScope.shape, kind: z.literal("single-holding-period-v1") });
 export type PublicFactsHoldingUpgradeScope = z.infer<typeof HoldingUpgradeScope>;
+const RecordTierUpgradeScope = z.strictObject({ ...UpgradeScope.shape, kind: z.literal("holding-record-tiers-v1") });
+export type PublicFactsRecordTierUpgradeScope = z.infer<typeof RecordTierUpgradeScope>;
 
 /** 明示した最大15群/19行/3銘柄だけを扱う。空・部分recipient・重複scopeを認めない。 */
 export function parsePublicFactsUpgradeScope(value: unknown): PublicFactsUpgradeScope {
@@ -160,6 +162,14 @@ export function parsePublicFactsHoldingUpgradeScope(value: unknown): PublicFacts
   return scope;
 }
 
+/** 全文2期間の1群/1行/1銘柄だけ。旧choice/holding scopeや既unknownは再利用しない。 */
+export function parsePublicFactsRecordTierUpgradeScope(value: unknown): PublicFactsRecordTierUpgradeScope {
+  const scope = RecordTierUpgradeScope.parse(value);
+  parsePublicFactsUpgradeScope({ version: scope.version, groups: scope.groups });
+  if (scope.groups.length !== 1 || scope.groups.some(group => group.rows !== 1)) throw new Error("掲載2期間v1更新は1群/1行/1銘柄限定です");
+  return scope;
+}
+
 /** 既存v1の全値と原文を再資格化し、version/構造以外を変えない純計画。 */
 export function planPublicFactsV1Upgrade(source: readonly BenefitRow[], preimage: readonly PublicFactsPreimage[], inputScope: PublicFactsUpgradeScope) {
   return planV1StructureUpgrade(source, preimage, parsePublicFactsUpgradeScope(inputScope), 2);
@@ -170,7 +180,11 @@ export function planPublicFactsV1HoldingUpgrade(source: readonly BenefitRow[], p
   return planV1StructureUpgrade(source, preimage, parsePublicFactsHoldingUpgradeScope(inputScope), 3);
 }
 
-function planV1StructureUpgrade(source: readonly BenefitRow[], preimage: readonly PublicFactsPreimage[], scope: PublicFactsUpgradeScope, targetVersion: 2 | 3) {
+export function planPublicFactsV1RecordTierUpgrade(source: readonly BenefitRow[], preimage: readonly PublicFactsPreimage[], inputScope: PublicFactsRecordTierUpgradeScope) {
+  return planV1StructureUpgrade(source, preimage, parsePublicFactsRecordTierUpgradeScope(inputScope), 4);
+}
+
+function planV1StructureUpgrade(source: readonly BenefitRow[], preimage: readonly PublicFactsPreimage[], scope: PublicFactsUpgradeScope, targetVersion: 2 | 3 | 4) {
   const rows = z.array(CompleteRow).parse(preimage);
   const codes = [...new Set(scope.groups.map(row => row.code))].sort();
   if (rows.length === 0 || rows.length > 100 || new Set(rows.map(row => row.id)).size !== rows.length || rows.some(row => !codes.includes(row.stockCode))) throw new Error("v1更新の全列PREが空・重複・範囲外です");
@@ -188,7 +202,7 @@ function planV1StructureUpgrade(source: readonly BenefitRow[], preimage: readonl
         context: { minShares: members.map(v => v.minShares), recordMonths: members.map(v => v.recordMonth) },
         fetchedAt: old.source.fetchedAt, batchFetchedAt: old.source.batchFetchedAt,
         ...(old.source.officialStatus === "verified" ? { official: { url: old.source.officialUrl!, verifiedAt: old.source.verifiedAt! } } : {}) });
-      if (next.version === 1 || next.version !== targetVersion || next.conditionStructure.status !== "literal_parsed") throw new Error(targetVersion === 2 ? "原文の全文選択構造を資格化できません" : "原文の全文掲載期間を資格化できません");
+      if (next.version === 1 || next.version !== targetVersion || next.conditionStructure.status !== "literal_parsed") throw new Error(targetVersion === 4 ? "原文の全文2期間構造を資格化できません" : targetVersion === 2 ? "原文の全文選択構造を資格化できません" : "原文の全文掲載期間を資格化できません");
       const { conditionStructure, ...fields } = next;
       if (!isDeepStrictEqual({ ...fields, version: 1 }, old) || conditionStructure.sourceSha256 !== group.sourceSha256) throw new Error("既存v1の値・根拠・時計が現在の共通判定と一致しません");
       const updated = expected.find(v => v.id === row.id);
@@ -405,16 +419,17 @@ export async function applyPublicFactsBackfillOnce(input: {
 async function upgradeV1Main(mode: string, sourcePath: string, dir: string, scopePath: string, qualificationPath?: string) {
   const readOnlyResume = mode === "resume-upgrade-holding-v1-read-only-stop", resume = mode === "resume-upgrade-holding-v1-zero-native" || readOnlyResume;
   const holding = mode === "prepare-upgrade-holding-v1" || mode === "apply-upgrade-holding-v1" || resume;
-  const qualification = holding ? { kind: "single-holding-period-v1", targetVersion: 3 } as const : {};
-  const state = join(dirname(realpathSync(".env")), holding ? "tmp/yutai-public-facts-v1-holding-upgrade" : "tmp/yutai-public-facts-v1-upgrade");
-  const parseScope = holding ? parsePublicFactsHoldingUpgradeScope : parsePublicFactsUpgradeScope;
+  const recordTier = mode === "prepare-upgrade-record-tier-v1" || mode === "apply-upgrade-record-tier-v1";
+  const qualification = recordTier ? { kind: "holding-record-tiers-v1", targetVersion: 4 } as const : holding ? { kind: "single-holding-period-v1", targetVersion: 3 } as const : {};
+  const state = join(dirname(realpathSync(".env")), recordTier ? "tmp/yutai-public-facts-v1-record-tier-upgrade" : holding ? "tmp/yutai-public-facts-v1-holding-upgrade" : "tmp/yutai-public-facts-v1-upgrade");
+  const parseScope = recordTier ? parsePublicFactsRecordTierUpgradeScope : holding ? parsePublicFactsHoldingUpgradeScope : parsePublicFactsUpgradeScope;
   if (!resume) assertPublicFactsUpgradeReady(state);
   assertNotCommittable(sourcePath); assertNotCommittable(scopePath); assertNotCommittable(join(dir, "preimage.json"));
   const sourceText = readFileSync(sourcePath, "utf8"), scopeText = readFileSync(scopePath, "utf8");
   const source = SourceSnapshot.parse(JSON.parse(sourceText)), scope = parseScope(JSON.parse(scopeText));
-  const planUpgrade = (rows: readonly BenefitRow[], preimage: readonly PublicFactsPreimage[]) => planV1StructureUpgrade(rows, preimage, scope, holding ? 3 : 2);
+  const planUpgrade = (rows: readonly BenefitRow[], preimage: readonly PublicFactsPreimage[]) => planV1StructureUpgrade(rows, preimage, scope, recordTier ? 4 : holding ? 3 : 2);
   const codes = [...new Set(scope.groups.map(v => v.code))].sort();
-  if (mode === "prepare-upgrade-v1" || mode === "prepare-upgrade-holding-v1") {
+  if (mode === "prepare-upgrade-v1" || mode === "prepare-upgrade-holding-v1" || mode === "prepare-upgrade-record-tier-v1") {
     const preimage = await loadPublicFactsPreimage(true, codes), plan = planUpgrade(source.rows, preimage);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     writeFileSync(join(dir, "source.json"), sourceText, { mode: 0o600, flag: "wx" });
@@ -425,7 +440,7 @@ async function upgradeV1Main(mode: string, sourcePath: string, dir: string, scop
       rows: preimage.length, targetRows: plan.targetRows, groups: plan.groups, codes });
     console.info(`v1条件の有限計画を保存: ${plan.targetRows}行/${plan.groups}群（書込0）`); return;
   }
-  const manifest = z.strictObject({ version: z.literal(1), ...(holding ? { kind: z.literal("single-holding-period-v1"), targetVersion: z.literal(3) } : {}), preparedAt: z.iso.datetime(), sourceSha256: z.string(), scopeSha256: z.string(),
+  const manifest = z.strictObject({ version: z.literal(1), ...(recordTier ? { kind: z.literal("holding-record-tiers-v1"), targetVersion: z.literal(4) } : holding ? { kind: z.literal("single-holding-period-v1"), targetVersion: z.literal(3) } : {}), preparedAt: z.iso.datetime(), sourceSha256: z.string(), scopeSha256: z.string(),
     preimageSha256: z.string(), expectedSha256: z.string(), planSha256: z.string(), rows: positiveInt(), targetRows: positiveInt(), groups: positiveInt(), codes: z.array(z.string()) }).parse(JSON.parse(readFileSync(join(dir, "upgrade-manifest.json"), "utf8")));
   const preText = readFileSync(join(dir, "preimage.json"), "utf8"), preimage = z.array(CompleteRow).parse(JSON.parse(preText));
   const plan = planUpgrade(source.rows, preimage);
@@ -437,10 +452,10 @@ async function upgradeV1Main(mode: string, sourcePath: string, dir: string, scop
   const archive = async (phase: "pre" | "post", rows: PublicFactsPreimage[]) => {
     const fetchedAt = phase === "pre" ? manifest.preparedAt : new Date().toISOString();
     const bytes = Uint8Array.from(gzipSync(json({ source, scope, rows, fetchedAt }))), payloadSha256 = digest(Buffer.from(bytes));
-    const prefix = holding ? "yutai-v1-holding-upgrade" : "yutai-v1-upgrade";
+    const prefix = recordTier ? "yutai-v1-record-tier-upgrade" : holding ? "yutai-v1-holding-upgrade" : "yutai-v1-upgrade";
     const files = [{ filename: publicFactsUpgradeFilename(holding, phase, payloadSha256), bytes, contentType: "application/gzip" }];
     const receipt = await recordPrimaryData({ service: "otakara-yutai", key: `${prefix}-${phase}-${payloadSha256}`,
-      source: `D1 complete scoped rows ${phase} explicit v1 ${holding ? "holding-structure" : "choice-structure"} upgrade`, fetchedAt,
+      source: `D1 complete scoped rows ${phase} explicit v1 ${recordTier ? "record-tier-structure" : holding ? "holding-structure" : "choice-structure"} upgrade`, fetchedAt,
       metadata: { ...qualification, rows: rows.length, targetRows: plan.targetRows, groups: plan.groups, scopeSha256: manifest.scopeSha256, payloadSha256 }, files });
     if (receipt.fileTooLarge || receipt.manifestMatch === "unknown") throw new Error("v1更新の物理保管が未確定です");
     await verifyArchivedAttachments(receipt.pageId, files, `優待v1更新${phase}`); save(dir, `archive-${phase}-receipt.json`, receipt);
@@ -466,9 +481,9 @@ async function upgradeV1Main(mode: string, sourcePath: string, dir: string, scop
 /** CLIと有限observerが同じ引数検査・通常処理を一度呼ぶ入口。 */
 export async function runPublicFactsBackfillCLI() {
   const [mode, sourceArg, dirArg, ...extra] = process.argv.slice(2);
-  if (mode === "prepare-upgrade-v1" || mode === "apply-upgrade-v1" || mode === "prepare-upgrade-holding-v1" || mode === "apply-upgrade-holding-v1" || mode === "resume-upgrade-holding-v1-zero-native" || mode === "resume-upgrade-holding-v1-read-only-stop") {
+  if (mode === "prepare-upgrade-v1" || mode === "apply-upgrade-v1" || mode === "prepare-upgrade-holding-v1" || mode === "apply-upgrade-holding-v1" || mode === "prepare-upgrade-record-tier-v1" || mode === "apply-upgrade-record-tier-v1" || mode === "resume-upgrade-holding-v1-zero-native" || mode === "resume-upgrade-holding-v1-read-only-stop") {
     const resume = mode === "resume-upgrade-holding-v1-zero-native" || mode === "resume-upgrade-holding-v1-read-only-stop";
-    if (!sourceArg || !dirArg || extra.length !== (resume ? 2 : 1)) throw new Error("使い方: backfill-public-facts.ts <prepare/apply-upgrade-v1|prepare/apply-upgrade-holding-v1|resume-upgrade-holding-v1-zero-native|resume-upgrade-holding-v1-read-only-stop> <source-snapshot.json> <private-output-dir> <explicit-scope.json> [explicit-resume-qualification.json]");
+    if (!sourceArg || !dirArg || extra.length !== (resume ? 2 : 1)) throw new Error("使い方: backfill-public-facts.ts <prepare/apply-upgrade-v1|prepare/apply-upgrade-holding-v1|prepare/apply-upgrade-record-tier-v1|resume-upgrade-holding-v1-zero-native|resume-upgrade-holding-v1-read-only-stop> <source-snapshot.json> <private-output-dir> <explicit-scope.json> [explicit-resume-qualification.json]");
     const dir = resolve(dirArg); assertNotCommittable(join(dir, "upgrade-failure.json"));
     try { await upgradeV1Main(mode, resolve(sourceArg), dir, resolve(extra[0]), resume ? resolve(extra[1]) : undefined); }
     catch (error) {
