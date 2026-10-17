@@ -82,7 +82,8 @@ interface IngestDetails {
   issuedShares?: { status: IssuedShareObservation["status"]; reason: string | null; candidateCount: number | null;
     observedKinds: number | null; heldObservations: number | null; zipSha256: string; archivePageId: string;
     reportedOptionExercises?: { status: "observed" | "held" | "not-observed"; reason: string | null; periods: number };
-    reportedCancellations?: { status: "observed" | "held" | "not-observed"; reason: string | null; statements: number } };
+    reportedCancellations?: { status: "observed" | "held" | "not-observed"; reason: string | null; statements: number };
+    reportedPaidIssuance?: { status: "observed" | "held" | "not-observed"; reason: string | null; statements: number } };
   parseStatus: ParseStatus | "parse_error";
   factCount: number;
   /** 海外売上の構造化結果 (同じ有報から並行構造化)。 */
@@ -566,7 +567,10 @@ export async function ingestDocument(
             periods: observation.reportedOptionExercises.statements.length } }),
           ...(observation.reportedCancellations === undefined ? {} : { reportedCancellations: {
             status: observation.reportedCancellations.status, reason: observation.reportedCancellations.reason,
-            statements: observation.reportedCancellations.statements.length } }) };
+            statements: observation.reportedCancellations.statements.length } }),
+          ...(observation.reportedPaidIssuance === undefined ? {} : { reportedPaidIssuance: {
+            status: observation.reportedPaidIssuance.status, reason: observation.reportedPaidIssuance.reason,
+            statements: observation.reportedPaidIssuance.statements.length } }) };
         console.info(`[ingest] 発行株数の限定原文観測 docID=${doc.docID} ${JSON.stringify(issuedSharesResult)}`);
       }
       console.info(`[ingest] 保有明細 ${holdings.status} docID=${doc.docID} rows=${holdings.parsed}${holdings.status === "held" ? ` reason=${holdings.reason}` : ""}`);
