@@ -305,6 +305,7 @@ describe("runBiztag 新規と既存の外部判定境界", () => {
     notionMocks.readStockTextRow.mockResolvedValue(TEXT_SECTIONS.flatMap(s => rich(s.title) === "" ? [] : [{ sectionKey: s.key, itemName: s.title, text: rich(s.title) }]));
     const finite = { ...opts, codes: [latest.stockCode], limit: 1, mechanicalOnly: true };
     expect((await runBiztag(finite)).countsByKind.skip).toBe(1);
+    expect(loadLatestDocs).toHaveBeenLastCalledWith(expect.anything(), finite.codes);
     expect(notionMocks.readStockTextRow).not.toHaveBeenCalled(); expect(notionMocks.replaceEvidenceBlock).not.toHaveBeenCalled();
     const summary = await runBiztag({ ...finite, refreshTextReceipt: true });
     expect(summary).toMatchObject({ refreshTextReceipt: true, countsByKind: { sync_text: 1 }, failures: [] });
