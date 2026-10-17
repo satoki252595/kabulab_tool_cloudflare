@@ -30,6 +30,11 @@ beforeEach(() => {
       "Fetched At": { date: { start: "2025-11-28T10:39:00.000+00:00" } } } };
   vi.mocked(queryUniqueRow).mockImplementation(async () => structuredClone(page) as never);
   vi.mocked(notionRequest).mockImplementation(async (method, path, body) => {
+    if (method === "POST" && path === `/databases/${"d".repeat(32)}/query`) {
+      expect(body).toEqual({ filter: { property: "保有明細状態", select: { equals: "実行中（結果未確定）" } },
+        sorts: [{ timestamp: "created_time", direction: "ascending" }], page_size: 6 });
+      return { object: "list", results: [], has_more: false, next_cursor: null } as never;
+    }
     if (method === "GET" && path === `/databases/${"d".repeat(32)}`) return { properties: Object.fromEntries(["保有明細", "保有価格"].flatMap(phase => [
       [`${phase}状態`, { type: "select" }], [`${phase}理由`, { type: "rich_text" }], [`${phase}再開情報`, { type: "rich_text" }],
     ])) } as never;
@@ -52,7 +57,7 @@ describe("発行株数観測の正常producerと保存reader", () => {
     const props = page.properties as Record<string, ReturnType<typeof rich>>;
     const info = JSON.parse(props["保有明細再開情報"].rich_text.map(p => p.plain_text).join(""));
     expect(info.issuedSharesObservation).toEqual(expected); expect(info.zipSha256).toBe(zipSha256); expect(info.sourceNextHoldingOffset).toBe(0);
-    expect(notionRequest).toHaveBeenCalledTimes(5);
+    expect(notionRequest).toHaveBeenCalledTimes(6);
     expect(vi.mocked(notionRequest).mock.calls.filter(([method]) => method === "PATCH")).toHaveLength(1);
     expect(recordPrimaryData).not.toHaveBeenCalled();
   });
@@ -64,8 +69,8 @@ describe("発行株数観測の正常producerと保存reader", () => {
     const { publishVerifiedShareholdings } = await import("./shareholdings.js");
     const result = await publishVerifiedShareholdings({ source: mode === "mismatch" ? { ...source, stockCode: "7203" } : source, ownerName: "株式会社ラストワンマイル", zip, archivePageId, maxRows: 100, observeIssuedShares });
     expect(result).toMatchObject({ status: "held", parsed: 0, issuedSharesObservation: { status: "held", sourceQualification: { status: "held" } } });
-    expect(result.issuedSharesObservation!.reason).not.toBeNull(); expect(notionRequest).toHaveBeenCalledTimes(4);
-    expect(vi.mocked(notionRequest).mock.calls.filter(([method, path]) => method === "POST" || path.startsWith("/databases/") && method !== "GET")).toHaveLength(0);
+    expect(result.issuedSharesObservation!.reason).not.toBeNull(); expect(notionRequest).toHaveBeenCalledTimes(5);
+    expect(vi.mocked(notionRequest).mock.calls.filter(([method, path]) => method === "POST" && !path.endsWith("/query") || path.startsWith("/databases/") && method !== "GET" && !path.endsWith("/query"))).toHaveLength(0);
     expect(recordPrimaryData).not.toHaveBeenCalled();
   });
   it("Worker型の未有効callerは共通DEIだけを通り、full観測を呼ばずtyped未観測を返す", async () => {
@@ -77,7 +82,7 @@ describe("発行株数観測の正常producerと保存reader", () => {
     const result = await publishVerifiedShareholdings({ source, ownerName: "株式会社ラストワンマイル", zip, archivePageId, maxRows: 0 });
     expect(result.issuedSharesObservation).toMatchObject({ status: "not-observed", sourceQualification: { status: "verified" }, observations: null, candidateCount: null });
     expect(result.issuedSharesObservation!.reason).toContain("有効化していません");
-    expect(full).not.toHaveBeenCalled(); expect(unzip).toHaveBeenCalledTimes(1); expect(notionRequest).toHaveBeenCalledTimes(5);
+    expect(full).not.toHaveBeenCalled(); expect(unzip).toHaveBeenCalledTimes(1); expect(notionRequest).toHaveBeenCalledTimes(6);
   });
   it("保存prepareは既存DEI展開を再利用し、追加upload/PATCH/sourceなしで同じ観測を返す", async () => {
     const zipReader = await import("../../../services/yuho-quant/src/services/edinet/zip.js");

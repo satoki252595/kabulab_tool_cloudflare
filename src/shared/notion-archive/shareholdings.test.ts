@@ -92,6 +92,7 @@ const pageProperties = (value: unknown) => (value as { properties: TestPropertie
 const restartInfo = (value: unknown, phase = "保有明細") => JSON.parse(testProperties(value)[`${phase}再開情報`].rich_text!.map(p => p.text.content).join("")) as Record<string, unknown>;
 async function requestRouter(method: string, path: string, body?: unknown): Promise<unknown> {
   if (method === "POST" && path === `/databases/${"d".repeat(32)}/query`) return { object: "list", results: await holdingPeriodRows(), has_more: false, next_cursor: null };
+  if (method === "POST" && path === `/databases/${"p".repeat(32)}/query`) return { object: "list", results: [], has_more: false, next_cursor: null };
   if (method === "GET" && path.startsWith("/databases/")) {
     if (path.includes("p".repeat(32))) return { id: "p".repeat(32), properties: {
       "保有明細状態": { type: "select" }, "保有明細理由": { type: "rich_text" }, "保有明細再開情報": { type: "rich_text" },
@@ -268,7 +269,7 @@ describe("株式保有の原典限定writer", () => {
       "保有明細再開情報": { rich_text: [{ text: { content: JSON.stringify(info) } }] } };
     const before = structuredClone(saved);
     await expect(publishVerifiedShareholdings(args)).rejects.toThrow(); expect(saved).toEqual(before);
-    expect(vi.mocked(notionRequest).mock.calls.filter(([method]) => method === "PATCH" || method === "POST")).toHaveLength(0);
+    expect(vi.mocked(notionRequest).mock.calls.filter(([method, path]) => method === "PATCH" || method === "POST" && !path.endsWith("/query"))).toHaveLength(0);
   });
   const actualAbsences: Array<{ source: ShareholdingsSource; ownerName: string; fixture: string; originalZipSha256: string;
     notApplicable: ShareholdingsNotApplicable }> = JSON.parse(readFileSync(new URL("../../../services/yuho-quant/src/tests/fixtures/holdings-absence-cli/provenance.json", import.meta.url), "utf8")).items;
@@ -284,6 +285,7 @@ describe("株式保有の原典限定writer", () => {
         "保有価格状態": { type: "select", select: null }, "保有価格理由": { type: "rich_text", rich_text: [] }, "保有価格再開情報": { type: "rich_text", rich_text: [] } } };
     const page = { ...structuredClone(before), properties: testProperties(structuredClone(before.properties)) }, budget = { remainingRows: 20 };
     vi.mocked(notionRequest).mockImplementation(async (method, path, body, options) => {
+      if (method === "POST" && path.endsWith("/query")) return requestRouter(method, path, body) as never;
       expect(path).toBe(`/pages/${args.archivePageId}`);
       if (method === "PATCH") {
         expect(options).toEqual({ singleAttempt: true });
@@ -486,7 +488,7 @@ describe("株式保有の原典限定writer", () => {
     expect(calls).toHaveLength(2);
     expect(calls[0][0].prices).toBe(calls[1][0].prices);
     expect(calls[0][0].prices).toBeInstanceOf(HoldingsPriceIndex);
-    expect(vi.mocked(notionRequest).mock.calls.every(([method]) => method === "GET")).toBe(true);
+    expect(vi.mocked(notionRequest).mock.calls.every(([method, path]) => method === "GET" || method === "POST" && path.endsWith("/query"))).toBe(true);
     expect(queryUniqueRow).not.toHaveBeenCalled();
   });
 });
@@ -665,8 +667,8 @@ describe("全原表へ束縛するsource有限window", () => {
     expect(testProperties(saved[sourcePath])["保有明細状態"].select!.name).toBe("実行中（結果未確定）");
     expect(testProperties(saved[sourcePath])["保有価格再開情報"]).toBeUndefined();
     vi.mocked(notionRequest).mockClear();
-    await expect(publishVerifiedShareholdings({ ...args, maxRows: 1 })).rejects.toThrow("前回結果が未確定");
-    expect(vi.mocked(notionRequest).mock.calls.every(([method]) => method === "GET")).toBe(true);
+    await expect(publishVerifiedShareholdings({ ...args, maxRows: 1 })).rejects.toThrow("結果未確定source");
+    expect(vi.mocked(notionRequest).mock.calls.every(([method, path]) => method === "GET" || method === "POST" && path.endsWith("/query"))).toBe(true);
   });
 
   it.each(["rotation", "different-object", "different-version"] as const)("Filesの%sを全source CASで検査し、再署名だけを許容する", async change => {
@@ -701,8 +703,8 @@ describe("全原表へ束縛するsource有限window", () => {
     expect(savedInfo().sourceNextHoldingOffset).toBe(0);
     expect(testProperties(saved[sourcePath])["保有明細状態"].select!.name).toBe("実行中（結果未確定）");
     vi.mocked(notionRequest).mockClear();
-    await expect(publishVerifiedShareholdings({ ...args, maxRows: 1 })).rejects.toThrow("前回結果が未確定");
-    expect(vi.mocked(notionRequest).mock.calls.every(([method]) => method === "GET")).toBe(true);
+    await expect(publishVerifiedShareholdings({ ...args, maxRows: 1 })).rejects.toThrow("結果未確定source");
+    expect(vi.mocked(notionRequest).mock.calls.every(([method, path]) => method === "GET" || method === "POST" && path.endsWith("/query"))).toBe(true);
   });
 
   it.each([args.zip.length, 6 * 1024 * 1024])("通常source再開が保存ZIP/native資格を再用し、部分windowの消費行数を計数する（%s bytes）", async size => {
@@ -768,9 +770,10 @@ describe("原本完了とは独立した保存価格queue", () => {
     vi.mocked(notionRequest).mockImplementation(async (method, path, body) => {
       if (method === "POST" && path === `/databases/${"d".repeat(32)}/query`) return requestRouter(method, path, body);
       if (method === "POST" && path.endsWith("/query")) {
-        const status = (body as { filter: { select: { equals: string } } }).filter.select.equals;
+        const filter = (body as { filter: { property: string; select: { equals: string } } }).filter;
+        const status = filter.select.equals;
         const page = await requestRouter("GET", `/pages/${args.archivePageId}`) as { properties: Record<string, { select?: { name: string } }> };
-        return { results: page.properties["保有価格状態"]?.select?.name === status ? [page] : [], has_more: false, next_cursor: null };
+        return { results: page.properties[filter.property]?.select?.name === status ? [page] : [], has_more: false, next_cursor: null };
       }
       return requestRouter(method, path, body);
     });
@@ -814,7 +817,7 @@ describe("原本完了とは独立した保存価格queue", () => {
     vi.mocked(notionRequest).mockClear(); vi.mocked(queryUniqueRow).mockClear();
     expect(await publishVerifiedShareholdings({ ...args, valuationSources: ready })).toEqual({ status: "published", parsed: 0, created: 0, updated: 0, unchanged: 0 });
     expect(saved).toEqual(before);
-    expect(vi.mocked(notionRequest).mock.calls.every(([method, path]) => method === "GET" || method === "POST" && path === `/databases/${"d".repeat(32)}/query`)).toBe(true);
+    expect(vi.mocked(notionRequest).mock.calls.every(([method, path]) => method === "GET" || method === "POST" && path.endsWith("/query"))).toBe(true);
     expect(queryUniqueRow).not.toHaveBeenCalled();
   });
 
@@ -916,7 +919,7 @@ describe("原本完了とは独立した保存価格queue", () => {
       archivePageId: evidence.archivePageId, filename: evidence.filename, gzipSha256: evidence.sha256, bodySha256: evidence.sha256 });
     vi.mocked(qualifyHoldingValuation).mockRejectedValue(error); vi.mocked(notionRequest).mockClear();
     expect(await publishVerifiedShareholdings({ ...args, valuationSources: ready })).toMatchObject({ status: "held", reason: error.message });
-    expect(JSON.stringify(vi.mocked(notionRequest).mock.calls)).not.toContain("実行中（結果未確定）");
+    expect(JSON.stringify(vi.mocked(notionRequest).mock.calls.filter(([method, path]) => method !== "GET" && !path.endsWith("/query")))).not.toContain("実行中（結果未確定）");
     await requestRouter("PATCH", `/pages/${args.archivePageId}`, { properties: { "保有価格状態": { select: { name: "実行中（結果未確定）" } } } });
     const before = structuredClone(saved); vi.mocked(notionRequest).mockClear(); vi.mocked(qualifyHoldingValuation).mockClear();
     await expect(publishVerifiedShareholdings({ ...args, valuationSources: ready })).rejects.toThrow("前回結果が未確定");

@@ -1,0 +1,17 @@
+# 保有明細の結果未確定sourceを隔離する通常処理
+
+定期のsource再開は、1文書の結果不明だけで別会社の再開・取込まで停止していた。共有処理で結果不明sourceを最大5件だけ識別し、未解決のHOLDとして保持する。旧pending/journal、株数・価格、source cursorや完了状態を変更せず、再送もしない。
+
+`resumePendingShareholdings`は6件上限のqueryで全件性を確認し、typed Key、Service、提出者・証券コード・期末・商号、元ZIPのmanifest SHA/bytes、facts SHAとsource cursorを照合する。未知の型、欠損、重複、6件以上、一覧の未完はSTOP。各sourceの全propsと作成・編集時計をsingleAttemptのGETで前後確認する。署名だけのFiles表現差は既存helperに従う。原本ZIPを再取得する処理ではなく、現在の物理bytesを検証したとは扱わない。
+
+再開queueと未知sourceの`(stockCode,fiscalYearEnd)`、文書ID、page IDが衝突する場合は他writerの前にSTOPする。さらに、取込、単通CLI、backfill、定期resumeが全て通るsource publisherにも同じ未知一覧の必須検査を置く。訂正文書や新しいarchive pageが同じ期末のholding行へ回り込むことを防ぐ。任意のbypassや跨run cacheは設けない。別期末は別の行集合として扱うが、各source自身の原本資格は引き続き必要である。
+
+価格phaseのglobalunknown停止条件、原本未完の価格開始拒否、同pageのunknown拒否は変更しない。保存実1911は`保有価格状態=null`、価格再開情報は空であり、source隔離によって価格queueへ加えない。`observed_pre`は未送信の証明へ変えない。
+
+cronの通常結果に`holdings:unknown_source_isolated`件数と`requires_review`/`pending`を残す。有限の隔離情報はpage ID、source identity、全source snapshot SHA、reasonのみをログへ出し、Files URLや認証情報を出さない。未解決HOLDを含むrunを全完了にはしない。
+
+追加通信はsource publisher1呼出あたりNotion query1（未知0件でも必須）、隔離source1件あたり前後GET2（最大10）。例えばpublisher呼出数を`p`、隔離件数を`u`とすると追加読取は`p+2u`で、通常cronの取込上限60文書・再開上限5文書なら最大75読取となる。D1、新原典GET、ZIP download、モデル、DDLは追加0。元の300秒と件数上限は増やさず、Notion rate次第で当該runの処理件数が減り得る。現行の凍結済み本番backfillへ適用しておらず、追加通信の実本番時間は未受入である。
+
+Nixで保存実1911の未知source全props、同じ原本の45明細、別1897の全ZIP/8明細・source snapshotを使って検証する。1897の元snapshotは完了状態である。テストでは再開可能checkpointを作るため状態とoffsetだけを明示的に変え、原本/業務値を変えない。FilesのSigV4 query/expiryだけの除去をprovenanceへ列挙し、未加工のprivate nativeは保持する。同じ期末の訂正文書、別期末の原本資格不足、既存の正準ID形式に反するdoc/code、malformed/未束縛/overflow/重複/衝突/全props drift、単発GET失敗を負例とした。新HTTP、業務書込、モデルは全て0。発行株数producerの実9252原本も追加query1と既存1展開を照合し、源GETや二重展開を増やさない。
+
+関連7 suite182 tests、全TypeScript型検査、変更対象lintがPASS。CIおよび本番適用は別受入とする。
