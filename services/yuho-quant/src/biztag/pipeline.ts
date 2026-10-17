@@ -37,6 +37,7 @@ import {
   updateSupplementRow,
   type LedgerEntry,
   type NotionStats,
+  type SupplementRow,
   type SupplementSchemaSpec,
 } from "../../../../src/shared/notion-archive/index.js";
 import type { JevClient } from "../../../../src/shared/jev/index.js";
@@ -111,6 +112,8 @@ export interface RunSummary {
   failures: Array<{ stockCode: string; message: string }>;
   /** ① 銘柄マスタに同じ銘柄コードの行が複数あり、relation を付けなかった銘柄コード */
   masterDuplicates: string[];
+  /** falseのときはmasterDuplicatesを全市場の重複確認済みと読まない。 */
+  masterIndexRead?: boolean;
   /** 再試行上限 (`MAX_RETRY_ATTEMPTS`) に到達したまま残っている銘柄コード (docs §11.6) */
   retryExhausted: string[];
   /**
@@ -256,6 +259,11 @@ function makeDryRunLedgerWrites(): {
 export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
   const publicationJournal = opts.publicationJournal ?? createSupplementPublicationJournal();
   publicationJournal.assertReady(); // Cross-run unknown stops before metadata HTTP or model initialization.
+  if (opts.codes !== undefined && (!Array.isArray(opts.codes) || opts.codes.length === 0 ||
+      Array.from(opts.codes).some(code => typeof code !== "string" || parseStockCode(code) !== code))) {
+    throw new Error("明示codesには空でない正準証券コード一覧が必要です。全量実行はcodesを省略してください");
+  }
+  const codes = opts.codes === undefined ? undefined : [...new Set(opts.codes)];
   if (opts.refreshTextReceipt && (!opts.mechanicalOnly || opts.codes === undefined || opts.codes.length === 0 || opts.codes.length > 100 ||
       new Set(opts.codes).size !== opts.codes.length || opts.codes.some(code => parseStockCode(code) !== code) ||
       !Number.isSafeInteger(opts.limit) || opts.limit! <= 0 || opts.limit! > opts.codes.length ||
@@ -338,13 +346,19 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
   }
 
   // 3. D1 の最新有報 (対象母集団)。
-  const latest = await loadLatestDocs(db, opts.codes && opts.codes.length > 0 ? opts.codes : undefined);
+  const latest = await loadLatestDocs(db, codes);
   const sector33Options = [...new Set(latest.map((l) => l.sector33).filter((s): s is string => s !== null))];
 
   // 4. 補足 DB を確保し、既存行を読む。
   const { dbId: supplementDbId, propertyIds } = await ensureSupplementDb(buildSchemaSpec(vocab, sector33Options));
   // 最新docと保存根拠・既知入力pointerを照合する。同一入力は全文再取得しない。
-  const rows = await loadSupplementRows(supplementDbId, propertyIds);
+  const rows: SupplementRow[] = [];
+  if (codes === undefined) rows.push(...await loadSupplementRows(supplementDbId, propertyIds));
+  else for (const selected of chunk(codes, 50)) {
+    const scoped = await loadSupplementRows(supplementDbId, propertyIds, { codes: selected });
+    if (scoped.some(row => !selected.includes(row.stockCode))) throw new Error("補足のコード指定queryが対象外の銘柄を返しました");
+    rows.push(...scoped);
+  }
   const items = planWork(latest, rows, today, newStockEligibility).map(item =>
     opts.refreshTextReceipt && item.kind === "skip" && !item.qualificationHeld && item.row?.tagStatus === "判定済"
       ? { ...item, kind: "sync_text" as const, refreshTextReceipt: true,
@@ -361,13 +375,17 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
 
   // 6. 銘柄マスタ (relation 先) の索引。
   // ① 側で同じ銘柄コードが複数行ある銘柄は relation を空のままにする (どれかを選ばない)。
-  const masterIndex = await loadStockMasterIndex();
-  const masterDuplicates = [...masterIndex.duplicates.keys()].sort();
-  if (masterDuplicates.length > 0) {
-    console.warn(
+  let masterIndex: Awaited<ReturnType<typeof loadStockMasterIndex>> | undefined;
+  const masterDuplicates: string[] = [];
+  const loadMaster = async () => {
+    if (masterIndex !== undefined) return;
+    masterIndex = await loadStockMasterIndex();
+    masterDuplicates.push(...[...masterIndex.duplicates.keys()].sort());
+    if (masterDuplicates.length > 0) console.warn(
       `[biztag] ① 銘柄マスタに同じ銘柄コードの行が複数あるため relation を付けない: ${masterDuplicates.join(", ")}`
     );
-  }
+  };
+  if (codes === undefined) await loadMaster();
 
   const deps: ProcessDeps = {
     vocab,
@@ -382,7 +400,10 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     get thresholds() { return opts.thresholds; },
     jevClient,
     today,
-    resolveMasterPageId: (code) => masterIndex.index.get(code) ?? null,
+    resolveMasterPageId: (code) => {
+      if (masterIndex === undefined) throw new Error("relationの解決前に銘柄マスタを取得していません");
+      return masterIndex.index.get(code) ?? null;
+    },
     readStockTextRow,
     assertLatestDocCurrent: (code, doc) => assertLatestDocCurrent(db, code, doc),
     createSupplementRow: opts.dryRun ? async () => "dry-run"
@@ -423,6 +444,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
       processed++;
       continue;
     }
+    if (codes !== undefined && ["create_row", "sync_and_tag", "retag", "retry"].includes(item.kind)) await loadMaster();
     try {
       const outcome = await processStock(item, deps);
       if (localJudgeStop !== undefined) throw localJudgeStop.error;
@@ -452,15 +474,17 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
 
   // 7. 見直し材料 (review packet) を台帳へ反映 (内容が変わったときだけ)。
   publicationJournal.assertReady();
-  const packet = buildReviewPacket(rows, vocab, new Date(start).toISOString());
-  await refreshReviewPacketLedger({
-    dbId: ledgerDbId,
-    packet,
-    listLedgerEntries,
-    readLedgerJson,
-    createLedgerEntry: ledgerWrites.createLedgerEntry,
-    replaceLedgerJson: ledgerWrites.replaceLedgerJson,
-  });
+  if (codes === undefined) {
+    const packet = buildReviewPacket(rows, vocab, new Date(start).toISOString());
+    await refreshReviewPacketLedger({
+      dbId: ledgerDbId,
+      packet,
+      listLedgerEntries,
+      readLedgerJson,
+      createLedgerEntry: ledgerWrites.createLedgerEntry,
+      replaceLedgerJson: ledgerWrites.replaceLedgerJson,
+    });
+  }
 
   const elapsedMs = Date.now() - start;
   return {
@@ -482,6 +506,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     vocabVersion: vocab.version,
     vocabSeeded: seeded,
     masterDuplicates,
+    masterIndexRead: masterIndex !== undefined,
     retryExhausted,
     billingBlocked: [...billingBlocked].sort(),
     qualificationHeld,

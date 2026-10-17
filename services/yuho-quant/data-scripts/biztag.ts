@@ -124,6 +124,9 @@ async function runCommand(): Promise<void> {
     ?.split(",")
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
+  if (rest.includes("--codes") || (codes !== undefined && codes.length === 0)) {
+    throw new Error("--codesを指定するときは空でない証券コード一覧が必要です。全量実行は--codesを省略してください");
+  }
   const dryRun = hasFlag("dry-run");
   const reconciliationStartedAt = Date.now();
   const reconciliationPath = arg("reconcile-pre-archive"), reconciliationSha256 = arg("reconcile-proof-sha256");

@@ -157,6 +157,8 @@ beforeEach(() => {
   vi.stubEnv("BIZTAG_NEW_LISTING_FROM", "2026-09-01");
   vi.mocked(loadLatestDocs).mockResolvedValue([]);
   vi.mocked(loadNewStockEligibility).mockResolvedValue({ eligibleCodes: new Set(), heldCodes: new Set() });
+  notionMocks.loadSupplementRows.mockReset().mockResolvedValue([]);
+  notionMocks.loadStockMasterIndex.mockReset().mockResolvedValue({ index: new Map(), duplicates: new Map() });
   setupListLedgerEntries();
 });
 afterEach(() => vi.unstubAllEnvs());
@@ -311,6 +313,11 @@ describe("runBiztag 新規と既存の外部判定境界", () => {
     expect(summary).toMatchObject({ refreshTextReceipt: true, countsByKind: { sync_text: 1 }, failures: [] });
     expect(notionMocks.readStockTextRow).toHaveBeenCalledOnce(); expect(notionMocks.replaceEvidenceBlock).toHaveBeenCalledOnce();
     expect(notionMocks.replaceEvidenceBlock.mock.calls[0][2].judgeInput).toContain("notionTextsSha256");
+    expect(notionMocks.loadSupplementRows).toHaveBeenLastCalledWith("supplement-db-id", {}, { codes: finite.codes });
+    expect(notionMocks.loadStockMasterIndex).not.toHaveBeenCalled();
+    expect(summary.masterIndexRead).toBe(false);
+    expect(notionMocks.listLedgerEntries.mock.calls.some(([, filter]) => filter?.kind === "見直し材料")).toBe(false);
+    expect(notionMocks.createLedgerEntry.mock.calls.some(([, input]) => input.kind === "見直し材料")).toBe(false);
     expect(createClefClient).not.toHaveBeenCalled(); expect(createJevClient).not.toHaveBeenCalled();
   });
 
@@ -324,6 +331,50 @@ describe("runBiztag 新規と既存の外部判定境界", () => {
     await expect(runBiztag({ ...opts, ...invalid, refreshTextReceipt: true })).rejects.toThrow("mechanical-only");
     expect(loadLatestDocs).not.toHaveBeenCalled(); expect(loadNewStockEligibility).not.toHaveBeenCalled();
     expect(notionMocks.ensureSupplementDb).not.toHaveBeenCalled(); expect(createClefClient).not.toHaveBeenCalled();
+  });
+});
+
+describe("明示コードscopeは全市場の副処理へ広げない", () => {
+  const saved = JSON.parse(gunzipSync(readFileSync(new URL("./fixtures/latest-docs-saved50-20261017.json.gz", import.meta.url))).toString()) as { core: Array<{ code: string; name: string }> };
+  const options = (codes: string[]) => ({ budgetMs: 10_000, mechanicalOnly: true, model: CLEF_MODEL, codes,
+    get thresholds(): never { throw new Error("scopeの検証にモデルは不要"); } });
+
+  it.each([{ codes: [] }, { codes: ["invalid"] }, { codes: Array<string>(1) }])("不正/空の明示scopeはmetadata前に拒否する (%j)", async ({ codes }) => {
+    await expect(runBiztag(options(codes))).rejects.toThrow("正準証券コード");
+    expect(loadNewStockEligibility).not.toHaveBeenCalled(); expect(loadLatestDocs).not.toHaveBeenCalled();
+    expect(notionMocks.ensureLedgerDb).not.toHaveBeenCalled(); expect(createClefClient).not.toHaveBeenCalled();
+  });
+
+  it("実101コードは50/50/1の既存OR読取へ分け、重複指定をSetとして扱う（新CLI上限なし）", async () => {
+    notionMocks.loadSupplementRows.mockResolvedValue([]);
+    const codes = saved.core.map(row => row.code);
+    const summary = await runBiztag(options([...codes, codes[0]]));
+    expect(loadLatestDocs).toHaveBeenCalledWith(expect.anything(), codes);
+    const batches = notionMocks.loadSupplementRows.mock.calls.map(([, , scope]) => scope!.codes!);
+    expect(batches.map(batch => batch.length)).toEqual([50, 50, 1]); expect(batches.flat()).toEqual(codes);
+    expect(summary).toMatchObject({ totalStocks: 0, processed: 0, failures: [], masterIndexRead: false });
+    expect(notionMocks.loadStockMasterIndex).not.toHaveBeenCalled();
+  });
+
+  it("対象外の補足応答は処理前に拒否し、空のactive選択を銘柄や金融値で埋めない", async () => {
+    notionMocks.loadSupplementRows.mockResolvedValueOnce([minimalRow({ stockCode: saved.core[1].code })]);
+    await expect(runBiztag(options([saved.core[0].code]))).rejects.toThrow("対象外");
+    expect(notionMocks.loadStockMasterIndex).not.toHaveBeenCalled(); expect(notionMocks.createSupplementRow).not.toHaveBeenCalled();
+    notionMocks.loadSupplementRows.mockResolvedValue([]);
+    const empty = await runBiztag(options([saved.core[0].code]));
+    expect(empty).toMatchObject({ totalStocks: 0, processed: 0, remaining: 0, failures: [], qualificationHeld: [] });
+  });
+
+  it("relationが必要な実処理だけ既存master索引を一度読み、重複コードの未設定を保持する", async () => {
+    const codes = saved.core.slice(0, 2).map(row => row.code);
+    // 保存実コード/社名にdoc欠測とmaster重複を宣言するprotocol fault。実在の欠測/重複とは主張しない。
+    vi.mocked(loadLatestDocs).mockResolvedValue(saved.core.slice(0, 2).map(row => ({ stockCode: row.code, companyName: row.name, sector33: null, doc: null })));
+    notionMocks.loadSupplementRows.mockResolvedValue([]);
+    notionMocks.loadStockMasterIndex.mockResolvedValueOnce({ index: new Map([[codes[0], "known-master"]]), duplicates: new Map([[codes[1], ["duplicate-1", "duplicate-2"]]]) });
+    const summary = await runBiztag(options(codes));
+    expect(notionMocks.loadStockMasterIndex).toHaveBeenCalledOnce();
+    expect(notionMocks.createSupplementRow.mock.calls.map(([, input]) => input.masterPageId)).toEqual(["known-master", null]);
+    expect(summary).toMatchObject({ masterIndexRead: true, masterDuplicates: [codes[1]] });
   });
 });
 
