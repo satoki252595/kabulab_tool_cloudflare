@@ -9,6 +9,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ## 2026-10-17
 
+- 本番作業: 優待1899の通常1行v4移行、JPXのindex＋5XLS・7物理ファイルと公開URL設定、EDINETの新しい原HTTP1件・6観測の通常保存/全照合、#506配信と固定4関数の性能、RAW72の元pool内継続、Mac両登録のquiet切替を受入。[23:13以降の追加記録](test-logs/recovery-functional-status-20261017-2313.md)へ、本文1,758/2,417・残659と10/18の20/21時と次営業日10/19の18時・権利金融資格・全体受入の残件を分けて記録。`RunAtLoad=false`で即時job/receipt置換を避け、旧4aの期待版secretは次20/21時の両受入まで保持。
 - EDINET原一覧の親書類・操作時計・報告状態を保持し、取下げ/未資格状態を通常writerと公開financialで理由付き保留する。未取込の報告も完全な主体/期末資格だけを扱い、正常な独立訂正原表と旧数値を保持。[保存原本・全caller・追加費用](test-logs/edinet-reported-lineage-20261017.md)を検証し、新D1空表schemaはmain merge/deploy前に別受入した（観測取込/公開guard配備/定期受入は未実施）。
 - 本番作業: 実21時のMac終了、保有208Aの原値を保持した4行訂正、本文50社の通常機械処理・全39項目/原本照合、独立JSSのstrict v4配備を受入。[21:52状況](test-logs/recovery-functional-status-20261017.md#2152-jstの追加受入と実行先の区別)へ、実測負荷・RAW元pool継続と配備先別の未受入を記録。
 - 定時株式syncにJPX配当落・権利落等の現在掲載版を最大5XLSまで共通原本保管・全SHA読戻しする経路を追加。欠測は独立診断へ残し、価格/株数の補正資格へは使わない。[実原本・費用・未受入範囲](test-logs/jpx-ex-rights-custody-20261017.md)。URL設定と本番物理受入は別途。
