@@ -1,4 +1,4 @@
-# 全20機能の復旧状況 — 10月17日16:00 JST／17:29追記
+# 全20機能の復旧状況 — 10月17日16:00 JST／17:29・18:21追記
 
 追跡: [#348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)。[当初の機能別監査](feature-gap-audit-20261014.md)と[受入台帳](recovery-acceptance-20261016.md)の保存証拠を集約した時点記録。全サービスを16時に一括再照会した結果ではない。全20機能の完了には未到達で、原典にない値を埋めない。
 
@@ -26,6 +26,45 @@
 | 18 | 有価証券保有明細 | 原本列1,667行115文書を全値・全原表・物理PRE/POSTで受入。1911のunknown行は通常の保全置換で閉鎖 | 次の固定範囲を通常publisherで継続。新規価格資格0、単位HOLD5,362行。分割前期末株数の明示根拠8社と、候補28行を価格確定へ読み替えない |
 | 19 | API・MCP | JSS private strict v1/v2/v3を配備、実コード・6bindings・health200・未認証401を確認 | 既存キーはCloudflareのみ。実認証付きv2/v3 payloadの通し受入は未完。鍵の取得・新規発行・変更はしていない |
 | 20 | 監視・Notion案内 | coverage/receipt監視、現行カタログ89blocks/5views等を反映 | 最新正常定時の終了receipt、Mac配備版と次20/21時、翌朝readcheckを別確認。配備成功だけで全機能完了にしない |
+
+## 18:21 JSTの追加受入と停止
+
+16:00と17:29の記録は保持する。以下は新たに書込み後まで照合した範囲で、全20機能の完了や最新全量照会を意味しない。
+
+| 項目 | 累計受入 | 現在の残件 |
+|---|---:|---|
+| 本文補足の機械同期 | 1,450/2,417社 | 残967社。今回の親処理は18:02に自然終了し、全子処理と最後の50社の独立照合を確認 |
+| 保有明細 | 2,642行・202文書 | 次範囲を実行中。新規価格資格0。定期実行前に、書込み後照合が閉じた境目で終了させる |
+| 受注 | 100文書・440数値 | 残12文書・39数値の通常prepare/apply/inspectを継続 |
+| 海外売上 | 120文書・724数値 | 残46文書・269数値。次20文書のwriter終了だけでは加算しない |
+| VWAP 5分足 | 1,658/1,856銘柄 | 未受入196の新しい有限処理を実行中。7531・9311の有効バー欠測HOLDは保持 |
+| 優待条件 | 選択19行＋保有期間4行 | 他tier・併用・公式情報の資格と次21時の通常receiptは未受入 |
+| JSS API/MCP | 認証付き固定11ケースを受入 | REST70行（v1=47/v2=19/v3=4）、MCP initialize/list8/raw metadata1。全データ網羅の証明ではない |
+| RAW | 全体受入18,412/78,832件を維持 | 通常bulk63は500件（新規489・既存11）を検証しcursor19,378。続く64が稼働中。cursor以降59,454件と全体差分は別管理 |
+| 事業タグ | 保存済みClef判定104社・公開完了受入0 | 通常公開器で1社目のappendとproperties PATCH200後、監視器が後続DELETEの送信前に停止。元intent/PRE/STOPを保全し、現値のREAD照合を実行中 |
+
+VWAPの前操作は9551のsource429で停止した。停止前の既知30銘柄は保存原本・物理raw・通常CASと新しい全R2 POSTを照合して受入し、未書込み20銘柄を加算していない。新しい196銘柄の有限処理は取得間隔を実送信で4秒に限定し、旧429・旧期限・累積費用を保持する。9551の過去429を恒久欠測へ分類せず、未知結果を再送しない。
+
+事業タグの監視器はJSONヘッダ付き・本文0 byteの通常DELETEをJSONとして解釈してしまい、実送信229件の全200後、230件目のintent/nativeより前に停止した。保存応答の独立再生で同じ例外を確認した。最初の1社には新根拠と新propertiesがあるが、旧根拠の退役とdurable completionは未完であり、公開完了へ数えない。このpendingにより通常publisherの全体ready判定も停止する。書込み済みappend/PATCHの再送やpending削除をせず、原PRE・新旧根拠・現properties・最新原書類を照合してから、通常共有コードでの明示的な復旧を準備する。Macの新runtime配備、20/21時の実確認、監視secret更新はこの時点で未実施。
+
+JSSの通し確認では、Cloudflare上の既存キーを同じWorker binding内だけで使う0%一時previewから通常本番認証・REST/MCPへ接続した。鍵の抽出・発行・変更・保存をせず、productionの100%配備と6bindingsが前後同じことを別の読取で確認した。内部D1 SELECTは6回、Notion/R2/source/model/業務書込み0。存在しない優待MCP toolの成功を主張しない。
+
+権利処理は、分割・併合の診断と、明示根拠のある限定的な期末株数basisの確認を行う。原株数と同年度の未調整終値に調整係数を再適用していない。増資・新株予約権行使・自己株消却を含む権利イベント台帳の全面実装、および過去調整価格全履歴の更新は未完である。原典の期間・数量を厳密に抽出する追加診断を検討しており、株数差からイベントや価格係数を推定しない。
+
+完了見込みは、進行中の有限補完を19:30までに区切り、Mac切替と実20/21時の受入はpending解決と各actor終了が条件。原本の残59,454件は直近500件/3,161.511秒と同じペースなら約4〜5日相当であり、将来の保証ではない。現在のRAW workflowは0.25 req/sを固定し、凍結した継続器にMac時間帯のpause/lease gateはない。一律1.0へ上げるとMac約2.63と重なるため変更していない。待機時間の実測がないので速度改善を断定せず、既存pool・通信回数・費用境界を保持する。全20項目には上記以外の権利処理・公式資格・最新receipt等も残り、全体の完了日は未確定。
+
+Worker main `f6314fec4ea7c3b8c1f14cc6b58f6bcf2d1c9393`は[#489](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/489)の3 CI成功後、17:41:37 JSTにversion `5e01287c-763b-4cfb-b8c1-f974acb1a57a`へ配信済み。Mac候補と稼働中の凍結runtimeをWorker配備と同一視しない。
+
+追加の私有証跡（同じ`tmp/feature-audit-20261017/`基準）:
+
+- 本文1,450: `G1548-mechanical-v3/batch-12/root-final-acceptance-v1.json` — `4d6173fabecefb8d4ca4a218caee2419959d87dc0048ae6eba77049a19c53ed7`。
+- 保有2,642: `holdings-next12-rate050-proposal-v1/actual-next12-v2/range-17/root-final-acceptance-v1.json` — `9d5b0396afa1c932924a86b0869f230d17d07b612ca7e958af44715f4794698b`。
+- 受注100: `orders-remaining52-normal-operation-v1/stage-02/root-final-acceptance-v1.json` — `78cddc86634027aa41e4dbf4b6b742e24af2992f2fe387ed17aaaf5c77e2b160`。
+- 海外120: `overseas-remaining66-normal-operation-v1/stage-01/root-final-acceptance-v1.json` — `28318fd3ee4b8f3ea8e8fdc37f098b5cd790d0f6426936030ddcb49e03a92061`。
+- VWAP追加30: `vwap276-partial02-saved-audit-v1/root-final-partial30-acceptance-v1.json` — `bf3795214432fef5824b8936b67318f3f6be9ba9866deb49fd5d6369efdd1606`。
+- JSS固定11: `jss-yutai-v23-auth-probe-v1/root-final-acceptance-v1.json` — `bbf65942b842366a44a237119a0a0e28ddc3331adec1b773d63fecd264c12011`。
+- 事業タグ送信前停止の保存再生: `biztag-3625-applied-stop-qualification-v1/agent-saved-qualification-v1.json` — `77c79bff97f3bc332d42b17db59014f28ecd7e5eb27447e696efda4239eec4d9`。
+- RAW速度の条件付き上限: `raw-throughput-source-and-input-audit-v1/conditional-rate-and-mac-overlap-v2.json` — `bf1ab3c07319666655e3806415a340cc8cf0699f637dd1ca16765a6d2d3b57d0`。
 
 ## 17:29 JSTの追加受入
 

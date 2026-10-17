@@ -1205,6 +1205,12 @@ async function recordRecoveryInfo(archivePageId: string, info: RecoveryInfo, sta
         parsed: info.parsed, factsSha256: info.factsSha256, priceQueueVersion: 1, nextHoldingOffset: 0, unavailableRows: 0 })) });
     }
   }
+  // The old recovery tail is preserved, so check the whole marker rather than assuming diagnostic headroom.
+  for (const property of Object.values(properties)) if (property.rich_text !== undefined) {
+    assert.ok(property.rich_text.length <= 100, "保有再開情報のrich_textが100要素を超えます。値を削らず送信を停止します");
+  }
+  assert.ok(Buffer.byteLength(JSON.stringify({ properties })) <= 400_000,
+    "保有再開markerが400000 bytesの送信予算を超えます。値を削らず送信を停止します");
   const ack = await notionRequest<{ object: string; id: string }>("PATCH", `/pages/${archivePageId}`, { properties }, { singleAttempt: true });
   assert.equal(ack.object, "page"); assert.equal(ack.id.replaceAll("-", ""), archivePageId.replaceAll("-", ""), "保有再開markerのPATCH ACKが別行です");
   const actual = await notionRequest<HoldingPage>("GET", `/pages/${archivePageId}`);

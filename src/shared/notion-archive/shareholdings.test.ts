@@ -313,6 +313,12 @@ describe("株式保有の原典限定writer", () => {
     expect(vi.mocked(notionRequest).mock.calls.filter(([method]) => method === "PATCH")).toHaveLength(1);
   });
 
+  it.each([ ["rich_text", "x".repeat(200_001)], ["送信予算", "あ".repeat(150_000)] ])(
+    "再開情報全体の%s予算超過は値を切らずPATCH0で停止", async (reason, ownerName) => {
+      vi.mocked(parseShareholdingsData).mockReturnValue({ ...extraction, status: "unsupported", reason: "protocol-only marker limit", holdings: [] });
+      await expect(publishVerifiedShareholdings({ ...args, ownerName })).rejects.toThrow(reason);
+      expect(vi.mocked(notionRequest).mock.calls.filter(([method, path]) => method === "PATCH" || method === "POST" && !path.endsWith("/query"))).toHaveLength(0);
+    });
   it("数値表があっても提出会社の保有主体が未成立なら原本HOLDのみで、明細へ書かない", async () => {
     vi.mocked(parseShareholdingsData).mockReturnValue({ ...extraction, holderScope: "unqualified", reason: "名義別区画は対象外" });
     expect(await publishVerifiedShareholdings(args)).toEqual({ status: "held", parsed: 0, reason: "名義別区画は対象外" });

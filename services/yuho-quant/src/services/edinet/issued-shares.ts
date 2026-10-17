@@ -1,6 +1,7 @@
 /** 取得済みtype1の限定発行株数観測。権利イベント/価格係数/財務値を生成しない。 */
 import { createHash } from "node:crypto";
 import { readFilingDateInstant } from "./duration-context.js";
+import { stripHtml } from "./text-sections.js";
 import { verifyHoldingsSourceEntries, type ShareholdingsSource } from "./shareholdings.js";
 import { unzip, type ZipEntries } from "./zip.js";
 
@@ -91,7 +92,57 @@ function unit(native: Native, id: string) {
     native.resolve(`${def.prefix}:unit`)?.namespace === INSTANCE && resolved?.namespace === INSTANCE && resolved.name === "shares" };
 }
 
+/** 掲載期間内の増加株数。個々の行使日・株式クラス・法的適用は確定しない。 */
+export interface ReportedOptionExercises {
+  status: "observed" | "held" | "not-observed"; reason: string | null;
+  element: string | null; namespace: string | null; factSha256: string | null;
+  normalizedTextSha256: string | null; contextRef: string | null;
+  nativeContext: { entity: string; instantDate: string } | null;
+  statements: Array<{ normalizedLiteral: string; periodStart: string; periodEnd: string;
+    reportedIncreaseShares: string; unit: "shares"; shareClass: "unknown";
+    individualExerciseDate: null; legalEffectiveDate: null; rightsApplication: "unknown" }>;
+}
+
+function reportedOptionExercises(instance: Native, natives: readonly Native[], filingDate: string | null, expectedEntity: string): ReportedOptionExercises {
+  const out: ReportedOptionExercises = { status: "not-observed", reason: "限定した原文行使期間は未観測です", element: null,
+    namespace: null, factSha256: null, normalizedTextSha256: null, contextRef: null, nativeContext: null, statements: [] };
+  const hold = (reason: string): ReportedOptionExercises => ({ ...out, status: "held", reason, statements: [] });
+  const name = "ChangesInNumberOfIssuedSharesStatedCapitalEtcTextBlock";
+  const facts = [...instance.masked.matchAll(new RegExp(`<([A-Za-z_][\\w.-]*):${name}\\b([^>]*?)>([\\s\\S]*?)<\\/\\1:${name}\\s*>`, "g"))];
+  const openings = [...instance.masked.matchAll(new RegExp(`<([A-Za-z_][\\w.-]*):${name}\\b`, "g"))];
+  if (openings.length === 0) return out;
+  if (facts.length !== 1 || openings.length !== 1) return hold("history-fact-incomplete-or-multiple");
+  const fact = facts[0], a = attributes(fact[2]), q = instance.resolve(`${fact[1]}:${name}`);
+  out.element = `${fact[1]}:${name}`; out.namespace = q === null ? null : q.namespace;
+  out.factSha256 = sha(instance.raw.slice(fact.index, fact.index + fact[0].length));
+  out.contextRef = a?.contextRef === undefined ? null : a.contextRef;
+  if (q === null || !VERSIONS.some(v => q.namespace === `http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/${v}/jpcrp_cor`)) return hold("history-namespace-unqualified-or-rebound");
+  if (a === null || Object.keys(a).join() !== "contextRef" || a.contextRef !== "FilingDateInstant" || filingDate === null) return hold("history-context-unqualified");
+  const contexts = natives.map(n => context(n, a.contextRef, q.namespace));
+  if (contexts.some(c => !c.valid || c.dimensions.length !== 0 || c.entity !== expectedEntity || c.instantDate !== filingDate)) return hold("history-context-entity-time-or-dimensions-unqualified");
+  out.nativeContext = { entity: contexts[0].entity!, instantDate: filingDate };
+  const text = stripHtml(stripHtml(fact[3])).normalize("NFKC"); out.normalizedTextSha256 = sha(text);
+  const terms = [...text.matchAll(/新株予約権/g)];
+  if (terms.length === 0) return out;
+  const matches = [...text.matchAll(/(\d{4})年(\d{1,2})月(\d{1,2})日から(\d{4})年(\d{1,2})月(\d{1,2})日までの間に、新株予約権の行使により、発行済株式総数が([\d,]+)株増加しております。/g)];
+  if (matches.length !== terms.length || matches.length > 64) return hold("option-exercise-wording-or-count-unqualified");
+  const statements: ReportedOptionExercises["statements"] = [];
+  for (const m of matches) {
+    const start = `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+    const end = `${m[4]}-${m[5].padStart(2, "0")}-${m[6].padStart(2, "0")}`;
+    if (!date(start) || !date(end) || start > end || end > filingDate || !/^(?:[1-9]\d*|[1-9]\d{0,2}(?:,\d{3})+)$/.test(m[7])) return hold("option-exercise-date-or-shares-unit-unqualified");
+    const shares = m[7].replaceAll(",", "");
+    if (!Number.isSafeInteger(Number(shares)) || Number(shares) <= 0) return hold("option-exercise-quantity-out-of-range");
+    if (statements.some(s => s.periodStart <= end && start <= s.periodEnd)) return hold("option-exercise-periods-overlap");
+    statements.push({ normalizedLiteral: copyText(m[0]), periodStart: start, periodEnd: end, reportedIncreaseShares: shares,
+      unit: "shares", shareClass: "unknown", individualExerciseDate: null, legalEffectiveDate: null, rightsApplication: "unknown" });
+  }
+  const result: ReportedOptionExercises = { ...out, status: "observed", reason: null, statements };
+  return Buffer.byteLength(JSON.stringify(result)) <= 8 * 1024 ? result : hold("option-exercise-diagnostic-budget-exceeded");
+}
+
 export interface IssuedShareObservation {
+  reportedOptionExercises?: ReportedOptionExercises;
   version: 1; status: "observed" | "observed-with-holds" | "not-observed" | "held" | "unknown";
   reason: string | null; source: ShareholdingsSource | null; zipSha256: string; candidateCount: number | null;
   sourceQualification: { status: "verified" | "held" | "unknown"; reason: string | null };
@@ -182,7 +233,19 @@ export function observeIssuedShares(zip: Buffer, source: ShareholdingsSource | n
     const held = observations.filter(o => o.qualification.status === "hold").length;
     const result: IssuedShareObservation = { ...base, status: observations.length === 0 ? "not-observed" : held === observations.length ? "held" : held > 0 ? "observed-with-holds" : "observed", reason: held > 0 ? "未資格の観測はHOLDのまま保持します" : null, observations };
     if (Buffer.byteLength(JSON.stringify(result)) > 64 * 1024) return { ...base, status: "held", reason: "診断64KiB予算超過。原ZIPの全原文を保全し観測完了とは数えません" };
-    return result;
+    let optionExercises: ReportedOptionExercises | undefined, optionHold: string | null = null;
+    try {
+      optionExercises = reportedOptionExercises(instance, natives, filing === null || filing.instantDate !== stem[4] ||
+        filingDateEvidence !== null && (submitted === null || declaredFilingDate !== filing.instantDate) ? null : filing.instantDate, stem[2]);
+      // Include the inserted JSON key/comma in the separate 8KiB addition envelope.
+      if (Buffer.byteLength(JSON.stringify({ reportedOptionExercises: optionExercises })) - 1 > 8 * 1024) optionHold = "option-exercise-diagnostic-budget-exceeded";
+    } catch {
+      optionHold = "option-exercise-parser-exception;original-issued-observations-preserved";
+    }
+    if (optionHold !== null) optionExercises = { status: "held", reason: optionHold, element: null, namespace: null,
+      factSha256: null, normalizedTextSha256: null, contextRef: null, nativeContext: null, statements: [] };
+    // Old fields retain their 64KiB contract; this separately bounded addition makes total <=72KiB.
+    return { ...result, reportedOptionExercises: optionExercises };
   } catch (error) {
     const reason = `原本/DEI資格を確定できません: ${error instanceof Error ? error.message : String(error)}`;
     return { ...base, status: "held", reason, sourceQualification: base.sourceQualification.status === "verified" ? base.sourceQualification : { status: "held", reason } };

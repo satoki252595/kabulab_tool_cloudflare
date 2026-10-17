@@ -15,7 +15,7 @@ import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createClefJournal } from "../../../scripts/biztag-local/clef-journal.js";
-import { reconcileSupplementPreArchive } from "../../../scripts/biztag-local/publication-journal.js";
+import { reconcileSupplementPreArchive, reconcileAppliedSupplementPublication } from "../../../scripts/biztag-local/publication-journal.js";
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import {
   createLedgerEntry,
@@ -35,7 +35,7 @@ import { evaluateAtThresholds, evaluateGolden, loadGoldenSet, type GoldenPerItem
 import { composeRunNotify, fetchGoldenTexts, makeEvaluateGoldenForVocab, runBiztag } from "../src/biztag/pipeline.js";
 import { buildReviewPacket, refreshReviewPacketLedger } from "../src/biztag/review.js";
 import { rollback } from "../src/biztag/rollback.js";
-import { type BiztagSourceDb } from "../src/biztag/source.js";
+import { assertLatestDocCurrent, type BiztagSourceDb } from "../src/biztag/source.js";
 import { makeBudgetedVerifySources } from "../src/biztag/sources-verify.js";
 import { loadCalibration } from "../src/biztag/thresholds.js";
 import { withBiztagWriter } from "../../../scripts/biztag-local/runtime.js";
@@ -98,6 +98,17 @@ function writeGithubStepSummary(markdown: string): void {
   const file = process.env.GITHUB_STEP_SUMMARY;
   if (!file) return;
   appendFileSync(file, `${markdown}\n`, "utf-8");
+}
+
+/** One already-ACKed publication only; no model loop. budget-min guards write admission; an operator finite capture must bound every native read/deadline. */
+async function reconcileAppliedCommand(): Promise<void> {
+  const proofPath = arg("proof"), proofSha256 = arg("proof-sha256"), stockCode = arg("code"), budget = Number(arg("budget-min"));
+  if (proofPath === undefined || proofSha256 === undefined || stockCode === undefined || !/^[0-9]{3}[0-9A-Z]$/.test(stockCode) ||
+      !Number.isFinite(budget) || budget <= 0 || budget > 15 || rest.length !== 4) throw new Error("reconcile-appliedにはproof/SHA/code/明示15分以内budgetの4引数が必要です");
+  const notAfter = Date.now() + budget * 60_000, db = createD1HttpDb(yuhoSchema) as unknown as BiztagSourceDb;
+  await reconcileAppliedSupplementPublication({ proofPath, proofSha256, stockCode, notAfter,
+    beforeWrite: doc => assertLatestDocCurrent(db, stockCode, doc) });
+  console.info(JSON.stringify({ status: "original_publication_closed", stockCode, appendWrites: 0, propertyWrites: 0, modelForwards: 0 }));
 }
 
 async function runCommand(): Promise<void> {
@@ -531,6 +542,8 @@ async function main(): Promise<void> {
     assertTypeSafeEnabled();
   }
   switch (subcommand) {
+    case "reconcile-applied":
+      return reconcileAppliedCommand();
     case "run":
       return runCommand();
     case "gate":
@@ -549,7 +562,7 @@ async function main(): Promise<void> {
       return competitorsEvalCommand();
     default:
       console.error(
-        "usage: pnpm biztag <run|gate|golden|rollback|packet|stats|competitors|competitors-eval> [options] " +
+        "usage: pnpm biztag <run|reconcile-applied|gate|golden|rollback|packet|stats|competitors|competitors-eval> [options] " +
           "(docs/005-yuho-quant-business-tags.md §11・「競合他社」節)"
       );
       process.exit(2);

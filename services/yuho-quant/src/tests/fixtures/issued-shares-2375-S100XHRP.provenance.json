@@ -1,0 +1,49 @@
+{
+  "source": {
+    "docId": "S100XHRP",
+    "stockCode": "2375",
+    "edinetCode": "E05356",
+    "fiscalYearEnd": "2025-10-31"
+  },
+  "description": "既保管EDINET type1原ZIP全bytes。新GETなし・原文/ZIP変更なし。掲載期間と増加株数だけを限定観測し、行使日/株式クラス/法的適用は確定しない。",
+  "zipBytes": 691698,
+  "zipSha256": "4d4ab3494fbf619df3303658fcfa22531c51c2965a680989714aa7d57e2e5ee7",
+  "instance": "XBRL/PublicDoc/jpcrp030000-asr-001_E05356-000_2025-10-31_01_2026-01-28.xbrl",
+  "memberSha256": "3e36c75394a1af40c885c77dd11c6a2865034d9a2e156c5e109c9f301b7c1cf2",
+  "factSha256": "858c368a52fa47adb87a323fdf726a49e53b86d79ef6517f982be7655b633aeb",
+  "savedInventorySha256": "0e830222a4b7f2f6741f0c77fe02bbdce8a1ec35fd15431639df0846c2605f57",
+  "sourceManifestSha256": "5fa05d6ce0245679af3ed0d22dba1a371420eb700ba0a4f494dd19a025af87aa",
+  "nativeFilingDateInstant": "2026-01-28",
+  "expectedPeriods": [
+    [
+      "2020-11-01",
+      "2021-03-31",
+      "5350"
+    ],
+    [
+      "2021-04-01",
+      "2021-10-31",
+      "18750"
+    ],
+    [
+      "2021-11-01",
+      "2022-10-31",
+      "97050"
+    ],
+    [
+      "2022-11-01",
+      "2023-10-31",
+      "36000"
+    ],
+    [
+      "2023-11-01",
+      "2024-10-31",
+      "89925"
+    ],
+    [
+      "2024-11-01",
+      "2025-10-31",
+      "22500"
+    ]
+  ]
+}
