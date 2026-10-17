@@ -30,6 +30,7 @@ import {
 import { semifEnv } from "../../../src/shared/semif/env.js";
 import { z } from "../../../src/shared/zod-mini.js";
 import { parseBenefitChoiceStructure } from "./choice-structure.js";
+import { parseBenefitHoldingStructure } from "./holding-structure.js";
 import { benefitKey } from "./benefit-key.js";
 import { loadBenefitRows, openOtakaraD1 } from "./benefit-rows.js";
 import { evaluateCompanyValue } from "./public-facts.js";
@@ -120,13 +121,17 @@ export function companyValue(task: SummaryTask): {
   return evaluateCompanyValue(task.description, context);
 }
 
-export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-and-one-of-v2";
+export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-one-of-and-holding-v3";
 
-/** 対応する種類＋額面か全文1点選択だけを定型化する。未対応の注記・見出し・条件を削らない。 */
+/** 対応する種類＋額面・全文1点選択・単一保有期間だけを定型化する。未対応条件を削らない。 */
 export function compileSimpleSummary(task: SummaryTask): SummaryResult | null {
   const choice = parseBenefitChoiceStructure(task.description);
   if (choice.status === "literal_parsed") return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion,
     shortSummary: "優待を1点選択", estimatedValue: null });
+  const holding = parseBenefitHoldingStructure(task.description);
+  if (holding !== null) return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion,
+    shortSummary: holding.ast.benefit.kind === "coupon" ? "半年以上保有・クーポン優待" : `1年以上保有・施設入場招待券${holding.ast.benefit.quantity}枚`,
+    estimatedValue: companyValue(task).value });
   const source = splitHeadedDescription(task.description);
   if (source.malformed) return null;
   const grammar = /^(QUOカードPay|QUOカード|クオカード|図書カードNEXT|図書カード|商品券|ギフトカード|自社商品|カタログギフト)[ \t]*(?:([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)円(分|相当))(?:を贈呈|贈呈)?[。]?$/u;
