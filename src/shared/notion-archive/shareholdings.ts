@@ -263,6 +263,7 @@ function assertMigrationPost(actual: HoldingPage, before: HoldingPage, changed: 
   assertPriceStatus(actual.properties, schema);
   assert.deepEqual(Object.keys(actual.properties).sort(), Object.keys(before.properties).sort());
   for (const [name, value] of Object.entries(before.properties)) {
+    assert(!("has_more" in value) || value.has_more === false);
     assert.equal(actual.properties[name].id, value.id, "移行でproperty IDが変更されています");
     const expected = name === "検証状態" || name === "価格状態" ? { ...value, formula: actual.properties[name].formula } : value;
     if (!Object.hasOwn(changed, name)) assert.deepEqual(stableProperty(actual.properties[name]), stableProperty(expected), "移行でlegacy/他propsが変更されています");
@@ -292,6 +293,211 @@ export async function inspectHoldingPatch(args: { before: HoldingPage; changed: 
   try { assertMigrationPost(current, before, changed, schema); return { status: "observed_intended", current, replayAuthorized: false }; }
   catch (error) { if (!(error instanceof AssertionError)) throw error; }
   return { status: "unknown", current, replayAuthorized: false };
+}
+
+export interface HoldingPatchJournal {
+  pending: string; journal: string; intent: string; request: string;
+  before: HoldingPage; schema: HoldingsSchema; beforeRaw: string; schemaRaw: string;
+}
+/** 最後の未知PATCHだけを原journal/原要求へ束縛する。読取観測も明示置換も同じ資格を使う。 */
+export function qualifyHoldingPatchJournal(input: HoldingPatchJournal): { attempt: number; changed: Record<string, HoldingProperty> } {
+  assert.deepEqual(JSON.parse(input.beforeRaw), input.before); assert.deepEqual(JSON.parse(input.schemaRaw), input.schema);
+  const hash = (value: string) => createHash("sha256").update(value).digest("hex"), pending = JSON.parse(input.pending);
+  assert.equal(pending.version, 2); assert.equal(pending.noAutomaticReplay, true);
+  assert(["latest-saved-holdings", "publish-saved"].includes(pending.mode));
+  const events = input.journal.trim().split("\n").map(line => JSON.parse(line)), sends = events.filter(v => v.phase === "send-intent"), last = sends.at(-1), stopped = events.at(-1);
+  assert(last); assert.equal(last.method, "PATCH"); assert.equal(last.attempt, sends.length);
+  assert.deepEqual(sends.map(v => v.attempt), sends.map((_, i) => i + 1));
+  const headers = events.filter(v => v.phase === "response-headers");
+  assert.equal(events.length, sends.length + headers.length + 1);
+  assert.deepEqual(headers.map(v => v.attempt), sends.slice(0, -1).map(v => v.attempt)); assert(headers.every(v => v.status === 200));
+  assert.equal(stopped.phase, "stopped-no-replay"); assert.equal(stopped.attempt, last.attempt); assert.equal(stopped.fullReadbackVerified, false);
+  const intent = JSON.parse(input.intent), body = JSON.parse(input.request);
+  assert.equal(intent.method, "PATCH"); assert.equal(intent.path, `/v1/pages/${input.before.id}`);
+  assert.equal(intent.bodyBytes, Buffer.byteLength(input.request)); assert.equal(intent.bodySha256, hash(input.request));
+  assert.equal(last.bodySha256, intent.bodySha256); assert.equal(last.urlSha256, intent.urlSha256);
+  assert.equal(intent.urlSha256, hash(`https://api.notion.com${intent.path}`));
+  for (const time of [last.time, intent.at, stopped.time]) assert(Number.isFinite(Date.parse(time)));
+  assert(Date.parse(last.time) <= Date.parse(intent.at) && Date.parse(intent.at) <= Date.parse(stopped.time));
+  assert.deepEqual(Object.keys(body), ["properties"], "旧PATCHは旧IDのproperties専用で、退役解除/移動要求を含んではいけません");
+  assert(body.properties && typeof body.properties === "object");
+  assert.equal(input.before.object, "page"); assert.equal(input.before.archived, false); assert.equal(input.before.in_trash, false);
+  assert.match(input.before.id.replaceAll("-", ""), /^[a-f0-9]{32}$/);
+  assert.equal(input.before.parent.type, "database_id");
+  assert.equal(input.before.parent.database_id.replaceAll("-", ""), input.schema.id.replaceAll("-", ""));
+  assert.equal(input.schema.id.replaceAll("-", ""), notionEnv.NOTION_STOCK_HOLDINGS_DB_ID().replaceAll("-", ""));
+  return { attempt: last.attempt, changed: body.properties };
+}
+
+interface HoldingPatchResolution {
+  version: 1; oldId: string; newId: string; pre: MigrationFile; post: MigrationFile; legacyPost?: MigrationFile;
+}
+interface HoldingPatchReplacementPost {
+  version: 1; kind: "holding-patch-replacement"; source: ShareholdingsSource; ownerName: string;
+  zipSha256: string; factsSha256: string; journal: HoldingPatchJournal;
+  sourcePage: HoldingPage; periodRows: HoldingPage[]; legacyPre: MigrationFile; legacyPreUtf8: string;
+  holdingIndex: number; extraRowIds: string[]; pre: MigrationFile;
+  retired: HoldingPage; replacement: HoldingPage; periodAfter: HoldingPage[];
+}
+const holdingHash = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
+
+/** 置換する既存行の全writable値を保持する。未対応propertyは推測変換しない。 */
+function replacementProperties(before: HoldingPage, changed: Record<string, HoldingProperty>): Record<string, unknown> {
+  const properties: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(before.properties)) {
+    if (value.type === "formula") { assert(["検証状態", "価格状態"].includes(name)); continue; }
+    if (value.type === "title" || value.type === "rich_text") {
+      const parts = value[value.type]; assert(Array.isArray(parts));
+      properties[name] = { [value.type]: parts.map(part => {
+        assert.equal(part.type, "text"); assert.equal(part.plain_text, part.text?.content);
+        const { plain_text: _plain, href: _href, ...write } = part as typeof part & { href?: unknown };
+        void _plain; void _href; return write;
+      }) };
+    } else {
+      assert(["number", "select", "date", "checkbox"].includes(value.type!), "未対応propertyは新IDへ変換しません");
+      properties[name] = value.type === "select" ? { select: value.select === null ? null : { name: value.select!.name } }
+        : { [value.type!]: value[value.type as "number" | "date" | "checkbox"] };
+    }
+  }
+  return { ...properties, ...changed };
+}
+function assertReplacementPost(actual: HoldingPage, before: HoldingPage, changed: Record<string, HoldingProperty>, schema: HoldingsSchema): void {
+  assert.notEqual(actual.id.replaceAll("-", ""), before.id.replaceAll("-", ""));
+  assert.equal(actual.object, "page"); assert.deepEqual(actual.parent, before.parent);
+  assert.equal(actual.archived, false); assert.equal(actual.in_trash, false);
+  for (const time of [actual.created_time, actual.last_edited_time]) assert(typeof time === "string" && Number.isFinite(Date.parse(time)));
+  // 新IDの作成時計は実応答のまま。元作成時計は物理PREに保存し、新ページへ偽装しない。
+  assertMigrationPost({ ...actual, id: before.id, created_time: before.created_time }, before, changed, schema);
+}
+function assertRetiredHoldingPatch(actual: HoldingPage, journal: HoldingPatchJournal): void {
+  assert.equal(actual.archived, true); assert.equal(actual.in_trash, true);
+  assert(typeof actual.last_edited_time === "string" && Number.isFinite(Date.parse(actual.last_edited_time)));
+  const { changed } = qualifyHoldingPatchJournal(journal);
+  // 退役で変わる状態/編集時計だけを比較対象から外す。遅延PATCHの事実は再構成しない。
+  const liveShape = { ...actual, archived: false, in_trash: false, last_edited_time: journal.before.last_edited_time };
+  try { assertSameHoldingPage(liveShape, journal.before); }
+  catch (error) { if (!(error instanceof AssertionError)) throw error; assertMigrationPost(liveShape, journal.before, changed, journal.schema); }
+}
+async function archivePatchProof(source: ShareholdingsSource, oldId: string, phase: "PRE" | "POST" | "LEGACY-POST", value: unknown): Promise<MigrationFile> {
+  const bytes = Buffer.from(JSON.stringify(value) + "\n"), sha256 = holdingHash(bytes);
+  return archiveMigration(source, { key: `holdings-patch/${source.docId}/${oldId}/${phase}/${sha256}`,
+    filename: `holdings-patch-${phase}.json`, sha256, bytes: bytes.length }, bytes);
+}
+async function readPatchProof(file: MigrationFile): Promise<Buffer> {
+  assert.match(file.sha256, /^[a-f0-9]{64}$/); assert(Number.isSafeInteger(file.bytes) && file.bytes > 0 && file.bytes <= 20 * 1024 * 1024);
+  assert(typeof file.pageId === "string");
+  const files = await listPageFiles(file.pageId, "Files"); assert.equal(files.length, 1); assert.equal(files[0].name, file.filename); assert.equal(files[0].kind, "file");
+  const bytes = Buffer.from(await downloadArchivedFile(files[0], "保有明細の明示置換証拠", { maxBytes: file.bytes }));
+  assert.equal(bytes.length, file.bytes); assert.equal(holdingHash(bytes), file.sha256); return bytes;
+}
+async function readHoldingPatchResolution(info: RecoveryInfo): Promise<HoldingPatchReplacementPost> {
+  const resolution = info.patchResolution!; assert.equal(resolution.version, 1); assert.notEqual(resolution.oldId, resolution.newId);
+  const proof = JSON.parse((await readPatchProof(resolution.post)).toString()) as HoldingPatchReplacementPost;
+  assert.equal(proof.version, 1); assert.equal(proof.kind, "holding-patch-replacement");
+  for (const name of ["source", "ownerName", "zipSha256", "factsSha256"] as const) assert.deepEqual(proof[name], info[name]);
+  assert.deepEqual(proof.pre, resolution.pre); assert.equal(proof.journal.before.id, resolution.oldId); assert.equal(proof.replacement.id, resolution.newId);
+  assert.equal(resolution.post.key, `holdings-patch/${info.source.docId}/${resolution.oldId}/POST/${resolution.post.sha256}`);
+  const { changed } = qualifyHoldingPatchJournal(proof.journal);
+  assert.equal(holdingHash(proof.legacyPreUtf8), proof.legacyPre.sha256);
+  const legacy = JSON.parse(proof.legacyPreUtf8); assert.deepEqual(legacy.source, info.source); assert.equal(legacy.sourceZipSha256, info.zipSha256); assert.equal(legacy.factsSha256, info.factsSha256);
+  assertSameHoldingPage(legacy.rows.find((page: HoldingPage) => page.id === resolution.oldId), proof.journal.before);
+  assertReplacementPost(proof.replacement, proof.journal.before, changed, proof.journal.schema);
+  assertRetiredHoldingPatch(await notionRequest<HoldingPage>("GET", `/pages/${resolution.oldId}`, undefined, { singleAttempt: true }), proof.journal);
+  return proof;
+}
+
+/** 原40行のPREを後続windowの新10行PREで失わず、別ID対応を全原表の完了前に物理保存する。 */
+async function finishHoldingPatchMigration(info: RecoveryInfo, proof: HoldingPatchReplacementPost,
+  parsed: ShareholdingsExtraction, rows: HoldingPage[], schema: HoldingsSchema): Promise<MigrationFile> {
+  const legacy = JSON.parse(proof.legacyPreUtf8) as { rows: HoldingPage[] };
+  assert.equal(holdingHash(proof.legacyPreUtf8), proof.legacyPre.sha256);
+  const resolved = resolveHoldingRows(info.source, info.ownerName, parsed.holdings, parsed.holdings, rows);
+  assert.equal(resolved.status, "ready");
+  const expected = parsed.holdings.map(holding => ({ ...holdingProperties(info.source, info.ownerName, holding),
+    ...sourceProperties(parsed, holding, info.zipSha256), ...valuationProperties(holding, { status: "unavailable", identity: null, reason: "銘柄同定・個別価格・分割観測の保存原本が未指定です" }) }));
+  const mapping = legacy.rows.map(before => {
+    const indexes = parsed.holdings.flatMap((holding, i) => holding.name === richValue(before.properties["銘柄名"]) ? [i] : []);
+    assert.equal(indexes.length, 1); const i = indexes[0], after = resolved.selected[i].existing; assert(after);
+    if (before.id === info.patchResolution!.oldId) { assert.equal(after.id, info.patchResolution!.newId); assertReplacementPost(after, before, expected[i], schema); }
+    else assertMigrationPost(after, before, expected[i], schema);
+    return { oldId: before.id, newId: after.id, holdingIndex: i, row: after };
+  });
+  assert.equal(new Set(mapping.map(v => v.oldId)).size, legacy.rows.length); assert.equal(new Set(mapping.map(v => v.newId)).size, legacy.rows.length);
+  assert.equal(rows.length, parsed.holdings.length + proof.extraRowIds.length);
+  for (const id of proof.extraRowIds) assertSameHoldingPage(rows.find(page => page.id === id)!, proof.periodRows.find(page => page.id === id)!);
+  assertRetiredHoldingPatch(await notionRequest<HoldingPage>("GET", `/pages/${info.patchResolution!.oldId}`, undefined, { singleAttempt: true }), proof.journal);
+  return archivePatchProof(info.source, info.patchResolution!.oldId, "LEGACY-POST", { version: 1, source: info.source, zipSha256: info.zipSha256,
+    factsSha256: info.factsSha256, originalLegacyPre: proof.legacyPre, replacementProof: info.patchResolution!.post, mapping, oldExtraRowsPreserved: proof.extraRowIds,
+    unknownOriginalACKReconstructed: false, oldPendingCleared: false });
+}
+
+/** 明示CLIだけの構成的な置換。旧PATCHの再送/採用やgeneric publisherのunknown例外ではない。 */
+export async function replaceUnknownHoldingPatch(args: {
+  source: ShareholdingsSource; ownerName: string; archivePageId: string; zip: Buffer;
+  journal: HoldingPatchJournal; legacyPre: ArchivedSource; assertLatestSource: () => Promise<void>;
+}): Promise<{ oldId: string; newId: string; resolution: HoldingPatchResolution; sourceNextHoldingOffset: 0; sourceComplete: false }> {
+  assert(args.zip.length <= HOLDINGS_ZIP_MAX_BYTES);
+  const { changed } = qualifyHoldingPatchJournal(args.journal), parsed = parseShareholdingsData(args.zip, args.source, { qualifySource: entries => verifyHoldingsSourceEntries(entries, args.source) });
+  assert.equal(parsed.status, "ok"); assert.equal(parsed.holderScope, "filer_only"); assert(parsed.holdings.length > 0 && parsed.holdings.length <= 100);
+  const zipSha256 = holdingHash(args.zip), factsSha256 = holdingsFactsSha256(parsed.holdings), oldId = args.journal.before.id;
+  const rowParts = changed["出典明細行"]?.rich_text; assert(Array.isArray(rowParts));
+  const rowKey = rowParts.map(part => { assert.equal(typeof part.text?.content, "string"); return part.text!.content; }).join("");
+  const index = parsed.holdings.findIndex(holding => rowKey === `${holding.tableIndex}:${holding.rowIndex}`);
+  assert(index >= 0); const holding = parsed.holdings[index];
+  const expected = { ...holdingProperties(args.source, args.ownerName, holding), ...sourceProperties(parsed, holding, zipSha256),
+    ...valuationProperties(holding, { status: "unavailable", identity: null, reason: "銘柄同定・個別価格・分割観測の保存原本が未指定です" }) };
+  assert.deepEqual(changed, expected, "元PATCH全値が保存原表の通常producerと一致しません");
+  const writableReplacement = replacementProperties(args.journal.before, changed);
+  const unknown = await readUnknownHoldingsSources(await recoveryDatabase()), target = unknown.filter(v => v.hold.archivePageId === args.archivePageId);
+  assert.equal(target.length, 1); const sourcePage = await notionRequest<HoldingPage>("GET", `/pages/${args.archivePageId}`, undefined, { singleAttempt: true });
+  assertSameHoldingPage(sourcePage, target[0].page); assert.deepEqual(target[0].hold.source, args.source);
+  const info = JSON.parse(richValue(sourcePage.properties["保有明細再開情報"])) as RecoveryInfo;
+  assert.equal(info.ownerName, args.ownerName); assert.equal(info.zipSha256, zipSha256); assert.equal(info.factsSha256, factsSha256);
+  assert.equal(info.parsed, parsed.holdings.length); assert.equal(info.sourceNextHoldingOffset, 0); assert.equal(info.patchResolution, undefined);
+  assert(info.legacyMigration); assert.equal(info.legacyMigration.offset, 0); assert.equal(info.legacyMigration.post, undefined);
+  const legacyPre = { ...info.legacyMigration.pre, pageId: args.legacyPre.archivePageId };
+  assert.equal(legacyPre.filename, args.legacyPre.filename); assert.equal(legacyPre.sha256, args.legacyPre.sha256);
+  assert.equal(holdingHash(args.legacyPre.bytes), legacyPre.sha256); assert.equal(args.legacyPre.bytes.length, legacyPre.bytes);
+  const legacy = JSON.parse(Buffer.from(args.legacyPre.bytes).toString()) as { source: ShareholdingsSource; ownerName: string; sourceZipSha256: string; factsSha256: string; offset: number; rows: HoldingPage[] };
+  assert.deepEqual(legacy.source, args.source); assert.equal(legacy.ownerName, args.ownerName); assert.equal(legacy.sourceZipSha256, zipSha256); assert.equal(legacy.factsSha256, factsSha256); assert.equal(legacy.offset, 0);
+  assert.deepEqual(legacy.rows.map(page => page.id), info.legacyMigration.rowIds); assert(legacy.rows.length > 0 && legacy.rows.length <= 100);
+  assertSameHoldingPage(legacy.rows.find(page => page.id === oldId)!, args.journal.before);
+  const schema = await readHoldingsSchema(); assert.equal(schema.id, args.journal.schema.id); assert.deepEqual(schema.properties, args.journal.schema.properties); assert.deepEqual(schema.description, args.journal.schema.description); assert.equal(Object.keys(buildHoldingsSchemaPatch(schema).properties).length, 0);
+  const periodRows = await readHoldingPeriodRows(schema.id, args.source), found = resolveHoldingRows(args.source, args.ownerName, parsed.holdings, parsed.holdings, periodRows);
+  assert.equal(found.status, "ready");
+  assert.equal(found.selected[index].existing?.id, oldId);
+  const current = await inspectHoldingPatch({ before: args.journal.before, changed, schema }); assert.notEqual(current.status, "unknown");
+  assertSameHoldingPage(current.current, found.selected[index].existing!);
+  for (const [i, choice] of found.selected.entries()) {
+    if (i < index) assert.equal(verifyCompletedHoldingsSource(args.source, args.ownerName, { ...parsed, holdings: [parsed.holdings[i]] }, zipSha256, periodRows).status, "verified");
+    if (i > index && choice.existing) assertSameHoldingPage(choice.existing, legacy.rows.find(page => page.id === choice.existing!.id)!);
+  }
+  const boundIds = new Set(found.selected.flatMap(choice => choice.existing ? [choice.existing.id] : [])), extraRowIds = periodRows.filter(page => !boundIds.has(page.id)).map(page => page.id);
+  await verifyArchivedAttachments(args.archivePageId, [{ filename: edinetArchiveFilename(args.source.docId, 1), bytes: args.zip }], "明示置換の同一提出者type1");
+  await verifyArchivedAttachments(legacyPre.pageId, [{ filename: legacyPre.filename, bytes: args.legacyPre.bytes }], "明示置換の旧全移行PRE");
+  const preValue = { version: 1 as const, kind: "holding-patch-replacement" as const, source: args.source, ownerName: args.ownerName,
+    zipSha256, factsSha256, journal: args.journal, sourcePage, periodRows, legacyPre, legacyPreUtf8: Buffer.from(args.legacyPre.bytes).toString(), holdingIndex: index, extraRowIds };
+  const pre = await archivePatchProof(args.source, oldId, "PRE", preValue);
+  await args.assertLatestSource(); assertSameHoldingPage(await notionRequest<HoldingPage>("GET", `/pages/${args.archivePageId}`), sourcePage);
+  const finalOld = await inspectHoldingPatch({ before: args.journal.before, changed, schema }); assert.notEqual(finalOld.status, "unknown"); assertSameHoldingPage(finalOld.current, current.current);
+  const retiredAck = await notionRequest<HoldingPage>("PATCH", `/pages/${oldId}`, { archived: true }, { singleAttempt: true }); assertRetiredHoldingPatch(retiredAck, args.journal);
+  const retired = await notionRequest<HoldingPage>("GET", `/pages/${oldId}`, undefined, { singleAttempt: true }); assertRetiredHoldingPatch(retired, args.journal);
+  await args.assertLatestSource();
+  const created = await notionRequest<HoldingPage>("POST", "/pages", { parent: { database_id: schema.id }, properties: writableReplacement }, { singleAttempt: true });
+  assert.match(created.id.replaceAll("-", ""), /^[a-f0-9]{32}$/); assertReplacementPost(created, args.journal.before, changed, schema);
+  const replacement = await notionRequest<HoldingPage>("GET", `/pages/${created.id}`, undefined, { singleAttempt: true }); assertReplacementPost(replacement, args.journal.before, changed, schema); assertSameHoldingPage(replacement, created);
+  const periodAfter = await readHoldingPeriodRows(schema.id, args.source);
+  assert.equal(periodAfter.length, periodRows.length); assert(!periodAfter.some(page => page.id === oldId));
+  for (const before of periodRows.filter(page => page.id !== oldId)) assertSameHoldingPage(periodAfter.find(page => page.id === before.id)!, before);
+  assertSameHoldingPage(periodAfter.find(page => page.id === replacement.id)!, replacement);
+  assert.equal(verifyCompletedHoldingsSource(args.source, args.ownerName, { ...parsed, holdings: parsed.holdings.slice(0, index + 1) }, zipSha256, periodAfter).status, "verified");
+  const post = await archivePatchProof(args.source, oldId, "POST", { ...preValue, pre, retired, replacement, periodAfter } satisfies HoldingPatchReplacementPost);
+  const resolution: HoldingPatchResolution = { version: 1, oldId, newId: replacement.id, pre, post };
+  await args.assertLatestSource();
+  const resumed = await recordRecoveryInfo(args.archivePageId, { ...info, sourceQueueVersion: 2, patchResolution: resolution }, "再開待ち", "未知PATCHの旧IDを物理保全・退役し別IDへ置換。全原表/旧extraを照合、旧cursor0を維持。原要求は再送しません", false, undefined, sourcePage);
+  assert.equal(resumed.created_time, sourcePage.created_time); assert.deepEqual(Object.keys(resumed.properties).sort(), Object.keys(sourcePage.properties).sort());
+  for (const [name, value] of Object.entries(sourcePage.properties)) if (!["保有明細状態", "保有明細理由", "保有明細再開情報"].includes(name)) assert.deepEqual(stableProperty(resumed.properties[name]), stableProperty(value), "明示置換で原本/他propsを変更しません");
+  return { oldId, newId: replacement.id, resolution, sourceNextHoldingOffset: 0, sourceComplete: false };
 }
 
 export function holdingProperties(source: ShareholdingsSource, ownerName: string, holding: Shareholding): Record<string, HoldingProperty> {
@@ -436,6 +642,7 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
   const zipSha256 = createHash("sha256").update(args.zip).digest("hex");
   let sourceBefore: HoldingPage | undefined;
   let sourceInfo: RecoveryInfo | undefined;
+  let patchResolutionProof: HoldingPatchReplacementPost | undefined;
   if (!pricePhase) {
     const dbId = await recoveryDatabase();
     sourceBefore = await notionRequest<HoldingPage>("GET", `/pages/${args.archivePageId}`);
@@ -469,10 +676,32 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
         for (const name of ["source", "ownerName", "zipBytes", "zipSha256"] as const) assert.deepEqual(saved[name], sourceInfo[name]);
       } else {
         assert.equal(args.sourceWindowPre, undefined, "既存v1へ旧PREを適用しません");
-        assert.equal(saved.sourceQueueVersion, 1);
+        assertSourceQueueVersion(saved);
+        sourceInfo.sourceQueueVersion = saved.sourceQueueVersion;
         for (const name of ["source", "ownerName", "zipBytes", "zipSha256", "parsed", "factsSha256"] as const) assert.deepEqual(saved[name], sourceInfo[name], "source windowの全facts/order/原本束縛が変更されています");
         assert.ok(Number.isSafeInteger(saved.sourceNextHoldingOffset) && saved.sourceNextHoldingOffset! >= 0 && saved.sourceNextHoldingOffset! <= saved.parsed);
         sourceInfo.sourceNextHoldingOffset = saved.sourceNextHoldingOffset;
+        if (saved.patchResolution !== undefined) {
+          sourceInfo = { ...saved, ...sourceInfo, patchResolution: saved.patchResolution };
+          patchResolutionProof = await readHoldingPatchResolution(sourceInfo);
+          if (status !== "明細原本照合済") assert.equal(args.valuationSources, undefined, "明示置換のsource完了前に価格を書きません");
+          else {
+            assert(saved.patchResolution.legacyPost, "原legacy全行の物理POSTがない置換sourceを完了扱いしません");
+            const post = JSON.parse((await readPatchProof(saved.patchResolution.legacyPost)).toString());
+            assert.deepEqual(post.source, args.source); assert.equal(post.zipSha256, zipSha256); assert.equal(post.factsSha256, sourceInfo.factsSha256);
+            assert.deepEqual(post.replacementProof, saved.patchResolution.post); assert.deepEqual(post.originalLegacyPre, patchResolutionProof.legacyPre);
+            const legacyRows = JSON.parse(patchResolutionProof.legacyPreUtf8).rows as HoldingPage[];
+            assert(Array.isArray(post.mapping)); assert.equal(post.mapping.length, legacyRows.length);
+            assert.deepEqual(post.mapping.map((value: { oldId: string }) => value.oldId), legacyRows.map(page => page.id));
+            for (const entry of post.mapping as Array<{ oldId: string; newId: string; row: HoldingPage }>) {
+              assert.equal(entry.row.id, entry.newId);
+              assert.equal(entry.newId, entry.oldId === saved.patchResolution.oldId ? saved.patchResolution.newId : entry.oldId);
+            }
+            const names = new Set(legacyRows.map(page => richValue(page.properties["銘柄名"])));
+            assert.equal(verifyCompletedHoldingsSource(args.source, args.ownerName, { ...parsed, holdings: parsed.holdings.filter(holding => names.has(holding.name)) }, zipSha256,
+              post.mapping.map((entry: { row: HoldingPage }) => entry.row)).status, "verified");
+          }
+        }
         if (status === "明細原本照合済") {
           assert.equal(saved.sourceNextHoldingOffset, saved.parsed);
           if (args.budget) args.budget.remainingRows += reservedRows;
@@ -538,6 +767,11 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
   const schema = await readHoldingsSchema();
   assert.equal(Object.keys(buildHoldingsSchemaPatch(schema).properties).length, 0, "保有明細schemaの受入が未完了です");
   const periodRows = await readHoldingPeriodRows(dbId, args.source);
+  if (patchResolutionProof && !pricePhase) {
+    const replacement = periodRows.find(page => page.id === sourceInfo!.patchResolution!.newId); assert(replacement);
+    assertReplacementPost(replacement, patchResolutionProof.journal.before, qualifyHoldingPatchJournal(patchResolutionProof.journal).changed, schema);
+    for (const id of patchResolutionProof.extraRowIds) assertSameHoldingPage(periodRows.find(page => page.id === id)!, patchResolutionProof.periodRows.find(page => page.id === id)!);
+  }
   if (!pricePhase && offset > 0) {
     const prefix = verifyCompletedHoldingsSource(args.source, args.ownerName,
       { ...parsed, holdings: parsed.holdings.slice(0, offset) }, zipSha256, periodRows);
@@ -640,9 +874,10 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
   if (!pricePhase) {
     const nextOffset = offset + selected.length, pending = nextOffset < parsed.holdings.length;
     if (!pending) {
-      const final = verifyCompletedHoldingsSource(args.source, args.ownerName, parsed, zipSha256,
-        await readHoldingPeriodRows(dbId, args.source));
+      const finalRows = await readHoldingPeriodRows(dbId, args.source);
+      const final = verifyCompletedHoldingsSource(args.source, args.ownerName, parsed, zipSha256, finalRows);
       if (final.status === "held") throw new Error(`全原表の最終読戻しが未成立です。${final.reason}`);
+      if (patchResolutionProof) sourceInfo!.patchResolution!.legacyPost = await finishHoldingPatchMigration(sourceInfo!, patchResolutionProof, parsed, finalRows, schema);
     }
     await recordRecoveryInfo(args.archivePageId, { ...sourceInfo!, sourceNextHoldingOffset: nextOffset },
       pending ? "再開待ち" : "明細原本照合済", pending ? `原本${nextOffset}/${parsed.holdings.length}明細の読戻し済み。次windowへ再開待ち` : "全明細の保存値・原典キー・旧値保全を読戻し済み",
@@ -839,14 +1074,30 @@ async function recoveryDatabase(): Promise<string> {
   return recoveryDb;
 }
 
+/** v1通常sourceの追加IOは0。明示置換だけv2にして旧publisherの再開を拒否する。 */
+function assertSourceQueueVersion(info: RecoveryInfo): void {
+  if (info.sourceQueueVersion === 1) { assert.equal(info.patchResolution, undefined, "v1 sourceへ置換証拠を混入しません"); return; }
+  assert.equal(info.sourceQueueVersion, 2, "未対応source queue versionです");
+  const resolution = info.patchResolution; assert(resolution, "v2 sourceには明示置換の物理証拠が必要です");
+  assert.equal(resolution.version, 1); assert.match(resolution.oldId.replaceAll("-", ""), /^[a-f0-9]{32}$/i); assert.match(resolution.newId.replaceAll("-", ""), /^[a-f0-9]{32}$/i);
+  assert.notEqual(resolution.oldId.replaceAll("-", ""), resolution.newId.replaceAll("-", ""));
+  for (const [phase, file] of [["PRE", resolution.pre], ["POST", resolution.post], ...(resolution.legacyPost === undefined ? [] : [["LEGACY-POST", resolution.legacyPost]])] as Array<[string, MigrationFile]>) {
+    assert.match(file.sha256, /^[a-f0-9]{64}$/); assert(Number.isSafeInteger(file.bytes) && file.bytes > 0 && file.bytes <= 20 * 1024 * 1024);
+    assert.equal(file.key, `holdings-patch/${info.source.docId}/${resolution.oldId}/${phase}/${file.sha256}`);
+    assert.equal(file.filename, `holdings-patch-${phase}.json`); assert(typeof file.pageId === "string"); assert.match(file.pageId.replaceAll("-", ""), /^[a-f0-9]{32}$/i);
+  }
+}
+
 interface RecoveryInfo {
   source: ShareholdingsSource; ownerName: string; zipBytes: number; zipSha256: string; parsed: number;
   factsSha256?: string;
   issuedSharesObservation?: IssuedShareObservation;
   notApplicable?: ShareholdingsNotApplicable;
-  sourceQueueVersion?: 1; sourceNextHoldingOffset?: number;
+  sourceQueueVersion?: 1 | 2; sourceNextHoldingOffset?: number;
   /** 未確定時もPREのexact key/SHAを保持し、同じ旧行PATCHを自動再送しない。 */
   legacyMigration?: { offset: number; rowIds: string[]; pre: MigrationFile; post?: MigrationFile };
+  /** 元unknown journalは不変。物理置換proofと原legacy PREを通常完了まで引き継ぐ。 */
+  patchResolution?: HoldingPatchResolution;
   priceQueueVersion?: 1; nextHoldingOffset?: number; unavailableRows?: number; snapshotId?: string;
 }
 
@@ -913,12 +1164,18 @@ async function recordRecoveryInfo(archivePageId: string, info: RecoveryInfo, sta
     assert.deepEqual(stableProperties(before.properties), stableProperties(sourceExpected.properties), "source windowの全propsが開始時から変更されています");
     assert.deepEqual(before.created_time, sourceExpected.created_time, "source windowの作成時計が変更されています");
     assert.deepEqual(before.last_edited_time, sourceExpected.last_edited_time, "source windowの編集時計が変更されています");
-    assert.equal(info.sourceQueueVersion, 1);
+    assertSourceQueueVersion(info);
     assert.ok(Number.isSafeInteger(info.sourceNextHoldingOffset) && info.sourceNextHoldingOffset! >= 0 && info.sourceNextHoldingOffset! <= info.parsed);
     if (status === "明細原本照合済") assert.equal(info.sourceNextHoldingOffset, info.parsed);
     if (sourceExpected.properties["保有明細状態"]?.select?.name === "実行中（結果未確定）") {
       const prior = JSON.parse(richValue(sourceExpected.properties["保有明細再開情報"])) as RecoveryInfo;
-      for (const name of ["source", "ownerName", "zipBytes", "zipSha256", "parsed", "factsSha256", "sourceQueueVersion"] as const) assert.deepEqual(prior[name], info[name]);
+      for (const name of ["source", "ownerName", "zipBytes", "zipSha256", "parsed", "factsSha256"] as const) assert.deepEqual(prior[name], info[name]);
+      if (prior.sourceQueueVersion !== info.sourceQueueVersion) {
+        assert.equal(prior.sourceQueueVersion, 1); assert.equal(info.sourceQueueVersion, 2); assert.equal(prior.patchResolution, undefined);
+        assert.equal(status, "再開待ち"); assert.equal(prior.sourceNextHoldingOffset, 0); assert.equal(info.sourceNextHoldingOffset, 0);
+        // 新versionは旧v1 publisherが拒否する。物理POSTを再検証した明示置換だけがこの遷移を許す。
+        await readHoldingPatchResolution(info);
+      }
       assert.ok(info.sourceNextHoldingOffset! >= prior.sourceNextHoldingOffset!);
     }
   }
@@ -1061,7 +1318,7 @@ function qualifyUnknownHoldingsSource(page: HoldingPage, dbId: string): UnknownH
   assert.ok(typeof page.created_time === "string" && Number.isFinite(Date.parse(page.created_time)));
   assert.ok(typeof page.last_edited_time === "string" && Number.isFinite(Date.parse(page.last_edited_time)));
   assert(Object.values(page.properties).every(property => !("has_more" in property) || property.has_more === false));
-  assert.equal(info.sourceQueueVersion, 1); assert.ok(Number.isSafeInteger(info.parsed) && info.parsed > 0);
+  assertSourceQueueVersion(info); assert.ok(Number.isSafeInteger(info.parsed) && info.parsed > 0);
   assert.ok(Number.isSafeInteger(info.sourceNextHoldingOffset) && info.sourceNextHoldingOffset! >= 0 && info.sourceNextHoldingOffset! < info.parsed);
   assert.match(info.zipSha256, /^[a-f0-9]{64}$/); assert.match(info.factsSha256!, /^[a-f0-9]{64}$/);
   assert.ok(Number.isSafeInteger(info.zipBytes) && info.zipBytes > 0 && info.zipBytes <= HOLDINGS_ZIP_MAX_BYTES);
@@ -1154,7 +1411,7 @@ export async function resumePendingShareholdings(args: { maxRows: number; should
     }).join("")) as RecoveryInfo;
     assert.ok(Number.isSafeInteger(info.zipBytes) && info.zipBytes > 0 && info.zipBytes <= HOLDINGS_ZIP_MAX_BYTES && /^[a-f0-9]{64}$/.test(info.zipSha256));
     if (info.sourceQueueVersion === undefined) { result.held++; result.pending = true; continue; }
-    assert.equal(info.sourceQueueVersion, 1);
+    assertSourceQueueVersion(info);
     const saved = await readSavedHoldingsZip(info.source);
     if (saved.status === "held") { result.held++; continue; }
     assert.equal(saved.archivePageId.replaceAll("-", ""), page.id.replaceAll("-", ""));

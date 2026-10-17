@@ -9,6 +9,8 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ## 2026-10-17
 
+- 保有明細の結果不明PATCHは、通常CLIで旧行と全証拠を物理保全・退役確認して別IDへ置換できる。旧要求は再送せず、通常publisherで全原表・旧値の物理POSTを確認してから再開する。[実1911回帰とversion2の互換停止](test-logs/holdings-patch-replacement-20261017.md)を記録した。本番の置換は未実行。
+
 - 保存原本の受注・海外売上PREは、queryと本文資格で同じmetadata確認を使う。欠測提出者・期末は補完せず公式ZIP DEIを必須に保ち、[実S100XUO9と停止128応答の照合](test-logs/saved-source-metadata-admission-20261017.md)で誤停止を直した。旧STOP・claims・再開期限は保持する。
 - 優待の既存v1条件に、明示した最大15群19行だけの構造更新modeを追加。元値・時計・対象外行の全列CASと物理PRE/POSTを保ち、結果不明や別出力先での再送を止める（本番適用は未実施）。
 
