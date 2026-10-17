@@ -1,0 +1,387 @@
+{
+  "provenance": "Unmodified actual saved ZIPs. Expected legacy fields were produced by accepted54097 before this guard; 208A baseline4 describes original source values only and is not qualified filer ownership. No new source/API/model or production row correction.",
+  "baselineSourceHead": "54097f6d3043a145de2f28db109cd06b4ff4920e",
+  "rootAcceptedInventorySha256": "7fb490528aa1b32c3601ea8667dd5a68fddf62ff4d829549105f7f002ac039ca",
+  "baselineAuditSha256": "ea0f8225a6cb5ce46e8e3beaf1ecb516e0547db68c47f86e7594b6d0447b1b7e",
+  "items": [
+    {
+      "source": {
+        "docId": "S100Z0JO",
+        "stockCode": "208A",
+        "edinetCode": "E39505",
+        "fiscalYearEnd": "2026-06-30"
+      },
+      "filename": "208A-S100Z0JO.zip",
+      "zipSha256": "f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10",
+      "zipBytes": 926421,
+      "ownerName": "株式会社構造計画研究所ホールディングス",
+      "nativeFilerName": "株式会社構造計画研究所ホールディングス",
+      "nativeMember": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm",
+      "memberSha256": "960634e958ad8f9f8383e7226a48922a1222edd3fa90e9bf52e24eade6db6633",
+      "wholeBlockSha256": "88a237b89265499b27cbe79953d4be438261f6db5fdf04e9200450f88c0a4ddc",
+      "blockUtf8Range": [
+        1040444,
+        1084564
+      ],
+      "scopeStatements": [
+        " 当社及び連結子会社のうち、投資株式の貸借対照表計上額(株式投資合計額)が最も大きい会社(最大保有会社)は株式会社構造計画研究所であるため、同社で保有している銘柄を記載しております。"
+      ],
+      "baselineFieldsSha256": "6a468dd6fd09c86e82a97a45ca00f660a227114268473b90aa57c12dfa672ae2",
+      "baselineParsed": {
+        "status": "ok",
+        "reason": null,
+        "source": {
+          "docId": "S100Z0JO",
+          "stockCode": "208A",
+          "edinetCode": "E39505",
+          "fiscalYearEnd": "2026-06-30"
+        },
+        "filename": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm",
+        "elementId": "jpcrp_cor:ShareholdingsTextBlock",
+        "contextRef": "FilingDateInstant",
+        "holdings": [
+          {
+            "name": "(株)みずほフィナンシャルグループ",
+            "kind": "特定投資株式",
+            "shares": 35349,
+            "sharesRaw": 35349,
+            "sharesUnit": "株",
+            "bookValueYen": 273707000,
+            "bookValueRaw": 273707,
+            "bookValueUnit": "千円",
+            "listingStatus": "unknown",
+            "price": null,
+            "priceDate": null,
+            "priceCurrency": null,
+            "tableIndex": 3,
+            "rowIndex": 3
+          },
+          {
+            "name": "(株)りそなホールディングス （注）",
+            "kind": "特定投資株式",
+            "shares": 14300,
+            "sharesRaw": 14300,
+            "sharesUnit": "株",
+            "bookValueYen": 30115000,
+            "bookValueRaw": 30115,
+            "bookValueUnit": "千円",
+            "listingStatus": "unknown",
+            "price": null,
+            "priceDate": null,
+            "priceCurrency": null,
+            "tableIndex": 3,
+            "rowIndex": 5
+          },
+          {
+            "name": "(株)メディパルホールディングス",
+            "kind": "特定投資株式",
+            "shares": 1700,
+            "sharesRaw": 1700,
+            "sharesUnit": "株",
+            "bookValueYen": 4457000,
+            "bookValueRaw": 4457,
+            "bookValueUnit": "千円",
+            "listingStatus": "unknown",
+            "price": null,
+            "priceDate": null,
+            "priceCurrency": null,
+            "tableIndex": 3,
+            "rowIndex": 7
+          },
+          {
+            "name": "ＮＴＴ(株)",
+            "kind": "特定投資株式",
+            "shares": 10000,
+            "sharesRaw": 10000,
+            "sharesUnit": "株",
+            "bookValueYen": 1450000,
+            "bookValueRaw": 1450,
+            "bookValueUnit": "千円",
+            "listingStatus": "unknown",
+            "price": null,
+            "priceDate": null,
+            "priceCurrency": null,
+            "tableIndex": 3,
+            "rowIndex": 9
+          }
+        ],
+        "holderScope": "filer_only"
+      },
+      "expectedGuardStatus": "unsupported",
+      "expectedOriginalPricesAccepted": false
+    },
+    {
+      "source": {
+        "docId": "S100YBV8",
+        "stockCode": "1518",
+        "edinetCode": "E00037",
+        "fiscalYearEnd": "2026-03-31"
+      },
+      "filename": "1518-S100YBV8.zip",
+      "zipSha256": "832b6b6677741de4edbd5f4906473544faec8920ba054f7e2aa54bd1f3c58a2d",
+      "zipBytes": 740199,
+      "ownerName": "三井松島ホールディングス株式会社",
+      "nativeFilerName": "三井松島ホールディングス株式会社",
+      "nativeMember": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E00037-000_2026-03-31_01_2026-06-17_ixbrl.htm",
+      "memberSha256": "43aee991791a566edf478f399db0d1c28e787b72cac94b4be571602da9146f8a",
+      "wholeBlockSha256": "0d6a1aae285266cf6eaf59e907902ccd1c236025c1db33ebdb88a9aff9ca2258",
+      "blockUtf8Range": [
+        865336,
+        941503
+      ],
+      "scopeStatements": [
+        " 提出会社及び連結子会社のうち、投資株式の貸借対照表計上額(投資株式計上額)が最も大きい会社(最大保有会社)である MM Investments(株) については以下の通りです。"
+      ],
+      "baselineFieldsSha256": "0b35459a87ab76fcfe4c531fa6902cbef6abed18a33b30f225a985c13c02dd4c",
+      "baselineParsed": {
+        "status": "ok",
+        "reason": null,
+        "source": {
+          "docId": "S100YBV8",
+          "stockCode": "1518",
+          "edinetCode": "E00037",
+          "fiscalYearEnd": "2026-03-31"
+        },
+        "filename": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E00037-000_2026-03-31_01_2026-06-17_ixbrl.htm",
+        "elementId": "jpcrp_cor:ShareholdingsTextBlock",
+        "contextRef": "FilingDateInstant",
+        "holdings": [
+          {
+            "name": "㈱三井住友フィナンシャルグループ",
+            "kind": "特定投資株式",
+            "shares": 132000,
+            "sharesRaw": 132000,
+            "sharesUnit": "株",
+            "bookValueYen": 660000000,
+            "bookValueRaw": 660,
+            "bookValueUnit": "百万円",
+            "listingStatus": "unknown",
+            "price": null,
+            "priceDate": null,
+            "priceCurrency": null,
+            "tableIndex": 2,
+            "rowIndex": 3
+          },
+          {
+            "name": "住友不動産㈱",
+            "kind": "特定投資株式",
+            "shares": 100000,
+            "sharesRaw": 100000,
+            "sharesUnit": "株",
+            "bookValueYen": 439000000,
+            "bookValueRaw": 439,
+            "bookValueUnit": "百万円",
+            "listingStatus": "unknown",
+            "price": null,
+            "priceDate": null,
+            "priceCurrency": null,
+            "tableIndex": 2,
+            "rowIndex": 5
+          },
+          {
+            "name": "ホウライ㈱",
+            "kind": "特定投資株式",
+            "shares": 90000,
+            "sharesRaw": 90000,
+            "sharesUnit": "株",
+            "bookValueYen": 184000000,
+            "bookValueRaw": 184,
+            "bookValueUnit": "百万円",
+            "listingStatus": "unknown",
+            "price": null,
+            "priceDate": null,
+            "priceCurrency": null,
+            "tableIndex": 2,
+            "rowIndex": 7
+          }
+        ],
+        "holderScope": "filer_only"
+      },
+      "expectedGuardStatus": "ok",
+      "expectedOriginalPricesAccepted": false
+    },
+    {
+      "source": {
+        "docId": "S100XBHA",
+        "stockCode": "2498",
+        "edinetCode": "E05646",
+        "fiscalYearEnd": "2025-09-30"
+      },
+      "filename": "2498-S100XBHA.zip",
+      "zipSha256": "c9b6c1003d3efbff6af2c13b6ef1c3a94e739b4a73c1d82d87066c15034ce8f1",
+      "zipBytes": 639253,
+      "ownerName": "株式会社オリエンタルコンサルタンツホールディングス",
+      "nativeFilerName": "株式会社オリエンタルコンサルタンツホールディングス",
+      "nativeMember": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E05646-000_2025-09-30_01_2025-12-23_ixbrl.htm",
+      "memberSha256": "2f4d3915640a26907d93dacb2f535e17e51d26c533885ab162e7c8795f23eb8c",
+      "wholeBlockSha256": "4c60000de104862dcd13486711cc5ffc448388c768f913d77b746a00664421de",
+      "blockUtf8Range": [
+        784728,
+        843610
+      ],
+      "scopeStatements": [
+        " 2 提出会社における株式の保有状況 当社及び連結子会社のうち、投資株式の貸借対照表計上額(投資株式計上額)が最も大きい会社(最大保有会社)である提出会社の株式の保有状況については以下のとおりです。",
+        " 3 (株)オリエンタルコンサルタンツグローバルにおける株式の保有状況 当社及び連結子会社のうち、投資株式の貸借対照表計上額(投資株式計上額)が次に大きい会社である (株)オリエンタルコンサルタンツグローバル における株式の保有状況については以下のとおりです。"
+      ],
+      "baselineFieldsSha256": "cb240274e99e90b5b30060e7b30dfacad7ef50e1048f300cf3debfa73fbdf29a",
+      "baselineParsed": {
+        "status": "ok",
+        "reason": null,
+        "source": {
+          "docId": "S100XBHA",
+          "stockCode": "2498",
+          "edinetCode": "E05646",
+          "fiscalYearEnd": "2025-09-30"
+        },
+        "filename": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E05646-000_2025-09-30_01_2025-12-23_ixbrl.htm",
+        "elementId": "jpcrp_cor:ShareholdingsTextBlock",
+        "contextRef": "FilingDateInstant",
+        "holdings": [
+          {
+            "name": "住友不動産㈱",
+            "kind": "特定投資株式",
+            "shares": 166000,
+            "sharesRaw": 166000,
+            "sharesUnit": "株",
+            "bookValueYen": 1084312000,
+            "bookValueRaw": 1084312,
+            "bookValueUnit": "千円",
+            "listingStatus": "unknown",
+            "price": null,
+            "priceDate": null,
+            "priceCurrency": null,
+            "tableIndex": 1,
+            "rowIndex": 3
+          },
+          {
+            "name": "いであ㈱",
+            "kind": "特定投資株式",
+            "shares": 40000,
+            "sharesRaw": 40000,
+            "sharesUnit": "株",
+            "bookValueYen": 133400000,
+            "bookValueRaw": 133400,
+            "bookValueUnit": "千円",
+            "listingStatus": "unknown",
+            "price": null,
+            "priceDate": null,
+            "priceCurrency": null,
+            "tableIndex": 1,
+            "rowIndex": 5
+          },
+          {
+            "name": "人・夢・技術 グループ㈱",
+            "kind": "特定投資株式",
+            "shares": 40000,
+            "sharesRaw": 40000,
+            "sharesUnit": "株",
+            "bookValueYen": 69320000,
+            "bookValueRaw": 69320,
+            "bookValueUnit": "千円",
+            "listingStatus": "unknown",
+            "price": null,
+            "priceDate": null,
+            "priceCurrency": null,
+            "tableIndex": 1,
+            "rowIndex": 7
+          }
+        ],
+        "holderScope": "filer_only"
+      },
+      "expectedGuardStatus": "ok",
+      "expectedOriginalPricesAccepted": false
+    },
+    {
+      "source": {
+        "docId": "S100X68L",
+        "stockCode": "1407",
+        "edinetCode": "E00327",
+        "fiscalYearEnd": "2025-08-31"
+      },
+      "filename": "1407-S100X68L.zip",
+      "zipSha256": "8a0d59adcb52a5adf10a2fc22f9d4378d7abfd97affe43f45f1af6836f68d354",
+      "zipBytes": 598978,
+      "ownerName": "株式会社ウエストホールディングス",
+      "nativeFilerName": "株式会社ウエストホールディングス",
+      "nativeMember": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E00327-000_2025-08-31_01_2025-11-25_ixbrl.htm",
+      "memberSha256": "cfdad3cb92fb9b41b79cec34a8912b4c681c2090a5b3e5a41d8021afe2d90972",
+      "wholeBlockSha256": "0416824ad990ef88f656c8b35b013226535c897c3e768817af51f64824b5c79e",
+      "blockUtf8Range": [
+        615470,
+        771288
+      ],
+      "scopeStatements": [
+        " 2 株式会社ウエストエネルギーソリューション における株式の保有状況 当社及び連結子会社のうち、投資株式の貸借対照表計上額(投資株式計上額)が最も大きい会社(最大保有会社)である株式会社ウエストエネルギーソリューションについては以下のとおりであります。",
+        " b.保有目的が純投資目的である投資株式 区分 当事業年度 前事業年度 銘柄数 (銘柄) 貸借対照表計 上額の合計額 (百万円) 銘柄数 (銘柄) 貸借対照表計 上額の合計額 (百万円) 非上場株式 2 8 2 8 非上場株式以外の株式 - - - - 区分 当事業年度 受取配当金の 合計額(百万円) 売却損益の 合計額(百万円) 評価損益の 合計額(百万円) 非上場株式 - - - 非上場株式以外の株式 - - - 3 提出会社における株式の保有状況 提出会社については、以下のとおりであります。"
+      ],
+      "baselineFieldsSha256": "2df99e6d4a6db09b26b1312618d4e53f8bfe274094597dad2d53fa6850db867f",
+      "baselineParsed": {
+        "status": "ok",
+        "reason": null,
+        "source": {
+          "docId": "S100X68L",
+          "stockCode": "1407",
+          "edinetCode": "E00327",
+          "fiscalYearEnd": "2025-08-31"
+        },
+        "filename": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E00327-000_2025-08-31_01_2025-11-25_ixbrl.htm",
+        "elementId": "jpcrp_cor:ShareholdingsTextBlock",
+        "contextRef": "FilingDateInstant",
+        "holdings": [
+          {
+            "name": "株式会社群馬銀行",
+            "kind": "特定投資株式",
+            "shares": 50000,
+            "sharesRaw": 50000,
+            "sharesUnit": "株",
+            "bookValueYen": 77000000,
+            "bookValueRaw": 77,
+            "bookValueUnit": "百万円",
+            "listingStatus": "unknown",
+            "price": null,
+            "priceDate": null,
+            "priceCurrency": null,
+            "tableIndex": 9,
+            "rowIndex": 3
+          },
+          {
+            "name": "株式会社京葉銀行",
+            "kind": "特定投資株式",
+            "shares": 20000,
+            "sharesRaw": 20000,
+            "sharesUnit": "株",
+            "bookValueYen": 24000000,
+            "bookValueRaw": 24,
+            "bookValueUnit": "百万円",
+            "listingStatus": "unknown",
+            "price": null,
+            "priceDate": null,
+            "priceCurrency": null,
+            "tableIndex": 9,
+            "rowIndex": 5
+          },
+          {
+            "name": "Green Bee株式会社",
+            "kind": "特定投資株式",
+            "shares": 70000,
+            "sharesRaw": 70000,
+            "sharesUnit": "株",
+            "bookValueYen": 70000000,
+            "bookValueRaw": 70,
+            "bookValueUnit": "百万円",
+            "listingStatus": "unknown",
+            "price": null,
+            "priceDate": null,
+            "priceCurrency": null,
+            "tableIndex": 9,
+            "rowIndex": 7
+          }
+        ],
+        "holderScope": "filer_only"
+      },
+      "expectedGuardStatus": "ok",
+      "expectedOriginalPricesAccepted": false
+    }
+  ],
+  "limits": "Named largest-holder boundaries only; self labels/order/known other sections retained. Not all issuer ownership or price qualification."
+}
