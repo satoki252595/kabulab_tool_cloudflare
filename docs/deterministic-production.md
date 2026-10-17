@@ -1,6 +1,6 @@
 # 決定的な処理を優先する本番運用
 
-更新: 2026-10-17。取得・抽出・計算・照合・保存・検証を通常のCLI/共有関数で実装する。入力が同じなら同じ結果となる処理を優先し、未取得・主体不明・原本にない値は生成しない。LLMは意味判断が必要な残件へ限定する。
+更新: 2026-10-18。取得・抽出・計算・照合・保存・検証を通常のCLI/共有関数で実装する。入力が同じなら同じ結果となる処理を優先し、未取得・主体不明・原本にない値は生成しない。LLMは意味判断が必要な残件へ限定する。
 
 [10/17 16:00の全20機能の状況](test-logs/recovery-functional-status-20261017.md)に、本文950社・保有1,667行・受注40文書・VWAP1,399銘柄の別照合と、RAWの通常索引再開、優待READ停止、通常定時との通信枠の切替えを記録した。全量・価格/権利・実認証API・次定時の未受入は維持する。
 
@@ -39,6 +39,33 @@ JPX配当落・権利落等の短期掲載原本は、既存18時 `scheduled-sto
 GitHubの[workflow dispatch仕様](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event)が保証するrefはbranch/tagなので、dispatchは従来の`main`を使い、[checkoutのSHA指定](https://github.com/actions/checkout/tree/v4#usage)で実行ソースを固定する。次runのworkflow YAMLやGitHub action自体、runner OS、Secretsはcommit固定の対象ではない。workflowが互換性を壊して変更される場合は別途止めて再受入する。
 
 固定manifest・元run pool・残run数・原本CAS/state・unknown停止・一度だけのdispatchは従来のまま。revision指定だけで別poolや古いunknownを回避できず、コード修正の受入を原本全量・最終anti-joinの完了と数えない。
+
+## RAW転送・最終照合のSSH移行計画（2026-10-18）
+
+ユーザー方針として、原本転送と独立した最終照合をSSH先PCの最新受入mainで実行し、照合にLLMを使わない。
+以下は10/18 08:22 JST記録の[移行準備観測](../tmp/feature-audit-20261018/raw-ssh-migration-preflight-v1/remote-observation-v1.json)（SHA256 `4cfeed9012c198b0814585ca4b684c055011bdabadb031e25348d11f1ef1e3ec`）に基づく。完了tool出力の構造化記録でSSH native全文ではなく、本番転送・最終照合は未実施。
+
+SSH alias `nipogi` はUbuntu 24.04.2 / x86_64、空き859.9GiB。GitHub mainの読取と `/home/sora/projects/kabulab-cf` の `55ab6d06` clone・cleanを確認した。
+Nix / pnpm / gh / tmuxは未導入、`.env`なし、SSH agent forwardingと資格情報移送は0。
+`sudo -n`は利用できず、Nix導入は管理者操作か正式なrootless運用を別途選ぶ。直接のglobal installへ切り替えない。
+user systemdはlinger=yes / degradedで、常駐・再起動・切断後継続の正常性は未受入。cloneだけで依存・運用準備完了とはしない。
+
+RAW78継続中のためSSH writerは0。全owned actorの自然終端、新dispatchの入場停止、同じR2 manifest / cutoff / cursor / inflightのfresh照合後だけ移行する。
+GitHub workflowの排他はSSH processへ及ばない。同planの並行実行も許可せず、単一writerへ引き継ぐ。
+新dispatch停止の候補は通常の[workflow disable/enable](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/disable-and-enable-workflows)（2026-10-18確認）で、まだ実施していない。
+実行中actorはcancelせず自然終端を待ち、step9の後続dispatch失敗とbusiness処理の成否を分ける。
+元200回pool・origin・75/76を含む既消費を引き継ぎ、移行でresetしない。RAW推移依存10ファイルは`55ab6d06`と既存実行版`85261e3d`で同bytesを確認済み。
+
+既存 `raw-index-backfill.ts` は固定manifestのSHA/page一意・件数を検査し、各原本の全body SHA256・サイズと15列索引を照合してcursorを進める。
+既存の取得履歴・旧NULL/未検証doc_idは保持し、添付が一意でない場合や本文不一致を推測で埋めない。SHA原本の転送完了と文書identity結合完了は別にする。
+最後のanti-joinはmanifest全SHAの登録漏れと9列metadataを再確認する。各転送時点の全body/15列検証の積上げであり、全原本を最後にfresh再GETした証明ではない。
+`raw-object-check.ts` は1件・最大1MiB、`raw-index-plan.ts` はローカル標本1〜100件だけで、全量独立監査の代用にはしない。
+全固定原本のfresh R2全SHA・サイズ＋D1全15列＋集合照合を行うstandalone read-only audit CLIは未実装。既存manifest解析・validatorを再利用する小CLIで閉じる方針で、新LLM・別business parserは不要。
+RAW74は残64.382秒で次hosted GETを拒否した停止で、署名URL失効やprovider失敗とは認定しない。callback件数から完了prefixや旧ACKを再構築しない。
+旧raw/index inflight unknownは別に保持し、fresh inspectだけで解除・再送しない。[停止境界](test-logs/raw-read-budget-partial-20261018.md)と[固定集合の契約](test-logs/raw-index-recovery-plan-20261014.md)を継承する。
+
+実行hostを変えてもAPI接続/workspace共有枠・R2/D1操作数・保存量・料金は消えない。[Notion request limits](https://developers.notion.com/reference/request-limits)（2026-10-18確認）と既存共有予約を守る。
+SSH移行による短縮幅は未実測。現行Mac/env、凍結本文observer、RAW実行sourceは変更せず、資格情報・実転送・全量監査は別の受入とする。
 
 ## 保有株式の保存原本バックフィル
 
