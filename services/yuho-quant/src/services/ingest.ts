@@ -344,6 +344,20 @@ export async function ingestDocument(
     );
   }
 
+  // 再解析失敗は旧facts/本文の不存在を証明しない。取得済みCSVは保管し、
+  // type1取得・保有明細publish・破壊的D1置換の前で停止する。
+  if (csvError && existsInDb && needDbWork) {
+    await recordEdinetZip({
+      service: NOTION_SERVICE, docID: doc.docID, type: 5, zip: csvZip,
+      source: `EDINET API v2 /documents/${doc.docID}?type=5`, fetchedAt: csvFetchedAt,
+      metadata: { docID: doc.docID, edinetCode: doc.edinetCode, secCode: doc.secCode,
+        filerName: doc.filerName, docTypeCode: doc.docTypeCode, periodStart: doc.periodStart,
+        periodEnd, submitDateTime: doc.submitDateTime, ...reportedDocumentMetadata(doc),
+        ingestPhase: "csv-reingest-rejected", csvParseStatus: "parse_error" }, force,
+    });
+    throw new Error(`[ingest] 既存文書のCSV再解析に失敗したため旧facts/本文を置換せず停止: docID=${doc.docID}`);
+  }
+
   // XBRL(type=1) は「受注 or 海外売上 ありで構造化が要る」か「Type1 の
   // Notion 物理保存が要る (ルール6)」のいずれかで取得する。どちらの開示も
   // 無く Type1 保存不要 (Type5 のみ欠け) なら重い XBRL を落とさない
