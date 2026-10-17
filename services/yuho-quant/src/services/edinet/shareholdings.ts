@@ -198,6 +198,7 @@ export function parseShareholdingsData(zip: Buffer, source: ShareholdingsSource,
   const tables = extractTables(block.html);
   let lastEnd = 0, scope: "filer" | "other" | "unknown" = "unknown";
   let ambiguousOwnerSection = false;
+  let unqualifiedLargestHolder: string | null = null;
   let kind: "特定投資株式" | "みなし保有株式" | null = null;
   let excludedTables = 0;
   for (const [tableIndex, table] of tables.entries()) {
@@ -208,8 +209,16 @@ export function parseShareholdingsData(zip: Buffer, source: ShareholdingsSource,
     // 当社の株式を相手方が保有する、という表の列見出しは主体証拠に使わない。
     // 保存原典で確認した当社自身の保有説明と明示区画だけ。別会社区画へ入った後は
     // その中の「当社」を提出会社へ読み替えず、次の明示提出会社区画まで対象外。
-    for (const event of before.matchAll(/(?:^|[\s。])当社は、|(?:当社が保有する|当社の保有する)|(?:^|[\s。])([^\s。]{1,100})\s*における株式の保有状況|(?:^|\s)\((最大保有会社の次に大きい会社)\)/g)) {
-      if (event[2] !== undefined) {
+    for (const event of before.matchAll(/(?:^|[\s。])当社は、|(?:当社が保有する|当社の保有する)|(?:^|[\s。])([^\s。]{1,100})\s*における株式の保有状況|(?:^|\s)\((最大保有会社の次に大きい会社)\)|(?:^|[\s。])(?:当社|提出会社)(?:及び|および)連結子会社のうち、[^。]{1,180}?\(最大保有会社\)(?:である\s*([^。]{1,120}?)\s*については以下の(?:とおり|通り)(?:であります|です)。|は([^。]{1,120}?)であるため、同社で保有している銘柄を記載しております。)/g)) {
+      if (event[3] !== undefined || event[4] !== undefined) {
+        const holder = (event[3] !== undefined ? event[3] : event[4]).trim();
+        // Named-largest disclosure is not a filer identity proof. Keep already
+        // qualified other sections and explicit self labels unchanged.
+        if (!/^(?:当社|提出会社)(?:の株式の保有状況)?$/.test(holder) && scope !== "other") {
+          scope = "unknown"; ambiguousOwnerSection = true;
+          unqualifiedLargestHolder = holder; kind = null;
+        }
+      } else if (event[2] !== undefined) {
         // S100YB9P's named next-largest holder is a separate section. An
         // unproved owner section must not inherit the preceding filer scope.
         const after = before.slice(event.index + event[0].length);
@@ -221,6 +230,7 @@ export function parseShareholdingsData(zip: Buffer, source: ShareholdingsSource,
         const label = event[1].replace(/^[①-⑳]/, "");
         scope = /^(?:[0-9]+[.)、]?)?(?:当社|提出会社)$/.test(label) ? "filer" : "other";
         ambiguousOwnerSection = false;
+        unqualifiedLargestHolder = null;
         kind = null;
       } else if (scope !== "other" && !ambiguousOwnerSection) scope = "filer";
     }
@@ -248,7 +258,9 @@ export function parseShareholdingsData(zip: Buffer, source: ShareholdingsSource,
     if (grid.length < 4 || !grid[0].some(c => normalize(c) === "銘柄") ||
         !grid.slice(0, 3).some(row => row.some(c => c.includes("株式数")))) continue;
     if (scope === "other") { excludedTables++; continue; }
-    if (scope !== "filer") return { ...result, status: "unsupported", reason: "明細の保有主体が当社/提出会社と明示されていません", holdings: [] };
+    if (scope !== "filer") return { ...result, status: "unsupported", reason: unqualifiedLargestHolder === null
+      ? "明細の保有主体が当社/提出会社と明示されていません"
+      : `最大保有会社「${unqualifiedLargestHolder}」を提出会社自身の保有主体として確認できません`, holdings: [] };
     if (grid.some(row => row.length < 3)) return { ...result, status: "unsupported", reason: "明細表の列数が不足しています", holdings: [] };
     // 当期/前期は明示ラベルで選ぶ。連結ラベル・重複・欠落・未知注記は読み替えない。
     const periods = grid[0].slice(1, 3).map(cell => normalize(cell).replace(/^\((当事業年度|前事業年度)\)$/, "$1"));
