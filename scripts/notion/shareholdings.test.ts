@@ -52,6 +52,11 @@ describe("normal pending-patch read-only CLI", () => {
     expect(native).not.toHaveBeenCalled(); expect(vi.mocked(fs.fsyncSync).mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 });
+// Bind the journal's actual fixture DB explicitly; CI must not rely on a developer .env.
+vi.mock("../../src/shared/notion-archive/env.js", async original => {
+  const real = await original<typeof import("../../src/shared/notion-archive/env.js")>();
+  return { ...real, notionEnv: { ...real.notionEnv, NOTION_STOCK_HOLDINGS_DB_ID: () => "5ad4d311-b06f-42b4-b78a-b3801cd509e2" } };
+});
 vi.mock("../../services/yuho-quant/src/services/edinet/zip.js", () => ({ unzip: vi.fn() }));
 const realFs = await vi.importActual<typeof import("node:fs")>("node:fs");
 const hash = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
