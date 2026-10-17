@@ -407,11 +407,12 @@ describe("EDINET の取込は母集団外の有報を取り込まない", () => 
       docTypeCode: "120",
       formCode: "030000",
       filerName: `テスト${code}`,
+      withdrawalStatus: "0",
     }));
     // 最初の日だけ 7 件を返し、残りの日は空。
     vi.mocked(listDocuments)
-      .mockResolvedValueOnce({ results: docs } as never)
-      .mockResolvedValue({ results: [] } as never);
+      .mockResolvedValueOnce({ metadata: {status: "200", resultset: {count: docs.length}}, results: docs } as never)
+      .mockResolvedValue({ metadata: {status: "200", resultset: {count: 0}}, results: [] } as never);
     vi.mocked(ingestDocument).mockResolvedValue({
       outcome: "ingested",
       parseStatus: "ok_pattern_a",
