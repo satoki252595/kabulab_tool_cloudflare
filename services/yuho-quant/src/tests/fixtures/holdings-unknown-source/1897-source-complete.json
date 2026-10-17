@@ -1,0 +1,382 @@
+{
+  "object": "page",
+  "id": "3fbd74ff-84cd-81da-9848-d8d8934c54c4",
+  "created_time": "2026-10-16T22:19:00.000Z",
+  "last_edited_time": "2026-10-16T22:20:00.000Z",
+  "created_by": {
+    "object": "user",
+    "id": "dd10be3d-c2bd-4edd-a332-28090d920e2e"
+  },
+  "last_edited_by": {
+    "object": "user",
+    "id": "dd10be3d-c2bd-4edd-a332-28090d920e2e"
+  },
+  "cover": null,
+  "icon": null,
+  "parent": {
+    "type": "database_id",
+    "database_id": "364d74ff-84cd-81a1-838b-d973ac329270"
+  },
+  "in_trash": false,
+  "is_archived": false,
+  "is_locked": false,
+  "properties": {
+    "保有価格理由": {
+      "id": "GLu%40",
+      "type": "rich_text",
+      "rich_text": [
+        {
+          "type": "text",
+          "text": {
+            "content": "原本明細は完了。保存価格の資格確認は未実施",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "原本明細は完了。保存価格の資格確認は未実施",
+          "href": null
+        }
+      ]
+    },
+    "保有明細理由": {
+      "id": "H%7DP%7C",
+      "type": "rich_text",
+      "rich_text": [
+        {
+          "type": "text",
+          "text": {
+            "content": "全明細の保存値・原典キー・旧値保全を読戻し済み",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "全明細の保存値・原典キー・旧値保全を読戻し済み",
+          "href": null
+        }
+      ]
+    },
+    "保有明細再開情報": {
+      "id": "IxYK",
+      "type": "rich_text",
+      "rich_text": [
+        {
+          "type": "text",
+          "text": {
+            "content": "{\"source\":{\"docId\":\"S100XT0W\",\"stockCode\":\"1897\",\"edinetCode\":\"E00133\",\"fiscalYearEnd\":\"2025-12-31\"},\"ownerName\":\"金下建設株式会社\",\"zipBytes\":533751,\"zipSha256\":\"270f9135134788be8d380060a04dc546f982fcee1ff1954cd97b51c1b2e48c0f\",\"parsed\":8,\"factsSha256\":\"d8289d3f26634f1cc137d5200c2fba87b0a6eaf3391c403614f578c3068cfbce\",\"sourceQueueVersion\":1,\"sourceNextHoldingOffset\":8,\"issuedSharesObservation\":{\"version\":1,\"status\":\"observed-with-holds\",\"reason\":\"未資格の観測はHOLDのまま保持します\",\"source\":{\"docId\":\"S100XT0W\",\"stockCode\":\"1897\",\"edinetCode\":\"E00133\",\"fiscalYearEnd\":\"2025-12-31\"},\"zipSha256\":\"270f9135134788be8d380060a04dc546f982fcee1ff1954cd97b51c1b2e48c0f\",\"candidateCount\":4,\"instance\":{\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25.xbrl\",\"memberSha256\":\"d4074ec45dfb04181efd267a5eda774b8f9598cfd5fde624c5b72da67da58d21\",\"namespaces\":{\"xmlns:iso4217\":\"http://www.xbrl.org/2003/iso4217\",\"xmlns:jpcrp030000-asr_E00133-000\":\"http://disclosure.edinet-fsa.go.jp/jpcrp030000/asr/001/E00133-000/2025-12-31/01/2026-03-25\",\"xmlns:jpcrp_cor\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2024-11-01/jpcrp_cor\",\"xmlns:jpdei_cor\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpdei/2013-08-31/jpdei_cor\",\"xmlns:jppfs_cor\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jppfs/2024-11-01/jppfs_cor\",\"xmlns:link\":\"http://www.xbrl.org/2003/linkbase\",\"xmlns:xbrldi\":\"http://xbrl.org/2006/xbrldi\",\"xmlns:xbrli\":\"http://www.xbrl.org/2003/instance\",\"xmlns:xlink\":\"http://www.w3.org/1999/xlink\",\"xmlns:xsi\":\"http://www.w3.org/2001/XMLSchema-instance\"}},\"observations\":[{\"element\":\"jpcrp_cor:NumberOfIssuedSharesAsOfFiscalYearEndIssuedSharesTotalNumberOfSharesEtc\",\"namespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2024-11-01/jpcrp_cor\",\"occurrence\":0,\"attributes\":{\"contextRef\":\"FilingDateInstant_OrdinaryShareMember\",\"decimals\":\"0\",\"unitRef\":\"shares\"},\"rawAttributes\":\" contextRef=\\\"FilingDateInstant_OrdinaryShareMember\\\" decimals=\\\"0\\\" unitRef=\\\"shares\\\"\",\"rawValue\":\"3806660\",\"",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "{\"source\":{\"docId\":\"S100XT0W\",\"stockCode\":\"1897\",\"edinetCode\":\"E00133\",\"fiscalYearEnd\":\"2025-12-31\"},\"ownerName\":\"金下建設株式会社\",\"zipBytes\":533751,\"zipSha256\":\"270f9135134788be8d380060a04dc546f982fcee1ff1954cd97b51c1b2e48c0f\",\"parsed\":8,\"factsSha256\":\"d8289d3f26634f1cc137d5200c2fba87b0a6eaf3391c403614f578c3068cfbce\",\"sourceQueueVersion\":1,\"sourceNextHoldingOffset\":8,\"issuedSharesObservation\":{\"version\":1,\"status\":\"observed-with-holds\",\"reason\":\"未資格の観測はHOLDのまま保持します\",\"source\":{\"docId\":\"S100XT0W\",\"stockCode\":\"1897\",\"edinetCode\":\"E00133\",\"fiscalYearEnd\":\"2025-12-31\"},\"zipSha256\":\"270f9135134788be8d380060a04dc546f982fcee1ff1954cd97b51c1b2e48c0f\",\"candidateCount\":4,\"instance\":{\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25.xbrl\",\"memberSha256\":\"d4074ec45dfb04181efd267a5eda774b8f9598cfd5fde624c5b72da67da58d21\",\"namespaces\":{\"xmlns:iso4217\":\"http://www.xbrl.org/2003/iso4217\",\"xmlns:jpcrp030000-asr_E00133-000\":\"http://disclosure.edinet-fsa.go.jp/jpcrp030000/asr/001/E00133-000/2025-12-31/01/2026-03-25\",\"xmlns:jpcrp_cor\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2024-11-01/jpcrp_cor\",\"xmlns:jpdei_cor\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpdei/2013-08-31/jpdei_cor\",\"xmlns:jppfs_cor\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jppfs/2024-11-01/jppfs_cor\",\"xmlns:link\":\"http://www.xbrl.org/2003/linkbase\",\"xmlns:xbrldi\":\"http://xbrl.org/2006/xbrldi\",\"xmlns:xbrli\":\"http://www.xbrl.org/2003/instance\",\"xmlns:xlink\":\"http://www.w3.org/1999/xlink\",\"xmlns:xsi\":\"http://www.w3.org/2001/XMLSchema-instance\"}},\"observations\":[{\"element\":\"jpcrp_cor:NumberOfIssuedSharesAsOfFiscalYearEndIssuedSharesTotalNumberOfSharesEtc\",\"namespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2024-11-01/jpcrp_cor\",\"occurrence\":0,\"attributes\":{\"contextRef\":\"FilingDateInstant_OrdinaryShareMember\",\"decimals\":\"0\",\"unitRef\":\"shares\"},\"rawAttributes\":\" contextRef=\\\"FilingDateInstant_OrdinaryShareMember\\\" decimals=\\\"0\\\" unitRef=\\\"shares\\\"\",\"rawValue\":\"3806660\",\"",
+          "href": null
+        },
+        {
+          "type": "text",
+          "text": {
+            "content": "factSha256\":\"8fb190550cbc807c82c34eb04ffe74feafc0c0fc0141332c1c987407a037ee51\",\"contextRef\":\"FilingDateInstant_OrdinaryShareMember\",\"unitRef\":\"shares\",\"decimals\":\"0\",\"contexts\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant_OrdinaryShareMember\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant_OrdinaryShareMember\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E00133-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-03-25</xbrli:instant>\\n</xbrli:period>\\n<xbrli:scenario>\\n<xbrldi:explicitMember dimension=\\\"jpcrp_cor:ClassesOfSharesAxis\\\">jpcrp_cor:OrdinaryShareMember</xbrldi:explicitMember>\\n</xbrli:scenario>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25.xbrl\",\"memberSha256\":\"d4074ec45dfb04181efd267a5eda774b8f9598cfd5fde624c5b72da67da58d21\"}],\"entity\":\"E00133-000\",\"instantDate\":\"2026-03-25\",\"dimensions\":[{\"axis\":\"jpcrp_cor:ClassesOfSharesAxis\",\"member\":\"jpcrp_cor:OrdinaryShareMember\",\"axisNamespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2024-11-01/jpcrp_cor\",\"memberNamespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2024-11-01/jpcrp_cor\"}],\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant_OrdinaryShareMember\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant_OrdinaryShareMember\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E00133-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-03-25</xbrli:instant>\\n</xbrli:period>\\n<xbrli:scenario>\\n<xbrldi:explicitMember dimension=\\\"jpcrp_cor:ClassesOfSharesAxis\\\">jpcrp_cor:OrdinaryShareMember</xbrldi:explicitMember>\\n</xbrli:scenario>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm\",\"memberSha256\":\"5ab680519ed3a9b8585524cdfd5a09dd25ca8006ae56911cfc90f60dd6d2926a\"}],\"entity\"",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "factSha256\":\"8fb190550cbc807c82c34eb04ffe74feafc0c0fc0141332c1c987407a037ee51\",\"contextRef\":\"FilingDateInstant_OrdinaryShareMember\",\"unitRef\":\"shares\",\"decimals\":\"0\",\"contexts\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant_OrdinaryShareMember\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant_OrdinaryShareMember\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E00133-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-03-25</xbrli:instant>\\n</xbrli:period>\\n<xbrli:scenario>\\n<xbrldi:explicitMember dimension=\\\"jpcrp_cor:ClassesOfSharesAxis\\\">jpcrp_cor:OrdinaryShareMember</xbrldi:explicitMember>\\n</xbrli:scenario>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25.xbrl\",\"memberSha256\":\"d4074ec45dfb04181efd267a5eda774b8f9598cfd5fde624c5b72da67da58d21\"}],\"entity\":\"E00133-000\",\"instantDate\":\"2026-03-25\",\"dimensions\":[{\"axis\":\"jpcrp_cor:ClassesOfSharesAxis\",\"member\":\"jpcrp_cor:OrdinaryShareMember\",\"axisNamespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2024-11-01/jpcrp_cor\",\"memberNamespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2024-11-01/jpcrp_cor\"}],\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant_OrdinaryShareMember\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant_OrdinaryShareMember\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E00133-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-03-25</xbrli:instant>\\n</xbrli:period>\\n<xbrli:scenario>\\n<xbrldi:explicitMember dimension=\\\"jpcrp_cor:ClassesOfSharesAxis\\\">jpcrp_cor:OrdinaryShareMember</xbrldi:explicitMember>\\n</xbrli:scenario>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm\",\"memberSha256\":\"5ab680519ed3a9b8585524cdfd5a09dd25ca8006ae56911cfc90f60dd6d2926a\"}],\"entity\"",
+          "href": null
+        },
+        {
+          "type": "text",
+          "text": {
+            "content": ":\"E00133-000\",\"instantDate\":\"2026-03-25\",\"dimensions\":[{\"axis\":\"jpcrp_cor:ClassesOfSharesAxis\",\"member\":\"jpcrp_cor:OrdinaryShareMember\",\"axisNamespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2024-11-01/jpcrp_cor\",\"memberNamespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2024-11-01/jpcrp_cor\"}],\"valid\":true}],\"units\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25.xbrl\",\"memberSha256\":\"d4074ec45dfb04181efd267a5eda774b8f9598cfd5fde624c5b72da67da58d21\"}],\"measure\":\"xbrli:shares\",\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm\",\"memberSha256\":\"5ab680519ed3a9b8585524cdfd5a09dd25ca8006ae56911cfc90f60dd6d2926a\"}],\"measure\":\"xbrli:shares\",\"valid\":true}],\"qualification\":{\"status\":\"observed-kind\",\"reason\":null,\"kind\":\"fiscal-year-end\",\"economicDate\":\"2025-12-31\",\"nativeContextDate\":\"2026-03-25\",\"shareClass\":\"ordinary\",\"rightsApplication\":\"unknown\"}},{\"element\":\"jpcrp_cor:NumberOfIssuedSharesAsOfFilingDateIssuedSharesTotalNumberOfSharesEtc\",\"namespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2024-11-01/jpcrp_cor\",\"occurrence\":1,\"attributes\":{\"contextRef\":\"FilingDateInstant_OrdinaryShareMember\",\"decimals\":\"0\",\"unitRef\":\"shares\"},\"rawAttributes\":\" contextRef=\\\"FilingDateInstant_OrdinaryShareMember\\\" decimals=\\\"0\\\" unitRef=\\\"shares\\\"\",\"rawValue\":\"3806660\",\"factSha256\":\"88378c4fe0e107a645523e587767b054d6795185dbdffab24047add0664cbdd9\",\"contextRef\":\"FilingDateInstant_OrdinaryShareMember\",\"unitRef\":\"shares\",\"decimals\":\"0\",\"contexts\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant_Ordinar",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": ":\"E00133-000\",\"instantDate\":\"2026-03-25\",\"dimensions\":[{\"axis\":\"jpcrp_cor:ClassesOfSharesAxis\",\"member\":\"jpcrp_cor:OrdinaryShareMember\",\"axisNamespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2024-11-01/jpcrp_cor\",\"memberNamespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2024-11-01/jpcrp_cor\"}],\"valid\":true}],\"units\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25.xbrl\",\"memberSha256\":\"d4074ec45dfb04181efd267a5eda774b8f9598cfd5fde624c5b72da67da58d21\"}],\"measure\":\"xbrli:shares\",\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm\",\"memberSha256\":\"5ab680519ed3a9b8585524cdfd5a09dd25ca8006ae56911cfc90f60dd6d2926a\"}],\"measure\":\"xbrli:shares\",\"valid\":true}],\"qualification\":{\"status\":\"observed-kind\",\"reason\":null,\"kind\":\"fiscal-year-end\",\"economicDate\":\"2025-12-31\",\"nativeContextDate\":\"2026-03-25\",\"shareClass\":\"ordinary\",\"rightsApplication\":\"unknown\"}},{\"element\":\"jpcrp_cor:NumberOfIssuedSharesAsOfFilingDateIssuedSharesTotalNumberOfSharesEtc\",\"namespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2024-11-01/jpcrp_cor\",\"occurrence\":1,\"attributes\":{\"contextRef\":\"FilingDateInstant_OrdinaryShareMember\",\"decimals\":\"0\",\"unitRef\":\"shares\"},\"rawAttributes\":\" contextRef=\\\"FilingDateInstant_OrdinaryShareMember\\\" decimals=\\\"0\\\" unitRef=\\\"shares\\\"\",\"rawValue\":\"3806660\",\"factSha256\":\"88378c4fe0e107a645523e587767b054d6795185dbdffab24047add0664cbdd9\",\"contextRef\":\"FilingDateInstant_OrdinaryShareMember\",\"unitRef\":\"shares\",\"decimals\":\"0\",\"contexts\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant_Ordinar",
+          "href": null
+        },
+        {
+          "type": "text",
+          "text": {
+            "content": "yShareMember\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant_OrdinaryShareMember\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E00133-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-03-25</xbrli:instant>\\n</xbrli:period>\\n<xbrli:scenario>\\n<xbrldi:explicitMember dimension=\\\"jpcrp_cor:ClassesOfSharesAxis\\\">jpcrp_cor:OrdinaryShareMember</xbrldi:explicitMember>\\n</xbrli:scenario>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25.xbrl\",\"memberSha256\":\"d4074ec45dfb04181efd267a5eda774b8f9598cfd5fde624c5b72da67da58d21\"}],\"entity\":\"E00133-000\",\"instantDate\":\"2026-03-25\",\"dimensions\":[{\"axis\":\"jpcrp_cor:ClassesOfSharesAxis\",\"member\":\"jpcrp_cor:OrdinaryShareMember\",\"axisNamespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2024-11-01/jpcrp_cor\",\"memberNamespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2024-11-01/jpcrp_cor\"}],\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant_OrdinaryShareMember\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant_OrdinaryShareMember\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E00133-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-03-25</xbrli:instant>\\n</xbrli:period>\\n<xbrli:scenario>\\n<xbrldi:explicitMember dimension=\\\"jpcrp_cor:ClassesOfSharesAxis\\\">jpcrp_cor:OrdinaryShareMember</xbrldi:explicitMember>\\n</xbrli:scenario>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm\",\"memberSha256\":\"5ab680519ed3a9b8585524cdfd5a09dd25ca8006ae56911cfc90f60dd6d2926a\"}],\"entity\":\"E00133-000\",\"instantDate\":\"2026-03-25\",\"dimensions\":[{\"axis\":\"jpcrp_cor:ClassesOfSharesAxis\",\"member\":\"jpcrp_cor:OrdinaryShareMember\",\"axisNamespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2024-11-01/jpcrp_cor\",\"memberNamespace\":\"http://disclo",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "yShareMember\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant_OrdinaryShareMember\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E00133-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-03-25</xbrli:instant>\\n</xbrli:period>\\n<xbrli:scenario>\\n<xbrldi:explicitMember dimension=\\\"jpcrp_cor:ClassesOfSharesAxis\\\">jpcrp_cor:OrdinaryShareMember</xbrldi:explicitMember>\\n</xbrli:scenario>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25.xbrl\",\"memberSha256\":\"d4074ec45dfb04181efd267a5eda774b8f9598cfd5fde624c5b72da67da58d21\"}],\"entity\":\"E00133-000\",\"instantDate\":\"2026-03-25\",\"dimensions\":[{\"axis\":\"jpcrp_cor:ClassesOfSharesAxis\",\"member\":\"jpcrp_cor:OrdinaryShareMember\",\"axisNamespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2024-11-01/jpcrp_cor\",\"memberNamespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2024-11-01/jpcrp_cor\"}],\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant_OrdinaryShareMember\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant_OrdinaryShareMember\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E00133-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-03-25</xbrli:instant>\\n</xbrli:period>\\n<xbrli:scenario>\\n<xbrldi:explicitMember dimension=\\\"jpcrp_cor:ClassesOfSharesAxis\\\">jpcrp_cor:OrdinaryShareMember</xbrldi:explicitMember>\\n</xbrli:scenario>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm\",\"memberSha256\":\"5ab680519ed3a9b8585524cdfd5a09dd25ca8006ae56911cfc90f60dd6d2926a\"}],\"entity\":\"E00133-000\",\"instantDate\":\"2026-03-25\",\"dimensions\":[{\"axis\":\"jpcrp_cor:ClassesOfSharesAxis\",\"member\":\"jpcrp_cor:OrdinaryShareMember\",\"axisNamespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2024-11-01/jpcrp_cor\",\"memberNamespace\":\"http://disclo",
+          "href": null
+        },
+        {
+          "type": "text",
+          "text": {
+            "content": "sure.edinet-fsa.go.jp/taxonomy/jpcrp/2024-11-01/jpcrp_cor\"}],\"valid\":true}],\"units\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25.xbrl\",\"memberSha256\":\"d4074ec45dfb04181efd267a5eda774b8f9598cfd5fde624c5b72da67da58d21\"}],\"measure\":\"xbrli:shares\",\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm\",\"memberSha256\":\"5ab680519ed3a9b8585524cdfd5a09dd25ca8006ae56911cfc90f60dd6d2926a\"}],\"measure\":\"xbrli:shares\",\"valid\":true}],\"qualification\":{\"status\":\"observed-kind\",\"reason\":null,\"kind\":\"filing-date\",\"economicDate\":\"2026-03-25\",\"nativeContextDate\":\"2026-03-25\",\"shareClass\":\"ordinary\",\"rightsApplication\":\"unknown\"}},{\"element\":\"jpcrp_cor:NumberOfIssuedSharesAsOfFiscalYearEndIssuedSharesTotalNumberOfSharesEtc\",\"namespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2024-11-01/jpcrp_cor\",\"occurrence\":2,\"attributes\":{\"contextRef\":\"FilingDateInstant\",\"decimals\":\"0\",\"unitRef\":\"shares\"},\"rawAttributes\":\" contextRef=\\\"FilingDateInstant\\\" decimals=\\\"0\\\" unitRef=\\\"shares\\\"\",\"rawValue\":\"3806660\",\"factSha256\":\"ac7710fcd78e07ebc6582c07b3992ec6c7af8fa8596b383883b53d357c7cf514\",\"contextRef\":\"FilingDateInstant\",\"unitRef\":\"shares\",\"decimals\":\"0\",\"contexts\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E00133-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-03-25</xbrli:instant>\\n</xbrli:period>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "sure.edinet-fsa.go.jp/taxonomy/jpcrp/2024-11-01/jpcrp_cor\"}],\"valid\":true}],\"units\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25.xbrl\",\"memberSha256\":\"d4074ec45dfb04181efd267a5eda774b8f9598cfd5fde624c5b72da67da58d21\"}],\"measure\":\"xbrli:shares\",\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm\",\"memberSha256\":\"5ab680519ed3a9b8585524cdfd5a09dd25ca8006ae56911cfc90f60dd6d2926a\"}],\"measure\":\"xbrli:shares\",\"valid\":true}],\"qualification\":{\"status\":\"observed-kind\",\"reason\":null,\"kind\":\"filing-date\",\"economicDate\":\"2026-03-25\",\"nativeContextDate\":\"2026-03-25\",\"shareClass\":\"ordinary\",\"rightsApplication\":\"unknown\"}},{\"element\":\"jpcrp_cor:NumberOfIssuedSharesAsOfFiscalYearEndIssuedSharesTotalNumberOfSharesEtc\",\"namespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2024-11-01/jpcrp_cor\",\"occurrence\":2,\"attributes\":{\"contextRef\":\"FilingDateInstant\",\"decimals\":\"0\",\"unitRef\":\"shares\"},\"rawAttributes\":\" contextRef=\\\"FilingDateInstant\\\" decimals=\\\"0\\\" unitRef=\\\"shares\\\"\",\"rawValue\":\"3806660\",\"factSha256\":\"ac7710fcd78e07ebc6582c07b3992ec6c7af8fa8596b383883b53d357c7cf514\",\"contextRef\":\"FilingDateInstant\",\"unitRef\":\"shares\",\"decimals\":\"0\",\"contexts\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E00133-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-03-25</xbrli:instant>\\n</xbrli:period>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr",
+          "href": null
+        },
+        {
+          "type": "text",
+          "text": {
+            "content": "-001_E00133-000_2025-12-31_01_2026-03-25.xbrl\",\"memberSha256\":\"d4074ec45dfb04181efd267a5eda774b8f9598cfd5fde624c5b72da67da58d21\"}],\"entity\":\"E00133-000\",\"instantDate\":\"2026-03-25\",\"dimensions\":[],\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E00133-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-03-25</xbrli:instant>\\n</xbrli:period>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm\",\"memberSha256\":\"5ab680519ed3a9b8585524cdfd5a09dd25ca8006ae56911cfc90f60dd6d2926a\"}],\"entity\":\"E00133-000\",\"instantDate\":\"2026-03-25\",\"dimensions\":[],\"valid\":true}],\"units\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25.xbrl\",\"memberSha256\":\"d4074ec45dfb04181efd267a5eda774b8f9598cfd5fde624c5b72da67da58d21\"}],\"measure\":\"xbrli:shares\",\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm\",\"memberSha256\":\"5ab680519ed3a9b8585524cdfd5a09dd25ca8006ae56911cfc90f60dd6d2926a\"}],\"measure\":\"xbrli:shares\",\"valid\":true}],\"qualification\":{\"status\":\"hold\",\"reason\":\"share-class-unspecified;dimension-free-is-not-ordinary\",\"kind\":null,\"economicDate\":null,\"nativeContextDate\":\"2026-03-25\",\"shareClass\":\"unknown\",\"rightsApplication\":\"unknown\"}},{\"element\":\"jpcrp_cor:NumberOfIssuedSharesAsOfFilingDateIssuedSharesTotalNumberOfSharesEtc\",\"namespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcr",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "-001_E00133-000_2025-12-31_01_2026-03-25.xbrl\",\"memberSha256\":\"d4074ec45dfb04181efd267a5eda774b8f9598cfd5fde624c5b72da67da58d21\"}],\"entity\":\"E00133-000\",\"instantDate\":\"2026-03-25\",\"dimensions\":[],\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E00133-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-03-25</xbrli:instant>\\n</xbrli:period>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm\",\"memberSha256\":\"5ab680519ed3a9b8585524cdfd5a09dd25ca8006ae56911cfc90f60dd6d2926a\"}],\"entity\":\"E00133-000\",\"instantDate\":\"2026-03-25\",\"dimensions\":[],\"valid\":true}],\"units\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25.xbrl\",\"memberSha256\":\"d4074ec45dfb04181efd267a5eda774b8f9598cfd5fde624c5b72da67da58d21\"}],\"measure\":\"xbrli:shares\",\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm\",\"memberSha256\":\"5ab680519ed3a9b8585524cdfd5a09dd25ca8006ae56911cfc90f60dd6d2926a\"}],\"measure\":\"xbrli:shares\",\"valid\":true}],\"qualification\":{\"status\":\"hold\",\"reason\":\"share-class-unspecified;dimension-free-is-not-ordinary\",\"kind\":null,\"economicDate\":null,\"nativeContextDate\":\"2026-03-25\",\"shareClass\":\"unknown\",\"rightsApplication\":\"unknown\"}},{\"element\":\"jpcrp_cor:NumberOfIssuedSharesAsOfFilingDateIssuedSharesTotalNumberOfSharesEtc\",\"namespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcr",
+          "href": null
+        },
+        {
+          "type": "text",
+          "text": {
+            "content": "p/2024-11-01/jpcrp_cor\",\"occurrence\":3,\"attributes\":{\"contextRef\":\"FilingDateInstant\",\"decimals\":\"0\",\"unitRef\":\"shares\"},\"rawAttributes\":\" contextRef=\\\"FilingDateInstant\\\" decimals=\\\"0\\\" unitRef=\\\"shares\\\"\",\"rawValue\":\"3806660\",\"factSha256\":\"523d68ed04bf5c443962f360a511124dbbb42e691dd05636e5b0f301e4d5f7a3\",\"contextRef\":\"FilingDateInstant\",\"unitRef\":\"shares\",\"decimals\":\"0\",\"contexts\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E00133-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-03-25</xbrli:instant>\\n</xbrli:period>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25.xbrl\",\"memberSha256\":\"d4074ec45dfb04181efd267a5eda774b8f9598cfd5fde624c5b72da67da58d21\"}],\"entity\":\"E00133-000\",\"instantDate\":\"2026-03-25\",\"dimensions\":[],\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E00133-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-03-25</xbrli:instant>\\n</xbrli:period>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm\",\"memberSha256\":\"5ab680519ed3a9b8585524cdfd5a09dd25ca8006ae56911cfc90f60dd6d2926a\"}],\"entity\":\"E00133-000\",\"instantDate\":\"2026-03-25\",\"dimensions\":[],\"valid\":true}],\"units\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25.xbrl\",\"memberSha256\":\"d4074ec45dfb04181efd267a5eda774b8f9598cfd5fde624c5b72da67da58d21\"}],\"measure\":\"xbrli:shares\",\"va",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "p/2024-11-01/jpcrp_cor\",\"occurrence\":3,\"attributes\":{\"contextRef\":\"FilingDateInstant\",\"decimals\":\"0\",\"unitRef\":\"shares\"},\"rawAttributes\":\" contextRef=\\\"FilingDateInstant\\\" decimals=\\\"0\\\" unitRef=\\\"shares\\\"\",\"rawValue\":\"3806660\",\"factSha256\":\"523d68ed04bf5c443962f360a511124dbbb42e691dd05636e5b0f301e4d5f7a3\",\"contextRef\":\"FilingDateInstant\",\"unitRef\":\"shares\",\"decimals\":\"0\",\"contexts\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E00133-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-03-25</xbrli:instant>\\n</xbrli:period>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25.xbrl\",\"memberSha256\":\"d4074ec45dfb04181efd267a5eda774b8f9598cfd5fde624c5b72da67da58d21\"}],\"entity\":\"E00133-000\",\"instantDate\":\"2026-03-25\",\"dimensions\":[],\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E00133-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-03-25</xbrli:instant>\\n</xbrli:period>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm\",\"memberSha256\":\"5ab680519ed3a9b8585524cdfd5a09dd25ca8006ae56911cfc90f60dd6d2926a\"}],\"entity\":\"E00133-000\",\"instantDate\":\"2026-03-25\",\"dimensions\":[],\"valid\":true}],\"units\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25.xbrl\",\"memberSha256\":\"d4074ec45dfb04181efd267a5eda774b8f9598cfd5fde624c5b72da67da58d21\"}],\"measure\":\"xbrli:shares\",\"va",
+          "href": null
+        },
+        {
+          "type": "text",
+          "text": {
+            "content": "lid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm\",\"memberSha256\":\"5ab680519ed3a9b8585524cdfd5a09dd25ca8006ae56911cfc90f60dd6d2926a\"}],\"measure\":\"xbrli:shares\",\"valid\":true}],\"qualification\":{\"status\":\"hold\",\"reason\":\"share-class-unspecified;dimension-free-is-not-ordinary\",\"kind\":null,\"economicDate\":null,\"nativeContextDate\":\"2026-03-25\",\"shareClass\":\"unknown\",\"rightsApplication\":\"unknown\"}}],\"sourceQualification\":{\"status\":\"verified\",\"reason\":null},\"filingDateEvidence\":{\"rawSubmitDateTime\":\"2026-03-25 10:03\",\"provenance\":\"saved-archive-metadata\"}},\"legacyMigration\":{\"offset\":0,\"rowIds\":[\"3f7d74ff-84cd-8153-8131-cce0482fac9b\",\"3f7d74ff-84cd-8190-883e-c91471dfc74e\",\"3f7d74ff-84cd-816d-9f76-dd30155be67a\",\"3f7d74ff-84cd-81b6-851c-cb0795186df8\",\"3f7d74ff-84cd-8191-bb3a-d12879c1980c\",\"3f7d74ff-84cd-811f-bb89-e4d78cc5325b\",\"3f7d74ff-84cd-81e1-af6e-cec59b06c241\"],\"pre\":{\"key\":\"holdings-legacy/S100XT0W/0/PRE/ff28cc9f689de1f5d00692aff0dbe05952f4320c35f5f54896cfd21c77b7f71a\",\"filename\":\"holdings-legacy-PRE.json\",\"sha256\":\"ff28cc9f689de1f5d00692aff0dbe05952f4320c35f5f54896cfd21c77b7f71a\",\"bytes\":30848,\"pageId\":\"3fbd74ff-84cd-81e9-a259-fa7e2622b180\"},\"post\":{\"key\":\"holdings-legacy/S100XT0W/0/POST/2ca9aa1762719c25a65a4b637cb2eb5cada98b47b815e62388efa00202991435\",\"filename\":\"holdings-legacy-POST.json\",\"sha256\":\"2ca9aa1762719c25a65a4b637cb2eb5cada98b47b815e62388efa00202991435\",\"bytes\":47516,\"pageId\":\"3fbd74ff-84cd-81f0-ba5c-d5cda8d01254\"}}}",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "lid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm\",\"memberSha256\":\"5ab680519ed3a9b8585524cdfd5a09dd25ca8006ae56911cfc90f60dd6d2926a\"}],\"measure\":\"xbrli:shares\",\"valid\":true}],\"qualification\":{\"status\":\"hold\",\"reason\":\"share-class-unspecified;dimension-free-is-not-ordinary\",\"kind\":null,\"economicDate\":null,\"nativeContextDate\":\"2026-03-25\",\"shareClass\":\"unknown\",\"rightsApplication\":\"unknown\"}}],\"sourceQualification\":{\"status\":\"verified\",\"reason\":null},\"filingDateEvidence\":{\"rawSubmitDateTime\":\"2026-03-25 10:03\",\"provenance\":\"saved-archive-metadata\"}},\"legacyMigration\":{\"offset\":0,\"rowIds\":[\"3f7d74ff-84cd-8153-8131-cce0482fac9b\",\"3f7d74ff-84cd-8190-883e-c91471dfc74e\",\"3f7d74ff-84cd-816d-9f76-dd30155be67a\",\"3f7d74ff-84cd-81b6-851c-cb0795186df8\",\"3f7d74ff-84cd-8191-bb3a-d12879c1980c\",\"3f7d74ff-84cd-811f-bb89-e4d78cc5325b\",\"3f7d74ff-84cd-81e1-af6e-cec59b06c241\"],\"pre\":{\"key\":\"holdings-legacy/S100XT0W/0/PRE/ff28cc9f689de1f5d00692aff0dbe05952f4320c35f5f54896cfd21c77b7f71a\",\"filename\":\"holdings-legacy-PRE.json\",\"sha256\":\"ff28cc9f689de1f5d00692aff0dbe05952f4320c35f5f54896cfd21c77b7f71a\",\"bytes\":30848,\"pageId\":\"3fbd74ff-84cd-81e9-a259-fa7e2622b180\"},\"post\":{\"key\":\"holdings-legacy/S100XT0W/0/POST/2ca9aa1762719c25a65a4b637cb2eb5cada98b47b815e62388efa00202991435\",\"filename\":\"holdings-legacy-POST.json\",\"sha256\":\"2ca9aa1762719c25a65a4b637cb2eb5cada98b47b815e62388efa00202991435\",\"bytes\":47516,\"pageId\":\"3fbd74ff-84cd-81f0-ba5c-d5cda8d01254\"}}}",
+          "href": null
+        }
+      ]
+    },
+    "Source": {
+      "id": "KXwe",
+      "type": "rich_text",
+      "rich_text": [
+        {
+          "type": "text",
+          "text": {
+            "content": "Saved Notion legacy type1; holdings-qualified nonzero custody migration; upstream GET 0",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "Saved Notion legacy type1; holdings-qualified nonzero custody migration; upstream GET 0",
+          "href": null
+        }
+      ]
+    },
+    "Obsoleted At": {
+      "id": "Oa%5C_",
+      "type": "date",
+      "date": null
+    },
+    "保有価格状態": {
+      "id": "Q%3Bpz",
+      "type": "select",
+      "select": {
+        "id": "3919a293-29d3-461b-b704-31b112b63c68",
+        "name": "再開待ち",
+        "color": "default"
+      }
+    },
+    "Origin Page": {
+      "id": "RAl%3D",
+      "type": "url",
+      "url": null
+    },
+    "Obsoleted Reason": {
+      "id": "aZ%5Ci",
+      "type": "rich_text",
+      "rich_text": []
+    },
+    "Status": {
+      "id": "cqix",
+      "type": "select",
+      "select": {
+        "id": "f46cb8a2-e822-4e39-9893-d75eea6f834f",
+        "name": "recorded",
+        "color": "yellow"
+      }
+    },
+    "保有価格再開情報": {
+      "id": "dv%7DK",
+      "type": "rich_text",
+      "rich_text": [
+        {
+          "type": "text",
+          "text": {
+            "content": "{\"source\":{\"docId\":\"S100XT0W\",\"stockCode\":\"1897\",\"edinetCode\":\"E00133\",\"fiscalYearEnd\":\"2025-12-31\"},\"ownerName\":\"金下建設株式会社\",\"zipBytes\":533751,\"zipSha256\":\"270f9135134788be8d380060a04dc546f982fcee1ff1954cd97b51c1b2e48c0f\",\"parsed\":8,\"factsSha256\":\"d8289d3f26634f1cc137d5200c2fba87b0a6eaf3391c403614f578c3068cfbce\",\"priceQueueVersion\":1,\"nextHoldingOffset\":0,\"unavailableRows\":0}",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "{\"source\":{\"docId\":\"S100XT0W\",\"stockCode\":\"1897\",\"edinetCode\":\"E00133\",\"fiscalYearEnd\":\"2025-12-31\"},\"ownerName\":\"金下建設株式会社\",\"zipBytes\":533751,\"zipSha256\":\"270f9135134788be8d380060a04dc546f982fcee1ff1954cd97b51c1b2e48c0f\",\"parsed\":8,\"factsSha256\":\"d8289d3f26634f1cc137d5200c2fba87b0a6eaf3391c403614f578c3068cfbce\",\"priceQueueVersion\":1,\"nextHoldingOffset\":0,\"unavailableRows\":0}",
+          "href": null
+        }
+      ]
+    },
+    "Service": {
+      "id": "k%3BjX",
+      "type": "select",
+      "select": {
+        "id": "4ae71ae8-acc7-44df-9cce-daf627ec1729",
+        "name": "yuho-quant",
+        "color": "brown"
+      }
+    },
+    "Metadata": {
+      "id": "lPug",
+      "type": "rich_text",
+      "rich_text": [
+        {
+          "type": "text",
+          "text": {
+            "content": "{\"docID\":\"S100XT0W\",\"edinetCode\":\"E00133\",\"secCode\":\"18970\",\"filerName\":\"金下建設株式会社\",\"docTypeCode\":\"120\",\"docDescription\":\"有価証券報告書－第75期(2025/01/01－2025/12/31)\",\"periodStart\":\"2025-01-01\",\"periodEnd\":\"2025-12-31\",\"submitDateTime\":\"2026-03-25 10:03\",\"parseStatus\":\"table_unrecognized\",\"honbunFile\":\"XBRL/PublicDoc/0101010_honbun_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm\",\"factCount\":0,\"xbrlUnavailable\":false,\"sourceLegacyPageId\":\"364d74ff-84cd-8173-a01c-e8b548481e9a\",\"sourceSha256\":\"270f9135134788be8d380060a04dc546f982fcee1ff1954cd97b51c1b2e48c0f\",\"edinetDocType\":1,\"_fileManifest\":{\"version\":1,\"files\":[{\"originalFilename\":\"S100XT0W_xbrl.zip\",\"uploadFilename\":\"S100XT0W_xbrl.zip\",\"originalMime\":\"application/zip\",\"uploadMime\":\"application/zip\",\"byteLength\":533751,\"sha256\":\"270f9135134788be8d380060a04dc546f982fcee1ff1954cd97b51c1b2e48c0f\",\"upload\":\"uploaded\"}],\"inputFingerprint\":\"2f40877346057781b4d649877cbac188bfc58ffed8e36924dbe61967b29270fa\"}}",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "{\"docID\":\"S100XT0W\",\"edinetCode\":\"E00133\",\"secCode\":\"18970\",\"filerName\":\"金下建設株式会社\",\"docTypeCode\":\"120\",\"docDescription\":\"有価証券報告書－第75期(2025/01/01－2025/12/31)\",\"periodStart\":\"2025-01-01\",\"periodEnd\":\"2025-12-31\",\"submitDateTime\":\"2026-03-25 10:03\",\"parseStatus\":\"table_unrecognized\",\"honbunFile\":\"XBRL/PublicDoc/0101010_honbun_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm\",\"factCount\":0,\"xbrlUnavailable\":false,\"sourceLegacyPageId\":\"364d74ff-84cd-8173-a01c-e8b548481e9a\",\"sourceSha256\":\"270f9135134788be8d380060a04dc546f982fcee1ff1954cd97b51c1b2e48c0f\",\"edinetDocType\":1,\"_fileManifest\":{\"version\":1,\"files\":[{\"originalFilename\":\"S100XT0W_xbrl.zip\",\"uploadFilename\":\"S100XT0W_xbrl.zip\",\"originalMime\":\"application/zip\",\"uploadMime\":\"application/zip\",\"byteLength\":533751,\"sha256\":\"270f9135134788be8d380060a04dc546f982fcee1ff1954cd97b51c1b2e48c0f\",\"upload\":\"uploaded\"}],\"inputFingerprint\":\"2f40877346057781b4d649877cbac188bfc58ffed8e36924dbe61967b29270fa\"}}",
+          "href": null
+        }
+      ]
+    },
+    "Fetched At": {
+      "id": "mzD%7C",
+      "type": "date",
+      "date": {
+        "start": "2026-03-25T10:03:00.000+00:00",
+        "end": null,
+        "time_zone": null
+      }
+    },
+    "保有明細状態": {
+      "id": "pZyo",
+      "type": "select",
+      "select": {
+        "id": "e6cce938-7352-4e26-a1ad-60487b9c0b04",
+        "name": "明細原本照合済",
+        "color": "default"
+      }
+    },
+    "Files": {
+      "id": "~kw%3E",
+      "type": "files",
+      "files": [
+        {
+          "name": "S100XT0W_xbrl.zip",
+          "type": "file",
+          "file": {
+            "url": "https://prod-files-secure.s3.us-west-2.amazonaws.com/86b36981-c3a3-41ca-84cd-9f087402bb68/9075f362-874e-4d56-8a79-ff8c41b1be47/S100XT0W_xbrl.zip?x-amz-checksum-mode=ENABLED&x-id=GetObject"
+          }
+        }
+      ]
+    },
+    "Key": {
+      "id": "title",
+      "type": "title",
+      "title": [
+        {
+          "type": "text",
+          "text": {
+            "content": "S100XT0W:type1",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "S100XT0W:type1",
+          "href": null
+        }
+      ]
+    }
+  },
+  "url": "https://app.notion.com/p/S100XT0W-type1-3fbd74ff84cd81da9848d8d8934c54c4",
+  "public_url": null,
+  "archived": false,
+  "request_id": "6551f4ab-c7e8-4841-b3e5-9f2cb83f3be6"
+}

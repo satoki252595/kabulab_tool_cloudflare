@@ -147,6 +147,10 @@ export async function runYuhoEdinetCatchup(
     holdingsPending = resumed.pending || resumed.held > 0;
     if (resumed.resumed > 0) byStatus["holdings:resumed"] = resumed.resumed;
     if (resumed.held > 0) byStatus["holdings:requires_review"] = resumed.held;
+    if (resumed.unknownSources) {
+      byStatus["holdings:unknown_source_isolated"] = resumed.unknownSources.length;
+      for (const source of resumed.unknownSources) console.warn("[yuho-edinet] 保有明細source隔離", JSON.stringify(source));
+    }
     if (resumed.pending) byStatus["holdings:pending"] = 1;
   }
   if (pastDeadline()) throw new Error("EDINET catchupの絶対締切です（既保管結果を保持・再送なし）");

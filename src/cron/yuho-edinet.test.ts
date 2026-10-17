@@ -236,7 +236,24 @@ describe("catchup 応答契約: 実失敗だけ非 2xx", () => {
     expect(result.byStatus["holdings:resumed"]).toBe(1);
     expect(catchupHttpStatus(result)).toBe(500);
   });
-  it("保有明細unknownはEDINET一覧やL2へ進めず、そのまま停止する", async () => {
+  it("資格済みの未知sourceは要確認を表示し、別会社の一覧・取込・L2は続ける", async () => {
+    const unknown = { archivePageId: "3fbd74ff-84cd-81b8-9ffb-ede100e5ad51",
+      source: { stockCode: "1911", docId: "S100Y1XP", edinetCode: "E00011", fiscalYearEnd: "2025-12-31" },
+      sourcePageSha256: "182830d267c881598d02051eb8b532bf740084570aeb0f24811a317e7503c5bf", // Actual1911 stable source snapshot SHA.
+      reasonCode: "unknown_source_isolated" as const, reason: "未知sourceを隔離。再送なし" };
+    vi.mocked(resumePendingShareholdings).mockResolvedValueOnce({ usedRows: 0, resumed: 0, held: 1, pending: true, unknownSources: [unknown] });
+    vi.mocked(listDocuments).mockResolvedValueOnce({ results: [annualDoc("7203")] } as never).mockResolvedValue({ results: [] } as never);
+    vi.mocked(ingestDocument).mockResolvedValue({ outcome: "ingested", parseStatus: "no_order_table", overseasParseStatus: "no_overseas_table", textParseStatus: "no_text_sections" } as never);
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = await runCatchup();
+      expect(result.byStatus).toMatchObject({ "holdings:requires_review": 1, "holdings:unknown_source_isolated": 1, "holdings:pending": 1 });
+      expect(ingestDocument).toHaveBeenCalled(); expect(rebuildYuhoGrowthProjection).toHaveBeenCalled();
+      expect(warning).toHaveBeenCalledWith("[yuho-edinet] 保有明細source隔離", JSON.stringify(unknown));
+      expect(catchupHttpStatus(result)).toBe(500);
+    } finally { warning.mockRestore(); }
+  });
+  it("未資格の保有明細unknownはEDINET一覧やL2へ進めず、そのまま停止する", async () => {
     vi.mocked(resumePendingShareholdings).mockRejectedValueOnce(new Error("HOLDINGS_UNKNOWN"));
     await expect(runCatchup()).rejects.toThrow("HOLDINGS_UNKNOWN");
     expect(listDocuments).not.toHaveBeenCalled();

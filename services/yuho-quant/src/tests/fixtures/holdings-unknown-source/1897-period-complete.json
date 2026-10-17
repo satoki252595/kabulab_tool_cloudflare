@@ -1,0 +1,3950 @@
+{
+  "source": {
+    "docId": "S100XT0W",
+    "stockCode": "1897",
+    "edinetCode": "E00133",
+    "fiscalYearEnd": "2025-12-31"
+  },
+  "rows": [
+    {
+      "object": "page",
+      "id": "3fbd74ff-84cd-81cb-9e37-cd3129b7db79",
+      "created_time": "2026-10-16T22:20:00.000Z",
+      "last_edited_time": "2026-10-16T22:20:00.000Z",
+      "created_by": {
+        "object": "user",
+        "id": "dd10be3d-c2bd-4edd-a332-28090d920e2e"
+      },
+      "last_edited_by": {
+        "object": "user",
+        "id": "dd10be3d-c2bd-4edd-a332-28090d920e2e"
+      },
+      "cover": null,
+      "icon": null,
+      "parent": {
+        "type": "database_id",
+        "database_id": "5ad4d311-b06f-42b4-b78a-b3801cd509e2"
+      },
+      "in_trash": false,
+      "is_archived": false,
+      "is_locked": false,
+      "properties": {
+        "出典文書ID": {
+          "id": "%3BQm%3F",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "S100XT0W",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "S100XT0W",
+              "href": null
+            }
+          ]
+        },
+        "欠測理由": {
+          "id": "%3CEpO",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+              "href": null
+            }
+          ]
+        },
+        "保有株数": {
+          "id": "%3D_fn",
+          "type": "number",
+          "number": 134190
+        },
+        "旧試算時価（未検証）": {
+          "id": "%40IA_",
+          "type": "number",
+          "number": null
+        },
+        "価格照合根拠": {
+          "id": "Bj%3Dg",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "旧分類（未検証）": {
+          "id": "DGfn",
+          "type": "select",
+          "select": null
+        },
+        "確定銘柄コード": {
+          "id": "DdCb",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有時価": {
+          "id": "GbBc",
+          "type": "number",
+          "number": null
+        },
+        "旧処理基準日（観測日未確認）": {
+          "id": "K%60%3Dj",
+          "type": "date",
+          "date": null
+        },
+        "価格状態": {
+          "id": "QE%3AD",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "未取得（価格・通貨・株数単位の照合未成立）"
+          }
+        },
+        "出典要素ID": {
+          "id": "QEf%3E",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "jpcrp_cor:ShareholdingsTextBlock",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "jpcrp_cor:ShareholdingsTextBlock",
+              "href": null
+            }
+          ]
+        },
+        "保有会社": {
+          "id": "Q%7BEH",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "金下建設株式会社",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "金下建設株式会社",
+              "href": null
+            }
+          ]
+        },
+        "株価": {
+          "id": "Txw%3B",
+          "type": "number",
+          "number": null
+        },
+        "価格照合済": {
+          "id": "U%3Fw%5C",
+          "type": "checkbox",
+          "checkbox": false
+        },
+        "検証状態": {
+          "id": "UCyH",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "明細原本照合済"
+          }
+        },
+        "帳簿価額（円）": {
+          "id": "UbUr",
+          "type": "number",
+          "number": 335000000
+        },
+        "株数単位": {
+          "id": "%5DPr%7B",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "株",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "株",
+              "href": null
+            }
+          ]
+        },
+        "銘柄名": {
+          "id": "%5EPJG",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "㈱三菱ＵＦＪフィナンシャル・グループ",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "㈱三菱ＵＦＪフィナンシャル・グループ",
+              "href": null
+            }
+          ]
+        },
+        "銘柄コード": {
+          "id": "%5EWgM",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "旧株価（通貨・観測日未確認）": {
+          "id": "%5Ezbz",
+          "type": "number",
+          "number": null
+        },
+        "通貨": {
+          "id": "eMOW",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "原本照合済": {
+          "id": "eePV",
+          "type": "checkbox",
+          "checkbox": true
+        },
+        "区分": {
+          "id": "gXtr",
+          "type": "select",
+          "select": {
+            "id": "04895bf5-ab00-4102-91aa-e6bc22125dad",
+            "name": "未確認",
+            "color": "gray"
+          }
+        },
+        "期末": {
+          "id": "ggrt",
+          "type": "date",
+          "date": {
+            "start": "2025-12-31",
+            "end": null,
+            "time_zone": null
+          }
+        },
+        "銘柄照合根拠": {
+          "id": "kA%5Bi",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有会社コード": {
+          "id": "lABv",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "1897",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "1897",
+              "href": null
+            }
+          ]
+        },
+        "出典原本SHA256": {
+          "id": "lJC%7D",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "270f9135134788be8d380060a04dc546f982fcee1ff1954cd97b51c1b2e48c0f",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "270f9135134788be8d380060a04dc546f982fcee1ff1954cd97b51c1b2e48c0f",
+              "href": null
+            }
+          ]
+        },
+        "旧抽出株数（単位未確認）": {
+          "id": "lTPG",
+          "type": "number",
+          "number": null
+        },
+        "出典明細行": {
+          "id": "tQbj",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "3:9",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "3:9",
+              "href": null
+            }
+          ]
+        },
+        "基準日": {
+          "id": "tdWc",
+          "type": "date",
+          "date": null
+        },
+        "出典Context": {
+          "id": "ubZV",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "FilingDateInstant",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "FilingDateInstant",
+              "href": null
+            }
+          ]
+        },
+        "保有種別": {
+          "id": "ujZY",
+          "type": "select",
+          "select": {
+            "id": "283b5186-568c-45d3-aeab-3335d7ae3bc6",
+            "name": "特定投資株式",
+            "color": "blue"
+          }
+        },
+        "出典ファイル": {
+          "id": "x%3B%3D%3A",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm",
+              "href": null
+            }
+          ]
+        },
+        "Name": {
+          "id": "title",
+          "type": "title",
+          "title": [
+            {
+              "type": "text",
+              "text": {
+                "content": "1897 金下建設株式会社 → ㈱三菱ＵＦＪフィナンシャル・グループ",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "1897 金下建設株式会社 → ㈱三菱ＵＦＪフィナンシャル・グループ",
+              "href": null
+            }
+          ]
+        }
+      },
+      "url": "https://app.notion.com/p/1897-3fbd74ff84cd81cb9e37cd3129b7db79",
+      "public_url": null,
+      "archived": false
+    },
+    {
+      "object": "page",
+      "id": "3f7d74ff-84cd-81e1-af6e-cec59b06c241",
+      "created_time": "2026-10-12T16:58:00.000Z",
+      "last_edited_time": "2026-10-16T22:20:00.000Z",
+      "created_by": {
+        "object": "user",
+        "id": "dd10be3d-c2bd-4edd-a332-28090d920e2e"
+      },
+      "last_edited_by": {
+        "object": "user",
+        "id": "dd10be3d-c2bd-4edd-a332-28090d920e2e"
+      },
+      "cover": null,
+      "icon": null,
+      "parent": {
+        "type": "database_id",
+        "database_id": "5ad4d311-b06f-42b4-b78a-b3801cd509e2"
+      },
+      "in_trash": false,
+      "is_archived": false,
+      "is_locked": false,
+      "properties": {
+        "出典文書ID": {
+          "id": "%3BQm%3F",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "S100XT0W",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "S100XT0W",
+              "href": null
+            }
+          ]
+        },
+        "欠測理由": {
+          "id": "%3CEpO",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+              "href": null
+            }
+          ]
+        },
+        "保有株数": {
+          "id": "%3D_fn",
+          "type": "number",
+          "number": 14904
+        },
+        "旧試算時価（未検証）": {
+          "id": "%40IA_",
+          "type": "number",
+          "number": 97159176
+        },
+        "価格照合根拠": {
+          "id": "Bj%3Dg",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "旧分類（未検証）": {
+          "id": "DGfn",
+          "type": "select",
+          "select": {
+            "id": "6cbdc909-12b5-4d08-b8e0-13bec96563a1",
+            "name": "上場",
+            "color": "blue"
+          }
+        },
+        "確定銘柄コード": {
+          "id": "DdCb",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有時価": {
+          "id": "GbBc",
+          "type": "number",
+          "number": null
+        },
+        "旧処理基準日（観測日未確認）": {
+          "id": "K%60%3Dj",
+          "type": "date",
+          "date": {
+            "start": "2026-06-16",
+            "end": null,
+            "time_zone": null
+          }
+        },
+        "価格状態": {
+          "id": "QE%3AD",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "未取得（価格・通貨・株数単位の照合未成立）"
+          }
+        },
+        "出典要素ID": {
+          "id": "QEf%3E",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "jpcrp_cor:ShareholdingsTextBlock",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "jpcrp_cor:ShareholdingsTextBlock",
+              "href": null
+            }
+          ]
+        },
+        "保有会社": {
+          "id": "Q%7BEH",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "金下建設株式会社",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "金下建設株式会社",
+              "href": null
+            }
+          ]
+        },
+        "株価": {
+          "id": "Txw%3B",
+          "type": "number",
+          "number": null
+        },
+        "価格照合済": {
+          "id": "U%3Fw%5C",
+          "type": "checkbox",
+          "checkbox": false
+        },
+        "検証状態": {
+          "id": "UCyH",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "明細原本照合済"
+          }
+        },
+        "帳簿価額（円）": {
+          "id": "UbUr",
+          "type": "number",
+          "number": 75000000
+        },
+        "株数単位": {
+          "id": "%5DPr%7B",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "株",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "株",
+              "href": null
+            }
+          ]
+        },
+        "銘柄名": {
+          "id": "%5EPJG",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "㈱三井住友フィナンシャルグループ",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "㈱三井住友フィナンシャルグループ",
+              "href": null
+            }
+          ]
+        },
+        "銘柄コード": {
+          "id": "%5EWgM",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "8316",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "8316",
+              "href": null
+            }
+          ]
+        },
+        "旧株価（通貨・観測日未確認）": {
+          "id": "%5Ezbz",
+          "type": "number",
+          "number": 6519
+        },
+        "通貨": {
+          "id": "eMOW",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "原本照合済": {
+          "id": "eePV",
+          "type": "checkbox",
+          "checkbox": true
+        },
+        "区分": {
+          "id": "gXtr",
+          "type": "select",
+          "select": {
+            "id": "04895bf5-ab00-4102-91aa-e6bc22125dad",
+            "name": "未確認",
+            "color": "gray"
+          }
+        },
+        "期末": {
+          "id": "ggrt",
+          "type": "date",
+          "date": {
+            "start": "2025-12-31",
+            "end": null,
+            "time_zone": null
+          }
+        },
+        "銘柄照合根拠": {
+          "id": "kA%5Bi",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有会社コード": {
+          "id": "lABv",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "1897",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "1897",
+              "href": null
+            }
+          ]
+        },
+        "出典原本SHA256": {
+          "id": "lJC%7D",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "270f9135134788be8d380060a04dc546f982fcee1ff1954cd97b51c1b2e48c0f",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "270f9135134788be8d380060a04dc546f982fcee1ff1954cd97b51c1b2e48c0f",
+              "href": null
+            }
+          ]
+        },
+        "旧抽出株数（単位未確認）": {
+          "id": "lTPG",
+          "type": "number",
+          "number": 14904
+        },
+        "出典明細行": {
+          "id": "tQbj",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "3:17",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "3:17",
+              "href": null
+            }
+          ]
+        },
+        "基準日": {
+          "id": "tdWc",
+          "type": "date",
+          "date": null
+        },
+        "出典Context": {
+          "id": "ubZV",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "FilingDateInstant",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "FilingDateInstant",
+              "href": null
+            }
+          ]
+        },
+        "保有種別": {
+          "id": "ujZY",
+          "type": "select",
+          "select": {
+            "id": "283b5186-568c-45d3-aeab-3335d7ae3bc6",
+            "name": "特定投資株式",
+            "color": "blue"
+          }
+        },
+        "出典ファイル": {
+          "id": "x%3B%3D%3A",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm",
+              "href": null
+            }
+          ]
+        },
+        "Name": {
+          "id": "title",
+          "type": "title",
+          "title": [
+            {
+              "type": "text",
+              "text": {
+                "content": "1897 金下建設株式会社 → ㈱三井住友フィナンシャルグループ",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "1897 金下建設株式会社 → ㈱三井住友フィナンシャルグループ",
+              "href": null
+            }
+          ]
+        }
+      },
+      "url": "https://app.notion.com/p/1897-3f7d74ff84cd81e1af6ecec59b06c241",
+      "public_url": null,
+      "archived": false
+    },
+    {
+      "object": "page",
+      "id": "3f7d74ff-84cd-811f-bb89-e4d78cc5325b",
+      "created_time": "2026-10-12T16:58:00.000Z",
+      "last_edited_time": "2026-10-16T22:20:00.000Z",
+      "created_by": {
+        "object": "user",
+        "id": "dd10be3d-c2bd-4edd-a332-28090d920e2e"
+      },
+      "last_edited_by": {
+        "object": "user",
+        "id": "dd10be3d-c2bd-4edd-a332-28090d920e2e"
+      },
+      "cover": null,
+      "icon": null,
+      "parent": {
+        "type": "database_id",
+        "database_id": "5ad4d311-b06f-42b4-b78a-b3801cd509e2"
+      },
+      "in_trash": false,
+      "is_archived": false,
+      "is_locked": false,
+      "properties": {
+        "出典文書ID": {
+          "id": "%3BQm%3F",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "S100XT0W",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "S100XT0W",
+              "href": null
+            }
+          ]
+        },
+        "欠測理由": {
+          "id": "%3CEpO",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+              "href": null
+            }
+          ]
+        },
+        "保有株数": {
+          "id": "%3D_fn",
+          "type": "number",
+          "number": 278200
+        },
+        "旧試算時価（未検証）": {
+          "id": "%40IA_",
+          "type": "number",
+          "number": null
+        },
+        "価格照合根拠": {
+          "id": "Bj%3Dg",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "旧分類（未検証）": {
+          "id": "DGfn",
+          "type": "select",
+          "select": {
+            "id": "6cbdc909-12b5-4d08-b8e0-13bec96563a1",
+            "name": "上場",
+            "color": "blue"
+          }
+        },
+        "確定銘柄コード": {
+          "id": "DdCb",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有時価": {
+          "id": "GbBc",
+          "type": "number",
+          "number": null
+        },
+        "旧処理基準日（観測日未確認）": {
+          "id": "K%60%3Dj",
+          "type": "date",
+          "date": null
+        },
+        "価格状態": {
+          "id": "QE%3AD",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "未取得（価格・通貨・株数単位の照合未成立）"
+          }
+        },
+        "出典要素ID": {
+          "id": "QEf%3E",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "jpcrp_cor:ShareholdingsTextBlock",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "jpcrp_cor:ShareholdingsTextBlock",
+              "href": null
+            }
+          ]
+        },
+        "保有会社": {
+          "id": "Q%7BEH",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "金下建設株式会社",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "金下建設株式会社",
+              "href": null
+            }
+          ]
+        },
+        "株価": {
+          "id": "Txw%3B",
+          "type": "number",
+          "number": null
+        },
+        "価格照合済": {
+          "id": "U%3Fw%5C",
+          "type": "checkbox",
+          "checkbox": false
+        },
+        "検証状態": {
+          "id": "UCyH",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "明細原本照合済"
+          }
+        },
+        "帳簿価額（円）": {
+          "id": "UbUr",
+          "type": "number",
+          "number": 220000000
+        },
+        "株数単位": {
+          "id": "%5DPr%7B",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "株",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "株",
+              "href": null
+            }
+          ]
+        },
+        "銘柄名": {
+          "id": "%5EPJG",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "日工㈱",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "日工㈱",
+              "href": null
+            }
+          ]
+        },
+        "銘柄コード": {
+          "id": "%5EWgM",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "6306",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "6306",
+              "href": null
+            }
+          ]
+        },
+        "旧株価（通貨・観測日未確認）": {
+          "id": "%5Ezbz",
+          "type": "number",
+          "number": null
+        },
+        "通貨": {
+          "id": "eMOW",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "原本照合済": {
+          "id": "eePV",
+          "type": "checkbox",
+          "checkbox": true
+        },
+        "区分": {
+          "id": "gXtr",
+          "type": "select",
+          "select": {
+            "id": "04895bf5-ab00-4102-91aa-e6bc22125dad",
+            "name": "未確認",
+            "color": "gray"
+          }
+        },
+        "期末": {
+          "id": "ggrt",
+          "type": "date",
+          "date": {
+            "start": "2025-12-31",
+            "end": null,
+            "time_zone": null
+          }
+        },
+        "銘柄照合根拠": {
+          "id": "kA%5Bi",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有会社コード": {
+          "id": "lABv",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "1897",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "1897",
+              "href": null
+            }
+          ]
+        },
+        "出典原本SHA256": {
+          "id": "lJC%7D",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "270f9135134788be8d380060a04dc546f982fcee1ff1954cd97b51c1b2e48c0f",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "270f9135134788be8d380060a04dc546f982fcee1ff1954cd97b51c1b2e48c0f",
+              "href": null
+            }
+          ]
+        },
+        "旧抽出株数（単位未確認）": {
+          "id": "lTPG",
+          "type": "number",
+          "number": 278200
+        },
+        "出典明細行": {
+          "id": "tQbj",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "3:15",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "3:15",
+              "href": null
+            }
+          ]
+        },
+        "基準日": {
+          "id": "tdWc",
+          "type": "date",
+          "date": null
+        },
+        "出典Context": {
+          "id": "ubZV",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "FilingDateInstant",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "FilingDateInstant",
+              "href": null
+            }
+          ]
+        },
+        "保有種別": {
+          "id": "ujZY",
+          "type": "select",
+          "select": {
+            "id": "283b5186-568c-45d3-aeab-3335d7ae3bc6",
+            "name": "特定投資株式",
+            "color": "blue"
+          }
+        },
+        "出典ファイル": {
+          "id": "x%3B%3D%3A",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm",
+              "href": null
+            }
+          ]
+        },
+        "Name": {
+          "id": "title",
+          "type": "title",
+          "title": [
+            {
+              "type": "text",
+              "text": {
+                "content": "1897 金下建設株式会社 → 日工㈱",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "1897 金下建設株式会社 → 日工㈱",
+              "href": null
+            }
+          ]
+        }
+      },
+      "url": "https://app.notion.com/p/1897-3f7d74ff84cd811fbb89e4d78cc5325b",
+      "public_url": null,
+      "archived": false
+    },
+    {
+      "object": "page",
+      "id": "3f7d74ff-84cd-8191-bb3a-d12879c1980c",
+      "created_time": "2026-10-12T16:58:00.000Z",
+      "last_edited_time": "2026-10-16T22:20:00.000Z",
+      "created_by": {
+        "object": "user",
+        "id": "dd10be3d-c2bd-4edd-a332-28090d920e2e"
+      },
+      "last_edited_by": {
+        "object": "user",
+        "id": "dd10be3d-c2bd-4edd-a332-28090d920e2e"
+      },
+      "cover": null,
+      "icon": null,
+      "parent": {
+        "type": "database_id",
+        "database_id": "5ad4d311-b06f-42b4-b78a-b3801cd509e2"
+      },
+      "in_trash": false,
+      "is_archived": false,
+      "is_locked": false,
+      "properties": {
+        "出典文書ID": {
+          "id": "%3BQm%3F",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "S100XT0W",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "S100XT0W",
+              "href": null
+            }
+          ]
+        },
+        "欠測理由": {
+          "id": "%3CEpO",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+              "href": null
+            }
+          ]
+        },
+        "保有株数": {
+          "id": "%3D_fn",
+          "type": "number",
+          "number": 43611
+        },
+        "旧試算時価（未検証）": {
+          "id": "%40IA_",
+          "type": "number",
+          "number": 339860523
+        },
+        "価格照合根拠": {
+          "id": "Bj%3Dg",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "旧分類（未検証）": {
+          "id": "DGfn",
+          "type": "select",
+          "select": {
+            "id": "6cbdc909-12b5-4d08-b8e0-13bec96563a1",
+            "name": "上場",
+            "color": "blue"
+          }
+        },
+        "確定銘柄コード": {
+          "id": "DdCb",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有時価": {
+          "id": "GbBc",
+          "type": "number",
+          "number": null
+        },
+        "旧処理基準日（観測日未確認）": {
+          "id": "K%60%3Dj",
+          "type": "date",
+          "date": {
+            "start": "2026-06-16",
+            "end": null,
+            "time_zone": null
+          }
+        },
+        "価格状態": {
+          "id": "QE%3AD",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "未取得（価格・通貨・株数単位の照合未成立）"
+          }
+        },
+        "出典要素ID": {
+          "id": "QEf%3E",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "jpcrp_cor:ShareholdingsTextBlock",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "jpcrp_cor:ShareholdingsTextBlock",
+              "href": null
+            }
+          ]
+        },
+        "保有会社": {
+          "id": "Q%7BEH",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "金下建設株式会社",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "金下建設株式会社",
+              "href": null
+            }
+          ]
+        },
+        "株価": {
+          "id": "Txw%3B",
+          "type": "number",
+          "number": null
+        },
+        "価格照合済": {
+          "id": "U%3Fw%5C",
+          "type": "checkbox",
+          "checkbox": false
+        },
+        "検証状態": {
+          "id": "UCyH",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "明細原本照合済"
+          }
+        },
+        "帳簿価額（円）": {
+          "id": "UbUr",
+          "type": "number",
+          "number": 249000000
+        },
+        "株数単位": {
+          "id": "%5DPr%7B",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "株",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "株",
+              "href": null
+            }
+          ]
+        },
+        "銘柄名": {
+          "id": "%5EPJG",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "㈱みずほフィナンシャルグループ",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "㈱みずほフィナンシャルグループ",
+              "href": null
+            }
+          ]
+        },
+        "銘柄コード": {
+          "id": "%5EWgM",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "8411",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "8411",
+              "href": null
+            }
+          ]
+        },
+        "旧株価（通貨・観測日未確認）": {
+          "id": "%5Ezbz",
+          "type": "number",
+          "number": 7793
+        },
+        "通貨": {
+          "id": "eMOW",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "原本照合済": {
+          "id": "eePV",
+          "type": "checkbox",
+          "checkbox": true
+        },
+        "区分": {
+          "id": "gXtr",
+          "type": "select",
+          "select": {
+            "id": "04895bf5-ab00-4102-91aa-e6bc22125dad",
+            "name": "未確認",
+            "color": "gray"
+          }
+        },
+        "期末": {
+          "id": "ggrt",
+          "type": "date",
+          "date": {
+            "start": "2025-12-31",
+            "end": null,
+            "time_zone": null
+          }
+        },
+        "銘柄照合根拠": {
+          "id": "kA%5Bi",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有会社コード": {
+          "id": "lABv",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "1897",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "1897",
+              "href": null
+            }
+          ]
+        },
+        "出典原本SHA256": {
+          "id": "lJC%7D",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "270f9135134788be8d380060a04dc546f982fcee1ff1954cd97b51c1b2e48c0f",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "270f9135134788be8d380060a04dc546f982fcee1ff1954cd97b51c1b2e48c0f",
+              "href": null
+            }
+          ]
+        },
+        "旧抽出株数（単位未確認）": {
+          "id": "lTPG",
+          "type": "number",
+          "number": 43611
+        },
+        "出典明細行": {
+          "id": "tQbj",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "3:13",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "3:13",
+              "href": null
+            }
+          ]
+        },
+        "基準日": {
+          "id": "tdWc",
+          "type": "date",
+          "date": null
+        },
+        "出典Context": {
+          "id": "ubZV",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "FilingDateInstant",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "FilingDateInstant",
+              "href": null
+            }
+          ]
+        },
+        "保有種別": {
+          "id": "ujZY",
+          "type": "select",
+          "select": {
+            "id": "283b5186-568c-45d3-aeab-3335d7ae3bc6",
+            "name": "特定投資株式",
+            "color": "blue"
+          }
+        },
+        "出典ファイル": {
+          "id": "x%3B%3D%3A",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm",
+              "href": null
+            }
+          ]
+        },
+        "Name": {
+          "id": "title",
+          "type": "title",
+          "title": [
+            {
+              "type": "text",
+              "text": {
+                "content": "1897 金下建設株式会社 → ㈱みずほフィナンシャルグループ",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "1897 金下建設株式会社 → ㈱みずほフィナンシャルグループ",
+              "href": null
+            }
+          ]
+        }
+      },
+      "url": "https://app.notion.com/p/1897-3f7d74ff84cd8191bb3ad12879c1980c",
+      "public_url": null,
+      "archived": false
+    },
+    {
+      "object": "page",
+      "id": "3f7d74ff-84cd-81b6-851c-cb0795186df8",
+      "created_time": "2026-10-12T16:58:00.000Z",
+      "last_edited_time": "2026-10-16T22:20:00.000Z",
+      "created_by": {
+        "object": "user",
+        "id": "dd10be3d-c2bd-4edd-a332-28090d920e2e"
+      },
+      "last_edited_by": {
+        "object": "user",
+        "id": "dd10be3d-c2bd-4edd-a332-28090d920e2e"
+      },
+      "cover": null,
+      "icon": null,
+      "parent": {
+        "type": "database_id",
+        "database_id": "5ad4d311-b06f-42b4-b78a-b3801cd509e2"
+      },
+      "in_trash": false,
+      "is_archived": false,
+      "is_locked": false,
+      "properties": {
+        "出典文書ID": {
+          "id": "%3BQm%3F",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "S100XT0W",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "S100XT0W",
+              "href": null
+            }
+          ]
+        },
+        "欠測理由": {
+          "id": "%3CEpO",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+              "href": null
+            }
+          ]
+        },
+        "保有株数": {
+          "id": "%3D_fn",
+          "type": "number",
+          "number": 216000
+        },
+        "旧試算時価（未検証）": {
+          "id": "%40IA_",
+          "type": "number",
+          "number": 381888000
+        },
+        "価格照合根拠": {
+          "id": "Bj%3Dg",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "旧分類（未検証）": {
+          "id": "DGfn",
+          "type": "select",
+          "select": {
+            "id": "6cbdc909-12b5-4d08-b8e0-13bec96563a1",
+            "name": "上場",
+            "color": "blue"
+          }
+        },
+        "確定銘柄コード": {
+          "id": "DdCb",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有時価": {
+          "id": "GbBc",
+          "type": "number",
+          "number": null
+        },
+        "旧処理基準日（観測日未確認）": {
+          "id": "K%60%3Dj",
+          "type": "date",
+          "date": {
+            "start": "2026-06-16",
+            "end": null,
+            "time_zone": null
+          }
+        },
+        "価格状態": {
+          "id": "QE%3AD",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "未取得（価格・通貨・株数単位の照合未成立）"
+          }
+        },
+        "出典要素ID": {
+          "id": "QEf%3E",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "jpcrp_cor:ShareholdingsTextBlock",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "jpcrp_cor:ShareholdingsTextBlock",
+              "href": null
+            }
+          ]
+        },
+        "保有会社": {
+          "id": "Q%7BEH",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "金下建設株式会社",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "金下建設株式会社",
+              "href": null
+            }
+          ]
+        },
+        "株価": {
+          "id": "Txw%3B",
+          "type": "number",
+          "number": null
+        },
+        "価格照合済": {
+          "id": "U%3Fw%5C",
+          "type": "checkbox",
+          "checkbox": false
+        },
+        "検証状態": {
+          "id": "UCyH",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "明細原本照合済"
+          }
+        },
+        "帳簿価額（円）": {
+          "id": "UbUr",
+          "type": "number",
+          "number": 309000000
+        },
+        "株数単位": {
+          "id": "%5DPr%7B",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "株",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "株",
+              "href": null
+            }
+          ]
+        },
+        "銘柄名": {
+          "id": "%5EPJG",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "㈱中央倉庫",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "㈱中央倉庫",
+              "href": null
+            }
+          ]
+        },
+        "銘柄コード": {
+          "id": "%5EWgM",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "9319",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "9319",
+              "href": null
+            }
+          ]
+        },
+        "旧株価（通貨・観測日未確認）": {
+          "id": "%5Ezbz",
+          "type": "number",
+          "number": 1768
+        },
+        "通貨": {
+          "id": "eMOW",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "原本照合済": {
+          "id": "eePV",
+          "type": "checkbox",
+          "checkbox": true
+        },
+        "区分": {
+          "id": "gXtr",
+          "type": "select",
+          "select": {
+            "id": "04895bf5-ab00-4102-91aa-e6bc22125dad",
+            "name": "未確認",
+            "color": "gray"
+          }
+        },
+        "期末": {
+          "id": "ggrt",
+          "type": "date",
+          "date": {
+            "start": "2025-12-31",
+            "end": null,
+            "time_zone": null
+          }
+        },
+        "銘柄照合根拠": {
+          "id": "kA%5Bi",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有会社コード": {
+          "id": "lABv",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "1897",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "1897",
+              "href": null
+            }
+          ]
+        },
+        "出典原本SHA256": {
+          "id": "lJC%7D",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "270f9135134788be8d380060a04dc546f982fcee1ff1954cd97b51c1b2e48c0f",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "270f9135134788be8d380060a04dc546f982fcee1ff1954cd97b51c1b2e48c0f",
+              "href": null
+            }
+          ]
+        },
+        "旧抽出株数（単位未確認）": {
+          "id": "lTPG",
+          "type": "number",
+          "number": 216000
+        },
+        "出典明細行": {
+          "id": "tQbj",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "3:11",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "3:11",
+              "href": null
+            }
+          ]
+        },
+        "基準日": {
+          "id": "tdWc",
+          "type": "date",
+          "date": null
+        },
+        "出典Context": {
+          "id": "ubZV",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "FilingDateInstant",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "FilingDateInstant",
+              "href": null
+            }
+          ]
+        },
+        "保有種別": {
+          "id": "ujZY",
+          "type": "select",
+          "select": {
+            "id": "283b5186-568c-45d3-aeab-3335d7ae3bc6",
+            "name": "特定投資株式",
+            "color": "blue"
+          }
+        },
+        "出典ファイル": {
+          "id": "x%3B%3D%3A",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm",
+              "href": null
+            }
+          ]
+        },
+        "Name": {
+          "id": "title",
+          "type": "title",
+          "title": [
+            {
+              "type": "text",
+              "text": {
+                "content": "1897 金下建設株式会社 → ㈱中央倉庫",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "1897 金下建設株式会社 → ㈱中央倉庫",
+              "href": null
+            }
+          ]
+        }
+      },
+      "url": "https://app.notion.com/p/1897-3f7d74ff84cd81b6851ccb0795186df8",
+      "public_url": null,
+      "archived": false
+    },
+    {
+      "object": "page",
+      "id": "3f7d74ff-84cd-8185-a2b4-ceb5a494d69c",
+      "created_time": "2026-10-12T16:58:00.000Z",
+      "last_edited_time": "2026-10-12T16:58:00.000Z",
+      "created_by": {
+        "object": "user",
+        "id": "dd10be3d-c2bd-4edd-a332-28090d920e2e"
+      },
+      "last_edited_by": {
+        "object": "user",
+        "id": "dd10be3d-c2bd-4edd-a332-28090d920e2e"
+      },
+      "cover": null,
+      "icon": null,
+      "parent": {
+        "type": "database_id",
+        "database_id": "5ad4d311-b06f-42b4-b78a-b3801cd509e2"
+      },
+      "in_trash": false,
+      "is_archived": false,
+      "is_locked": false,
+      "properties": {
+        "出典文書ID": {
+          "id": "%3BQm%3F",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "欠測理由": {
+          "id": "%3CEpO",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有株数": {
+          "id": "%3D_fn",
+          "type": "number",
+          "number": null
+        },
+        "旧試算時価（未検証）": {
+          "id": "%40IA_",
+          "type": "number",
+          "number": 435043980
+        },
+        "価格照合根拠": {
+          "id": "Bj%3Dg",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "旧分類（未検証）": {
+          "id": "DGfn",
+          "type": "select",
+          "select": {
+            "id": "6cbdc909-12b5-4d08-b8e0-13bec96563a1",
+            "name": "上場",
+            "color": "blue"
+          }
+        },
+        "確定銘柄コード": {
+          "id": "DdCb",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有時価": {
+          "id": "GbBc",
+          "type": "number",
+          "number": null
+        },
+        "旧処理基準日（観測日未確認）": {
+          "id": "K%60%3Dj",
+          "type": "date",
+          "date": {
+            "start": "2026-06-16",
+            "end": null,
+            "time_zone": null
+          }
+        },
+        "価格状態": {
+          "id": "QE%3AD",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "未取得（価格・通貨・株数単位の照合未成立）"
+          }
+        },
+        "出典要素ID": {
+          "id": "QEf%3E",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有会社": {
+          "id": "Q%7BEH",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "金下建設株式会社",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "金下建設株式会社",
+              "href": null
+            }
+          ]
+        },
+        "株価": {
+          "id": "Txw%3B",
+          "type": "number",
+          "number": null
+        },
+        "価格照合済": {
+          "id": "U%3Fw%5C",
+          "type": "checkbox",
+          "checkbox": false
+        },
+        "検証状態": {
+          "id": "UCyH",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "未検証（旧取込）"
+          }
+        },
+        "帳簿価額（円）": {
+          "id": "UbUr",
+          "type": "number",
+          "number": null
+        },
+        "株数単位": {
+          "id": "%5DPr%7B",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "銘柄名": {
+          "id": "%5EPJG",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "㈱三菱UFJフィナンシャル・グループ",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "㈱三菱UFJフィナンシャル・グループ",
+              "href": null
+            }
+          ]
+        },
+        "銘柄コード": {
+          "id": "%5EWgM",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "8306",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "8306",
+              "href": null
+            }
+          ]
+        },
+        "旧株価（通貨・観測日未確認）": {
+          "id": "%5Ezbz",
+          "type": "number",
+          "number": 3242
+        },
+        "通貨": {
+          "id": "eMOW",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "原本照合済": {
+          "id": "eePV",
+          "type": "checkbox",
+          "checkbox": false
+        },
+        "区分": {
+          "id": "gXtr",
+          "type": "select",
+          "select": null
+        },
+        "期末": {
+          "id": "ggrt",
+          "type": "date",
+          "date": {
+            "start": "2025-12-31",
+            "end": null,
+            "time_zone": null
+          }
+        },
+        "銘柄照合根拠": {
+          "id": "kA%5Bi",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有会社コード": {
+          "id": "lABv",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "1897",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "1897",
+              "href": null
+            }
+          ]
+        },
+        "出典原本SHA256": {
+          "id": "lJC%7D",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "旧抽出株数（単位未確認）": {
+          "id": "lTPG",
+          "type": "number",
+          "number": 134190
+        },
+        "出典明細行": {
+          "id": "tQbj",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "基準日": {
+          "id": "tdWc",
+          "type": "date",
+          "date": null
+        },
+        "出典Context": {
+          "id": "ubZV",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有種別": {
+          "id": "ujZY",
+          "type": "select",
+          "select": null
+        },
+        "出典ファイル": {
+          "id": "x%3B%3D%3A",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "Name": {
+          "id": "title",
+          "type": "title",
+          "title": [
+            {
+              "type": "text",
+              "text": {
+                "content": "1897 金下建設株式会社 → ㈱三菱UFJフィナンシャル・グループ",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "1897 金下建設株式会社 → ㈱三菱UFJフィナンシャル・グループ",
+              "href": null
+            }
+          ]
+        }
+      },
+      "url": "https://app.notion.com/p/1897-UFJ-3f7d74ff84cd8185a2b4ceb5a494d69c",
+      "public_url": null,
+      "archived": false
+    },
+    {
+      "object": "page",
+      "id": "3f7d74ff-84cd-816d-9f76-dd30155be67a",
+      "created_time": "2026-10-12T16:58:00.000Z",
+      "last_edited_time": "2026-10-16T22:20:00.000Z",
+      "created_by": {
+        "object": "user",
+        "id": "dd10be3d-c2bd-4edd-a332-28090d920e2e"
+      },
+      "last_edited_by": {
+        "object": "user",
+        "id": "dd10be3d-c2bd-4edd-a332-28090d920e2e"
+      },
+      "cover": null,
+      "icon": null,
+      "parent": {
+        "type": "database_id",
+        "database_id": "5ad4d311-b06f-42b4-b78a-b3801cd509e2"
+      },
+      "in_trash": false,
+      "is_archived": false,
+      "is_locked": false,
+      "properties": {
+        "出典文書ID": {
+          "id": "%3BQm%3F",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "S100XT0W",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "S100XT0W",
+              "href": null
+            }
+          ]
+        },
+        "欠測理由": {
+          "id": "%3CEpO",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+              "href": null
+            }
+          ]
+        },
+        "保有株数": {
+          "id": "%3D_fn",
+          "type": "number",
+          "number": 300000
+        },
+        "旧試算時価（未検証）": {
+          "id": "%40IA_",
+          "type": "number",
+          "number": 627300000
+        },
+        "価格照合根拠": {
+          "id": "Bj%3Dg",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "旧分類（未検証）": {
+          "id": "DGfn",
+          "type": "select",
+          "select": {
+            "id": "6cbdc909-12b5-4d08-b8e0-13bec96563a1",
+            "name": "上場",
+            "color": "blue"
+          }
+        },
+        "確定銘柄コード": {
+          "id": "DdCb",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有時価": {
+          "id": "GbBc",
+          "type": "number",
+          "number": null
+        },
+        "旧処理基準日（観測日未確認）": {
+          "id": "K%60%3Dj",
+          "type": "date",
+          "date": {
+            "start": "2026-06-16",
+            "end": null,
+            "time_zone": null
+          }
+        },
+        "価格状態": {
+          "id": "QE%3AD",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "未取得（価格・通貨・株数単位の照合未成立）"
+          }
+        },
+        "出典要素ID": {
+          "id": "QEf%3E",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "jpcrp_cor:ShareholdingsTextBlock",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "jpcrp_cor:ShareholdingsTextBlock",
+              "href": null
+            }
+          ]
+        },
+        "保有会社": {
+          "id": "Q%7BEH",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "金下建設株式会社",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "金下建設株式会社",
+              "href": null
+            }
+          ]
+        },
+        "株価": {
+          "id": "Txw%3B",
+          "type": "number",
+          "number": null
+        },
+        "価格照合済": {
+          "id": "U%3Fw%5C",
+          "type": "checkbox",
+          "checkbox": false
+        },
+        "検証状態": {
+          "id": "UCyH",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "明細原本照合済"
+          }
+        },
+        "帳簿価額（円）": {
+          "id": "UbUr",
+          "type": "number",
+          "number": 733000000
+        },
+        "株数単位": {
+          "id": "%5DPr%7B",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "株",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "株",
+              "href": null
+            }
+          ]
+        },
+        "銘柄名": {
+          "id": "%5EPJG",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "ニチレキグループ㈱",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "ニチレキグループ㈱",
+              "href": null
+            }
+          ]
+        },
+        "銘柄コード": {
+          "id": "%5EWgM",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "5011",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "5011",
+              "href": null
+            }
+          ]
+        },
+        "旧株価（通貨・観測日未確認）": {
+          "id": "%5Ezbz",
+          "type": "number",
+          "number": 2091
+        },
+        "通貨": {
+          "id": "eMOW",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "原本照合済": {
+          "id": "eePV",
+          "type": "checkbox",
+          "checkbox": true
+        },
+        "区分": {
+          "id": "gXtr",
+          "type": "select",
+          "select": {
+            "id": "04895bf5-ab00-4102-91aa-e6bc22125dad",
+            "name": "未確認",
+            "color": "gray"
+          }
+        },
+        "期末": {
+          "id": "ggrt",
+          "type": "date",
+          "date": {
+            "start": "2025-12-31",
+            "end": null,
+            "time_zone": null
+          }
+        },
+        "銘柄照合根拠": {
+          "id": "kA%5Bi",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有会社コード": {
+          "id": "lABv",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "1897",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "1897",
+              "href": null
+            }
+          ]
+        },
+        "出典原本SHA256": {
+          "id": "lJC%7D",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "270f9135134788be8d380060a04dc546f982fcee1ff1954cd97b51c1b2e48c0f",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "270f9135134788be8d380060a04dc546f982fcee1ff1954cd97b51c1b2e48c0f",
+              "href": null
+            }
+          ]
+        },
+        "旧抽出株数（単位未確認）": {
+          "id": "lTPG",
+          "type": "number",
+          "number": 300000
+        },
+        "出典明細行": {
+          "id": "tQbj",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "3:7",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "3:7",
+              "href": null
+            }
+          ]
+        },
+        "基準日": {
+          "id": "tdWc",
+          "type": "date",
+          "date": null
+        },
+        "出典Context": {
+          "id": "ubZV",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "FilingDateInstant",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "FilingDateInstant",
+              "href": null
+            }
+          ]
+        },
+        "保有種別": {
+          "id": "ujZY",
+          "type": "select",
+          "select": {
+            "id": "283b5186-568c-45d3-aeab-3335d7ae3bc6",
+            "name": "特定投資株式",
+            "color": "blue"
+          }
+        },
+        "出典ファイル": {
+          "id": "x%3B%3D%3A",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm",
+              "href": null
+            }
+          ]
+        },
+        "Name": {
+          "id": "title",
+          "type": "title",
+          "title": [
+            {
+              "type": "text",
+              "text": {
+                "content": "1897 金下建設株式会社 → ニチレキグループ㈱",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "1897 金下建設株式会社 → ニチレキグループ㈱",
+              "href": null
+            }
+          ]
+        }
+      },
+      "url": "https://app.notion.com/p/1897-3f7d74ff84cd816d9f76dd30155be67a",
+      "public_url": null,
+      "archived": false
+    },
+    {
+      "object": "page",
+      "id": "3f7d74ff-84cd-8190-883e-c91471dfc74e",
+      "created_time": "2026-10-12T16:58:00.000Z",
+      "last_edited_time": "2026-10-16T22:20:00.000Z",
+      "created_by": {
+        "object": "user",
+        "id": "dd10be3d-c2bd-4edd-a332-28090d920e2e"
+      },
+      "last_edited_by": {
+        "object": "user",
+        "id": "dd10be3d-c2bd-4edd-a332-28090d920e2e"
+      },
+      "cover": null,
+      "icon": null,
+      "parent": {
+        "type": "database_id",
+        "database_id": "5ad4d311-b06f-42b4-b78a-b3801cd509e2"
+      },
+      "in_trash": false,
+      "is_archived": false,
+      "is_locked": false,
+      "properties": {
+        "出典文書ID": {
+          "id": "%3BQm%3F",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "S100XT0W",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "S100XT0W",
+              "href": null
+            }
+          ]
+        },
+        "欠測理由": {
+          "id": "%3CEpO",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+              "href": null
+            }
+          ]
+        },
+        "保有株数": {
+          "id": "%3D_fn",
+          "type": "number",
+          "number": 403601
+        },
+        "旧試算時価（未検証）": {
+          "id": "%40IA_",
+          "type": "number",
+          "number": 1616422005
+        },
+        "価格照合根拠": {
+          "id": "Bj%3Dg",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "旧分類（未検証）": {
+          "id": "DGfn",
+          "type": "select",
+          "select": {
+            "id": "6cbdc909-12b5-4d08-b8e0-13bec96563a1",
+            "name": "上場",
+            "color": "blue"
+          }
+        },
+        "確定銘柄コード": {
+          "id": "DdCb",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有時価": {
+          "id": "GbBc",
+          "type": "number",
+          "number": null
+        },
+        "旧処理基準日（観測日未確認）": {
+          "id": "K%60%3Dj",
+          "type": "date",
+          "date": {
+            "start": "2026-06-16",
+            "end": null,
+            "time_zone": null
+          }
+        },
+        "価格状態": {
+          "id": "QE%3AD",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "未取得（価格・通貨・株数単位の照合未成立）"
+          }
+        },
+        "出典要素ID": {
+          "id": "QEf%3E",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "jpcrp_cor:ShareholdingsTextBlock",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "jpcrp_cor:ShareholdingsTextBlock",
+              "href": null
+            }
+          ]
+        },
+        "保有会社": {
+          "id": "Q%7BEH",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "金下建設株式会社",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "金下建設株式会社",
+              "href": null
+            }
+          ]
+        },
+        "株価": {
+          "id": "Txw%3B",
+          "type": "number",
+          "number": null
+        },
+        "価格照合済": {
+          "id": "U%3Fw%5C",
+          "type": "checkbox",
+          "checkbox": false
+        },
+        "検証状態": {
+          "id": "UCyH",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "明細原本照合済"
+          }
+        },
+        "帳簿価額（円）": {
+          "id": "UbUr",
+          "type": "number",
+          "number": 1366000000
+        },
+        "株数単位": {
+          "id": "%5DPr%7B",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "株",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "株",
+              "href": null
+            }
+          ]
+        },
+        "銘柄名": {
+          "id": "%5EPJG",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "ライト工業㈱",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "ライト工業㈱",
+              "href": null
+            }
+          ]
+        },
+        "銘柄コード": {
+          "id": "%5EWgM",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "1926",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "1926",
+              "href": null
+            }
+          ]
+        },
+        "旧株価（通貨・観測日未確認）": {
+          "id": "%5Ezbz",
+          "type": "number",
+          "number": 4005
+        },
+        "通貨": {
+          "id": "eMOW",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "原本照合済": {
+          "id": "eePV",
+          "type": "checkbox",
+          "checkbox": true
+        },
+        "区分": {
+          "id": "gXtr",
+          "type": "select",
+          "select": {
+            "id": "04895bf5-ab00-4102-91aa-e6bc22125dad",
+            "name": "未確認",
+            "color": "gray"
+          }
+        },
+        "期末": {
+          "id": "ggrt",
+          "type": "date",
+          "date": {
+            "start": "2025-12-31",
+            "end": null,
+            "time_zone": null
+          }
+        },
+        "銘柄照合根拠": {
+          "id": "kA%5Bi",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有会社コード": {
+          "id": "lABv",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "1897",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "1897",
+              "href": null
+            }
+          ]
+        },
+        "出典原本SHA256": {
+          "id": "lJC%7D",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "270f9135134788be8d380060a04dc546f982fcee1ff1954cd97b51c1b2e48c0f",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "270f9135134788be8d380060a04dc546f982fcee1ff1954cd97b51c1b2e48c0f",
+              "href": null
+            }
+          ]
+        },
+        "旧抽出株数（単位未確認）": {
+          "id": "lTPG",
+          "type": "number",
+          "number": 403601
+        },
+        "出典明細行": {
+          "id": "tQbj",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "3:5",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "3:5",
+              "href": null
+            }
+          ]
+        },
+        "基準日": {
+          "id": "tdWc",
+          "type": "date",
+          "date": null
+        },
+        "出典Context": {
+          "id": "ubZV",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "FilingDateInstant",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "FilingDateInstant",
+              "href": null
+            }
+          ]
+        },
+        "保有種別": {
+          "id": "ujZY",
+          "type": "select",
+          "select": {
+            "id": "283b5186-568c-45d3-aeab-3335d7ae3bc6",
+            "name": "特定投資株式",
+            "color": "blue"
+          }
+        },
+        "出典ファイル": {
+          "id": "x%3B%3D%3A",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm",
+              "href": null
+            }
+          ]
+        },
+        "Name": {
+          "id": "title",
+          "type": "title",
+          "title": [
+            {
+              "type": "text",
+              "text": {
+                "content": "1897 金下建設株式会社 → ライト工業㈱",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "1897 金下建設株式会社 → ライト工業㈱",
+              "href": null
+            }
+          ]
+        }
+      },
+      "url": "https://app.notion.com/p/1897-3f7d74ff84cd8190883ec91471dfc74e",
+      "public_url": null,
+      "archived": false
+    },
+    {
+      "object": "page",
+      "id": "3f7d74ff-84cd-8153-8131-cce0482fac9b",
+      "created_time": "2026-10-12T16:58:00.000Z",
+      "last_edited_time": "2026-10-16T22:20:00.000Z",
+      "created_by": {
+        "object": "user",
+        "id": "dd10be3d-c2bd-4edd-a332-28090d920e2e"
+      },
+      "last_edited_by": {
+        "object": "user",
+        "id": "dd10be3d-c2bd-4edd-a332-28090d920e2e"
+      },
+      "cover": null,
+      "icon": null,
+      "parent": {
+        "type": "database_id",
+        "database_id": "5ad4d311-b06f-42b4-b78a-b3801cd509e2"
+      },
+      "in_trash": false,
+      "is_archived": false,
+      "is_locked": false,
+      "properties": {
+        "出典文書ID": {
+          "id": "%3BQm%3F",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "S100XT0W",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "S100XT0W",
+              "href": null
+            }
+          ]
+        },
+        "欠測理由": {
+          "id": "%3CEpO",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+              "href": null
+            }
+          ]
+        },
+        "保有株数": {
+          "id": "%3D_fn",
+          "type": "number",
+          "number": 727272
+        },
+        "旧試算時価（未検証）": {
+          "id": "%40IA_",
+          "type": "number",
+          "number": 3272724000
+        },
+        "価格照合根拠": {
+          "id": "Bj%3Dg",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "旧分類（未検証）": {
+          "id": "DGfn",
+          "type": "select",
+          "select": {
+            "id": "6cbdc909-12b5-4d08-b8e0-13bec96563a1",
+            "name": "上場",
+            "color": "blue"
+          }
+        },
+        "確定銘柄コード": {
+          "id": "DdCb",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有時価": {
+          "id": "GbBc",
+          "type": "number",
+          "number": null
+        },
+        "旧処理基準日（観測日未確認）": {
+          "id": "K%60%3Dj",
+          "type": "date",
+          "date": {
+            "start": "2026-06-16",
+            "end": null,
+            "time_zone": null
+          }
+        },
+        "価格状態": {
+          "id": "QE%3AD",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "未取得（価格・通貨・株数単位の照合未成立）"
+          }
+        },
+        "出典要素ID": {
+          "id": "QEf%3E",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "jpcrp_cor:ShareholdingsTextBlock",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "jpcrp_cor:ShareholdingsTextBlock",
+              "href": null
+            }
+          ]
+        },
+        "保有会社": {
+          "id": "Q%7BEH",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "金下建設株式会社",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "金下建設株式会社",
+              "href": null
+            }
+          ]
+        },
+        "株価": {
+          "id": "Txw%3B",
+          "type": "number",
+          "number": null
+        },
+        "価格照合済": {
+          "id": "U%3Fw%5C",
+          "type": "checkbox",
+          "checkbox": false
+        },
+        "検証状態": {
+          "id": "UCyH",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "明細原本照合済"
+          }
+        },
+        "帳簿価額（円）": {
+          "id": "UbUr",
+          "type": "number",
+          "number": 2492000000
+        },
+        "株数単位": {
+          "id": "%5DPr%7B",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "株",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "株",
+              "href": null
+            }
+          ]
+        },
+        "銘柄名": {
+          "id": "%5EPJG",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "㈱京都フィナンシャルグループ",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "㈱京都フィナンシャルグループ",
+              "href": null
+            }
+          ]
+        },
+        "銘柄コード": {
+          "id": "%5EWgM",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "5844",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "5844",
+              "href": null
+            }
+          ]
+        },
+        "旧株価（通貨・観測日未確認）": {
+          "id": "%5Ezbz",
+          "type": "number",
+          "number": 4500
+        },
+        "通貨": {
+          "id": "eMOW",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "原本照合済": {
+          "id": "eePV",
+          "type": "checkbox",
+          "checkbox": true
+        },
+        "区分": {
+          "id": "gXtr",
+          "type": "select",
+          "select": {
+            "id": "04895bf5-ab00-4102-91aa-e6bc22125dad",
+            "name": "未確認",
+            "color": "gray"
+          }
+        },
+        "期末": {
+          "id": "ggrt",
+          "type": "date",
+          "date": {
+            "start": "2025-12-31",
+            "end": null,
+            "time_zone": null
+          }
+        },
+        "銘柄照合根拠": {
+          "id": "kA%5Bi",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有会社コード": {
+          "id": "lABv",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "1897",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "1897",
+              "href": null
+            }
+          ]
+        },
+        "出典原本SHA256": {
+          "id": "lJC%7D",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "270f9135134788be8d380060a04dc546f982fcee1ff1954cd97b51c1b2e48c0f",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "270f9135134788be8d380060a04dc546f982fcee1ff1954cd97b51c1b2e48c0f",
+              "href": null
+            }
+          ]
+        },
+        "旧抽出株数（単位未確認）": {
+          "id": "lTPG",
+          "type": "number",
+          "number": 727272
+        },
+        "出典明細行": {
+          "id": "tQbj",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "3:3",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "3:3",
+              "href": null
+            }
+          ]
+        },
+        "基準日": {
+          "id": "tdWc",
+          "type": "date",
+          "date": null
+        },
+        "出典Context": {
+          "id": "ubZV",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "FilingDateInstant",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "FilingDateInstant",
+              "href": null
+            }
+          ]
+        },
+        "保有種別": {
+          "id": "ujZY",
+          "type": "select",
+          "select": {
+            "id": "283b5186-568c-45d3-aeab-3335d7ae3bc6",
+            "name": "特定投資株式",
+            "color": "blue"
+          }
+        },
+        "出典ファイル": {
+          "id": "x%3B%3D%3A",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E00133-000_2025-12-31_01_2026-03-25_ixbrl.htm",
+              "href": null
+            }
+          ]
+        },
+        "Name": {
+          "id": "title",
+          "type": "title",
+          "title": [
+            {
+              "type": "text",
+              "text": {
+                "content": "1897 金下建設株式会社 → ㈱京都フィナンシャルグループ",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "1897 金下建設株式会社 → ㈱京都フィナンシャルグループ",
+              "href": null
+            }
+          ]
+        }
+      },
+      "url": "https://app.notion.com/p/1897-3f7d74ff84cd81538131cce0482fac9b",
+      "public_url": null,
+      "archived": false
+    }
+  ]
+}

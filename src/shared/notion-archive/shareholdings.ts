@@ -398,7 +398,10 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
     return { status: "held", parsed, reason, ...(retry ? { pending: true } : {}),
       ...(notApplicable === undefined ? {} : { reasonCode: "explicit_not_applicable", notApplicable }) };
   };
-  if (args.zip.length > HOLDINGS_ZIP_MAX_BYTES) return hold("1原本20MiBの解析予算を超えています", 0, false);
+  if (args.zip.length > HOLDINGS_ZIP_MAX_BYTES) {
+    if (!pricePhase) await assertNoUnknownHoldingPeriod(args.source, args.archivePageId);
+    return hold("1原本20MiBの解析予算を超えています", 0, false);
+  }
   const parsed = parseShareholdingsData(args.zip, args.source, diagnostic === undefined ? undefined : { qualifySource: entries => {
     if (args.observeIssuedShares === true) diagnostic.observation = observeIssuedShares(args.zip, args.source,
         args.issuedSharesFilingDateEvidence === undefined ? null : args.issuedSharesFilingDateEvidence, entries);
@@ -412,6 +415,10 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
     const identity = diagnostic.observation.sourceQualification;
     return identity.status === "verified" ? { status: "verified" } : { status: "held", reason: identity.reason === null ? "提出者原本資格は未確認です" : identity.reason };
   } });
+  // Keep the shared run reservation synchronous, before the new source guard's first await.
+  const reservedRows = parsed.status === "ok" && parsed.holderScope === "filer_only" ? Math.min(maxRows, parsed.holdings.length) : 0;
+  if (args.budget) args.budget.remainingRows -= reservedRows;
+  if (!pricePhase) await assertNoUnknownHoldingPeriod(args.source, args.archivePageId);
   // 明示不該当は未対応表と区別するが、空配列成功や価格queueへ変換しない。
   if (parsed.status === "explicit_not_applicable") {
     assert.equal(parsed.holderScope, "filer_only"); assert.equal(parsed.holdings.length, 0);
@@ -426,9 +433,6 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
     assert.equal(pricePhase.info.parsed, parsed.holdings.length);
     assert.equal(pricePhase.info.factsSha256, holdingsFactsSha256(parsed.holdings), "価格windowの全facts/orderが変化しています");
   }
-  // 並列backfillでも、最初のawait前にrun枠を予約する。未知結果で返却しない。
-  const reservedRows = Math.min(maxRows, parsed.holdings.length);
-  if (args.budget) args.budget.remainingRows -= reservedRows;
   const zipSha256 = createHash("sha256").update(args.zip).digest("hex");
   let sourceBefore: HoldingPage | undefined;
   let sourceInfo: RecoveryInfo | undefined;
@@ -1037,9 +1041,78 @@ export async function resumePendingShareholdingsPrices(args: {
   return result;
 }
 
-/** EDINET完了checkpointとは独立した既知HOLDだけを、次定時に保存原本から優先再開。 */
+export interface UnknownHoldingsSource {
+  archivePageId: string; source: ShareholdingsSource; sourcePageSha256: string;
+  reasonCode: "unknown_source_isolated"; reason: string;
+}
+
+/** 未知sourceを同定して隔離する。原本bytes/holding行は読まず、旧markerを変更しない。 */
+function qualifyUnknownHoldingsSource(page: HoldingPage, dbId: string): UnknownHoldingsSource {
+  assert.ok(page.properties?.["保有明細再開情報"], "結果未確定sourceの再開情報が欠けています");
+  const info = JSON.parse(richValue(page.properties["保有明細再開情報"])) as RecoveryInfo;
+  assert.match(info.source.docId, /^S[0-9A-Z]{7}$/); assert.match(info.source.stockCode, /^[0-9]{3}[0-9A-Z]$/);
+  assert.ok(typeof info.source.edinetCode === "string"); assert.match(info.source.edinetCode, /^E[0-9]{5}$/);
+  assert.match(info.source.fiscalYearEnd, /^\d{4}-\d{2}-\d{2}$/); assert.ok(Number.isFinite(Date.parse(info.source.fiscalYearEnd)));
+  assert.equal(new Date(info.source.fiscalYearEnd).toISOString().slice(0, 10), info.source.fiscalYearEnd);
+  assert.ok(typeof info.ownerName === "string" && info.ownerName.trim().length > 0);
+  qualifyRecoveryPage(page, page.id, dbId, info.source);
+  assert.equal(page.properties["Service"]?.select?.name, "yuho-quant", "結果未確定sourceのServiceが未確認です");
+  assert.equal(page.properties["保有明細状態"].select?.name, "実行中（結果未確定）");
+  assert.ok(typeof page.created_time === "string" && Number.isFinite(Date.parse(page.created_time)));
+  assert.ok(typeof page.last_edited_time === "string" && Number.isFinite(Date.parse(page.last_edited_time)));
+  assert(Object.values(page.properties).every(property => !("has_more" in property) || property.has_more === false));
+  assert.equal(info.sourceQueueVersion, 1); assert.ok(Number.isSafeInteger(info.parsed) && info.parsed > 0);
+  assert.ok(Number.isSafeInteger(info.sourceNextHoldingOffset) && info.sourceNextHoldingOffset! >= 0 && info.sourceNextHoldingOffset! < info.parsed);
+  assert.match(info.zipSha256, /^[a-f0-9]{64}$/); assert.match(info.factsSha256!, /^[a-f0-9]{64}$/);
+  assert.ok(Number.isSafeInteger(info.zipBytes) && info.zipBytes > 0 && info.zipBytes <= HOLDINGS_ZIP_MAX_BYTES);
+  const metadata = JSON.parse(richValue(page.properties["Metadata"]));
+  const proof = verifySavedHoldingsMetadata(metadata, info.source);
+  assert.equal(proof.status, "verified", "未知sourceの原本主体が未確認です");
+  assert.ok(proof.status === "verified" && proof.missing.length === 0, "未知sourceの提出者/期末が欠けています");
+  assert.equal(metadata.edinetDocType, 1); assert.equal(metadata.filerName, info.ownerName);
+  assert.equal(metadata._fileManifest.version, 1); assert.equal(metadata._fileManifest.files.length, 1);
+  const file = metadata._fileManifest.files[0];
+  assert.equal(file.originalFilename, edinetArchiveFilename(info.source.docId, 1));
+  assert.equal(file.sha256, info.zipSha256); assert.equal(file.byteLength, info.zipBytes);
+  const attachments = page.properties["Files"] as { type?: unknown; files?: Array<{ name?: unknown; type?: unknown }> };
+  assert.equal(attachments.type, "files"); assert.ok(Array.isArray(attachments.files)); assert.equal(attachments.files.length, 1);
+  assert.equal(attachments.files[0].type, "file"); assert.equal(attachments.files[0].name, file.originalFilename);
+  const fetchedAt = page.properties["Fetched At"]?.date?.start;
+  assert.ok(typeof fetchedAt === "string" && Number.isFinite(Date.parse(fetchedAt)));
+  if (metadata.sourceSha256 !== undefined) assert.equal(metadata.sourceSha256, info.zipSha256);
+  return { archivePageId: page.id, source: info.source,
+    sourcePageSha256: createHash("sha256").update(JSON.stringify({ id: page.id, parent: page.parent, created_time: page.created_time,
+      last_edited_time: page.last_edited_time, properties: stableProperties(page.properties) })).digest("hex"),
+    reasonCode: "unknown_source_isolated", reason: "前回送信の結果未確定。原本・旧値を保持し、このsourceを再送せず隔離しています" };
+}
+
+/** Partial/overflow/duplicate/unbound unknown listings cannot authorize another source writer. */
+async function readUnknownHoldingsSources(dbId: string): Promise<Array<{ page: HoldingPage; hold: UnknownHoldingsSource }>> {
+  const unknown = await notionRequest<{ results: HoldingPage[]; has_more: boolean; next_cursor: string | null }>(
+    "POST", `/databases/${dbId}/query`, { filter: { property: "保有明細状態", select: { equals: "実行中（結果未確定）" } },
+      sorts: [{ timestamp: "created_time", direction: "ascending" }], page_size: 6 }, { singleAttempt: true });
+  assert.equal(unknown.has_more, false, "結果未確定sourceの全体を有限枠内で識別できません");
+  assert.equal(unknown.next_cursor, null); assert.ok(unknown.results.length <= 5, "結果未確定sourceの隔離枠5通を超えています");
+  const identities = new Set<string>(), ids = new Set<string>(), docs = new Set<string>();
+  return unknown.results.map(page => {
+    const hold = qualifyUnknownHoldingsSource(page, dbId), key = JSON.stringify([hold.source.stockCode, hold.source.fiscalYearEnd]), id = page.id.replaceAll("-", "");
+    assert(!identities.has(key) && !ids.has(id) && !docs.has(hold.source.docId), "結果未確定sourceのID/文書/提出者・期末が重複しています");
+    identities.add(key); ids.add(id); docs.add(hold.source.docId);
+    return { page, hold };
+  });
+}
+
+async function assertNoUnknownHoldingPeriod(source: ShareholdingsSource, archivePageId: string): Promise<void> {
+  // A revised document has a new archive ID but can target the same rows. No source caller can opt out.
+  const unknown = await readUnknownHoldingsSources(await recoveryDatabase());
+  assert(!unknown.some(({ hold }) => hold.source.docId === source.docId || hold.archivePageId.replaceAll("-", "") === archivePageId.replaceAll("-", "") ||
+    hold.source.stockCode === source.stockCode && hold.source.fiscalYearEnd === source.fiscalYearEnd),
+    "同じ提出会社・期末の保有明細に前回結果が未確定です。別文書からも再送しません");
+}
+
+/** EDINET完了checkpointとは独立した既知HOLDだけを再開し、資格済み未知sourceは隔離して保持する。 */
 export async function resumePendingShareholdings(args: { maxRows: number; shouldStop: () => boolean; observeIssuedShares?: true }): Promise<{
-  usedRows: number; resumed: number; held: number; pending: boolean;
+  usedRows: number; resumed: number; held: number; pending: boolean; unknownSources?: UnknownHoldingsSource[];
 }> {
   assert.ok(Number.isSafeInteger(args.maxRows) && args.maxRows >= 0 && args.maxRows <= 100);
   notionEnv.NOTION_STOCK_HOLDINGS_DB_ID(); // EDINET源取得より前に必須設定を検証する。
@@ -1047,11 +1120,27 @@ export async function resumePendingShareholdings(args: { maxRows: number; should
   const query = (status: string, size: number) => notionRequest<{ results: HoldingPage[]; has_more: boolean; next_cursor: string | null }>(
     "POST", `/databases/${dbId}/query`, { filter: { property: "保有明細状態", select: { equals: status } },
       sorts: [{ timestamp: "created_time", direction: "ascending" }], page_size: size });
-  const unknown = await query("実行中（結果未確定）", 1);
-  assert.equal(unknown.results.length, 0, "保有明細に結果未確定の通があります。自動再送せず読取照合してください");
+  const unknown = await readUnknownHoldingsSources(dbId);
+  const unknownSources: UnknownHoldingsSource[] = [], protectedPages: HoldingPage[] = [], identities = new Set<string>(),
+    unknownIds = new Set<string>(), unknownDocs = new Set<string>();
+  for (const { page, hold } of unknown) {
+    const key = JSON.stringify([hold.source.stockCode, hold.source.fiscalYearEnd]);
+    const id = page.id.replaceAll("-", "");
+    identities.add(key); unknownIds.add(id); unknownDocs.add(hold.source.docId);
+    assert(!args.shouldStop(), "結果未確定sourceの資格確認中に時間予算を超えました");
+    const fresh = await notionRequest<HoldingPage>("GET", `/pages/${page.id}`, undefined, { singleAttempt: true });
+    assertSameHoldingPage(fresh, page); protectedPages.push(fresh); unknownSources.push(hold);
+  }
   const queue = await query("再開待ち", 6);
   const attention = await query("要確認", 1);
-  const result = { usedRows: 0, resumed: 0, held: attention.results.length, pending: queue.has_more || queue.results.length > 5 };
+  const result = { usedRows: 0, resumed: 0, held: attention.results.length + unknownSources.length,
+    pending: unknownSources.length > 0 || queue.has_more || queue.results.length > 5 };
+  // 同じholding期末に別source/legacyが混在した場合は、未知sourceを迂回して書かない。
+  for (const page of queue.results) {
+    const info = JSON.parse(richValue(page.properties["保有明細再開情報"])) as RecoveryInfo;
+    assert(!identities.has(JSON.stringify([info.source.stockCode, info.source.fiscalYearEnd])) &&
+      !unknownIds.has(page.id.replaceAll("-", "")) && !unknownDocs.has(info.source.docId), "再開queueが結果未確定sourceと衝突しています");
+  }
   for (const page of queue.results.slice(0, 5)) {
     if (args.shouldStop() || result.usedRows === args.maxRows) { result.pending = true; break; }
     assert.equal(page.archived, false);
@@ -1078,5 +1167,9 @@ export async function resumePendingShareholdings(args: { maxRows: number; should
     else if (outcome.pending) { result.usedRows += outcome.usedRows!; result.resumed++; result.pending = true; }
     else { result.held++; result.pending = true; }
   }
-  return result;
+  for (const page of protectedPages) {
+    assert(!args.shouldStop(), "結果未確定sourceの保護POST確認前に時間予算を超えました");
+    assertSameHoldingPage(await notionRequest<HoldingPage>("GET", `/pages/${page.id}`, undefined, { singleAttempt: true }), page);
+  }
+  return unknownSources.length === 0 ? result : { ...result, unknownSources };
 }

@@ -1,0 +1,87 @@
+{
+  "description": "Actual read-only closure snapshots. Original source/period/ZIP business values are unchanged. File URL SigV4 query and expiry only are removed as listed; no HTTP is issued by tests.",
+  "files": [
+    {
+      "fixture": "1911-source-unknown.json",
+      "fixtureSha256": "6979e72db78689084f236f286269a2950ab7a2bc2a5fe8d74dc531a0116b2f15",
+      "savedSourceBundleSha256": "ecc58de6907e9d38aab0b8cecd208aece031169b6670a754f9f37c76aa7fbbc1",
+      "originalSelectedObjectSha256": "e0cc573a6871060cf03213c58e25c451d365602c87c555cee4e4159016a0b432",
+      "actualNative": [
+        {
+          "sequence": 26,
+          "responseSha256": "e0cc573a6871060cf03213c58e25c451d365602c87c555cee4e4159016a0b432"
+        }
+      ],
+      "stockCode": "1911"
+    },
+    {
+      "fixture": "1897-source-complete.json",
+      "fixtureSha256": "8d411f0e92ddd150afc4e73adcc11f0433d115379a72e2c7651bd51a071c5f7a",
+      "savedSourceBundleSha256": "ecc58de6907e9d38aab0b8cecd208aece031169b6670a754f9f37c76aa7fbbc1",
+      "originalSelectedObjectSha256": "2d141808a08d919b0a00a0462a49ab531ef63acf1370640a19381f7eae1d3cfe",
+      "actualNative": [
+        {
+          "sequence": 21,
+          "responseSha256": "2d141808a08d919b0a00a0462a49ab531ef63acf1370640a19381f7eae1d3cfe"
+        }
+      ],
+      "stockCode": "1897"
+    },
+    {
+      "fixture": "1897-period-complete.json",
+      "fixtureSha256": "1b3ed76d1c80a5f5769e625979185382341abab8f6db42b5d4eeb1ace07b2db6",
+      "savedPeriodBundleSha256": "4d358946f86e942be1931477184e888136e1d77aca6afe87b89e701b20ceb57d"
+    },
+    {
+      "fixture": "1897-S100XT0W.zip",
+      "fixtureSha256": "270f9135134788be8d380060a04dc546f982fcee1ff1954cd97b51c1b2e48c0f",
+      "publicDocument": {
+        "docId": "S100XT0W",
+        "stockCode": "1897",
+        "edinetCode": "E00133",
+        "fiscalYearEnd": "2025-12-31"
+      },
+      "bytes": 533751
+    }
+  ],
+  "removedTransport": [
+    {
+      "path": "1911-source-unknown.json.properties.Files.files[0].file.url",
+      "removedQueryNames": [
+        "X-Amz-Algorithm",
+        "X-Amz-Content-Sha256",
+        "X-Amz-Credential",
+        "X-Amz-Date",
+        "X-Amz-Expires",
+        "X-Amz-Security-Token",
+        "X-Amz-Signature",
+        "X-Amz-SignedHeaders"
+      ]
+    },
+    {
+      "path": "1911-source-unknown.json.properties.Files.files[0].file.expiry_time",
+      "removed": true
+    },
+    {
+      "path": "1897-source-complete.json.properties.Files.files[0].file.url",
+      "removedQueryNames": [
+        "X-Amz-Algorithm",
+        "X-Amz-Content-Sha256",
+        "X-Amz-Credential",
+        "X-Amz-Date",
+        "X-Amz-Expires",
+        "X-Amz-Security-Token",
+        "X-Amz-Signature",
+        "X-Amz-SignedHeaders"
+      ]
+    },
+    {
+      "path": "1897-source-complete.json.properties.Files.files[0].file.expiry_time",
+      "removed": true
+    }
+  ],
+  "declaredTestMutations": [
+    "Healthy 1897 complete source is cloned to a restartable checkpoint: only source state is set to 再開待ち and sourceNextHoldingOffset to0. This is a declared test checkpoint, not an assertion of its historical state.",
+    "Negative cases deliberately alter one specified field in cloned real snapshots. Unknown 1911 originals and its 143-event journal remain private and immutable."
+  ]
+}
