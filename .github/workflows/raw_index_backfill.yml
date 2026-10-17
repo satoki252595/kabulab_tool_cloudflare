@@ -40,6 +40,10 @@ on:
         description: "成功後に同じ固定集合を継続する残run上限(0で単発)。最大200、各run500件/2GiB/新規開始3600秒以下"
         type: string
         default: "0"
+      hosted_max_rps:
+        description: "任意の独立hosted取得枠0.25〜1rps（通常apply専用）。空欄は従来のAPI/hosted合算.25"
+        type: string
+        default: ""
       reconcile_sha256:
         description: "人間判断後の単一raw/index_inflight回復。apply/limit1/両SHA必須、通常は空欄"
         type: string
@@ -85,6 +89,7 @@ jobs:
           LIMIT: ${{ inputs.limit }}
           MAX_BYTES: ${{ inputs.max_bytes }}
           MAX_SECONDS: ${{ inputs.max_seconds }}
+          HOSTED_MAX_RPS: ${{ inputs.hosted_max_rps }}
           RECONCILE_SHA256: ${{ inputs.reconcile_sha256 }}
           RECONCILE_STATE_SHA256: ${{ inputs.reconcile_state_sha256 }}
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
@@ -102,6 +107,9 @@ jobs:
           reconcile_args=()
           if [ -n "$RECONCILE_SHA256" ] || [ -n "$RECONCILE_STATE_SHA256" ]; then
             reconcile_args+=("--reconcile-sha256=$RECONCILE_SHA256" "--reconcile-state-sha256=$RECONCILE_STATE_SHA256")
+          fi
+          if [ -n "$HOSTED_MAX_RPS" ]; then
+            reconcile_args+=("--hosted-max-rps=$HOSTED_MAX_RPS")
           fi
           nix develop -c pnpm exec tsx scripts/notion/raw-index-backfill.ts \
             "--mode=$MODE" "--plan-id=$PLAN_ID" "--expected-count=$EXPECTED_COUNT" "--cutoff=$CUTOFF" \

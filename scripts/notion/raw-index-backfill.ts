@@ -153,6 +153,8 @@ export interface RawBackfillOptions {
   /** 終端後の人間判断に限る単一原本/索引回復。通常再開のunknown停止は変えない。 */
   reconcileSha256?: string;
   reconcileStateSha256?: string;
+  /** 通常applyだけの独立hosted枠。省略時は従来のAPI/hosted合算枠。 */
+  hostedMaxRps?: number;
 }
 export interface RawIndexRow {
   sha256: string; r2_bucket: string; r2_key: string; source: string; datatype: string; scope: string;
@@ -166,6 +168,7 @@ export interface RawIndexReadOptions {
 }
 export type RawDownloadOptions = Pick<ArchivedDownloadOptions, "signal" | "onAttempt"> & {
   notionRequestOptions?: Pick<NotionRequestOptions, "singleAttempt" | "beforeRequest">;
+  beforeHostedRequest?: () => void;
 };
 export interface BackfillIo {
   rawBucket: string; receiptBucket: string;
@@ -178,6 +181,12 @@ export interface BackfillIo {
   antiJoin: (items: readonly RawItem[]) => Promise<{ checked: number; missing: number }>;
   now: () => number;
   emit: (record: object) => Promise<void>; // caller fsyncs before remote mutation.
+}
+
+function hostedIntervalMs(rps: number | undefined): number | undefined {
+  if (rps === undefined) return undefined;
+  if (!Number.isFinite(rps) || rps < 0.25 || rps > 1) throw new NotionConfigError("[raw-backfill] 独立hosted枠は0.25〜1rpsです");
+  return Math.ceil(1000 / rps);
 }
 
 export function validateRawOptions(opts: RawBackfillOptions, now = Date.now()): void {
@@ -201,6 +210,11 @@ export function validateRawOptions(opts: RawBackfillOptions, now = Date.now()): 
         opts.maxBytes > 64 * 1024 ** 2 || opts.maxSeconds > 600 ||
         !hashSchema.safeParse(opts.reconcileSha256).success || !hashSchema.safeParse(opts.reconcileStateSha256).success)
       throw new Error("[raw-backfill] 明示reconcileはapply/limit1/固定cutoff/両SHA/64MiB/600秒以下が必須です");
+  }
+  if (opts.hostedMaxRps !== undefined) {
+    hostedIntervalMs(opts.hostedMaxRps);
+    if (opts.mode !== "apply" || opts.reconcileSha256 !== undefined || opts.reconcileStateSha256 !== undefined)
+      throw new NotionConfigError("[raw-backfill] 独立hosted枠は通常apply専用です");
   }
 }
 
@@ -352,8 +366,10 @@ function validateIndex(row: RawIndexRow, item: RawItem, bucket: string, expected
 }
 
 /** hosted原本を全文取得。Notionが非対応拡張子をZIPで包んだ時だけ、単一実名memberを解く。 */
-export function createRawDownloader(find = findCanonicalRawFileAttachments, download = downloadArchivedFile): BackfillIo["download"] {
+export function createRawDownloader(find = findCanonicalRawFileAttachments, download = downloadArchivedFile, hostedMaxRps?: number): BackfillIo["download"] {
   let cache = new Map<string, CanonicalRawAttachment>();
+  const interval = hostedIntervalMs(hostedMaxRps);
+  let lastHostedStart = -Infinity;
   return async (item, cohort, options) => {
     if (!cache.has(item.sha256) || options?.notionRequestOptions !== undefined) {
       const shas = cohort.map((row) => row.sha256);
@@ -373,10 +389,21 @@ export function createRawDownloader(find = findCanonicalRawFileAttachments, down
     const maxBytes = file.name === item.filename ? item.sizeBytes : item.sizeBytes + Math.ceil(item.sizeBytes * 0.001) + 4096;
     let wireBytes = 0;
     const wire = await download(file, "⑤raw-index", { maxBytes, signal: options?.signal, onAttempt: async event => {
-      if (event.phase === "start") await paceNotionNativeRequest(options?.signal);
+      if (event.phase === "start" && interval === undefined) await paceNotionNativeRequest(options?.signal);
       else wireBytes += event.receivedBytes;
       await options?.onAttempt?.(event);
       if (wireBytes > maxBytes * 2) throw new Error("[raw-backfill] hosted物理転送が予約予算を超えました");
+      if (event.phase === "start" && interval !== undefined) {
+        // accounting/fsync後。helperはこのcallback後の同期abort検査からfetchへ直行する。
+        for (;;) {
+          options?.signal?.throwIfAborted(); options?.beforeHostedRequest?.();
+          const wait = interval - (performance.now() - lastHostedStart);
+          if (wait <= 0) break;
+          await delay(wait, undefined, { signal: options?.signal });
+        }
+        options?.signal?.throwIfAborted(); options?.beforeHostedRequest?.();
+        lastHostedStart = performance.now();
+      }
     } });
     let body = wire;
     if (file.name !== item.filename) {
@@ -719,7 +746,9 @@ export async function runRawBackfill(opts: RawBackfillOptions, io: BackfillIo) {
         if (remainingMs <= 0) throw new Error("[raw-backfill] 準備の時間予算到達。未完manifestを使わず停止");
         const beforeBytes = stats.notionDownloadBytes, beforeAttempts = stats.notionDownloadAttempts;
         const saved = await io.download(item, manifest.items.slice(state.cursor, state.cursor + 50), {
-          signal: AbortSignal.timeout(remainingMs), onAttempt: async event => {
+          signal: AbortSignal.timeout(remainingMs), beforeHostedRequest: () => {
+            if (io.now() + 65_000 > deadline) throw new NotionConfigError("[raw-backfill] hostedの65秒headroom不足。送信せず停止");
+          }, onAttempt: async event => {
             if (event.phase === "start") stats.notionDownloadAttempts++;
             else stats.notionDownloadBytes += event.receivedBytes;
             await io.emit({ phase: "hosted_read_attempt", sha256: item.sha256, attempt: event.attempt,
@@ -804,7 +833,7 @@ export async function runRawBackfill(opts: RawBackfillOptions, io: BackfillIo) {
 
 async function main() {
   const required = ["mode", "plan-id", "limit", "max-bytes", "max-seconds", "expected-count", "out"];
-  const allowed = [...required, "notion-max-rps", "cutoff", "reconcile-sha256", "reconcile-state-sha256"];
+  const allowed = [...required, "notion-max-rps", "hosted-max-rps", "cutoff", "reconcile-sha256", "reconcile-state-sha256"];
   const args = new Map<string, string>();
   for (const arg of process.argv.slice(2)) {
     const m = /^--([a-z0-9-]+)=(.+)$/.exec(arg);
@@ -815,11 +844,13 @@ async function main() {
   const opts: RawBackfillOptions = { mode: args.get("mode") as RawBackfillOptions["mode"], planId: args.get("plan-id")!, limit: Number(args.get("limit")),
     maxBytes: Number(args.get("max-bytes")), maxSeconds: Number(args.get("max-seconds")), expectedCount: Number(args.get("expected-count")), ...(args.has("cutoff") ? { cutoff: args.get("cutoff")! } : {}),
     ...(args.has("reconcile-sha256") ? { reconcileSha256: args.get("reconcile-sha256")! } : {}),
-    ...(args.has("reconcile-state-sha256") ? { reconcileStateSha256: args.get("reconcile-state-sha256")! } : {}) };
+    ...(args.has("reconcile-state-sha256") ? { reconcileStateSha256: args.get("reconcile-state-sha256")! } : {}),
+    ...(args.has("hosted-max-rps") ? { hostedMaxRps: Number(args.get("hosted-max-rps")) } : {}) };
   validateRawOptions(opts);
-  if (opts.reconcileSha256 !== undefined) {
+  if (opts.reconcileSha256 !== undefined || opts.hostedMaxRps !== undefined) {
     const rps = args.has("notion-max-rps") ? Number(args.get("notion-max-rps")) : 0.25;
-    if (!Number.isFinite(rps) || rps <= 0 || rps > 0.25) throw new NotionConfigError("[raw-backfill] reconcile Notion pacingは0.25rps以下です");
+    if (!Number.isFinite(rps) || rps <= 0 || rps > 0.25) throw new NotionConfigError(opts.hostedMaxRps === undefined
+      ? "[raw-backfill] reconcile Notion pacingは0.25rps以下です" : "[raw-backfill] 独立hosted時のNotion API pacingは0.25rps以下です");
     setNotionMaxRps(rps);
   } else if (args.has("notion-max-rps")) setNotionMaxRps(Number(args.get("notion-max-rps")));
   const receipt = await fs.open(args.get("out")!, "wx", 0o600), before = notionStats();
@@ -858,7 +889,7 @@ async function main() {
   try {
     const result = await runRawBackfill(opts, { rawBucket: sharedEnv.R2_BUCKET_RAW(), receiptBucket: sharedEnv.R2_BUCKET(),
       get: (key, bucket, options) => r2GetBytesVersion(key, bucket, { ...options, singleAttempt: true }), put: r2PutBytes,
-      list: (cutoff, guard) => listCanonicalRawFiles(cutoff, guard, observeInventory), download: createRawDownloader(), index: readRawIndex, insert: insertRawIndex,
+      list: (cutoff, guard) => listCanonicalRawFiles(cutoff, guard, observeInventory), download: createRawDownloader(undefined, undefined, opts.hostedMaxRps), index: readRawIndex, insert: insertRawIndex,
       antiJoin: (items) => auditRawIndexMembership(items, sharedEnv.R2_BUCKET_RAW()), now: Date.now, emit });
     const after = notionStats();
     console.info(JSON.stringify({ ...result, notionRequests: after.requests - before.requests }));

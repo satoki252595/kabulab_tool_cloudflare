@@ -59,6 +59,9 @@ def continuation(event: dict, records: list[dict], execution_revision: str) -> d
     }
     next_inputs["continue_runs"] = str(runs - 1)
     next_inputs["execution_revision"] = execution_revision
+    if inputs.get("hosted_max_rps"):
+        # Only a normal CLI-successful explicit hosted mode is carried; old inputs stay byte-equivalent.
+        next_inputs["hosted_max_rps"] = inputs["hosted_max_rps"]
     return {"ref": "main", "inputs": next_inputs}
 
 
