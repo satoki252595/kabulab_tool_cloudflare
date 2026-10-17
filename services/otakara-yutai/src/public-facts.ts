@@ -28,11 +28,21 @@ export type BenefitConditionStructure = {
 } & ({ status: "literal_parsed"; ast: { take: 1; options: { ordinal: number; listedYen: number; notation: "相当" | "分" }[] } }
   | { status: "unparsed"; ast: null; reason: "malformed_heading" | "additional_condition" | "unsupported_grammar" });
 
-export type PublicBenefitFacts = ({ version: 1 } | { version: 2; conditionStructure: BenefitConditionStructure }) & {
+export type BenefitHoldingStructure = {
+  status: "literal_parsed";
+  rule: "single-holding-period-v1";
+  sourceSha256: string;
+  applicability: "unverified";
+  ast: { holdingPeriod: "半年以上"; benefit: { kind: "coupon"; listedYen: number; notation: "相当" } }
+    | { holdingPeriod: "1年以上"; benefit: { kind: "admission_tickets"; quantity: number; unit: "枚" } };
+};
+
+export type PublicBenefitFacts = ({ version: 1 } | { version: 2; conditionStructure: BenefitConditionStructure }
+  | { version: 3; conditionStructure: BenefitHoldingStructure }) & {
   sourceGroup: string;
   /** 掲載表記の検出。必要条件・適用対象を確認済みという意味ではない。 */
   holding: boolean;
-  /** 掲載中の期間表記。株数・保有条件・別の利用期間との対応は未確定。 */
+  /** 掲載中の期間表記。v3の全文対応を除き特典との対応は未確定。本人・株数条件は未確認。 */
   holdingPeriods: string[];
   /** 選択・抽選に関する掲載表記の検出。対象の確定ではない。 */
   choice: boolean;
@@ -79,9 +89,9 @@ export function parsePublicBenefitFacts(value: unknown, code?: string): PublicBe
   const raw: unknown = typeof value === "string" ? JSON.parse(value) : value;
   const version = typeof raw === "object" && raw !== null && "version" in raw ? raw.version : undefined;
   const facts = record(raw,
-    ["version", "sourceGroup", "holding", "holdingPeriods", "choice", "lottery", "application", "combination", "valueStatus", "qualifiedAmount", "valueReasons", "source", ...(version === 2 ? ["conditionStructure"] : [])]);
+    ["version", "sourceGroup", "holding", "holdingPeriods", "choice", "lottery", "application", "combination", "valueStatus", "qualifiedAmount", "valueReasons", "source", ...(version === 2 || version === 3 ? ["conditionStructure"] : [])]);
   const source = record(facts.source, ["listingUrl", "fetchedAt", "batchFetchedAt", "officialStatus", "officialUrl", "verifiedAt"]);
-  if ((facts.version !== 1 && facts.version !== 2) || typeof facts.sourceGroup !== "string" || !/^[0-9a-f]{16}$/.test(facts.sourceGroup) ||
+  if ((facts.version !== 1 && facts.version !== 2 && facts.version !== 3) || typeof facts.sourceGroup !== "string" || !/^[0-9a-f]{16}$/.test(facts.sourceGroup) ||
       [facts.holding, facts.choice, facts.lottery, facts.application].some(v => typeof v !== "boolean") ||
       !Array.isArray(facts.holdingPeriods) || facts.holdingPeriods.some(v => typeof v !== "string" || !/^(?:[0-9]+|半)(?:年|か月)(?:以上|未満|以下|超)$/.test(v)) ||
       (facts.holding === false && facts.holdingPeriods.length > 0) ||
@@ -116,6 +126,24 @@ export function parsePublicBenefitFacts(value: unknown, code?: string): PublicBe
             !["相当", "分"].includes(option.notation as string)) throw new Error("掲載選択肢の値が不正です");
       }
     } else throw new Error("条件構造の状態が不正です");
+  }
+  if (facts.version === 3) {
+    const structure = record(facts.conditionStructure, ["status", "rule", "sourceSha256", "applicability", "ast"]);
+    const ast = record(structure.ast, ["holdingPeriod", "benefit"]);
+    if (structure.status !== "literal_parsed" || structure.rule !== "single-holding-period-v1" ||
+        typeof structure.sourceSha256 !== "string" || !/^[0-9a-f]{64}$/.test(structure.sourceSha256) || structure.applicability !== "unverified" ||
+        facts.holding !== true || facts.choice !== false || facts.lottery !== false || facts.application !== false ||
+        facts.combination !== "unverified" || JSON.stringify(facts.holdingPeriods) !== JSON.stringify([ast.holdingPeriod])) throw new Error("掲載保有期間の適用範囲が不正です");
+    if (typeof ast.benefit !== "object" || ast.benefit === null || !("kind" in ast.benefit)) throw new Error("掲載特典の構造が不正です");
+    if (ast.benefit.kind === "coupon") {
+      const benefit = record(ast.benefit, ["kind", "listedYen", "notation"]);
+      if (ast.holdingPeriod !== "半年以上" || benefit.notation !== "相当" || typeof benefit.listedYen !== "number" || !Number.isSafeInteger(benefit.listedYen) || benefit.listedYen <= 0 ||
+          (facts.qualifiedAmount !== null && facts.qualifiedAmount !== benefit.listedYen)) throw new Error("掲載期間と円額の対応が不正です");
+    } else if (ast.benefit.kind === "admission_tickets") {
+      const benefit = record(ast.benefit, ["kind", "quantity", "unit"]);
+      if (ast.holdingPeriod !== "1年以上" || benefit.unit !== "枚" || typeof benefit.quantity !== "number" || !Number.isSafeInteger(benefit.quantity) || benefit.quantity <= 0 ||
+          facts.qualifiedAmount !== null || facts.valueStatus !== "unresolved") throw new Error("掲載期間と枚数の対応が不正です");
+    } else throw new Error("掲載特典の種類が未対応です");
   }
   if (code !== undefined && source.listingUrl !== `https://minkabu.jp/stock/${code}/yutai`) {
     throw new Error("公開条件の銘柄と掲載出典が一致しません");

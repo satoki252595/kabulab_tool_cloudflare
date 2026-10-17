@@ -29,7 +29,7 @@ describe("全文に束縛した1点選択の構造", () => {
     expect(parsePublicBenefitFacts(JSON.stringify(facts), "7203")).toEqual(facts);
     const html = renderBenefitFacts(facts, null);
     expect(html).toContain("2選択肢から1点を選択");
-    expect(html).toContain("保有期間別・併用の構造は未解析");
+    expect(html).toContain("複数の保有期間・株数段階・併用の構造は未解析");
     expect(html).not.toContain("カタログギフト");
     expect(html).not.toContain("2,000円");
   });

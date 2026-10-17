@@ -1,0 +1,190 @@
+{
+  "provenance": {
+    "savedReadbackSha256": "82317d87aedf4877a1a6b16fb899832fc395223e85523d45123a5207a70f8dfb",
+    "corpusSha256": "cf75176596e3515ff264c8541189934388ea374f92dfdd33d3d01f04d2e91f38",
+    "projection": "Four actual source hashes, row condition fields, old public facts and independently transcribed period/amount/count AST. Full descriptions stay private.",
+    "privateFixtureSha256": "c266539cfc5e45d168c93edbb8f5352b2b422503f83ac6c1c193d804475b785a"
+  },
+  "groups": [
+    {
+      "code": "2282",
+      "sourceGroup": "8af5cfe598bf8b9e",
+      "sourceSha256": "9e50c64f998e31a009ce1bfde4e18b88fb8d4d3de2b52dc995a5d7afd9453c33",
+      "rows": 1,
+      "minShares": [
+        300
+      ],
+      "recordMonths": [
+        9
+      ],
+      "oldFacts": {
+        "version": 1,
+        "sourceGroup": "8af5cfe598bf8b9e",
+        "choice": false,
+        "holding": true,
+        "holdingPeriods": [
+          "半年以上"
+        ],
+        "lottery": false,
+        "application": false,
+        "combination": "unverified",
+        "valueStatus": "source_amount_qualified",
+        "qualifiedAmount": 1000,
+        "valueReasons": [
+          "qualified_company_per_grant"
+        ],
+        "source": {
+          "listingUrl": "https://minkabu.jp/stock/2282/yutai",
+          "fetchedAt": null,
+          "batchFetchedAt": null,
+          "officialStatus": "not_verified",
+          "officialUrl": null,
+          "verifiedAt": null
+        }
+      },
+      "ast": {
+        "holdingPeriod": "半年以上",
+        "benefit": {
+          "kind": "coupon",
+          "listedYen": 1000,
+          "notation": "相当"
+        }
+      }
+    },
+    {
+      "code": "2282",
+      "sourceGroup": "ccdbe3f9ec6ca87b",
+      "sourceSha256": "f2f4e25429348795f31f62dc11ad57f27e09c8920225c4970919c82905f30688",
+      "rows": 1,
+      "minShares": [
+        900
+      ],
+      "recordMonths": [
+        9
+      ],
+      "oldFacts": {
+        "version": 1,
+        "sourceGroup": "ccdbe3f9ec6ca87b",
+        "choice": false,
+        "holding": true,
+        "holdingPeriods": [
+          "半年以上"
+        ],
+        "lottery": false,
+        "application": false,
+        "combination": "unverified",
+        "valueStatus": "source_amount_qualified",
+        "qualifiedAmount": 2000,
+        "valueReasons": [
+          "qualified_company_per_grant"
+        ],
+        "source": {
+          "listingUrl": "https://minkabu.jp/stock/2282/yutai",
+          "fetchedAt": null,
+          "batchFetchedAt": null,
+          "officialStatus": "not_verified",
+          "officialUrl": null,
+          "verifiedAt": null
+        }
+      },
+      "ast": {
+        "holdingPeriod": "半年以上",
+        "benefit": {
+          "kind": "coupon",
+          "listedYen": 2000,
+          "notation": "相当"
+        }
+      }
+    },
+    {
+      "code": "2282",
+      "sourceGroup": "f70b884c89dafac6",
+      "sourceSha256": "0be1f4443c1465f58a61d94e02fd73fc88984628f4778a321ce822034bf64069",
+      "rows": 1,
+      "minShares": [
+        1500
+      ],
+      "recordMonths": [
+        9
+      ],
+      "oldFacts": {
+        "version": 1,
+        "sourceGroup": "f70b884c89dafac6",
+        "choice": false,
+        "holding": true,
+        "holdingPeriods": [
+          "半年以上"
+        ],
+        "lottery": false,
+        "application": false,
+        "combination": "unverified",
+        "valueStatus": "source_amount_qualified",
+        "qualifiedAmount": 3000,
+        "valueReasons": [
+          "qualified_company_per_grant"
+        ],
+        "source": {
+          "listingUrl": "https://minkabu.jp/stock/2282/yutai",
+          "fetchedAt": null,
+          "batchFetchedAt": null,
+          "officialStatus": "not_verified",
+          "officialUrl": null,
+          "verifiedAt": null
+        }
+      },
+      "ast": {
+        "holdingPeriod": "半年以上",
+        "benefit": {
+          "kind": "coupon",
+          "listedYen": 3000,
+          "notation": "相当"
+        }
+      }
+    },
+    {
+      "code": "9048",
+      "sourceGroup": "ef6e5799380fc61e",
+      "sourceSha256": "b0dd112f574cc8e2fd67e3b13bd52e9921d18c6ece2ca93bd4fa012b370590e0",
+      "rows": 1,
+      "minShares": [
+        200
+      ],
+      "recordMonths": [
+        3
+      ],
+      "oldFacts": {
+        "version": 1,
+        "sourceGroup": "ef6e5799380fc61e",
+        "choice": false,
+        "holding": true,
+        "holdingPeriods": [
+          "1年以上"
+        ],
+        "lottery": false,
+        "application": false,
+        "combination": "unverified",
+        "valueStatus": "unresolved",
+        "qualifiedAmount": null,
+        "valueReasons": [
+          "no_source_yen_amount"
+        ],
+        "source": {
+          "listingUrl": "https://minkabu.jp/stock/9048/yutai",
+          "fetchedAt": null,
+          "batchFetchedAt": null,
+          "officialStatus": "not_verified",
+          "officialUrl": null,
+          "verifiedAt": null
+        }
+      },
+      "ast": {
+        "holdingPeriod": "1年以上",
+        "benefit": {
+          "kind": "admission_tickets",
+          "quantity": 6,
+          "unit": "枚"
+        }
+      }
+    }
+  ]
+}
