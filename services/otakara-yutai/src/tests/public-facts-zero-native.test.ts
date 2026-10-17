@@ -9,8 +9,8 @@ import { ROOT } from "../../../../src/shared/db/tests/source-scan.js";
 import { toNotionUpload } from "../../../../src/shared/notion-archive/file-upload.js";
 import { benefitKey } from "../../data-scripts/benefit-key.js";
 import { buildPublicBenefitFacts } from "../../data-scripts/public-facts.js";
-import { claimHoldingUpgradeZeroNative, claimPublicFactsUpgrade, parsePublicFactsHoldingUpgradeScope,
-  planPublicFactsV1HoldingUpgrade, publicFactsUpgradeFilename, qualifyHoldingUpgradeZeroNative } from "../../data-scripts/backfill-public-facts.js";
+import { claimHoldingUpgradeReadOnlyStop, claimHoldingUpgradeZeroNative, claimPublicFactsUpgrade, parsePublicFactsHoldingUpgradeScope,
+  planPublicFactsV1HoldingUpgrade, publicFactsUpgradeFilename, qualifyHoldingUpgradeReadOnlyStop, qualifyHoldingUpgradeZeroNative } from "../../data-scripts/backfill-public-facts.js";
 import holdingSaved from "./fixtures/holding-period-saved4.json";
 
 const dirs: string[] = [], sha = (v: string | Uint8Array) => createHash("sha256").update(v).digest("hex");
@@ -50,6 +50,74 @@ function protocol() {
   write(proofPath, proof);
   return { root, state, directory, manifest, proof, proofPath, startedPath, sourcePath, scopePath, attemptDir, stopPath, releasePath };
 }
+
+/** 完全に手順専用のREAD packet。実Notion応答・本番データを装わない。 */
+function readOnlyProtocol() {
+  const f = protocol(); claimHoldingUpgradeZeroNative(f.state, f.directory, f.manifest, f.proofPath);
+  const sidecarPath = join(f.state, "upgrade-v1-zero-native-resume-started.json"), at = Date.parse(read(sidecarPath).at),
+    clock = (n: number) => new Date(at + n).toISOString(), attemptDir = join(f.root, "read-attempt"); mkdirSync(attemptDir, { mode: 0o700 });
+  const priorObserver = write(join(f.root, "read-observer.json"), { proceduralReadOnly: true });
+  const release = write(join(f.root, "read-release.json"), { status: "ROOT_RELEASED_NORMAL_HOLDING4_ZERO_NATIVE_RESUME_ONCE", codeRoot: f.root,
+    sourceHead: "14ce552846fca288d4f4890a84f1f4afbaad48e9", wrapperSha256: sha(readFileSync(priorObserver)),
+    qualificationSha256: sha(readFileSync(f.proofPath)), originalStartedSha256: sha(readFileSync(f.startedPath)) });
+  const request = Buffer.from(JSON.stringify({ query: "一次データ｜otakara-yutai", filter: { property: "object", value: "database" }, page_size: 100 })),
+    response = Buffer.from(JSON.stringify({ object: "list", results: [], has_more: false, next_cursor: null }));
+  writeFileSync(join(attemptDir, "request-1.body"), request); writeFileSync(join(attemptDir, "response-1.body"), response);
+  write(join(attemptDir, "attempt-once.json"), { at: clock(-1), sourceAPI: 0, models: 0, unknownResend: false, releaseSha256: sha(readFileSync(release)),
+    sourceHead: read(release).sourceHead, codeRoot: f.root, sourcePins: { "read-observer.json": sha(readFileSync(priorObserver)) }, originalPins: f.proof.pins,
+    qualificationSha256: sha(readFileSync(f.proofPath)), originalStartedSha256: sha(readFileSync(f.startedPath)) });
+  write(join(attemptDir, "intent-1.json"), { at: clock(1), kind: "notion", method: "POST", path: "/v1/search", urlSha256: sha("https://api.notion.com/v1/search"), resend: 0, bytes: request.length, sha256: sha(request) });
+  write(join(attemptDir, "response-1.json"), { at: clock(2), kind: "notion", status: 200, bytes: response.length, sha256: sha(response) });
+  const counters = { seq: 1, notion: 1, hosted: 0, d1Read: 0, d1Batch: 0, responseBytes: response.length, observedResponseBytes: response.length };
+  write(join(attemptDir, "NATIVE-STOP-0.json"), { at: clock(3), ...counters, name: "AssertionError", resend: 0 });
+  write(join(attemptDir, "STOP.json"), { at: clock(4), ...counters, unknownResend: false });
+  const qualification = { version: 1, kind: "holding-upgrade-single-read-stop", allOwnedProcessesTerminal: true, zeroNativeQualificationPath: f.proofPath,
+    priorAttemptDir: attemptDir, priorReleasePath: release, priorObserverPath: priorObserver, priorSourceHead: read(release).sourceHead,
+    pins: { ...f.proof.pins, ...Object.fromEntries([f.proofPath, sidecarPath, release, priorObserver, ...readdirSync(attemptDir).map(n => join(attemptDir, n))].map(p => [p, sha(readFileSync(p))])) } };
+  const qualificationPath = write(join(f.root, "read-qualification.json"), qualification);
+  return { ...f, sidecarPath, qualification, qualificationPath, priorAttemptDir: attemptDir };
+}
+
+describe("holding明示search READ1停止の一度再資格", () => {
+  it("旧2intentを保持し、READ1全文ACK・全pinsだけ新sidecarへ束縛する", () => {
+    const f = readOnlyProtocol(), old = readFileSync(f.startedPath), oldResume = readFileSync(f.sidecarPath), fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
+    expect(qualifyHoldingUpgradeReadOnlyStop(f.state, f.directory, f.manifest, f.qualificationPath)).toMatchObject({ priorReadRequests: 1, priorArchiveMutations: 0, priorD1Requests: 0 });
+    claimHoldingUpgradeReadOnlyStop(f.state, f.directory, f.manifest, f.qualificationPath);
+    expect(readFileSync(f.startedPath).equals(old)).toBe(true); expect(readFileSync(f.sidecarPath).equals(oldResume)).toBe(true);
+    expect(readdirSync(f.state).sort()).toEqual(["upgrade-v1-read-only-resume-started.json", "upgrade-v1-started.json", "upgrade-v1-zero-native-resume-started.json"]);
+    expect(() => claimHoldingUpgradeReadOnlyStop(f.state, f.directory, f.manifest, f.qualificationPath)).toThrow(); expect(fetch).not.toHaveBeenCalled();
+  });
+  it.each(["extra-native", "mutation", "d1", "ack", "response-drift", "request-route", "new-directory", "old-sidecar", "missing-pin", "unclosed"])("%sをclaim/HTTP前に拒否する", kind => {
+    const f = readOnlyProtocol(), fetch = vi.fn(); vi.stubGlobal("fetch", fetch); let directory = f.directory;
+    const change = (path: string, value: unknown) => { write(path, value); f.qualification.pins[path] = sha(readFileSync(path)); };
+    const stop = join(f.priorAttemptDir, "STOP.json"), response = join(f.priorAttemptDir, "response-1.json"), intent = join(f.priorAttemptDir, "intent-1.json");
+    if (kind === "extra-native") write(join(f.priorAttemptDir, "intent-2.json"), { procedural: true });
+    if (kind === "mutation") change(stop, { ...read(stop), notion: 2 });
+    if (kind === "d1") change(stop, { ...read(stop), d1Batch: 1 });
+    if (kind === "ack") change(response, { ...read(response), status: 500 });
+    if (kind === "response-drift") write(join(f.priorAttemptDir, "response-1.body"), { changed: true });
+    if (kind === "request-route") change(intent, { ...read(intent), path: "/v1/pages" });
+    if (kind === "new-directory") { directory = join(f.root, "different"); mkdirSync(directory); }
+    if (kind === "old-sidecar") change(f.sidecarPath, { ...read(f.sidecarPath), originalStartedSha256: "0".repeat(64) });
+    if (kind === "missing-pin") delete f.qualification.pins[f.sidecarPath];
+    if (kind === "unclosed") f.qualification.allOwnedProcessesTerminal = false;
+    write(f.qualificationPath, f.qualification);
+    expect(() => claimHoldingUpgradeReadOnlyStop(f.state, directory, f.manifest, f.qualificationPath)).toThrow();
+    expect(existsSync(join(f.state, "upgrade-v1-read-only-resume-started.json"))).toBe(false); expect(fetch).not.toHaveBeenCalled();
+  });
+  it("通常CLI新modeだけ同じ計画へ進み、再開後エラーもprivateへ保持する", () => {
+    const f = readOnlyProtocol(), old = readFileSync(f.startedPath), oldResume = readFileSync(f.sidecarPath), hook = join(f.root, "deny-fetch.mjs");
+    writeFileSync(hook, "globalThis.fetch=async()=>{throw new Error('procedural transport denied; no native HTTP');};\n");
+    expect(() => execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), "--import", hook,
+      join(ROOT, "services/otakara-yutai/data-scripts/backfill-public-facts.ts"), "resume-upgrade-holding-v1-read-only-stop",
+      f.sourcePath, f.directory, f.scopePath, f.qualificationPath], { cwd: f.root, stdio: "pipe", timeout: 10_000 })).toThrow();
+    expect(readFileSync(f.startedPath).equals(old)).toBe(true); expect(readFileSync(f.sidecarPath).equals(oldResume)).toBe(true);
+    expect(existsSync(join(f.state, "upgrade-v1-read-only-resume-started.json"))).toBe(true);
+    const failure = readdirSync(f.directory).find(n => n.startsWith("upgrade-failure-")); expect(failure).toBeDefined();
+    expect(read(join(f.directory, failure!)).mode).toBe("resume-upgrade-holding-v1-read-only-stop");
+    expect(existsSync(join(f.directory, "apply-started.json"))).toBe(false);
+  });
+});
 
 describe("holding zero-nativeの明示再資格", () => {
   it("実4source SHAの両phase名が100字以内で完全SHAを維持し、旧choice名は同一", () => {
