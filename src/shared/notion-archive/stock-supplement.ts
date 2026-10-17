@@ -1259,3 +1259,62 @@ export async function replaceEvidenceBlock(
   }
   publication.complete({ archivePageId, postPageSha256 });
 }
+
+export interface AppliedSupplementSnapshot {
+  page: EvidencePage & { created_time: string; parent: unknown };
+  children: ChildBlock[];
+  expectedProperties: Record<string, unknown>;
+  expectedEvidence: unknown;
+}
+
+/** Explicit recovery of ACKed properties/evidence only. Never append or PATCH again. */
+export async function finishAppliedSupplementPublication(input: {
+  snapshot: AppliedSupplementSnapshot; appliedPage: EvidencePage; newEvidenceId: string; recordedNewEvidence: unknown;
+  archivePageId: string; archiveKey: string; archiveRequest: SupplementPreArchiveRequest;
+  snapshotRaw: string; beforeWrite(): Promise<void>;
+  complete(output: { archivePageId: string; postPageSha256: string }): void;
+}): Promise<void> {
+  const { snapshot } = input, same = (a: unknown, b: unknown) => JSON.stringify(canonicalizeForHash(a)) === JSON.stringify(canonicalizeForHash(b));
+  const fail = (message: string): never => { throw new SupplementWriteHeldError(`適用済み補足の明示照合: ${message}。元intentを保持`); };
+  const old = snapshot.children.filter(b => b.type === "heading_3" && richPlain((b.heading_3 as { rich_text: unknown }).rich_text).startsWith(EVIDENCE_TITLE_PREFIX));
+  if (old.length !== 1 || snapshot.expectedEvidence === null || snapshot.expectedEvidence === undefined || old[0].id === input.newEvidenceId) fail("単一の旧/新根拠に束縛できません");
+  if (!same(evidenceValue(input.recordedNewEvidence), evidenceValue(snapshot.expectedEvidence))) fail("保存ACKの新根拠全文が不一致");
+  const verifyPage = (page: EvidencePage) => {
+    const before = snapshot.page, full = page as EvidencePage & { created_time: string; parent: unknown };
+    if (page.id !== before.id || full.created_time !== before.created_time || !same(full.parent, before.parent) || page.archived !== false || page.in_trash !== false ||
+        !same(Object.keys(page.properties).sort(), Object.keys(before.properties).sort())) fail("対象行の主体/全列が変更");
+    for (const [name, value] of Object.entries(page.properties)) {
+      if (value.id !== before.properties[name].id || !same(propertyValue(value), propertyValue(Object.hasOwn(snapshot.expectedProperties, name) ? snapshot.expectedProperties[name] : before.properties[name]))) fail(`列${name}が変更`);
+      if (!Object.hasOwn(snapshot.expectedProperties, name) && !same(value, before.properties[name])) fail(`保持列${name}が変更`);
+    }
+  };
+  const verifyChildren = (children: ChildBlock[], oldPresent: boolean) => {
+    const fresh = children.filter(b => b.id === input.newEvidenceId), previous = children.filter(b => b.id === old[0].id);
+    if (fresh.length !== 1 || !same(evidenceValue(fresh[0]), evidenceValue(snapshot.expectedEvidence))) fail("既存の新根拠全文が変更");
+    if (previous.length !== Number(oldPresent) || oldPresent && !same(previous[0], old[0]) ||
+        !same(children.filter(b => b.id !== input.newEvidenceId && b.id !== old[0].id), snapshot.children.filter(b => b.id !== old[0].id))) fail("旧根拠/保持本文が変更");
+  };
+  verifyPage(input.appliedPage);
+  const postPageSha256 = await sha256Hex(JSON.stringify(canonicalizeForHash(input.appliedPage)));
+  await verifySupplementPreArchive(input.archivePageId, input.archiveKey, input.snapshotRaw, input.archiveRequest);
+  const page = await evidencePage(snapshot.page.id), children = await evidenceChildren(snapshot.page.id);
+  const previous = await notionRequest<ChildBlock & { archived: boolean; in_trash: boolean }>("GET", `/blocks/${old[0].id}`, undefined, { singleAttempt: true });
+  if (previous.id !== old[0].id || typeof previous.archived !== "boolean" || typeof previous.in_trash !== "boolean" || !previous.archived && previous.in_trash) fail("旧根拠の状態不明");
+  const rootBody = (block: ChildBlock) => { const root = { ...block }; delete root.request_id; const body = { ...(root[root.type] as Record<string, unknown>) }; delete body.children; root[root.type] = body; return root; };
+  if (!previous.archived && !same(rootBody(previous), rootBody(old[0]))) fail("最後の旧根拠GETで本文/時計/全root内容が変更");
+  verifyPage(page); verifyChildren(children, !previous.archived);
+  if (!previous.archived && !same(page, input.appliedPage)) fail("適用後PRE時計/全対象内容が変更");
+  await input.beforeWrite();
+  if (!previous.archived) {
+    try {
+      const ack = await notionRequest<{ id: string; archived: boolean }>("DELETE", `/blocks/${old[0].id}`, undefined, { singleAttempt: true });
+      if (ack.id !== old[0].id || ack.archived !== true) throw new Error("旧根拠退役ACKが不正");
+    } catch (cause) { throw new NotionUnknownResultError("明示旧根拠退役が不明。元intent/一度だけの復旧claimを保持し再送しません", { cause }); }
+  }
+  const retired = await notionRequest<{ id: string; archived: boolean }>("GET", `/blocks/${old[0].id}`, undefined, { singleAttempt: true });
+  if (retired.id !== old[0].id || retired.archived !== true) throw new NotionUnknownResultError("明示旧根拠退役の読戻し不明。完了記録を保留");
+  verifyPage(await evidencePage(snapshot.page.id)); verifyChildren(await evidenceChildren(snapshot.page.id), false);
+  await input.beforeWrite();
+  // Match the normal publisher: hash the full page after property ACK, before old evidence retirement.
+  input.complete({ archivePageId: input.archivePageId, postPageSha256 });
+}

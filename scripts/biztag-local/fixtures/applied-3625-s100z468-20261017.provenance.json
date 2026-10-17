@@ -1,0 +1,149 @@
+{
+  "description": "Actual3625 public disclosure/PRE and ACKed tail; declared transport protocol projection for offline tests, not a new historical native baseline. Originals remain private.",
+  "originalWholeNativeCount": 229,
+  "projectionNativeIndices": [
+    215,
+    216,
+    217,
+    218,
+    219,
+    220,
+    221,
+    222,
+    223,
+    224,
+    225,
+    226,
+    227,
+    228,
+    229
+  ],
+  "projectionChanges": [
+    "indices215..229 reindexed1..15 in intent/response metadata/nativeStart",
+    "response JSON serialized compactly; response bytes/SHA recalculated",
+    "nativeStop.nativeAttempts/stats.requests projected to15"
+  ],
+  "removedTransportFields": [
+    "current/archive/properties/Files/files/0/file/url removed signed URL query",
+    "current/archive/properties/Files/files/0/file/expiry_time removed transport expiry",
+    "record/216/response/expiry_time removed transport expiry",
+    "record/217/response/expiry_time removed transport expiry",
+    "record/218/response/properties/Files/files/0/file/url removed signed URL query",
+    "record/218/response/properties/Files/files/0/file/expiry_time removed transport expiry",
+    "record/219/response/properties/Files/files/0/file/url removed signed URL query",
+    "record/219/response/properties/Files/files/0/file/expiry_time removed transport expiry"
+  ],
+  "originalPreSha256": "f9a229142d9bc3f6ea4f2f80df648c1368cd3c4f47bad379a385c54ea5dce61f",
+  "originalIntentSha256": "aea97cf100110cc911aaf1c0d99b4923ea50092fa82905ce60b02560282a07c6",
+  "originalCaptureRecords": [
+    {
+      "originalIndex": 215,
+      "originalIntentSha256": "ce8a3e650a8f9028c4b03671b2b2e8cba69c71a5c2b56857696e8ba92986e02c",
+      "originalRequestSha256": "e20feec25d9763ad92a3d9ed7b6cecef61444c84d357a57b5eba6e65e7928ff1",
+      "originalResponseSha256": "1c8be52e3395234efb0ce27489fa115bb0797aa13d3f6d04d40eff321cac788e",
+      "originalResponseMetadataSha256": "348164f5a572a060290a540374e768b77bc1ac2228dc80a904e1358cf41656bd"
+    },
+    {
+      "originalIndex": 216,
+      "originalIntentSha256": "379adf67d8abea21925b13141b2f0637f6abd19a42cac7c5927d020b05e49f33",
+      "originalRequestSha256": "c2e94615805065ee64dffa1d93755fa998a46e7e3a4e10322b51e9f7fc2744de",
+      "originalResponseSha256": "ada8ba3fc3cbb5800746b51972310788052a579b9e8d5d7ad4103400906bd138",
+      "originalResponseMetadataSha256": "b6d5b4004d26bdca2c190c26058acbdd651b53ab96ed0d16e58c84055f214f96"
+    },
+    {
+      "originalIndex": 217,
+      "originalIntentSha256": "e52c03f621b8a0544cab3c804381e572efc5a5cd51097371f5010da1573e3d56",
+      "originalRequestSha256": "24ba5e744f852c5064a98aa7ea4f5be64a90c9b13628f562680d69eaba96660e",
+      "originalResponseSha256": "4ab370bc809b199594cc15f7c82da30cf0bcfb405cdcc7b8d0e306b3b02f993f",
+      "originalResponseMetadataSha256": "15e2c8258067cdcc70e7f00d326874cb5e56079fe14713ff760acd27a0bd6269"
+    },
+    {
+      "originalIndex": 218,
+      "originalIntentSha256": "f87028f4f28a3a312df3c606c2e77f70f14f8faafb5d84fff1d7269fb0df4f95",
+      "originalRequestSha256": "17dfae76133c296d2f1c2516bb398fa317c5fe16bc151acc161c65a73db32d5d",
+      "originalResponseSha256": "1f4f70f556de9f2cbc879004a94c2976972decd43093d0fee204fd8471e85237",
+      "originalResponseMetadataSha256": "961d92d6d1891ba789eb215b40f7fc6d6ff595e64f26f408af02995bda8d72bb"
+    },
+    {
+      "originalIndex": 219,
+      "originalIntentSha256": "537dc1e5c7954733eee6b13754b6558d69ba9f1530a59113673c596c677c8735",
+      "originalRequestSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "originalResponseSha256": "4571ef0addccca15137cc4006a17e99619f7d62fad85cda81c1a47295610c308",
+      "originalResponseMetadataSha256": "6540227dd452ccac59ba5c61da4dd3f6ebaa8662054df43d4eceabeb74f0055b"
+    },
+    {
+      "originalIndex": 220,
+      "originalIntentSha256": "5e7302cffa5fd8c9e37de73bedac4710dad3d12139f59396233b6d05554fd9c9",
+      "originalRequestSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "originalResponseSha256": "f9a229142d9bc3f6ea4f2f80df648c1368cd3c4f47bad379a385c54ea5dce61f",
+      "originalResponseMetadataSha256": "8d2ca720cc279fd50884ef7e8beff8f0b8c0627a990eab641c0327051e66ba8c"
+    },
+    {
+      "originalIndex": 221,
+      "originalIntentSha256": "e0c39c60211172a11f50ce8561e2314445b4c16b50ac9c187d1571c91a98317d",
+      "originalRequestSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "originalResponseSha256": "b5b66681ebb66bab4c98ecad1bca3ee574b478533476f0e11987b94c390f98e5",
+      "originalResponseMetadataSha256": "008cfd604cb7c6c83d0f4d814fa05981a66414c713947eacf75c68b7d0b50dbe"
+    },
+    {
+      "originalIndex": 222,
+      "originalIntentSha256": "7fad6134c03afb47d846aedd0eba0d2d15a071fb0beb62263d13769800116fd4",
+      "originalRequestSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "originalResponseSha256": "7752d41974c5524efa401c4db32648c6441986386a8f55bdec35275c6718eef5",
+      "originalResponseMetadataSha256": "78000a2b2f01591f568de759a9109c601cea65de4d6d4a3d5e0ec83caaeecc59"
+    },
+    {
+      "originalIndex": 223,
+      "originalIntentSha256": "927aa98f115576236d76a17812e21410240d2012617e85a174a38e4b075ec17a",
+      "originalRequestSha256": "a49aded00585f1aa8b45633419bf51b24006d629b63ce9e73b264f350d6db583",
+      "originalResponseSha256": "a1422b0c257fdae855bb4d4b304ab0225cb378df3003479990146f98306b4c58",
+      "originalResponseMetadataSha256": "11f7105257a3548ef8e0e2d3f5da7ac032cb04f11fd9344c39cd169bd8591581"
+    },
+    {
+      "originalIndex": 224,
+      "originalIntentSha256": "d15cee004418ac849ae8ead229851286429ad1bbb376387b13936b19049d303f",
+      "originalRequestSha256": "0db97d62043f4a14da17cdb08327cc46d8760ea421c80443d8fdca59f6f90e2a",
+      "originalResponseSha256": "5e7e61dd225caf0a298ef3ef11a23d53f352351a9f1cdbb95565a799b83942df",
+      "originalResponseMetadataSha256": "047244913f51caf0ac6d8273c897097ced824668306c3695a51671713dab231c"
+    },
+    {
+      "originalIndex": 225,
+      "originalIntentSha256": "11634524c598423725a6bfc7329842e4812310e82d1697ee4c320e2c5548f349",
+      "originalRequestSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "originalResponseSha256": "c381c26223ba2b88362b8e2915d3768a61eb47f89beb8ffc5da6a7c611da9b2d",
+      "originalResponseMetadataSha256": "cdce4ddca3df4112fe9ec7f6877bdb7611c07d329d87fa048796fbb3d09df093"
+    },
+    {
+      "originalIndex": 226,
+      "originalIntentSha256": "55e08ab036c9979dfb67ccf3f848062440e8e4b31cd9908404c6e12fd6dfed25",
+      "originalRequestSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "originalResponseSha256": "b89ffba967fbf63f8b47a054e844ad8ce8cb07ca05d7d14d510529d3d8455e33",
+      "originalResponseMetadataSha256": "cf8cf9a437280d45f61e3f9138d5f51fda8a339eb8d67bd4f753098d89a251b6"
+    },
+    {
+      "originalIndex": 227,
+      "originalIntentSha256": "67d758ef82c22a93384c3824ec8609807910a6849a00cc6545bea154effa1fc1",
+      "originalRequestSha256": "805e0f5b7bd9299d5f2d43b25ccac210e22a64986213f17c8f62981302240bf4",
+      "originalResponseSha256": "d58dee2125174d405c74ce2016018276ee5511ae1d451d52e2bbd6b008207f8e",
+      "originalResponseMetadataSha256": "edded15647d72052c13a2386f592a97e4ec0d8c17616366872bdca564960ac80"
+    },
+    {
+      "originalIndex": 228,
+      "originalIntentSha256": "7d2ea1227d0c1ec7b297dbdfdecb90d57885351692358893c54ad0524ee45d52",
+      "originalRequestSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "originalResponseSha256": "edb68f30e8bd4bb55b9ff63bd93f4b4f688fab84dd0a4182ddad4375946f7070",
+      "originalResponseMetadataSha256": "0ccf40d43cb21fd1edc5fb57b731c2d4118098faadf9d428d851d83d747ea69d"
+    },
+    {
+      "originalIndex": 229,
+      "originalIntentSha256": "01fcacf3669cbe7cecf4578b28c80f794e5f7bd7d8d8f1a660c5eac9ec6d16c2",
+      "originalRequestSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "originalResponseSha256": "e2699c7fbdba65a94236a565d963dc6fb2e5a215a6c025bdbdc568ec138e6f1a",
+      "originalResponseMetadataSha256": "3ef4b8211ac0219ea8ba18a882fa000c93ba78d76b073003fc2b5c79fcefff12"
+    }
+  ],
+  "fixtureSha256": "81199e61997665dd0ece9b515611dad4d60f9e9cdcdede95157c4644c4bf7f58",
+  "newBusinessFacts": 0,
+  "authHeadersRetained": false,
+  "originalSignedUrlsRetained": false
+}
