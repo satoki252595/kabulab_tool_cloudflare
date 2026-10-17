@@ -73,6 +73,8 @@ stageは10/17 04:16:47 JSTのMac runtime `65579f60`へ配備し、固定33社sco
 
 ## 配備と完了の判定
 
+10/17 09:03:56 JSTのCloudflare配信はmain `d456bc0f`、version `8c9232a1-816f-4f8d-a4a1-1c7225dba273`。投影のas_ofはcaptured runStartedSecへ束縛し、全文1点選択は共通の厳格parser/DTO/UIで構造化する。結果未確定の保有sourceは原記録を保持し、同じ提出会社・期末への迂回を拒否して他社の通常処理を続ける。隔離による追加Notion読取と通常300秒内の実所要時間は[検証記録](test-logs/holdings-unknown-source-isolation-20261017.md)で区別する。進行中の凍結runtimeを途中変更せず、残受注92文書は同じ通常CLIのfresh PRE→原子apply→別inspectで補完する。[09:13の受入台帳](test-logs/recovery-acceptance-20261016.md)の保存件数を、全20機能・次20/21時の定時完了と混同しない。
+
 10/17にユーザーがWorkers Paid/D1有料枠の利用を確認した。[D1公式料金](https://developers.cloudflare.com/d1/platform/pricing/)（同日確認）の読取包含枠は月250億行、超過は百万行あたり$0.001。1.3億行は包含枠の0.52%で、他の利用を含む月間合計が枠内なら追加読取料はない。包含枠を使い切った仮定でもこの読取分は$0.13。書込・保存容量・Workers/R2等は別で、月間使用済み量は未確認。旧契約API403をPaid未確認のまま扱わず、既存の有限実行cap・索引利用・実rows_read記録は維持する。
 
 10/17 07:32:04 JSTのCloudflare配信はmain `7d938e38`、version `30a5f745-0de7-4d77-9779-5c21e5716d76`。受注は通常ingest/missingと同じ保存変換を共有する保存原本CLIを追加した。保有の不該当も通常CLI/共有publisherへ接続した。Mac e4c・保有b8等の稼働中sourceは固定し、Worker配備をMac配備や残cohortの適用完了と混同しない。通信の結果不明は再送せず保存済みintent/全値との照合へ進める。
