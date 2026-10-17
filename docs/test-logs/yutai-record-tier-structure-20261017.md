@@ -41,7 +41,7 @@ nix develop --offline --command env -u NODE_PATH node --import tsx \
 
 通常優待28suite648 PASS、既存private原文不在7件は明示skip。JSS standalone12suite187 PASS・既存10skip、root/standalone TypeScriptと変更TSのESLintもPASS。不完全・逆順・異なる閾値・定義先の不一致・未知条件・非円/異なる表記をHOLDし、DTOの単一評価額への昇格・未知キー・不正回数・不正発送月も拒否する。初回の既存SSR試験は説明文の旧全文期待で失敗し、対応済み以外の複数期間が未解析と明示した後に全suiteを再実行してPASSした。standalone型検査のfixture配列undefinedは明示guardを追加して再検証PASS。新CLIのunknown試験は隔離envの`tmp`親が未作成だったためnative前に失敗し、project環境と同じ親を試験側へ用意して全28suiteを再実行PASSした。
 
-全群producerの交互5回中央値は205.663ms→204.880ms、全比較process peak RSS 326,696,960B。結果`agent-result-v2.json` SHAは`a45382262e2f6f89493ba4741f086f6266f2c832db53188ce85c3c5826d07af2`、再生script SHAは`591f7d1862c5489cefdf9273571caee3e9f8ec1278b518f77e012ecbf782ba7c`。CPU・RSSはNodeのローカル純処理だけで、本番Worker/定時の所要や完走・モデル削減の実績を保証しない。
+全群producerの交互5回中央値は205.667ms→209.109ms、全比較process peak RSS 323,829,760B。結果`agent-result-v3.json` SHAは`3c28a1bd122d31678b12bb7e1847af951c581e17461a3118b56e1d9967c27556`、再生script SHAは`591f7d1862c5489cefdf9273571caee3e9f8ec1278b518f77e012ecbf782ba7c`。同じhostの並行処理影響は分離していない。CPU・RSSはNodeのローカル純処理だけで、本番Worker/定時の所要や完走・モデル削減の実績を保証しない。
 
 ## 明示した既存1行の通常移行
 

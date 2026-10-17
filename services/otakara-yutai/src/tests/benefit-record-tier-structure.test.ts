@@ -34,6 +34,8 @@ describe("全文対応した掲載2期間と名簿定義のv4", () => {
     expect(html).toContain("1年未満はQUOカード2,000円相当、1年以上はQUOカード5,000円相当");
     expect(html).toContain("毎年3月下旬発送予定");
     expect(html).toContain("本人・株数・同じ名義や連続記録の条件は未確認");
+    expect(html).toContain("株主名簿は会社が株主の氏名や保有株数等を登録する名簿");
+    expect(html).toContain("名義は登録された名前、連続記録は記録が途切れないこと");
     expect(html).toContain("会社の公式情報との照合は未実施");
     expect(html).not.toContain("適用済み");
   });
