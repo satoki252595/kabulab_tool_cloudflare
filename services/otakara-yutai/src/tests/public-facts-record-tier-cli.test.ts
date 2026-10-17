@@ -8,6 +8,7 @@ import { benefitKey } from "../../data-scripts/benefit-key.js";
 import { buildPublicBenefitFacts } from "../../data-scripts/public-facts.js";
 import { runPublicFactsBackfillCLI, type PublicFactsPreimage } from "../../data-scripts/backfill-public-facts.js";
 import type { D1BatchStatement } from "../../../../src/shared/db/d1-http-client.js";
+import type { RecordResult } from "../../../../src/shared/notion-archive/archive.js";
 
 const adapter = vi.hoisted(() => ({ envPath: "", rows: [] as PublicFactsPreimage[], after: [] as PublicFactsPreimage[],
   reads: 0, batches: [] as D1BatchStatement[][], archives: [] as { key: string; metadata: Record<string, unknown>; files: { filename: string; bytes: Uint8Array }[] }[], unknown: false }));
@@ -20,7 +21,7 @@ vi.mock("../../../../src/shared/db/d1-http-client.js", () => ({ createD1HttpBatc
   adapter.batches.push(structuredClone(statements)); if (adapter.unknown) throw Error("protocol sender unknown"); adapter.rows = structuredClone(adapter.after);
 } }));
 vi.mock("../../../../src/shared/notion-archive/index.js", () => ({ recordPrimaryData: vi.fn(async input => {
-  adapter.archives.push(input); return { pageId: `protocol-archive-${adapter.archives.length}`, outcome: "recorded", fileTooLarge: false, manifestMatch: "exact" };
+  adapter.archives.push(input); return { pageId: `protocol-archive-${adapter.archives.length}`, outcome: "recorded", fileTooLarge: false, manifestMatch: "written" } satisfies RecordResult;
 }), verifyArchivedAttachments: vi.fn(async () => undefined) }));
 
 const originalArgv = process.argv;
