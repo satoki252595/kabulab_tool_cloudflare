@@ -9,7 +9,7 @@ import { queryUniqueRow, recordPrimaryData } from "./archive.js";
 import { notionRequest } from "./client.js";
 import { verifyArchivedAttachments } from "./readback.js";
 import { listPageFiles } from "./page-file.js";
-import { applyHoldingsSchema, buildHoldingsSchemaPatch, HOLDINGS_DESCRIPTION, LEGACY_HOLDINGS_COLUMNS, publishSavedShareholdings, publishVerifiedShareholdings, resumePendingShareholdings, resumePendingShareholdingsPrices, readSavedHoldingsZip, holdingProperties, holdingsFactsSha256, resolveHoldingRows, verifyCompletedHoldingsSource, type HoldingsSchema, type HoldingPriceSourceLoader } from "./shareholdings.js";
+import { readHoldingsSchema, applyHoldingsSchema, buildHoldingsSchemaPatch, HOLDINGS_DESCRIPTION, LEGACY_HOLDINGS_COLUMNS, publishSavedShareholdings, publishVerifiedShareholdings, resumePendingShareholdings, resumePendingShareholdingsPrices, readSavedHoldingsZip, holdingProperties, holdingsFactsSha256, resolveHoldingRows, verifyCompletedHoldingsSource, type HoldingsSchema, type HoldingPriceSourceLoader } from "./shareholdings.js";
 
 vi.mock("../../../services/yuho-quant/src/services/edinet/shareholdings.js", async original => ({
   ...await original<typeof import("../../../services/yuho-quant/src/services/edinet/shareholdings.js")>(),
@@ -121,6 +121,22 @@ async function requestRouter(method: string, path: string, body?: unknown): Prom
 beforeEach(() => { vi.clearAllMocks(); saved = {}; holdingPeriodRows = async () => Promise.all(Object.entries(saved).filter(([path, value]) => path.startsWith("/pages/") && Object.hasOwn(value as object, "銘柄名")).map(([path]) => requestRouter("GET", path))); vi.mocked(parseShareholdingsData).mockReturnValue(structuredClone(extraction));
   vi.mocked(notionRequest).mockImplementation(requestRouter);
   vi.mocked(queryUniqueRow).mockResolvedValue(null); });
+
+describe("保有明細schemaの宣言値とHTTP応答envelope", () => {
+  it("実208Aの全schema値を保持し、応答ごとのrequest_idをschemaへ混入しない", async () => {
+    const snapshot = JSON.parse(readFileSync(new URL("../../../services/yuho-quant/src/tests/fixtures/holdings-owner-quarantine/snapshot.json", import.meta.url), "utf8"));
+    // Financial/schema values are real fixture values; these two request IDs are explicit transport projections.
+    const replies = ["first-read-request", "second-read-request"].map(request_id => ({ ...structuredClone(snapshot.schema), object: "database", request_id }));
+    vi.mocked(notionRequest).mockResolvedValueOnce(replies[0]).mockResolvedValueOnce(replies[1]);
+    const first = await readHoldingsSchema(), second = await readHoldingsSchema();
+    expect(first).toEqual(snapshot.schema); expect(second).toEqual(first);
+    expect(Object.keys(first).sort()).toEqual(["description", "id", "properties"]);
+    expect(first.properties).toBe(replies[0].properties); expect(first.description).toBe(replies[0].description);
+    expect(replies[0].request_id).toBe("first-read-request"); expect(replies[1].request_id).toBe("second-read-request");
+    expect(vi.mocked(notionRequest).mock.calls.map(call => call.slice(0, 2))).toEqual(Array.from({ length: 2 }, () => ["GET", `/databases/${"d".repeat(32)}`]));
+    expect(recordPrimaryData).not.toHaveBeenCalled();
+  });
+});
 
 describe("旧未検証行の明示source移行", () => {
   type NativeHolding = Parameters<typeof resolveHoldingRows>[4][number];
