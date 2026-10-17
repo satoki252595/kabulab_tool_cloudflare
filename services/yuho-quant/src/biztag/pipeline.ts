@@ -338,11 +338,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
   }
 
   // 3. D1 の最新有報 (対象母集団)。
-  let latest = await loadLatestDocs(db);
-  if (opts.codes && opts.codes.length > 0) {
-    const codeSet = new Set(opts.codes);
-    latest = latest.filter((l) => codeSet.has(l.stockCode));
-  }
+  const latest = await loadLatestDocs(db, opts.codes && opts.codes.length > 0 ? opts.codes : undefined);
   const sector33Options = [...new Set(latest.map((l) => l.sector33).filter((s): s is string => s !== null))];
 
   // 4. 補足 DB を確保し、既存行を読む。

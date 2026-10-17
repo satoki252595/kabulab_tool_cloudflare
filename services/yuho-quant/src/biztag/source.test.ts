@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
+import { gunzipSync } from "node:zlib";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { yuhoEnv } from "../env.js";
@@ -11,12 +12,14 @@ const FROM = "2026-09-25";
 const TODAY = "2026-09-30";
 let sqlite: DatabaseSync;
 let queries: string[];
+let responses: Array<{ params: unknown[]; rows: number }>;
 
 function db() {
   return drizzle(async (sql, params, method) => {
     queries.push(sql);
     if (method === "run" || !sql.toLowerCase().startsWith("select")) throw new Error("source test: SELECT 以外は禁止");
     const rows = sqlite.prepare(sql).all(...params as (string | number | null)[]).map((row) => Object.values(row));
+    responses.push({ params, rows: rows.length });
     return { rows: method === "get" ? rows[0] : rows };
   });
 }
@@ -24,6 +27,7 @@ function db() {
 beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(() => { throw new Error("ネットワークは禁止"); }));
   queries = [];
+  responses = [];
   sqlite = new DatabaseSync(":memory:");
   sqlite.exec(`
     CREATE TABLE universe_overlay_state (
@@ -43,6 +47,68 @@ beforeEach(() => {
       row.code, row.listingDate, batch.eventsFetchedAt, batch.sources.newListings.rawSha, batch.archiveKey, batch.eventsFetchedAt
     );
   }
+});
+
+describe("固定コードの最新有報をSQLから限定する", () => {
+  const saved = JSON.parse(gunzipSync(readFileSync(new URL("./fixtures/latest-docs-saved50-20261017.json.gz", import.meta.url))).toString()) as {
+    scopeCodes: string[];
+    core: Array<{ id: number; code: string; name: string; sector33: string | null }>;
+    documents: Array<{ id: number; stock_id: number; doc_id: string; doc_type_code: string; period_end: string; submitted_at: number; notion_doc_page_id: string | null; text_parse_status: string | null }>;
+  };
+  function installSavedRows() {
+    sqlite.exec(readFileSync(new URL("../../../../drizzle/d1/0032_edinet_reported_changes.sql", import.meta.url), "utf8"));
+    sqlite.exec(`CREATE TABLE core_stocks(id INTEGER PRIMARY KEY, code TEXT UNIQUE, name TEXT, sector33 TEXT, is_active INTEGER, instrument_type TEXT);
+      CREATE TABLE yuho_documents(id INTEGER PRIMARY KEY, stock_id INTEGER, doc_id TEXT, doc_type_code TEXT, period_end TEXT, submitted_at INTEGER, notion_doc_page_id TEXT, text_parse_status TEXT);`);
+    for (const row of saved.core) sqlite.prepare("insert into core_stocks values(?,?,?,?,1,'equity')").run(row.id, row.code, row.name, row.sector33);
+    for (const row of saved.documents) sqlite.prepare("insert into yuho_documents values(?,?,?,?,?,?,?,?)").run(
+      row.id, row.stock_id, row.doc_id, row.doc_type_code, row.period_end, row.submitted_at, row.notion_doc_page_id, row.text_parse_status);
+  }
+  const byCode = <T extends { stockCode: string }>(rows: T[]) => rows.sort((a, b) => a.stockCode.localeCompare(b.stockCode));
+
+  it("実保存50銘柄は旧全量＋Set filterと全値同値、2 SELECTともD1返却scopeを限定する", async () => {
+    installSavedRows();
+    const all = await loadLatestDocs(db()), wholeDocRows = responses[1].rows;
+    const expected = all.filter(row => new Set(saved.scopeCodes).has(row.stockCode));
+    expect(queries.every(query => !query.includes("json_each"))).toBe(true);
+    queries = []; responses = [];
+    const scoped = await loadLatestDocs(db(), saved.scopeCodes);
+    expect(byCode(scoped)).toEqual(byCode(expected)); expect(scoped).toHaveLength(50);
+    expect(queries).toHaveLength(2); expect(responses[0].rows).toBe(50); expect(responses[1].rows).toBeLessThan(wholeDocRows);
+    for (let i = 0; i < 2; i++) {
+      expect(queries[i]).toContain('"core_stocks"."code" in (select value from json_each(?))');
+      expect(responses[i].params.filter(param => param === JSON.stringify(saved.scopeCodes))).toHaveLength(1);
+      expect(responses[i].params.length).toBeLessThanOrEqual(5);
+    }
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("101実コードと重複指定も1 JSON bindのSet意味を保ち、100bindを超えない", async () => {
+    installSavedRows(); const codes = saved.core.map(row => row.code);
+    expect(codes).toHaveLength(101);
+    const actual = await loadLatestDocs(db(), [...codes, ...codes]);
+    expect(new Set(actual.map(row => row.stockCode))).toEqual(new Set(codes)); expect(actual).toHaveLength(101);
+    expect(responses.every(row => row.params.length <= 5)).toBe(true);
+    expect(responses.every(row => row.params.includes(JSON.stringify(codes)))).toBe(true);
+  });
+
+  it("明示empty scopeはSQL0、unknown codeは空、active/最新HOLD資格は旧親へ戻さない", async () => {
+    expect(await loadLatestDocs(db(), [])).toEqual([]); expect(queries).toEqual([]);
+    installSavedRows(); expect(await loadLatestDocs(db(), ["0000"])).toEqual([]);
+    const code = saved.scopeCodes[0], original = (await loadLatestDocs(db(), [code]))[0];
+    expect(original.doc).not.toBeNull();
+    // 実書類の取下げではない。同じ保存値へ宣言したreported-state protocol fault。
+    sqlite.prepare("insert into yuho_edinet_reported_changes(source_page_id,seq_number,source_raw_sha256,doc_id,parent_doc_id,reported_state,observation_json) values(?,?,?,?,?,?,?)").run(
+      "declared-source", 1, "declared-not-original-SHA", original.doc!.docId, null, "reported_withdrawal", '{"protocolFault":true}');
+    const held = (await loadLatestDocs(db(), [code]))[0];
+    expect(held.doc).toEqual(original.doc); expect(held.reportedHoldReason).toBeDefined();
+    sqlite.prepare("update core_stocks set is_active=0 where code=?").run(code);
+    expect(await loadLatestDocs(db(), [code])).toEqual([]); expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([{ codes: ["bad"] }, { codes: ["7247' OR 1=1"] }, { codes: [null] }, { codes: Array(1) }, { codes: "7247" }])("不正scopeはSQLより前に拒否する (%j)", async ({ codes }) => {
+    await expect(loadLatestDocs(db(), codes as unknown as string[])).rejects.toThrow("正準証券コード");
+    expect(queries).toEqual([]); expect(fetch).not.toHaveBeenCalled();
+  });
 });
 
 afterEach(() => {

@@ -1,0 +1,21 @@
+{
+  "fixtureSha256": "c82282188704cb00eb441802a45435f16636379178251f1b4851a5687c930d9e",
+  "decodedSha256": "3dd764479dd70caeb1f8031e0260cd81b3ead297274ecc5d9d920a596db178cb",
+  "source": {
+    "kind": "exact_saved_D1_rows_projection",
+    "coreSourceSha256": "7bb82165f1abaf7bf6847b1c6e9edc23e8efbb98e7fff6a6c10b50efab15df32",
+    "documentSourceSha256": "b4d0c2e3fef1804f9d6b389262162bef25145d3c6bbbde7b6dbde88359680469",
+    "candidateScopeSha256": "e6e8e8b280acf6eb7af9ea116b09dd72c19cc5999b8ad922f313342e41e4af92",
+    "originalCoreRows": 3687,
+    "originalDocumentRows": 36929,
+    "projectedCoreRows": 101,
+    "projectedDocumentRows": 960,
+    "allSavedRowsForThese101Stocks": true,
+    "currentD1Qualification": false,
+    "reportedObservationsProtocolFixture": "empty table baseline; declared HOLD faults in tests"
+  },
+  "codeCount": 50,
+  "network": 0,
+  "valuesChanged": false,
+  "notionURLsAndCredentialsIncluded": false
+}

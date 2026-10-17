@@ -15,7 +15,7 @@
  * `yuho_text_sections` (索引テーブル。80万行規模) には一切触れない
  * (rows_read を抑える)。
  */
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
 import { activeEquityCondition } from "../../../../src/shared/db/active-equity.js";
 import { stocks } from "../../../../src/shared/db/core-schema.js";
@@ -179,15 +179,22 @@ function isLater(a: DocRow, b: DocRow): boolean {
  * 母集団 (上場中の内国普通株) の銘柄ごとに、最新の有報/訂正有報 1 通を返す。
  * 有報が 1 通も無い銘柄は `doc: null` (古い書類には戻らない。設計 §5.1)。
  */
-export async function loadLatestDocs(db: BiztagSourceDb): Promise<LatestDoc[]> {
+export async function loadLatestDocs(db: BiztagSourceDb, codes?: readonly string[]): Promise<LatestDoc[]> {
+  if (codes !== undefined && (!Array.isArray(codes) || [...codes].some(code => typeof code !== "string" || parseStockCode(code) !== code))) {
+    throw new Error("loadLatestDocs: 銘柄scopeは正準証券コードの配列で指定してください");
+  }
+  if (codes?.length === 0) return [];
+  // One JSON bind keeps an explicit scope below D1's 100-bind limit, including more than 100 codes.
+  const active = codes === undefined ? activeEquityCondition() : and(activeEquityCondition(),
+    inArray(stocks.code, sql`(select value from json_each(${JSON.stringify([...new Set(codes)])}))`));
   const stockRows = await db
     .select({ id: stocks.id, code: stocks.code, name: stocks.name, sector33: stocks.sector33 })
     .from(stocks)
-    .where(activeEquityCondition());
+    .where(active);
 
   // 母集団の id をサブクエリのまま渡す (JS 配列の inArray は銘柄数ぶんの bind を
   // 作り D1 の 1 クエリ 100 bind 上限を超える)。
-  const activeStockIds = db.select({ id: stocks.id }).from(stocks).where(activeEquityCondition());
+  const activeStockIds = db.select({ id: stocks.id }).from(stocks).where(active);
 
   const docRows = (await db
     .select({
