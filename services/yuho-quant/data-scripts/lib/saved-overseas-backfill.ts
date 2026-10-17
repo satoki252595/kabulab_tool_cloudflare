@@ -309,6 +309,16 @@ export function assertSavedCanonicalSource(
     date: { start: string };
   };
   assert.equal(Date.parse(rawClock.date.start), Date.parse(actualClock));
+  assertSavedSourcePageMetadata(item, source);
+}
+
+/** Query admission and full-source qualification use the same metadata/lineage contract.
+ * Missing issuer/FY metadata stays missing; the saved reader still requires official ZIP DEI.
+ */
+export function assertSavedSourcePageMetadata(
+  item: SavedOverseasItem,
+  source: Page,
+): void {
   assert.equal(
     verifySavedHoldingsMetadata(metadata(source), sourceOf(item)).status,
     "verified",
@@ -981,16 +991,7 @@ function installGuard(
                 item,
                 "new physical capsule key must be absent before creation",
               );
-              const data = metadata(found as Page);
-              assert.equal(data.docID, item.docId);
-              assert.equal(data.edinetCode, item.edinetCode);
-              if (nid(found.id) !== nid(item.archivePageId)) {
-                assert.equal(data.edinetDocType, 1);
-                assert.equal(
-                  nid(String(data.sourceLegacyPageId)),
-                  nid(item.archivePageId),
-                );
-              }
+              assertSavedSourcePageMetadata(item, found as Page);
               pages.add(nid(found.id));
             }
           }

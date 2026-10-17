@@ -9,13 +9,17 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { guard } from "./saved-overseas-atomic.js";
+import { verifySavedHoldingsMetadata } from "../../../../src/shared/notion-archive/shareholdings.js";
+import { verifySavedHoldingsSource } from "../../src/services/edinet/shareholdings.js";
 import {
   assertSavedCanonicalSource,
+  assertSavedSourcePageMetadata,
   assertSavedClaimsAvailable,
   reserveSavedClaims,
   runSavedOverseas,
@@ -248,6 +252,108 @@ describe("normal finite saved overseas entry", () => {
         source(data),
         "b".repeat(64),
         item.sourceFetchedAt,
+      ),
+    ).toThrow();
+  });
+  it("admits actual S100XUO9 missing issuer/FY metadata through the shared contract and still requires exact official ZIP DEI", () => {
+    const fixture = fileURLToPath(
+        new URL(
+          "../../src/tests/fixtures/saved-source-S100XUO9/",
+          import.meta.url,
+        ),
+      ),
+      proof = JSON.parse(
+        readFileSync(join(fixture, "provenance.json"), "utf8"),
+      ),
+      pageBytes = readFileSync(join(fixture, "source-page.json")),
+      source = JSON.parse(pageBytes.toString()),
+      original = JSON.stringify(source),
+      zip = readFileSync(join(fixture, "S100XUO9.zip")),
+      sha = (bytes: Uint8Array) =>
+        createHash("sha256").update(bytes).digest("hex"),
+      savedItem = proof.item as SavedOverseasItem,
+      official = {
+        docId: savedItem.docId,
+        stockCode: savedItem.stockCode,
+        edinetCode: savedItem.edinetCode,
+        fiscalYearEnd: savedItem.periodEnd,
+      },
+      metadata = JSON.parse(
+        source.properties.Metadata.rich_text
+          .map((part: { plain_text: string }) => part.plain_text)
+          .join(""),
+      );
+    expect(sha(pageBytes)).toBe(proof.sourcePageProjectionSha256);
+    expect(sha(zip)).toBe(savedItem.zipSha256);
+    expect(zip.length).toBe(proof.zipBytes);
+    expect(metadata.edinetCode).toBeUndefined();
+    expect(metadata.periodEnd).toBeUndefined();
+    expect(verifySavedHoldingsMetadata(metadata, official)).toEqual({
+      status: "verified",
+      missing: ["edinetCode", "periodEnd"],
+    });
+    expect(() =>
+      assertSavedSourcePageMetadata(savedItem, source),
+    ).not.toThrow();
+    expect(() =>
+      assertSavedCanonicalSource(
+        savedItem,
+        source,
+        savedItem.zipSha256,
+        savedItem.sourceFetchedAt,
+      ),
+    ).not.toThrow();
+    expect(verifySavedHoldingsSource(zip, official)).toMatchObject({
+      status: "verified",
+    });
+    expect(JSON.stringify(source)).toBe(original);
+
+    // Explicitly corrupted copies of the actual page must not use nested primary as a fallback.
+    for (const mutation of [
+      { docID: "S100OTHER" },
+      { edinetCode: "E99999" },
+      { periodEnd: "2024-12-31" },
+      { stockCode: "2900" },
+      { rawSecCode: "29000" },
+      { stockCode: undefined, rawSecCode: undefined },
+    ]) {
+      const changed = structuredClone(source),
+        raw = JSON.stringify({ ...metadata, ...mutation });
+      changed.properties.Metadata.rich_text = [
+        {
+          type: "text",
+          plain_text: raw,
+          text: { content: raw },
+        },
+      ];
+      expect(() => assertSavedSourcePageMetadata(savedItem, changed)).toThrow();
+    }
+    // DEI remains mandatory when top-level metadata is absent; changing the expected issuer/FY/code fails.
+    for (const mutation of [
+      { edinetCode: "E99999" },
+      { fiscalYearEnd: "2024-12-31" },
+      { stockCode: "2900" },
+    ])
+      expect(() =>
+        verifySavedHoldingsSource(zip, { ...official, ...mutation }),
+      ).toThrow();
+    const replaced = structuredClone(source);
+    replaced.id = "3fbd74ff-84cd-814d-8c11-c7427ccab9d4";
+    expect(() => assertSavedSourcePageMetadata(savedItem, replaced)).toThrow();
+    expect(() =>
+      assertSavedCanonicalSource(
+        savedItem,
+        source,
+        "b".repeat(64),
+        savedItem.sourceFetchedAt,
+      ),
+    ).toThrow();
+    expect(() =>
+      assertSavedCanonicalSource(
+        savedItem,
+        source,
+        savedItem.zipSha256,
+        "2026-10-03T09:31:00Z",
       ),
     ).toThrow();
   });
