@@ -1,0 +1,32 @@
+{
+  "description": "保存EDINET type1実原本。新GET/原文変更0。報告消却実施日・明示普通株数だけの根拠で、法的効力日/市場落日/価格係数へ昇格しない。",
+  "source": {
+    "docId": "S100Z5N2",
+    "stockCode": "6908",
+    "edinetCode": "E02009",
+    "fiscalYearEnd": "2026-03-31"
+  },
+  "zipBytes": 1031674,
+  "zipSha256": "8ce480cdf2003ac669ce120909e32cc283831c0213504fe4e07c817fe494f74b",
+  "instance": "XBRL/PublicDoc/jpcrp030000-asr-001_E02009-000_2026-03-31_02_2026-10-01.xbrl",
+  "memberSha256": "ddc29b8c817cb90be08617fd1eb8489ee305832bca0a250757b34bc0a67fb439",
+  "historyFactSha256": "fb2e9c749b2893dd3558b2c167aa47b8eba660cbdb8d0ba1d000c1c370c4fa0e",
+  "normalizedTextSha256": "912c88ed2a4479733b46021437b15046a3e0468aefb5df6f585f782e2d1ac6f4",
+  "rawSubmitDateTime": "2026-10-01 16:10",
+  "expectedReportedDate": "2025-02-13",
+  "expectedReportedCancelledShares": "122819",
+  "expectedOrdinaryFiscalYearEndShares": "24460879",
+  "sourceManifestSha256": "5fa05d6ce0245679af3ed0d22dba1a371420eb700ba0a4f494dd19a025af87aa",
+  "savedSourceAuditSha256": "1aac3ab6d2ab2c29d7288ecf21ff3c11d0923aeccd1dbda3738b56fd1c4ce63b",
+  "ownerName": "イリソ電子工業株式会社",
+  "sourceMetadata": {
+    "docID": "S100Z5N2",
+    "edinetCode": "E02009",
+    "secCode": "69080",
+    "filerName": "イリソ電子工業株式会社",
+    "periodEnd": "2026-03-31",
+    "submitDateTime": "2026-10-01 16:10",
+    "edinetDocType": 1
+  },
+  "sourceMetadataProjectionNote": "保存正準itemの実identity/提出日時だけをprotocol境界へ投影。財務値や原典clockを補完しない。"
+}

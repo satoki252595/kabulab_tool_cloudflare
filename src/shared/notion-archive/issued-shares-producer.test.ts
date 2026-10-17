@@ -45,6 +45,23 @@ beforeEach(() => {
   });
 });
 describe("発行株数観測の正常producerと保存reader", () => {
+  it("実6908の消却診断を同じRecoveryInfo PATCH/readbackへ渡し、追加取得/展開をしない", async () => {
+    const p = JSON.parse(readFileSync(new URL("../../../services/yuho-quant/src/tests/fixtures/issued-cancellation-6908-S100Z5N2.provenance.json", import.meta.url), "utf8"));
+    const actualZip = readFileSync(new URL("../../../services/yuho-quant/src/tests/fixtures/issued-cancellation-6908-S100Z5N2.zip", import.meta.url));
+    (page.properties as Record<string, unknown>).Key = { type: "title", title: [{ type: "text", text: { content: `${p.source.docId}:type1` }, plain_text: `${p.source.docId}:type1` }] };
+    (page.properties as Record<string, unknown>).Metadata = rich(JSON.stringify(p.sourceMetadata));
+    const zipReader = await import("../../../services/yuho-quant/src/services/edinet/zip.js");
+    const { publishVerifiedShareholdings } = await import("./shareholdings.js");
+    const unzip = vi.spyOn(zipReader, "unzip");
+    const result = await publishVerifiedShareholdings({ source: p.source, ownerName: p.ownerName, zip: actualZip, archivePageId, maxRows: 0,
+      observeIssuedShares: true, issuedSharesFilingDateEvidence: { rawSubmitDateTime: p.rawSubmitDateTime, provenance: "same-edinet-document" } });
+    expect(result.issuedSharesObservation!.reportedCancellations).toMatchObject({ status: "observed", statements: [{ reportedCancelledShares: "122819" }] });
+    const props = page.properties as Record<string, ReturnType<typeof rich>>;
+    const info = JSON.parse(props["保有明細再開情報"].rich_text.map(x => x.plain_text).join(""));
+    expect(info.issuedSharesObservation).toEqual(result.issuedSharesObservation);
+    expect(unzip).toHaveBeenCalledOnce(); expect(recordPrimaryData).not.toHaveBeenCalled();
+    expect(notionRequest).toHaveBeenCalledTimes(5);
+  });
   it("実正常原本の全明細値を保持し、既存1展開と同じ再開PATCH/readbackへ診断を載せる", async () => {
     const zipReader = await import("../../../services/yuho-quant/src/services/edinet/zip.js");
     const { publishVerifiedShareholdings } = await import("./shareholdings.js");

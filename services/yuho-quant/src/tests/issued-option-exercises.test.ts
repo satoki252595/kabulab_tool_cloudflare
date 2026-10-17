@@ -56,8 +56,8 @@ describe("実2375の明示新株予約権行使期間・掲載増加株数", () 
     const boom = vi.spyOn(textSections, "stripHtml").mockImplementation(() => { throw new RangeError("protocol decoder failure"); });
     const actual = observeIssuedShares(zip, p.source, null, entries);
     boom.mockRestore();
-    const { reportedOptionExercises, ...old } = actual;
-    const { reportedOptionExercises: prior, ...expected } = observed;
+    const { reportedOptionExercises, reportedCancellations: _new, ...old } = actual;
+    const { reportedOptionExercises: prior, reportedCancellations: _priorNew, ...expected } = observed;
     expect(old).toEqual(expected); expect(prior!.status).toBe("observed");
     expect(reportedOptionExercises).toMatchObject({ status: "held", statements: [], reason: expect.stringContaining("parser-exception") });
     const invalidEntity = textChanged(v => v.replaceAll("5,350株", "&#999999999999;株"));
@@ -70,7 +70,7 @@ describe("実2375の明示新株予約権行使期間・掲載増加株数", () 
     const actual = changed((value, name) => name === p.instance ? value.replace(
       '<xbrli:context id="FilingDateInstant_OrdinaryShareMember">',
       '<xbrli:context id="FilingDateInstant_OrdinaryShareMember">' + " ".repeat(25_100)) : value);
-    const { reportedOptionExercises, ...old } = actual;
+    const { reportedOptionExercises, reportedCancellations: _new, ...old } = actual;
     const oldBytes = Buffer.byteLength(JSON.stringify(old));
     expect(oldBytes).toBeGreaterThan(63 * 1024); expect(oldBytes).toBeLessThanOrEqual(64 * 1024);
     expect(Buffer.byteLength(JSON.stringify(actual))).toBeGreaterThan(64 * 1024);
