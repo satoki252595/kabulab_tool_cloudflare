@@ -12,6 +12,7 @@ import { z } from "../../../src/shared/zod-mini.js";
 import { activeEquityCondition } from "../../../src/shared/db/active-equity.js";
 import { createD1HttpBatchSender, type D1BatchStatement } from "../../../src/shared/db/d1-http-client.js";
 import { recordPrimaryData, verifyArchivedAttachments } from "../../../src/shared/notion-archive/index.js";
+import { toNotionUpload } from "../../../src/shared/notion-archive/file-upload.js";
 import { stocks, yutaiBenefits } from "../src/db/schema.js";
 import { parsePublicBenefitFacts } from "../src/public-facts.js";
 import { assertBenefitSchedule } from "../src/record-date.js";
@@ -229,6 +230,82 @@ export function claimPublicFactsUpgrade(state: string, value: unknown): void {
   const path = join(state, "upgrade-v1-started.json"); writeFileSync(path, json(value), { mode: 0o600, flag: "wx", flush: true }); syncParent(path);
 }
 
+/** 冪等Keyとは別に添付名だけを短くし、共通Notion上限を送信・claim前にも確認する。 */
+export function publicFactsUpgradeFilename(holding: boolean, phase: "pre" | "post", sha256: string): string {
+  if (!/^[a-f0-9]{64}$/.test(sha256)) throw new Error("v1更新の添付名には完全SHAが必要です");
+  const filename = `${holding ? "yutai-holding-v1" : "yutai-v1-upgrade"}-${phase}-${sha256}.json.gz`;
+  toNotionUpload(filename, "application/gzip");
+  return filename;
+}
+
+const ZeroNativeQualification = z.strictObject({
+  version: z.literal(1), kind: z.literal("holding-upgrade-zero-native"), allOwnedProcessesTerminal: z.literal(true),
+  directory: z.string(), originalSourceHead: z.string().check(z.regex(/^[a-f0-9]{40}$/)),
+  originalStartedSha256: z.string(), originalAttemptDir: z.string(), originalReleasePath: z.string(),
+  originalObserverPath: z.string(), originalReadPlanPath: z.string(), pins: z.record(z.string(), z.string()),
+});
+
+/** 明示CLI専用。旧startedを消さず、全native0の保存証拠だけを一度のsidecarへ束縛する。 */
+export function qualifyHoldingUpgradeZeroNative(state: string, directory: string, manifest: {
+  scopeSha256: string; preimageSha256: string; planSha256: string;
+}, qualificationPath: string) {
+  assertNotCommittable(qualificationPath);
+  const proof = ZeroNativeQualification.parse(JSON.parse(readFileSync(qualificationPath, "utf8")));
+  const read = (path: string): Record<string, unknown> => JSON.parse(readFileSync(path, "utf8"));
+  const st = lstatSync(state);
+  if (!st.isDirectory() || st.isSymbolicLink() || st.uid !== process.getuid?.() || (st.mode & 0o777) !== 0o700 ||
+      !isDeepStrictEqual(readdirSync(state), ["upgrade-v1-started.json"]) || realpathSync(directory) !== proof.directory) {
+    throw new Error("zero-native再資格は元state/同じ計画dir/未再開のstartedだけが必要です");
+  }
+  const startedPath = join(state, "upgrade-v1-started.json"), started = read(startedPath);
+  if (digest(readFileSync(startedPath)) !== proof.originalStartedSha256 || started.dir !== directory ||
+      started.kind !== "single-holding-period-v1" || started.targetVersion !== 3 ||
+      started.scopeSha256 !== manifest.scopeSha256 || started.preimageSha256 !== manifest.preimageSha256 || started.planSha256 !== manifest.planSha256) {
+    throw new Error("zero-native元started/原source・scope・全PRE・SQLが不一致です");
+  }
+  const required = [startedPath, qualificationPath, proof.originalReleasePath, proof.originalObserverPath, proof.originalReadPlanPath,
+    ...["source.json", "scope.json", "preimage.json", "expected.json", "sql-plan.json", "upgrade-manifest.json"].map(name => join(directory, name)),
+    ...["attempt-once.json", "STOP.json"].map(name => join(proof.originalAttemptDir, name))];
+  const attemptDirectory = lstatSync(proof.originalAttemptDir);
+  if (!attemptDirectory.isDirectory() || attemptDirectory.isSymbolicLink() || attemptDirectory.uid !== process.getuid?.() ||
+      (attemptDirectory.mode & 0o777) !== 0o700 || !isDeepStrictEqual(readdirSync(proof.originalAttemptDir).sort(), ["STOP.json", "attempt-once.json"]) ||
+      readdirSync(directory).some(name => /^(archive-|apply-|applied\.|readback\.)/.test(name))) throw new Error("zero-native以外の進捗・native保存物があります。再送しません");
+  // qualification自身は自己参照SHAにせず、sidecarで全文SHAを束縛する。
+  for (const path of required.filter(path => path !== qualificationPath)) {
+    if (!Object.hasOwn(proof.pins, path)) throw new Error("zero-nativeの必須input pinがありません");
+  }
+  const readPlan = read(proof.originalReadPlanPath), sourcePins = z.record(z.string(), z.string()).parse(readPlan.sourcePins),
+    inputPins = z.record(z.string(), z.string()).parse(readPlan.inputPins);
+  if (Object.keys(sourcePins).length === 0 || Object.keys(inputPins).length === 0 || typeof readPlan.envRealpath !== "string" ||
+      state !== join(dirname(realpathSync(readPlan.envRealpath)), "tmp/yutai-public-facts-v1-holding-upgrade") ||
+      readPlan.envSha256 !== digest(readFileSync(readPlan.envRealpath))) throw new Error("zero-native元source/env pinsが不明です");
+  for (const [path, hash] of Object.entries({ ...sourcePins, ...inputPins })) if (proof.pins[path] !== hash) throw new Error("zero-native元producer全pinsが不一致です");
+  for (const [path, hash] of Object.entries(proof.pins)) if (!/^[a-f0-9]{64}$/.test(hash) || digest(readFileSync(path)) !== hash) throw new Error("zero-native保存inputが変化しました");
+  const attempt = read(join(proof.originalAttemptDir, "attempt-once.json")), stop = read(join(proof.originalAttemptDir, "STOP.json")), release = read(proof.originalReleasePath);
+  if (["seq", "notion", "hosted", "d1Read", "d1Batch"].some(key => stop[key] !== 0) || stop.unknownResend !== false ||
+      attempt.sourceAPI !== 0 || attempt.models !== 0 || attempt.unknownResend !== false || attempt.releaseSha256 !== digest(readFileSync(proof.originalReleasePath)) ||
+      release.status !== "ROOT_RELEASED_NORMAL_V1_HOLDING_UPGRADE4_APPLY_ONCE" || release.applySha256 !== digest(readFileSync(proof.originalObserverPath)) ||
+      release.sourceHead !== proof.originalSourceHead || readPlan.sourceHead !== proof.originalSourceHead || release.canonicalStateRealpath !== state ||
+      release.freshManifestSha256 !== digest(readFileSync(join(directory, "upgrade-manifest.json")))) throw new Error("zero-native全IO0/元release/元source資格が不一致です");
+  if (typeof release.rootPreAuditPath !== "string" || proof.pins[release.rootPreAuditPath] !== release.rootPreAuditSha256 ||
+      digest(readFileSync(release.rootPreAuditPath)) !== release.rootPreAuditSha256) throw new Error("zero-native元root PRE資格が不明です");
+  const preAudit = read(release.rootPreAuditPath);
+  if (preAudit.acceptedMain !== proof.originalSourceHead || preAudit.readPlanSha256 !== digest(readFileSync(proof.originalReadPlanPath)) ||
+      preAudit.manifestSha256 !== release.freshManifestSha256) throw new Error("zero-native元root PRE/source bindingが不一致です");
+  const clocks = [attempt.at, started.at, stop.at].map(value => typeof value === "string" ? Date.parse(value) : NaN);
+  if (clocks.some(value => !Number.isFinite(value)) || clocks[0] > clocks[1] || clocks[1] > clocks[2]) throw new Error("zero-native原時計の順序が不明です");
+  return { version: 1, kind: "holding-upgrade-zero-native", directory, originalStartedSha256: proof.originalStartedSha256,
+    qualificationSha256: digest(readFileSync(qualificationPath)), originalPins: proof.pins, originalACKInvented: false };
+}
+
+export function claimHoldingUpgradeZeroNative(state: string, directory: string, manifest: {
+  scopeSha256: string; preimageSha256: string; planSha256: string;
+}, qualificationPath: string): void {
+  const qualified = qualifyHoldingUpgradeZeroNative(state, directory, manifest, qualificationPath);
+  const path = join(state, "upgrade-v1-zero-native-resume-started.json");
+  writeFileSync(path, json({ ...qualified, at: new Date().toISOString() }), { mode: 0o600, flag: "wx", flush: true }); syncParent(path);
+}
+
 const digest = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const json = (value: unknown) => JSON.stringify(value, null, 2) + "\n";
 const save = (dir: string, name: string, value: unknown) => writeFileSync(join(dir, name), json(value), { mode: 0o600, flag: "wx" });
@@ -249,12 +326,13 @@ export async function applyPublicFactsBackfillOnce(input: {
 }
 
 /** 有限upgradeの通常prepare/apply。旧NULL移行を装わず、全列PRE/POSTを物理保全する。 */
-async function upgradeV1Main(mode: string, sourcePath: string, dir: string, scopePath: string) {
-  const holding = mode === "prepare-upgrade-holding-v1" || mode === "apply-upgrade-holding-v1";
+async function upgradeV1Main(mode: string, sourcePath: string, dir: string, scopePath: string, qualificationPath?: string) {
+  const resume = mode === "resume-upgrade-holding-v1-zero-native";
+  const holding = mode === "prepare-upgrade-holding-v1" || mode === "apply-upgrade-holding-v1" || resume;
   const qualification = holding ? { kind: "single-holding-period-v1", targetVersion: 3 } as const : {};
   const state = join(dirname(realpathSync(".env")), holding ? "tmp/yutai-public-facts-v1-holding-upgrade" : "tmp/yutai-public-facts-v1-upgrade");
   const parseScope = holding ? parsePublicFactsHoldingUpgradeScope : parsePublicFactsUpgradeScope;
-  assertPublicFactsUpgradeReady(state);
+  if (!resume) assertPublicFactsUpgradeReady(state);
   assertNotCommittable(sourcePath); assertNotCommittable(scopePath); assertNotCommittable(join(dir, "preimage.json"));
   const sourceText = readFileSync(sourcePath, "utf8"), scopeText = readFileSync(scopePath, "utf8");
   const source = SourceSnapshot.parse(JSON.parse(sourceText)), scope = parseScope(JSON.parse(scopeText));
@@ -284,28 +362,43 @@ async function upgradeV1Main(mode: string, sourcePath: string, dir: string, scop
     const fetchedAt = phase === "pre" ? manifest.preparedAt : new Date().toISOString();
     const bytes = Uint8Array.from(gzipSync(json({ source, scope, rows, fetchedAt }))), payloadSha256 = digest(Buffer.from(bytes));
     const prefix = holding ? "yutai-v1-holding-upgrade" : "yutai-v1-upgrade";
-    const files = [{ filename: `${prefix}-${phase}-${payloadSha256}.json.gz`, bytes, contentType: "application/gzip" }];
+    const files = [{ filename: publicFactsUpgradeFilename(holding, phase, payloadSha256), bytes, contentType: "application/gzip" }];
     const receipt = await recordPrimaryData({ service: "otakara-yutai", key: `${prefix}-${phase}-${payloadSha256}`,
       source: `D1 complete scoped rows ${phase} explicit v1 ${holding ? "holding-structure" : "choice-structure"} upgrade`, fetchedAt,
       metadata: { ...qualification, rows: rows.length, targetRows: plan.targetRows, groups: plan.groups, scopeSha256: manifest.scopeSha256, payloadSha256 }, files });
     if (receipt.fileTooLarge || receipt.manifestMatch === "unknown") throw new Error("v1更新の物理保管が未確定です");
     await verifyArchivedAttachments(receipt.pageId, files, `優待v1更新${phase}`); save(dir, `archive-${phase}-receipt.json`, receipt);
   };
-  claimPublicFactsUpgrade(state, { at: new Date().toISOString(), ...qualification, dir, scopeSha256: manifest.scopeSha256, preimageSha256: manifest.preimageSha256, planSha256: manifest.planSha256 });
+  // 同じ長さの完全SHAで両phaseの添付名を事前検査し、純粋な名前エラーでlatchを残さない。
+  for (const phase of ["pre", "post"] as const) publicFactsUpgradeFilename(holding, phase, manifest.preimageSha256);
+  if (resume) {
+    if (qualificationPath === undefined) throw new Error("zero-nativeの明示資格ファイルが必要です");
+    claimHoldingUpgradeZeroNative(state, dir, manifest, qualificationPath);
+  } else claimPublicFactsUpgrade(state, { at: new Date().toISOString(), ...qualification, dir, scopeSha256: manifest.scopeSha256, preimageSha256: manifest.preimageSha256, planSha256: manifest.planSha256 });
   await archive("pre", preimage);
   await applyPublicFactsBackfillOnce({ dir, expected: plan.expected, statements: plan.statements, sender: createD1HttpBatchSender(),
     readback: () => loadPublicFactsPreimage(true, codes), verifyPost: rows => archive("post", rows) });
   const path = join(state, "upgrade-v1-completed.json"); writeFileSync(path, json({ at: new Date().toISOString(), ...qualification, intentSha256: digest(readFileSync(join(state, "upgrade-v1-started.json"))),
     scopeSha256: manifest.scopeSha256, planSha256: manifest.planSha256, readbackSha256: digest(readFileSync(join(dir, "readback.json"))),
-    postArchiveReceiptSha256: digest(readFileSync(join(dir, "archive-post-receipt.json"))) }), { mode: 0o600, flag: "wx", flush: true }); syncParent(path);
+    postArchiveReceiptSha256: digest(readFileSync(join(dir, "archive-post-receipt.json"))),
+    ...(resume ? { zeroNativeResumeIntentSha256: digest(readFileSync(join(state, "upgrade-v1-zero-native-resume-started.json"))) } : {}) }), { mode: 0o600, flag: "wx", flush: true }); syncParent(path);
   console.info(`v1条件${plan.targetRows}行のversion/構造のみ更新し、全列・物理PRE/POST照合一致`);
 }
 
 async function main() {
   const [mode, sourceArg, dirArg, ...extra] = process.argv.slice(2);
-  if (mode === "prepare-upgrade-v1" || mode === "apply-upgrade-v1" || mode === "prepare-upgrade-holding-v1" || mode === "apply-upgrade-holding-v1") {
-    if (!sourceArg || !dirArg || extra.length !== 1) throw new Error("使い方: backfill-public-facts.ts prepare-upgrade-v1|apply-upgrade-v1|prepare-upgrade-holding-v1|apply-upgrade-holding-v1 <source-snapshot.json> <private-output-dir> <explicit-scope.json>");
-    await upgradeV1Main(mode, resolve(sourceArg), resolve(dirArg), resolve(extra[0])); return;
+  if (mode === "prepare-upgrade-v1" || mode === "apply-upgrade-v1" || mode === "prepare-upgrade-holding-v1" || mode === "apply-upgrade-holding-v1" || mode === "resume-upgrade-holding-v1-zero-native") {
+    const resume = mode === "resume-upgrade-holding-v1-zero-native";
+    if (!sourceArg || !dirArg || extra.length !== (resume ? 2 : 1)) throw new Error("使い方: backfill-public-facts.ts <prepare/apply-upgrade-v1|prepare/apply-upgrade-holding-v1|resume-upgrade-holding-v1-zero-native> <source-snapshot.json> <private-output-dir> <explicit-scope.json> [zero-native-qualification.json]");
+    const dir = resolve(dirArg); assertNotCommittable(join(dir, "upgrade-failure.json"));
+    try { await upgradeV1Main(mode, resolve(sourceArg), dir, resolve(extra[0]), resume ? resolve(extra[1]) : undefined); }
+    catch (error) {
+      if (existsSync(dir)) save(dir, `upgrade-failure-${Date.now()}.json`, { at: new Date().toISOString(), mode,
+        error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack,
+          cause: error.cause instanceof Error ? { name: error.cause.name, message: error.cause.message, stack: error.cause.stack } : error.cause } : String(error) });
+      throw error;
+    }
+    return;
   }
   if ((mode !== "prepare" && mode !== "apply") || !sourceArg || !dirArg || extra.length > 0) {
     throw new Error("使い方: backfill-public-facts.ts prepare|apply <source-snapshot.json> <private-output-dir>");
