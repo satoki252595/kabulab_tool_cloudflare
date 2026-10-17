@@ -94,7 +94,9 @@ export function buildHoldingsSchemaPatch(schema: HoldingsSchema): { properties: 
 }
 
 export async function readHoldingsSchema(): Promise<HoldingsSchema> {
-  return notionRequest<HoldingsSchema>("GET", `/databases/${notionEnv.NOTION_STOCK_HOLDINGS_DB_ID()}`);
+  const { id, properties, description } = await notionRequest<HoldingsSchema>("GET", `/databases/${notionEnv.NOTION_STOCK_HOLDINGS_DB_ID()}`);
+  // request_id等の応答envelopeはschemaの同一性に含めず、宣言した全schema値を保持する。
+  return { id, properties, description };
 }
 
 /** rootが物理PRE保管を確認してから呼ぶ。未知のACKは後続読取/行更新へ進めない。 */

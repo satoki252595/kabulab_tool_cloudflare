@@ -66,7 +66,8 @@ beforeEach(() => {
     if (method === "GET" && path.startsWith("/databases/")) {
       const schema = nid(path.split("/").at(-1)!) === nid(fixture.schema.id) ? structuredClone(fixture.schema) : structuredClone(fixture.sourceSchema);
       if (fault === "source-option" && schema.id === page.parent.database_id) schema.properties["保有価格状態"].select.options = schema.properties["保有価格状態"].select.options.filter((option: { name: string }) => option.name !== "要確認");
-      return schema;
+      // The API returns a full database envelope; request_id is deliberately different on each read.
+      return { ...schema, object: "database", request_id: `transport-read-${vi.mocked(notionRequest).mock.calls.length}` };
     }
     if (method === "POST" && path.endsWith("/query")) return { results: input.filter?.property === "保有明細状態" ? [] : [...structuredClone(rows), ...structuredClone(extra)], has_more: false, next_cursor: null } as never;
     if (method === "GET") {
@@ -106,7 +107,7 @@ describe("実208Aの明示主体保留", () => {
     }
     expect(fetch).not.toHaveBeenCalled();
   });
-  it.each(["canonical-price", "canonical-zero-price", "price-checked", "source-unknown", "source-price-unknown", "source-option", "row-ids", "facts", "ZIP", "period-extra"])("%sを元値のままSTOPし業務/物理0", async kind => {
+  it.each(["canonical-price", "canonical-zero-price", "price-checked", "source-unknown", "source-price-unknown", "source-option", "row-ids", "facts", "ZIP", "period-extra", "schema-id", "schema-description", "schema-property"])("%sを元値のままSTOPし業務/物理0", async kind => {
     const input = args();
     if (kind === "canonical-price") rows[0].properties["株価"].number = fixture.acceptedHoldings[0].bookValueRaw;
     if (kind === "canonical-zero-price") rows[0].properties["株価"].number = 0;
@@ -116,6 +117,9 @@ describe("実208Aの明示主体保留", () => {
     if (kind === "row-ids") input.expectedRows.reverse();
     if (kind === "facts") input.acceptedHoldings.reverse();
     if (kind === "ZIP") input.zip = bytes("snapshot.json");
+    if (kind === "schema-id") input.schema.id = "wrong-schema-transport-fault";
+    if (kind === "schema-description") input.schema.description[0].plain_text += "宣言schema変更";
+    if (kind === "schema-property") input.schema.properties["原本照合済"].id = "changed-property-id";
     if (kind === "period-extra") extra.push(structuredClone(rows[0]));
     if (kind === "source-option") fault = kind;
     await expect(quarantineSavedHoldingSource(input)).rejects.toThrow(); expect(writes).toHaveLength(0); expect(archives).toHaveLength(0);
