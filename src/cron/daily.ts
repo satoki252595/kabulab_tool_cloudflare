@@ -1234,14 +1234,6 @@ async function runDailySyncAndRecord(
   };
   // 価格・母集団とも開始窓と予定日・書込み期限は守る。
   assertStockSyncStart(startedAt);
-  // 13時頃更新・短期掲載の公式資料を既存18時入口で保持。欠測は独立診断で、quote資格を代用しない。
-  if (sharedEnv.STOCK_SYNC_TARGET() === "scheduled-stocks") {
-    const custody = await collectOfficialRightsCustody(new Date(startedAt + 9 * 3600_000).toISOString().slice(0, 10));
-    officialRightsCustody.push(custody);
-    console.info(`[sync-daily] 公式権利原本: ${JSON.stringify(custody)}`);
-    if (custody.status === "incomplete") console.warn("[sync-daily] JPX source incomplete。権利資格は未確認のまま、独立した株価経路を継続します。");
-    assertStockDeadline();
-  }
   // 母集団は価格取得とは独立して更新する。N225 の欠測で上場廃止の適用を止めない。
   // HOLD 残があれば不完全失敗を throw し、株価 fetch へ進まない。
   const overlay = await ensureUniverseOverlay(db, {
@@ -1721,6 +1713,14 @@ async function runDailySyncAndRecord(
           `(対象 ${targets.length} 銘柄中 成功 ${succeeded} 件・投影仕上げが 0 行でした)`
         : null,
   });
+
+  // 主要金融write・Phase6・期限確認・完了記録の後。custody待機でquote書込窓を消費しない。
+  if (sharedEnv.STOCK_SYNC_TARGET() === "scheduled-stocks") {
+    const custody = await collectOfficialRightsCustody(new Date(startedAt + 9 * 3600_000).toISOString().slice(0, 10));
+    officialRightsCustody.push(custody);
+    console.info(`[sync-daily] 公式権利原本: ${JSON.stringify(custody)}`);
+    if (custody.status === "incomplete") console.warn("[sync-daily] JPX source incomplete。権利資格は未確認のまま、既存株価の資格・値は変更しません。");
+  }
 
   // 失敗バッチの物理保管。結果 return の前 = CLI の 1% throw の前に完了させる。
   // 保管失敗は結果を返さず throw (例外パスへ。非0・fallback なし)。

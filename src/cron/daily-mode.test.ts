@@ -706,11 +706,11 @@ describe("SCHEDULED_DATE 検証 (CF scheduler 経由の一致確認のみ)", () 
       "日足を確認できません"
     );
     expect(fetchChart).toHaveBeenCalled();
-    expect(collectOfficialRightsCustody).toHaveBeenCalledExactlyOnceWith("2026-09-29");
+    expect(collectOfficialRightsCustody).not.toHaveBeenCalled();
     const failureBatch = vi.mocked(recordPrimaryData).mock.calls.find(([input]) => input.key.startsWith("price-sync-batch-"))?.[0];
     expect(failureBatch).toBeDefined();
     const body = JSON.parse(new TextDecoder().decode(failureBatch!.files![0].bytes));
-    expect(body.officialRightsCustody).toEqual([expect.objectContaining({ status: "incomplete", financialQualification: "unqualified" })]);
+    expect(body.officialRightsCustody).toBeUndefined(); // earlier quote STOP: JPX not started, not a retained/empty source.
   });
 
   it("scheduled-stocks の日付欠落・空・空白は fetch 前に落とす", async () => {

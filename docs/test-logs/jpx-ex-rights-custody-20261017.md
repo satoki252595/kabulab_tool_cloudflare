@@ -25,12 +25,12 @@ source/設定/表/保管不明は `officialRightsCustody.status="incomplete"` �
 
 ## 保存再生と増分費用
 
-Nixで4 suites/80 tests、全体 `tsc --noEmit`、対象eslint、diff check PASS。実indexの5版と全SHA・date/href不一致・未来日・別URL・HTTP429/redirect・過大prefix・transport・偽XLSを確認した。collectorは実indexの最初の1行だけを明示したtransport projection＋同日実XLSで、共通archive/物理読戻し・同日訂正別key・incomplete/unknownを確認する。投影テストを本番5版の取得成功とは呼ばない。
+Nixで4 suites/81 tests、全体 `tsc --noEmit`、対象eslint、diff check PASS。実indexの5版と全SHA・date/href不一致・未来日・別URL・HTTP429/redirect・過大prefix・transport・偽XLSを確認した。collectorは実indexの最初の1行だけを明示したtransport projection＋同日実XLSで、共通archive/物理読戻し・同日訂正別key・incomplete/unknownを確認する。投影テストを本番5版の取得成功とは呼ばない。
 
-既存日次回帰はJPX不完全でも元N225資格まで進み、元失敗理由と原本診断を一緒に保存することを確認する。既存非定時モードの値/SQL/取得契約は変更しない。
+JPX処理は主要金融write・Phase6・既存21Z完了guard・recordPriceSyncCompletionの後、最終物理バッチの直前へ置く。実8303の既存値を使う回帰で、custody入場時に主要writeと完了記録が済み、以降のD1変更0、incomplete診断が最終バッチに残ることを確認した。前段quote STOPではJPXはnotstarted/未受入で、原本0件や資格成功とは呼ばない。既存非定時モードの値/SQL/取得契約は変更しない。
 
 保存index 100回の同条件parseは8.595ms、CPU user9,164µs/system312µs。5版・入力全SHA不変、HTTP0。旧経路にこの取得はなかったため、実ネットワーク短縮率はない。
 
-条件付き冷間正常値（既存DB発見search1page、7添付即uploaded、retry0）はJPX6 GET、Notion20 API、hosted7 GET＝計33 HTTP/新archive1行/15 mutation（添付create+send各7、page1）。DB/WS cache済みの新keyはNotion17 API＋hosted7＋JPX6、cache済みの既存key完全一致はNotion2 API＋hosted7＋JPX6。5 XLSが実10/16と同程度なら原本約0.34MB＋manifest。search pagination、provider待機、既存client再試行で増えるためhard native/time保証ではない。1.6rps合算枠の27 starts間隔下界16.25秒も完走保証ではない。最大source保持は1MiB＋5×4MiB。全体archive deadline/call capの新設はしていない。
+条件付き冷間正常値（既存DB発見search1page、7添付即uploaded、retry0）はJPX6 GET、Notion20 API、hosted7 GET＝計33 HTTP/新archive1行/15 mutation（添付create+send各7、page1）。DB/WS cache済みの新keyはNotion17 API＋hosted7＋JPX6、cache済みの既存key完全一致はNotion2 API＋hosted7＋JPX6。5 XLSが実10/16と同程度なら原本約0.34MB＋manifest。search pagination、provider待機、既存client再試行で増えるためhard native/time保証ではない。1.6rps合算枠の27 starts間隔下界16.25秒も完走保証ではない。最大source保持は1MiB＋5×4MiB。全体archive deadline/call capの新設はしていない。source最大180秒に加えてcommon archiveのfetch/Retry-Afterには総上限がないため、後段のjob完了・最終summaryを遅らせ得る。新custodyを価格取得前に置いて書込窓を消費することは避け、custody後に株価D1writeや新たな金融期限判定を追加しない。
 
 本番設定・次18時の原本物理受入はrootの別確認事項。将来イベント資格化には普通株/主体・該当基準日/市場日・版/訂正来歴・必要な法的根拠を別に要求し、このcaptureだけでOHLCV/配当/株数を適用しない。

@@ -35,6 +35,8 @@ import type { OverlayCollectFn } from "./universe-overlay.js";
 import { emptyUniverseBatch, fakeOverlayCollect } from "./tests/overlay-batch.js";
 import { chartWithRaw, stockWithRaw } from "./tests/yahoo-capture.js";
 import { archiveYahooRawBatch } from "../shared/yahoo/raw-custody.js";
+import { collectOfficialRightsCustody, type OfficialRightsCustody } from "./rights-official-custody.js";
+import * as jpLegModule from "./macro-jp-leg.js";
 import { makeTxBatchSender } from "./tests/overlay-test-sender.js";
 
 const fakeCollect: OverlayCollectFn = fakeOverlayCollect;
@@ -58,6 +60,7 @@ vi.mock("../shared/yahoo/client.js", async (original) => ({
   fetchStockRawData: vi.fn(),
 }));
 vi.mock("../shared/yahoo/raw-custody.js", () => ({ archiveYahooRawBatch: vi.fn() }));
+vi.mock("./rights-official-custody.js", () => ({ collectOfficialRightsCustody: vi.fn() }));
 vi.mock("../shared/yahoo/nikkei-vi.js", () => ({ fetchNikkeiVi: vi.fn() }));
 vi.mock("../shared/notion-archive/index.js", async (original) => ({
   ...await original<typeof import("../shared/notion-archive/index.js")>(),
@@ -473,6 +476,31 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
       new TextDecoder().decode(input.files![0].bytes)
     ) as { failures: unknown[] };
     expect(body.failures).toEqual([]);
+  });
+
+  it("JPX待機は実8303の主要write・Phase6・完了記録の後、以降の金融write0", async () => {
+    const targetDate = "2026-10-14";
+    vi.mocked(Date.now).mockReturnValue(Date.parse(`${targetDate}T10:16:00Z`));
+    vi.stubEnv("STOCK_SYNC_TARGET", "scheduled-stocks"); vi.stubEnv("SCHEDULED_DATE", targetDate);
+    // N225/JPlegは既存harnessのtransport投影。8303金融値は保存実原本のまま。
+    vi.mocked(fetchChart).mockImplementation(chartWithRaw(sessionChart(targetDate)));
+    vi.spyOn(jpLegModule, "captureMacroJpLeg").mockResolvedValue({ ok: true, reason: "JP leg transport projection" });
+    const bodies = JSON.parse(gunzipSync(readFileSync(new URL("../shared/yahoo/fixtures/stock-daily-scopes-20261014.json.gz", import.meta.url))).toString());
+    const value = await parseSavedStockRawData("8303", saved8303Source(bodies));
+    vi.mocked(fetchStockRawData).mockImplementation(stockWithRaw(value));
+    const db = freshDb(); seedTarget(1, "8303"); let changesBeforeCustody: unknown;
+    const diagnostic: OfficialRightsCustody = { family: "jpx-ex-rights", status: "incomplete", reason: "source", financialQualification: "unqualified", sourceCount: 1, completeSources: 0, archiveKey: null, archivePageId: null, physicalVerified: false, error: null };
+    vi.mocked(collectOfficialRightsCustody).mockImplementationOnce(async () => {
+      expect(sqlite.prepare("SELECT COUNT(*) AS n FROM core_stock_financials").get()).toEqual({ n: 1 });
+      expect(recordPriceSyncLog).toHaveBeenCalledTimes(1); // completion is after Phase6 and the existing date guard.
+      changesBeforeCustody = sqlite.prepare("SELECT total_changes() AS n").get();
+      return diagnostic;
+    });
+    await runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect, sendOverlayBatch: makeTxBatchSender(sqlite, { sends: 0 }), jpLegStore: { get: async () => null, put: async () => { throw Error("unexpected JP write in transport projection"); } } });
+    expect(collectOfficialRightsCustody).toHaveBeenCalledExactlyOnceWith("2026-10-14");
+    expect(sqlite.prepare("SELECT total_changes() AS n").get()).toEqual(changesBeforeCustody);
+    const batch = vi.mocked(recordPrimaryData).mock.calls.find(([input]) => input.key.startsWith("price-sync-batch-"))![0];
+    expect(JSON.parse(new TextDecoder().decode(batch.files![0].bytes)).officialRightsCustody).toEqual([diagnostic]);
   });
 
   it.each([[false, false], [true, false], [false, true]])("8303の旧RSI/原SHA保持、当日書込失敗=%s・fresh HOLD=%sを二重計数しない", async (saveFails, freshHold) => {
