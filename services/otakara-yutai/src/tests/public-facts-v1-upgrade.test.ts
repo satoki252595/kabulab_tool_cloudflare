@@ -8,11 +8,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ROOT } from "../../../../src/shared/db/tests/source-scan.js";
 import type { D1BatchStatement } from "../../../../src/shared/db/d1-http-client.js";
 import { assertPublicFactsUpgradeReady, claimPublicFactsUpgrade, planPublicFactsV1Upgrade, parsePublicFactsUpgradeScope,
+  planPublicFactsV1HoldingUpgrade, parsePublicFactsHoldingUpgradeScope,
   applyPublicFactsBackfillOnce, type PublicFactsPreimage, type PublicFactsUpgradeScope } from "../../data-scripts/backfill-public-facts.js";
 import { benefitKey } from "../../data-scripts/benefit-key.js";
 import { buildPublicBenefitFacts } from "../../data-scripts/public-facts.js";
 import { parsePublicBenefitFacts } from "../public-facts.js";
 import saved from "./fixtures/choice-list-saved15.json";
+import holdingSaved from "./fixtures/holding-period-saved4.json";
 
 const sha = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 const source = (rows: PublicFactsPreimage[]) => rows.map(({ genreId, createdAt, publicFacts, ...value }) => {
@@ -38,6 +40,17 @@ function scope(rows: PublicFactsPreimage[]): PublicFactsUpgradeScope {
   return parsePublicFactsUpgradeScope({ version: 1, groups: [{ code: first.stockCode, taskId: benefitKey(first.stockCode, first.description),
     sourceSha256: sha(first.description), rows: 1, recipients: [{ minShares: first.minShares, recordMonth: first.recordMonth, recordDate: first.recordDate }] }] });
 }
+function holdingRows(): PublicFactsPreimage[] {
+  // 文法・CAS試験専用。実制度を表す値ではない。
+  const description = '【種別："オンラインショップ・クーポン（長期保有者向け）"】\n【半年以上保有】\n1,000円相当';
+  const next = buildPublicBenefitFacts({ code: "7203", description, context: { minShares: [100], recordMonths: [3] }, fetchedAt: null, batchFetchedAt: null });
+  if (next.version !== 3) throw new Error("v3 producer required");
+  const { conditionStructure, ...fields } = next; void conditionStructure;
+  const rows = protocolRows();
+  rows[0] = { ...rows[0], description, publicFacts: JSON.stringify({ ...fields, version: 1 }) };
+  return rows;
+}
+const holdingScope = (rows: PublicFactsPreimage[]) => parsePublicFactsHoldingUpgradeScope({ ...scope(rows), kind: "single-holding-period-v1" });
 function database(rows: PublicFactsPreimage[]) {
   const db = new DatabaseSync(":memory:");
   db.exec("CREATE TABLE core_stocks(id INTEGER PRIMARY KEY,code TEXT,name TEXT,is_active INTEGER,instrument_type TEXT); CREATE TABLE yutai_benefits(id INTEGER PRIMARY KEY,stock_id INTEGER,genre_id INTEGER,description TEXT,short_summary TEXT,min_shares INTEGER,record_month INTEGER,record_date TEXT,estimated_value INTEGER,estimate_value_source TEXT,created_at INTEGER,updated_at INTEGER,public_facts TEXT)");
@@ -52,6 +65,54 @@ function database(rows: PublicFactsPreimage[]) {
 }
 
 describe("明示v1条件だけの有限更新", () => {
+  it("明示holding modeだけがv3を扱い、choice scope/構造と混在しない", async () => {
+    const before = holdingRows(), fixed = holdingScope(before), plan = planPublicFactsV1HoldingUpgrade(source(before), before, fixed);
+    expect(plan).toMatchObject({ groups: 1, targetRows: 1, codes: ["7203"] });
+    const next = parsePublicBenefitFacts(plan.expected[0].publicFacts)!;
+    expect(next).toMatchObject({ version: 3, qualifiedAmount: 1000, conditionStructure: { applicability: "unverified" } });
+    if (next.version !== 3) throw new Error("v3 required");
+    const { version, conditionStructure, ...fields } = next; void version; void conditionStructure;
+    expect({ ...fields, version: 1 }).toEqual(parsePublicBenefitFacts(before[0].publicFacts));
+    expect(plan.expected[1]).toEqual(before[1]);
+    const native = vi.fn(); vi.stubGlobal("fetch", native);
+    expect(() => planPublicFactsV1Upgrade(source(before), before, scope(before))).toThrow();
+    expect(() => parsePublicFactsUpgradeScope(fixed)).toThrow();
+    expect(() => parsePublicFactsHoldingUpgradeScope(scope(before))).toThrow();
+    const choice = protocolRows();
+    expect(() => planPublicFactsV1HoldingUpgrade(source(choice), choice, holdingScope(choice))).toThrow();
+    expect(native).not.toHaveBeenCalled();
+    const { db, read, send } = database(before);
+    try { const original = read(); await send(plan.statements); expect(read()).toEqual(original.map(row => ({ ...row, public_facts: plan.expected.find(v => v.id === row.id)!.publicFacts })));
+      const accepted = read(); await expect(send(plan.statements)).rejects.toThrow(); expect(read()).toEqual(accepted); }
+    finally { db.close(); }
+  });
+  it("holding scopeの4群/4行/2code上限とv3/意味差・部分原文をHTTP前に拒否する", () => {
+    const before = holdingRows(), fixed = holdingScope(before), group = fixed.groups[0], native = vi.fn(); vi.stubGlobal("fetch", native);
+    for (const groups of [
+      Array.from({ length: 5 }, (_, index) => ({ ...group, taskId: index.toString(16).padStart(16,"0") })),
+      Array.from({ length: 3 }, (_, index) => ({ ...group, code: `720${index}`, taskId: index.toString(16).padStart(16,"0") })),
+      [{ ...group, rows: 5, recipients: Array.from({ length: 5 }, (_, index) => ({ ...group.recipients[0], minShares: index + 1 })) }],
+    ]) expect(() => parsePublicFactsHoldingUpgradeScope({ ...fixed, groups })).toThrow();
+    const plan = planPublicFactsV1HoldingUpgrade(source(before), before, fixed);
+    for (const publicFacts of [plan.expected[0].publicFacts, JSON.stringify({ ...JSON.parse(before[0].publicFacts!), qualifiedAmount: 2000 })]) {
+      const changed = [{ ...before[0], publicFacts }, before[1]];
+      expect(() => planPublicFactsV1HoldingUpgrade(source(changed), changed, fixed)).toThrow();
+    }
+    const changed = [{ ...before[0], description: before[0].description + "\n同じ株主番号が必要" }, before[1]];
+    expect(() => planPublicFactsV1HoldingUpgrade(source(changed), changed, fixed)).toThrow();
+    expect(native).not.toHaveBeenCalled();
+  });
+  it("全PREを保持するholdingだけ128kまで扱い、旧choiceの64kと全target64k上限を広げない", () => {
+    // 大きい対象外列の境界専用。実掲載文・実制度を表さない。
+    const large = (rows: PublicFactsPreimage[], size: number) => [rows[0], { ...rows[1], description: "x".repeat(size) }];
+    const holding = large(holdingRows(), 65_000);
+    expect(Buffer.byteLength(JSON.stringify(holding))).toBeGreaterThan(64_000);
+    expect(() => planPublicFactsV1HoldingUpgrade(source(holding), holding, holdingScope(holding))).not.toThrow();
+    const choice = large(protocolRows(), 65_000);
+    expect(() => planPublicFactsV1Upgrade(source(choice), choice, scope(choice))).toThrow(/有限上限/);
+    const over = large(holdingRows(), 128_000);
+    expect(() => planPublicFactsV1HoldingUpgrade(source(over), over, holdingScope(over))).toThrow(/有限上限/);
+  });
   it("version/構造だけを変え、対象外の行・価格・要約・時計を全列で保持する", async () => {
     const before = protocolRows(), plan = planPublicFactsV1Upgrade(source(before), before, scope(before));
     expect(plan).toMatchObject({ groups: 1, targetRows: 1, codes: ["7203"] });
@@ -117,5 +178,30 @@ describe("明示v1条件だけの有限更新", () => {
     const { db, read, send } = database(rows); try { const before = read(); await send(plan.statements); expect(sha(JSON.stringify(read()))).toBe(sha(JSON.stringify(before.map(row => ({ ...row, public_facts: plan.expected.find(v => v.id === row.id)!.publicFacts })))));
       const accepted = read(); await expect(send(plan.statements)).rejects.toThrow(); expect(sha(JSON.stringify(read()))).toBe(sha(JSON.stringify(accepted))); }
     finally { db.close(); }
+  });
+
+  const holdingPath = join(ROOT, "tmp/holding-upgrade-pure-v1/actual-scoped.private.json");
+  it.skipIf(!existsSync(holdingPath))("保存実47行から4群だけv3へ採用し、他43行・旧額・時計を全列保持する", async () => {
+    const bytes = readFileSync(holdingPath); expect(sha(bytes)).toBe("f0979385aed0a710d54ce39dc7f274635f218d6233a4b7c26c1b6801711deffa");
+    const rows = JSON.parse(bytes.toString()) as PublicFactsPreimage[];
+    const fixed = parsePublicFactsHoldingUpgradeScope({ version: 1, kind: "single-holding-period-v1", groups: holdingSaved.groups.map(group => ({
+      code: group.code, taskId: group.sourceGroup, sourceSha256: group.sourceSha256, rows: group.rows,
+      recipients: rows.filter(row => benefitKey(row.stockCode, row.description) === group.sourceGroup).map(({ minShares, recordMonth, recordDate }) => ({ minShares, recordMonth, recordDate })),
+    })) });
+    const plan = planPublicFactsV1HoldingUpgrade(source(rows), rows, fixed);
+    expect(plan).toMatchObject({ groups: 4, targetRows: 4, codes: ["2282", "9048"] });
+    expect(plan.expected.filter((row,index) => row.publicFacts !== rows[index].publicFacts)).toHaveLength(4);
+    for (const [index, row] of plan.expected.entries()) expect({ ...row, publicFacts: rows[index].publicFacts }).toEqual(rows[index]);
+    for (const group of holdingSaved.groups) {
+      const row = plan.expected.find(value => benefitKey(value.stockCode, value.description) === group.sourceGroup)!;
+      expect(parsePublicBenefitFacts(row.publicFacts)).toMatchObject({ version: 3, qualifiedAmount: group.oldFacts.qualifiedAmount,
+        conditionStructure: { applicability: "unverified", sourceSha256: group.sourceSha256, ast: group.ast } });
+    }
+    const { db, read, send } = database(rows);
+    try { const before = read(); await send(plan.statements); expect(read()).toEqual(before.map(row => ({ ...row, public_facts: plan.expected.find(value => value.id === row.id)!.publicFacts })));
+      const accepted = read(); await expect(send(plan.statements)).rejects.toThrow(); expect(read()).toEqual(accepted); }
+    finally { db.close(); }
+    const wrongChoice = { version: 1 as const, groups: fixed.groups };
+    expect(() => planPublicFactsV1Upgrade(source(rows), rows, wrongChoice)).toThrow();
   });
 });
