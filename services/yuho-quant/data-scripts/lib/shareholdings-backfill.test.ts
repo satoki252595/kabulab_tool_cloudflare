@@ -25,14 +25,18 @@ describe("保有明細backfillの最新有報選択", () => {
       (8,5,'S100DELISTED','E00005','STRUCTURAL','2026-03-31',100,'120'),
       (9,6,'S100ACTIVE','E00006','STRUCTURAL','2026-03-31',100,'120'),
       (10,7,'S100NONANNUAL','E00007','STRUCTURAL','2026-03-31',100,'140');`);
-    const queries: Array<{ sql: string; params: unknown[] }> = [];
+    const queries: Array<{ sql: string; params: unknown[]; columns: string[] }> = [];
     const db = drizzle(async (statement, params) => {
-      queries.push({ sql: statement, params });
-      return { rows: (sqlite.prepare(statement).all(...params as never[]) as Record<string, unknown>[]).map(row => Object.values(row)) };
+      const query = { sql: statement, params, columns: [] as string[] };
+      queries.push(query);
+      const prepared = sqlite.prepare(statement);
+      query.columns = prepared.columns().map(column => column.name);
+      return { rows: (prepared.all(...params as never[]) as Record<string, unknown>[]).map(row => Object.values(row)) };
     });
     try {
       const first = await selectLatestHoldingsDocuments(db, { afterCode: null, limit: 1 });
       expect(queries).toHaveLength(1);
+      expect(queries[0].columns.at(-1)).toBe("reported_hold");
       expect(first.more).toBe(true);
       expect(first.rows.map(row => [row.stockCode, row.docId])).toEqual([["1001", "S100CORRECT2"]]);
       const plan = sqlite.prepare(`EXPLAIN QUERY PLAN ${queries[0].sql}`).all(...queries[0].params as never[]) as Array<{ detail: string }>;
