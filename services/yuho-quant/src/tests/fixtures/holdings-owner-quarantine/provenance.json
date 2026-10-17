@@ -1,0 +1,23 @@
+{
+  "source": {
+    "docId": "S100Z0JO",
+    "stockCode": "208A",
+    "edinetCode": "E39505",
+    "fiscalYearEnd": "2026-06-30"
+  },
+  "rootAcceptanceSha256": "f5f7aa92b70d1c1404dcae27abfc660178328515894bd36d10e5c0f86befc58a",
+  "originalFullPostSha256": "c9a900589b123b2f346048f5c5695975f7c9fe6e8aa39147bef113c8eafaab4d",
+  "originalBaselineParsedSha256": "6a468dd6fd09c86e82a97a45ca00f660a227114268473b90aa57c12dfa672ae2",
+  "zipSha256": "f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10",
+  "transportProjection": "Original HoldingPage envelope subset. Signed file URLs replaced with offline.invalid; no financial/source/name/date/quantity values generated. Response clock changes in tests are transport fault cases, not actual mutation receipts.",
+  "HTTP": 0,
+  "businessWrite": 0,
+  "targetOrder": "Original accepted holdings order; exact unique name maps each original full POST row. expectedPeriod retains native query order.",
+  "sourceSchema": {
+    "path": "/Users/satoki252595/projects/kabulab-cf/tmp/feature-audit-20261017/holdings-next8h-rate075-pure-v1/actual-range08-v5/range-08/native/response-123.body",
+    "sha256": "a5479ea398b647b15497756215c06c7e24f6127acae042f2e24052e5096dd3d4",
+    "projection": "id/description/properties from actual native123; no option generated"
+  },
+  "sharedZipFixture": "../holdings-largest-holder/208A-S100Z0JO.zip",
+  "duplicateZipAdded": false
+}
