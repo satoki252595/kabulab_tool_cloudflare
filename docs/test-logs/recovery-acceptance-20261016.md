@@ -2,6 +2,28 @@
 
 追跡は[#348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)。この記録は以下の対象の実測であり、全20機能・全空欄の完了を意味しない。
 
+## 10月17日09:13 JSTの受入と進行
+
+#475の実行開始時計に束縛した投影日付、#477の全文1点選択の条件構造、#476の結果未確定sourceの隔離をexact headの3 CI成功後に通常マージした。Cloudflareはmain `d456bc0f`、09:03:56/version `8c9232a1-816f-4f8d-a4a1-1c7225dba273`まで実配信確認。進行中のMac e4c、保有b8、海外2bac、受注92cのsource・依存・.envは切り替えていない。
+
+| 対象 | root保存別再生まで受入 | 進行・残件 |
+|---|---|---|
+| 事業タグ本文 | 固定2,417社の先頭750社、モデル0 | 残1,667社は通常機械処理。ローカルClefの104社/106交換は生成済みだが公開0。本文全chainの閉鎖後に現入力を再資格化する |
+| 保有原本列 | 累計1,153行・82文書。追加123行/6文書と151行/4文書を全native・物理PRE/POST・全props・原本/時計から別再生 | 未着手範囲は残1,822候補行・142文書。元14:52:14.476 JST期限・0.5rpsを維持。価格確定0、1911のpartial31行を加算しない |
+| 受注 | 最初20文書124項目の通常applyと別inspectをroot独立再生まで閉鎖。617＋126＝743 native、20原子batch、全6表/原本/本文/2実体/20claimを照合 | 分離した112候補の残92文書355項目を09:11:23に通常CLIで開始。5窓20/20/20/20/12、0.25rps、17:11:23 JSTまで。先頭20のclaimと交差除外65文書を保持し、G本文と重なる64文書は当該Gの終端・root全物理/永続closureをFSで待ってからfresh PREへ進む |
+| 海外売上 | 計60文書351数値を保持 | 次20文書125数値は元normal apply/別inspectが閉鎖し、root別再生前なのでまだ加算しない。元producerのas_ofは10/16、元保存監査は23:57 UTC成功。UTC翌日のroot再生は実nativeのas_ofだけを元build区間で資格化する別の保存監査を準備し、Date偽装・元producer変更・再APPLYはしない |
+| VWAP 5分足 | 固定suffixは850/1,856銘柄。32窓の先頭11窓/550銘柄を全R2 PRE/POST・ETag・実SDK metadata・物理summary・保存UTC間隔まで別再生 | 残1,006銘柄は通常CLI。元15:26:19.392 JST期限を保持。長い過去穴と以前のmetadata未保存の限界は未解消 |
+| RAW索引 | pool51/run38978149098は500検証（新483/既完17）、位置15,912/78,832・残62,920。全manifest/log/実checkout9cdf/通常継続をroot別再生 | pool52/run38983256054が同実行版で通常継続。遠隔private payload・最終anti-join・旧46 ACK不明は未解消。追加dispatch0 |
+| 優待条件 | #477を通常compiler/DTO/UIへ配備。保存5,748群/7,716行のroot再生で旧27群は不変、追加15群19行は選択構造を解析し評価額NULL | 実データへの新構造採用0。既存v1の原文SHA・受取条件・全列をCASで守る限定upgradeを実装中。保有期間tier・併用・公式確認・一意でない評価は未完 |
+
+通常・独立保存監査の繰り返しは固定範囲のツールで処理し、新HTTPやモデル推論を追加しない。VWAPのroot監査初回はNixのNODE_PATHを外し忘れてsource guardで停止した。元STOP/logを保持し、原処理・実データ・原期限を変えず、別private namespaceで起動設定を明示修正した。HTTP/業務書込0の停止をproducer失敗と扱わない。
+
+Notion予約は本文1.7＋保有0.5＋RAW0.25＋海外0.25＋受注0.25＋VWAP0.04＝2.99 req/sのまま。#476の追加読取はpublisher数p＋隔離source数u×2（最大5source）。通常300秒の上限を増やさず、実定時の処理件数・時間は未受入。#477は追加取得/モデル/依存0で、保存5,748群の純parser中央値20.95ms、全7,716行へ将来v2を保存する場合のJSON増分見積り約1.48MB。今回19行への採用や全量時間の実測とは分ける。
+
+1911は結果未確定1要求・旧pending/143journal・source latchを保護し再送0。株価41社の当日原本NULL、単位根拠不足5,362行、原典不在、権利処理#343、次20/21時の定時receipt、全20機能は未完。完了数を空欄の充足率へ読み替えない。
+
+私有root最終証跡は保有range06 `d64fefe7…24a1d`、受注20 `87d12efa…d0b6`、RAW51 `fd8842f7…78af`、各PRの`continuation/pr475〜477-root-final-review.json`。全SHA・入力pinsは実JSONへ保持し、原文・署名URL・秘密値はGitに含めない。
+
 ## 10月17日08:25 JSTの受入と進行
 
 #471の通常read-only inspect、#472の受注投影0の正資格保存、#473の分割前株数の明示文型はexact headの3 CI成功後に通常マージした。Cloudflareはmain `7bf3f67c`、08:22:11/version `117f2a31-dfe1-4e28-a7a5-0cdb42a9bbf2`まで実配信確認。以下の保存件数・実行中・配備待ちを分ける。
