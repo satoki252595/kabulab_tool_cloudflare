@@ -9,6 +9,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ## 2026-10-17
 
+- 本番作業: 本文950社、保有原本列1,667行/115文書、受注40文書、VWAP1,399銘柄を別照合し、RAWは通常の単件索引登録まで再開。[全20機能の状況](test-logs/recovery-functional-status-20261017.md)へ残件・優待のREAD停止・通常定時との通信枠を記録した。
 - 優待holdingの既知search読取1件だけで止まった場合は、原2intentと全送信証跡・元PREを保持する明示通常CLIで一度だけ継続できる。業務送信や未知応答がある停止は再送せず、[実47行と原observerのSHA誤差](test-logs/yutai-holding-read-only-stop-20261017.md)を保存照合した（実再開は別受入）。
 
 - 優待holding条件の添付名を上限内へ直し、両phase名を開始記録前に検査する。外部通信0の保存証拠を全SHAで再資格した場合だけ、原記録を保持する専用通常CLIで一度再開できる。[実47行・旧choice同値と再送拒否](test-logs/yutai-holding-zero-native-20261017.md)を確認した（本番再開は別受入）。
