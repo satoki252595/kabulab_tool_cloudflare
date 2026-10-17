@@ -59,6 +59,18 @@ class ContinuationTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             continuation(event, RECORDS, REVISION)
 
+    def test_verified_prefix_budget_partial_uses_same_pool_and_revision(self):
+        records = copy.deepcopy(RECORDS)
+        records[1].update(processed=1, verified=1, cursor=18879, remaining=59953,
+                          limitReached=False, stoppedByBudget=True, budgetStopReason="seconds")
+        result = continuation(EVENT, records, REVISION)
+        self.assertEqual(result["inputs"]["continue_runs"], "136")
+        self.assertEqual(result["inputs"]["execution_revision"], REVISION)
+        self.assertEqual(result["inputs"]["plan_id"], EVENT["inputs"]["plan_id"])
+        records[1].update(processed=0, verified=0)
+        with self.assertRaises(AssertionError):
+            continuation(EVENT, records, REVISION)
+
 
 if __name__ == "__main__":
     unittest.main()

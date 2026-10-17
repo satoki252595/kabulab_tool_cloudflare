@@ -1,0 +1,25 @@
+{
+  "provenance": {
+    "kind": "actual_safe_failure_excerpt_not_raw_or_signed_locator",
+    "executionRevision": "4d76e9b1a9c8b3cd8d99619c9029896811a69d25",
+    "sourceLogBytes": 114308,
+    "sourceLogSha256": "6315903ad8541bea8da59737b7fb84d8741dd87fbefbd8c1f1cfbb1ea077adb7",
+    "sourceLogPath": "tmp/feature-audit-20261017/raw-main4d76-continuation74-watch-v1/run74-full-job.private.log",
+    "maximumSeconds": 3600,
+    "fullNativeLedgerExported": false,
+    "verifiedPrefixCountEstablishedByThisExcerpt": false
+  },
+  "failure": {
+    "status": "stopped",
+    "detail": "contract_or_transport_error",
+    "errorClass": "NotionConfigError",
+    "messageSha256": "3cf569e6b53772d1d12410a060e8b23123a4e9ddba6d099b4879871efcaf9126",
+    "lastPhase": "hosted_read_attempt",
+    "elapsedMs": 3535618,
+    "notionRequests": 10,
+    "notionRateLimited": 0,
+    "notionTransientRetries": 0,
+    "notionDownloadAttempts": 481,
+    "notionDownloadBytes": 87549046
+  }
+}

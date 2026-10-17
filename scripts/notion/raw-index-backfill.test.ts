@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "../../src/shared/zod-mini.js";
 import { canonicalRawKey } from "./raw-index-plan.js";
@@ -6,6 +7,7 @@ import { safeRawFailure, createRawDownloader, expectedRawIndex, inspectRawBackfi
 import { sharedEnv } from "../../src/shared/env.js";
 import { downloadArchivedFile, type ArchivedDownloadOptions } from "../../src/shared/notion-archive/archived-download.js";
 import type { CanonicalRawFile } from "../../src/shared/notion-archive/raw-files.js";
+import { NotionConfigError } from "../../src/shared/notion-archive/env.js";
 
 // Protocol fixture only: raw binary fidelity/unknown transport tests, not financial facts.
 const body = new Uint8Array([0, 255, 128, 42]);
@@ -822,5 +824,108 @@ describe("RAW結果不明のread-only inspect", () => {
     if (fault === "limit") bad.limit = 3;
     if (fault === "reconcile") { bad.reconcileSha256 = sha; bad.reconcileStateSha256 = sha; }
     await expect(inspectRawBackfill(bad, f.io)).rejects.toThrow(); f.unchanged();
+  });
+});
+
+describe("RAW74 actual pre-send headroom stop", () => {
+  // Saved safe failure clock/hash only. The in-memory publisher remains the declared protocol fixture above.
+  const actual = JSON.parse(readFileSync(new URL("./fixtures/raw74-hosted-headroom-stop.json", import.meta.url), "utf8")) as {
+    provenance: { maximumSeconds: number }; failure: { elapsedMs: number; messageSha256: string };
+  };
+  const budgetOpts = { ...opts, maxSeconds: actual.provenance.maximumSeconds };
+  const start = Date.parse("2026-10-14T00:00:00.000Z");
+  const find = async (shas: readonly string[]) => new Map(shas.map(digest => [digest,
+    { raw: digest === sha ? raw : { ...raw, sha256: digest, pageId: "d".repeat(32) },
+      file: { name: raw.filename, url: "https://file.notion.so/source.zip" } }]));
+
+  it("matches the real error fingerprint and refuses a new item before its reads", async () => {
+    const message = "[raw-backfill] hostedの65秒headroom不足。送信せず停止";
+    expect(createHash("sha256").update(message).digest("hex")).toBe(actual.failure.messageSha256);
+    expect(budgetOpts.maxSeconds * 1000 - actual.failure.elapsedMs).toBe(64_382);
+    const f = fixture(); let clock = start; f.io.now = () => clock;
+    const emit = f.io.emit;
+    f.io.emit = vi.fn(async record => { await emit(record); if ((record as { phase: string }).phase === "manifest") clock = start + actual.failure.elapsedMs; });
+    expect(await runRawBackfill(budgetOpts, f.io)).toMatchObject({ status: "partial", stoppedByBudget: true,
+      budgetStopReason: "seconds", processed: 0, cursor: 0, notionDownloads: 0, notionDownloadAttempts: 0 });
+    expect(f.state()).toMatchObject({ cursor: 0, inflight: null });
+    expect(f.io.download).not.toHaveBeenCalled(); expect(f.io.index).not.toHaveBeenCalled();
+    expect(f.rawPuts()).toHaveLength(0); expect(f.io.insert).not.toHaveBeenCalled();
+  });
+
+  it("fsync crossing 65s retains the completed prefix and does not send the next hosted GET", async () => {
+    const f = fixture(); let clock = start; f.io.now = () => clock;
+    const rows = [raw, { ...raw, sha256: "f".repeat(64), pageId: "d".repeat(32) }].sort((a, b) => a.sha256.localeCompare(b.sha256));
+    f.io.list = vi.fn(async () => rows); f.io.download = createRawDownloader(find, undefined, 1);
+    const native = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(body));
+    const emit = f.io.emit; let starts = 0;
+    f.io.emit = vi.fn(async record => {
+      await emit(record);
+      if ((record as { phase: string; attemptPhase?: string }).phase === "hosted_read_attempt" &&
+          (record as { attemptPhase?: string }).attemptPhase === "start" && ++starts === 2) clock = start + actual.failure.elapsedMs;
+    });
+    const result = await runRawBackfill({ ...budgetOpts, expectedCount: 2, hostedMaxRps: 1 }, f.io);
+    expect(result).toMatchObject({ status: "partial", stoppedByBudget: true, budgetStopReason: "seconds",
+      processed: 1, verified: 1, cursor: 1, remaining: 1, notionDownloads: 1, wouldPut: 1, rawPuts: 1,
+      d1Inserts: 1, notionDownloadAttempts: 2, notionDownloadBytes: body.length });
+    expect(f.state()).toMatchObject({ cursor: 1, inflight: null });
+    expect(native).toHaveBeenCalledOnce(); expect(f.rawPuts()).toHaveLength(1);
+    expect(f.emitted.at(-1)).toMatchObject({ phase: "summary", ...result });
+  });
+
+  it("read latency crossing 65s refuses metadata/download acquisition before its first callback", async () => {
+    const f = fixture(); let clock = start; f.io.now = () => clock; const get = f.io.get;
+    f.io.get = vi.fn(async (...args: Parameters<BackfillIo["get"]>) => {
+      const result = await get(...args); if (args[1] === f.io.rawBucket) clock = start + actual.failure.elapsedMs; return result;
+    });
+    expect(await runRawBackfill(budgetOpts, f.io)).toMatchObject({ status: "partial", budgetStopReason: "seconds",
+      processed: 0, cursor: 0, notionDownloads: 0, notionDownloadAttempts: 0 });
+    expect(f.io.download).not.toHaveBeenCalled(); expect(f.state()).toMatchObject({ cursor: 0, inflight: null });
+    expect(f.rawPuts()).toHaveLength(0); expect(f.io.insert).not.toHaveBeenCalled();
+  });
+
+  it.each([0, 2])("a rejected second hosted attempt retains %d observed partial bytes", async partialBytes => {
+    const f = fixture(); let clock = start; f.io.now = () => clock;
+    f.io.download = createRawDownloader(find, undefined, 1);
+    const native = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      if (partialBytes === 0) throw new TypeError("fetch failed");
+      let sent = false;
+      return new Response(new ReadableStream({ pull(controller) {
+        if (!sent) { sent = true; controller.enqueue(body.slice(0, partialBytes)); }
+        else controller.error(new TypeError("terminated"));
+      } }));
+    });
+    const emit = f.io.emit;
+    f.io.emit = vi.fn(async record => {
+      await emit(record);
+      const event = record as { phase: string; attemptPhase?: string; attempt?: number };
+      if (event.phase === "hosted_read_attempt" && event.attemptPhase === "start" && event.attempt === 2)
+        clock = start + actual.failure.elapsedMs;
+    });
+    expect(await runRawBackfill({ ...budgetOpts, hostedMaxRps: 1 }, f.io)).toMatchObject({ status: "partial",
+      budgetStopReason: "seconds", processed: 0, cursor: 0, notionDownloads: 0, rawPuts: 0, d1Inserts: 0,
+      notionDownloadAttempts: 2, notionDownloadBytes: partialBytes });
+    expect(native).toHaveBeenCalledOnce(); expect(f.state()).toMatchObject({ cursor: 0, inflight: null });
+  });
+
+  it.each(["config", "transport", "same-text"])("general %s failure is never converted to partial", async kind => {
+    const f = fixture();
+    const error = kind === "transport" ? new TypeError("fetch failed") : new NotionConfigError(kind === "same-text"
+      ? "[raw-backfill] hostedの65秒headroom不足。送信せず停止" : "explicit configuration failure");
+    f.io.download = vi.fn(async () => { throw error; });
+    await expect(runRawBackfill(budgetOpts, f.io)).rejects.toBe(error);
+    expect(f.emitted.some(record => (record as { phase: string }).phase === "summary")).toBe(false);
+    expect(f.rawPuts()).toHaveLength(0); expect(f.io.insert).not.toHaveBeenCalled();
+  });
+
+  it("preexisting raw unknown is not hidden by the new-item headroom stop", async () => {
+    const f = fixture(), put = f.io.put;
+    f.io.put = vi.fn(async (...args: Parameters<BackfillIo["put"]>) => { if (args[3] === f.io.rawBucket) throw new Error("unknown PUT"); await put(...args); });
+    await expect(runRawBackfill(budgetOpts, f.io)).rejects.toThrow("unknown PUT");
+    const prior = f.state(); expect(prior.inflight.phase).toBe("raw_inflight");
+    let clock = start; f.io.now = () => clock; const emit = f.io.emit;
+    f.io.emit = vi.fn(async record => { await emit(record); if ((record as { phase: string }).phase === "manifest") clock = start + actual.failure.elapsedMs; });
+    vi.mocked(f.io.download).mockClear(); vi.mocked(f.io.put).mockClear();
+    await expect(runRawBackfill(budgetOpts, f.io)).rejects.toThrow("PUTを再送せず保全停止");
+    expect(f.state()).toEqual(prior); expect(f.io.download).not.toHaveBeenCalled(); expect(f.io.put).not.toHaveBeenCalled();
   });
 });
