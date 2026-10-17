@@ -1,0 +1,20 @@
+{
+  "provenance": "Original canonical manifest item and already committed real source bytes. R2/D1 transport in tests is declared protocol projection, not fresh remote acceptance.",
+  "bodyPath": "pipeline/tests/fixtures/direct-roa/8566-S100YF3N-type5.zip",
+  "bodySha256": "270c211710faf3133d66459f3050700be1378ab8284b627fff50ec0c1d175f25",
+  "item": {
+    "pageId": "38dd74ff-84cd-8124-82e8-d676a3776569",
+    "sha256": "270c211710faf3133d66459f3050700be1378ab8284b627fff50ec0c1d175f25",
+    "filename": "edinet_csv_8566_20260619.zip",
+    "sizeBytes": 138896,
+    "source": "EDINET",
+    "datatype": "csv",
+    "scope": "8566",
+    "dataDate": "2026-06-19",
+    "fetchedAt": "2026-06-29T02:48:00.000+09:00",
+    "licenseTag": "commercial-ok",
+    "convertStatus": "完了",
+    "hostedAttachments": 3,
+    "docId": "S100YF3N"
+  }
+}

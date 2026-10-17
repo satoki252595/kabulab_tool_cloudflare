@@ -331,7 +331,7 @@ export async function inspectRawBackfill(opts: RawBackfillOptions,
   await io.emit({ phase: "inspect_summary", ...result });
   return result;
 }
-export function parseRawManifest(value: unknown, opts: RawBackfillOptions, bucket: string): RawManifest {
+export function parseRawManifest(value: unknown, opts: Pick<RawBackfillOptions, "planId" | "cutoff" | "expectedCount">, bucket: string): RawManifest {
   const manifest = Manifest.parse(value);
   if (opts.cutoff !== undefined && manifest.cutoff !== opts.cutoff) throw new Error("[raw-backfill] 明示cutoffと保存manifestが不一致です");
   if (manifest.planId !== opts.planId || manifest.rawBucket !== bucket || manifest.expectedCount !== opts.expectedCount ||
@@ -343,7 +343,7 @@ export function parseRawManifest(value: unknown, opts: RawBackfillOptions, bucke
   for (const item of manifest.items) canonicalRawKey({ ...item, sourceUrl: null }, item.docId);
   return manifest;
 }
-function validateBody(body: Uint8Array, item: RawItem): void {
+export function validateBody(body: Uint8Array, item: RawItem): void {
   if (body.length !== item.sizeBytes || digest(body) !== item.sha256) throw new Error("[raw-backfill] 原本全body SHA/サイズ不一致");
 }
 export function expectedRawIndex(item: RawItem, bucket: string, key: string): RawIndexRow {
@@ -354,7 +354,7 @@ export function expectedRawIndex(item: RawItem, bucket: string, key: string): Ra
     ext: path.extname(item.filename).slice(1).toLowerCase(), size_bytes: item.sizeBytes, license_tag: item.licenseTag,
     convert_status: item.convertStatus, first_fetched_at: epoch, last_fetched_at: epoch };
 }
-function validateIndex(row: RawIndexRow, item: RawItem, bucket: string, expectedKey?: string): void {
+export function validateIndex(row: RawIndexRow, item: RawItem, bucket: string, expectedKey?: string): void {
   const expected = expectedRawIndex(item, bucket, row.r2_key);
   if (!row.r2_key.startsWith("raw/") || (expectedKey !== undefined && row.r2_key !== expectedKey) ||
       (Object.keys(expected) as Array<keyof RawIndexRow>).some((key) => {
@@ -443,12 +443,50 @@ export async function readRawIndex(sha: string, options?: RawIndexReadOptions): 
   const rows = assertD1SingleQueryResponse(await response.json());
   if (rows.length > 1) throw new Error("[raw-backfill] D1 SHA重複");
   if (rows.length === 0) return null;
-  const row = rows[0]!;
+  return assertRawIndexRow(rows[0]!, sha);
+}
+function assertRawIndexRow(row: Record<string, unknown>, sha: string): RawIndexRow {
   if (row.sha256 !== sha || ["r2_bucket", "r2_key", "source", "datatype", "scope", "ext", "license_tag", "convert_status"].some((k) => typeof row[k] !== "string" || row[k] === "") ||
       ["doc_id", "code", "data_date"].some((k) => row[k] !== null && typeof row[k] !== "string") ||
       ["size_bytes", "first_fetched_at", "last_fetched_at"].some((k) => typeof row[k] !== "number" || !Number.isSafeInteger(row[k]))) throw new Error("[raw-backfill] D1 object行契約不正");
   return row as unknown as RawIndexRow;
 }
+
+/** 独立監査用。SHA最大100件を先に限定する単発SELECT。通常single-SHA SQL/再読契約は不変。 */
+export async function readRawIndexes(shas: string[], options: {
+  signal: AbortSignal; maxBytes: number; beforeRequest: () => Promise<void>;
+  onRead: (body: Uint8Array, complete: boolean) => Promise<void>;
+}): Promise<RawIndexRow[]> {
+  if (shas.length < 1 || shas.length > 100 || new Set(shas).size !== shas.length ||
+      shas.some(sha => !/^[a-f0-9]{64}$/.test(sha)) || !Number.isSafeInteger(options.maxBytes) || options.maxBytes < 1)
+    throw new Error("[raw-audit] SHA限定読取/bytes予算不正");
+  const signal = AbortSignal.any([options.signal, AbortSignal.timeout(60_000)]);
+  const init = { method: "POST", signal, headers: {
+    Authorization: `Bearer ${sharedEnv.CLOUDFLARE_API_TOKEN()}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ sql: `SELECT sha256,r2_bucket,r2_key,source,datatype,scope,doc_id,code,data_date,ext,size_bytes,license_tag,convert_status,first_fetched_at,last_fetched_at FROM jss_raw_files WHERE sha256 IN (${shas.map(() => "?").join(",")})`, params: shas }) };
+  await options.beforeRequest(); signal.throwIfAborted();
+  const response = await fetch(d1HttpQueryUrl(), init);
+  if (response.body === null) throw new Error("[raw-audit] D1 body欠測");
+  const reader = response.body.getReader(), chunks: Uint8Array[] = [];
+  let bytes = 0, complete = false;
+  try {
+    for (;;) {
+      signal.throwIfAborted();
+      const next = await reader.read(); if (next.done) break;
+      bytes += next.value.length; chunks.push(next.value);
+      if (bytes > options.maxBytes) throw new Error("[raw-audit] D1 bytes予算超過");
+    }
+    complete = true;
+  } finally {
+    try { await reader.cancel(); } finally { await options.onRead(Buffer.concat(chunks, bytes), complete); }
+  }
+  if (!response.ok) throw new Error(`[raw-audit] D1 read HTTP ${response.status}`);
+  const rows = assertD1SingleQueryResponse(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks, bytes))));
+  if (new Set(rows.map(row => row.sha256)).size !== rows.length || rows.some(row => !shas.includes(row.sha256 as string)))
+    throw new Error("[raw-audit] D1索引未知/重複SHA");
+  return rows.map(row => assertRawIndexRow(row, row.sha256 as string));
+}
+
 export async function insertRawIndex(row: RawIndexRow): Promise<void> {
   const columns = Object.keys(row) as Array<keyof RawIndexRow>;
   // 競合の後勝ちを禁止。単一INSERTはnative atomic、共有senderは単発・strict ACK。
