@@ -9,6 +9,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ## 2026-10-17
 
+- 優待の単一掲載期間と額・枚数を、厳密な全文2文法だけ通常取込・定期要約で共通解析する。実4群の旧額・条件・時計を保持し、本人適用や株数段階・併用は未確認のまま。[保存5,748群の同値検証](test-logs/yutai-single-holding-period-20261017.md)を記録した（実データ採用は別途）。
 - 保有明細の結果不明PATCHは、通常CLIで旧行と全証拠を物理保全・退役確認して別IDへ置換できる。旧要求は再送せず、通常publisherで全原表・旧値の物理POSTを確認してから再開する。[実1911回帰とversion2の互換停止](test-logs/holdings-patch-replacement-20261017.md)を記録した。本番の置換は未実行。
 
 - 保存原本の受注・海外売上PREは、queryと本文資格で同じmetadata確認を使う。欠測提出者・期末は補完せず公式ZIP DEIを必須に保ち、[実S100XUO9と停止128応答の照合](test-logs/saved-source-metadata-admission-20261017.md)で誤停止を直した。旧STOP・claims・再開期限は保持する。

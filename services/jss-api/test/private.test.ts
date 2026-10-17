@@ -58,6 +58,22 @@ describe("内部面の優待時期", () => {
     expect(body.data[0]?.can_aggregate).toBe(false);
     expect(JSON.stringify(body)).not.toContain("description");
   });
+  it("実4群のv3掲載期間を内部面で再読し、本人適用と合計を未確認に保つ", async () => {
+    const saved = (await import("../../otakara-yutai/src/tests/fixtures/holding-period-saved4.json")).default.groups;
+    for (const group of saved) {
+      const facts = { ...group.oldFacts, version: 3, conditionStructure: { status: "literal_parsed", rule: "single-holding-period-v1",
+        sourceSha256: group.sourceSha256, applicability: "unverified", ast: group.ast } };
+      const response = await app.request(`/v1/yutai/${group.code}`, AUTH, env({ DB: stubD1(() => [
+        { genre_id: 1, min_shares: group.minShares[0], record_month: group.recordMonths[0], record_date: null, public_facts: JSON.stringify(facts) },
+      ]) }));
+      expect(response.status).toBe(200);
+      const body = await response.json() as { data: { public_facts: unknown; can_aggregate: boolean }[] };
+      expect(body.data[0]?.public_facts).toEqual(facts);
+      expect(body.data[0]?.can_aggregate).toBe(false);
+      expect(JSON.stringify(body)).not.toContain("description");
+      expect(JSON.stringify(body)).not.toContain("リトルワールド");
+    }
+  });
   it("実月・随時・単発日を区別し、内部0を暦月として返さない", async () => {
     const rows = [
       { genre_id: 1, min_shares: 100, record_month: 3, record_date: null, public_facts: null },
