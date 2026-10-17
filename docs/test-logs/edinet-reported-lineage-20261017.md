@@ -79,6 +79,14 @@ SQL/snapshotはNixの通常`drizzle-kit generate --name=edinet_reported_changes`
 
 実20社の元6表PRE・screen実通過3113/3382を含む最終public SQLを、同入力・同4関数・5回×50反復で比較した。旧→新SQLite medianはorders screen **0.02691→0.15786ms**、overseas screen **0.03173→0.16307ms**、orders sector **0.00644→0.03013ms**、overseas sector **0.00643→0.02780ms**。VM概数は618→5,162、574→5,144、214→2,714、206→2,390。全4出力と全20社×6表は同値。known HOLD predicateをlatest探索前へ置く1回のtrialで、新VMを7,394/6,950/4,084/3,294から低減したが、旧版に対する追加費用は残る。全市場D1の課金・性能保証へ広げない。新compound索引/既存doc・facts索引の利用はEXPLAINで確認した。
 
+## 本番READの性能棄却と共有guardの修正
+
+初回source `473152b`を新表0行・writer停止中の通常13 SELECTで比較した。全4関数の結果は一致したが、受注screen/sector・海外screen/sectorのD1 rows_readは旧版の**19.00 / 21.88 / 13.98 / 15.19倍**となった。受注screenは16,620行/39.44ms→315,750行/822.43ms、海外screenは16,130行/8.92ms→225,464行/220.79ms。この性能を受け入れず、push/merge/deployを保留した。操作自体の全応答と旧新同値は受入済みで、性能受入とは分ける。1回の読取測定でありpercentileや月額費用ではない。
+
+原証跡は canonical `tmp/feature-audit-20261017/edinet-lineage-market-readonly-probe-v1/root-final-acceptance-v1.json`（SHA `f35dbb8259a933f52dcda706084608a6a2915b0ac433f99ca5d2c4b778878124`）、性能棄却は同dir `root-performance-decision-v1.json`（SHA `2e25c801b2f9f135b6b0d100300c8838f50d67c080feb327f76269d07a29db9c`）へ保持した。
+
+共有`reportedGrowthHold`の入口だけを修正する。非relation観測の資格済みstock IDと、exact doc IDを実documentへ結ぶstock IDの非相関unionを一度構成し、`CASE`で影響候補だけを従来の厳格guardへ渡す。NULL identityのexact HOLD・未取込qualified報告の両方を保持し、global空表だけに依存しない。旧guardの意味・DDL・金融値・SQL発行回数は変えない。性能修正後もNix full TypeScript/lintと関連23 suites **435 tests**はPASS。実NULL提出者の取下げが無関係ならpublic4出力同値、実3113/3382 metadataに宣言した未取込/facts0は引き続きscreen/sectorを保留する。保存入力の新旧比較とv2 actual READは別証跡で資格化し、後者の受入前に本番の費用増が小さいと確約しない。
+
 ## I/Oと上限
 
 通常cronの一覧原本capture/Notion物理保管は既存処理を再用するので追加source/Notionは0。変更観測が0なら観測保存のD1 IOも0。観測ありは2 SELECT＋ceil(未保存行/9) INSERT。原metadataが完全なHOLD候補に限り、既存issuer逆引きとnormal core集合を各90件以内で照合するD1 SELECTが増える。保存38 HOLDの候補0にはこのlookupを発行しない。新captureで変更観測ありの場合はsnapshot保全の進捗CAS1回、保存一覧からの再開時は`@list`予約/解除CAS2回が増える。

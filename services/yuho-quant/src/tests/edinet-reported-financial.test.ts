@@ -31,6 +31,37 @@ function open(snapshot:Snapshot=before) {
 }
 
 describe("reported exact-document HOLD never selects older financial values", () => {
+  it("a real null-issuer withdrawal absent from the saved financial cohort leaves all four public consumers unchanged",async()=>{
+    const saved=JSON.parse(readFileSync(new URL("./fixtures/reported-latest-3113-3382/snapshot.json",import.meta.url),"utf8")) as Snapshot;
+    const original=JSON.parse(readFileSync(new URL("./fixtures/edinet-reported-lineage.json",import.meta.url),"utf8")).entries.find((entry:{original:{docID:string}})=>entry.original.docID==="S100YRSP").original;
+    const {sqlite,db,hold}=open(saved);try{
+      expect(original.edinetCode).toBeNull();expect(original.withdrawalStatus).toBe("1");
+      expect(saved.yuho_documents.some(d=>d.doc_id===original.docID)).toBe(false);
+      const values=async()=>[await screenOrderGrowth(db,{metric:"orders",minYears:1,limit:100}),await screenOverseasGrowth(db,{minYears:1,limit:100}),await listSectorsWithOrders(db),await listSectorsWithOverseas(db)];
+      const old=await values();hold(original.docID);
+      expect(await values()).toEqual(old);
+      for(const stock of saved.core_stocks)expect(readSnapshot(sqlite,stock.id as number)).toEqual(Object.fromEntries(Object.entries(saved).map(([table,rows])=>[table,rows.filter(row=>row[table==="core_stocks"?"id":"stock_id"]===stock.id)])));
+    }finally{sqlite.close();}
+  });
+  it("qualified latest reported metadata with no document row still masks actual 3113/3382 screens and sectors",async()=>{
+    const saved=JSON.parse(readFileSync(new URL("./fixtures/reported-latest-3113-3382/snapshot.json",import.meta.url),"utf8")) as Snapshot;
+    for(const [code,kind,id] of [["3113","orders","S100YHET"],["3382","overseas","S100Y4VB"]] as const){
+      const {sqlite,db}=open(saved);try{
+        const row=saved.yuho_documents.find(d=>d.doc_id===id)!,stock=saved.core_stocks.find(s=>s.code===code)!;
+        const screen=()=>kind==="orders"?screenOrderGrowth(db,{metric:"orders",minYears:1,limit:100}):screenOverseasGrowth(db,{minYears:1,limit:100});
+        const sectors=()=>kind==="orders"?listSectorsWithOrders(db):listSectorsWithOverseas(db);
+        expect((await screen()).rows.some(r=>r.code===code)).toBe(true);
+        // Declared absent-document protocol on unchanged actual metadata, not an observed withdrawal.
+        for(const table of ["yuho_order_facts","yuho_overseas_facts","yuho_text_sections"])sqlite.prepare(`delete from ${table} where document_id=?`).run(row.id as number);
+        sqlite.prepare("delete from yuho_documents where id=?").run(row.id as number);
+        const unchanged=readSnapshot(sqlite,stock.id as number);
+        sqlite.prepare("insert into yuho_edinet_reported_changes values (?,?,?,?,?,?,?,?,?,?)")
+          .run("declared-qualified-missing-document",1,"declared-protocol",id,null,"reported_withdrawal","{}",row.stock_id as number,row.period_end as string,row.submitted_at as number);
+        expect((await screen()).rows.some(r=>r.code===code)).toBe(false);expect(await sectors()).not.toContain(stock.sector33);
+        expect(readSnapshot(sqlite,stock.id as number)).toEqual(unchanged);
+      }finally{sqlite.close();}
+    }
+  });
   it("actual 3113/3382 latest FY outside the projection window cannot leave stale screens/sectors usable under a declared HOLD/fact0 fault",async()=>{
     const saved=JSON.parse(readFileSync(new URL("./fixtures/reported-latest-3113-3382/snapshot.json",import.meta.url),"utf8")) as Snapshot;
     for(const [code,kind,id] of [["3113","orders","S100YHET"],["3382","overseas","S100Y4VB"]] as const){

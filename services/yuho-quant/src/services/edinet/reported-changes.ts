@@ -230,13 +230,20 @@ export function reportedGrowthHold(kind: "orders" | "overseas", stockId: AnyColu
     : sql`f.region_kind in ('overseas_total', 'total', 'overseas')`;
   const newerUsed = kind === "orders" ? sql`newer.segment_kind = 'total'`
     : sql`newer.region_kind in ('overseas_total', 'total')`;
-  return sql`(${reportedOverallLatestHold(stockId)} or ${qualifiedProjectionHold(kind,stockId,firstFy,lastFy)} or ${reportedUnrepresentedDocumentHold(kind, stockId, firstFy, lastFy)} or exists (select 1 from ${facts} f join yuho_documents d on d.id = f.document_id
+  // 観測から影響候補stockを一度だけ構成し、無関係stockの履歴/facts再探索を避ける。
+  // ponytail: 集合構築は観測履歴O(rows)。実測読取の増大時だけactive影響集合を検討する。
+  // NULL identityのexact docは実metadataへjoin、未取込の資格済み報告はstock_id側で保持する。
+  return sql`case when ${outer(stockId)} in (
+    select affected.stock_id from ${table} affected where affected.reported_state <> 'unqualified_relation' and affected.stock_id is not null
+    union select document.stock_id from ${table} affected join yuho_documents document on document.doc_id=affected.doc_id
+      where affected.reported_state <> 'unqualified_relation'
+  ) then (${reportedOverallLatestHold(stockId)} or ${qualifiedProjectionHold(kind,stockId,firstFy,lastFy)} or ${reportedUnrepresentedDocumentHold(kind, stockId, firstFy, lastFy)} or exists (select 1 from ${facts} f join yuho_documents d on d.id = f.document_id
     where f.stock_id = ${outer(stockId)} and f.fiscal_year_end between ${outer(firstFy)} and ${outer(lastFy)}
       and ${used} and ${reportedDocumentHold(sql`d.doc_id`)}
       and not exists (select 1 from ${facts} newer
         join yuho_documents nd on nd.id = newer.document_id
         where newer.stock_id = f.stock_id and newer.fiscal_year_end = f.fiscal_year_end
-          and ${newerUsed} and nd.submitted_at > d.submitted_at)))`;
+          and ${newerUsed} and nd.submitted_at > d.submitted_at))) else 0 end`;
 }
 
 /** 最新HOLD書類にfactsが無い場合も旧提出の同FY値へ戻さない。別FYや正常な新提出は巻き込まない。 */
