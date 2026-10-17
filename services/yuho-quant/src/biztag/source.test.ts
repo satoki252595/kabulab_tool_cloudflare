@@ -105,7 +105,7 @@ describe("固定コードの最新有報をSQLから限定する", () => {
     expect(await loadLatestDocs(db(), [code])).toEqual([]); expect(fetch).not.toHaveBeenCalled();
   });
 
-  it.each([["bad"], ["7247' OR 1=1"], [null], Array(1), "7247"])("不正scopeはSQLより前に拒否する (%j)", async codes => {
+  it.each([{ codes: ["bad"] }, { codes: ["7247' OR 1=1"] }, { codes: [null] }, { codes: Array(1) }, { codes: "7247" }])("不正scopeはSQLより前に拒否する (%j)", async ({ codes }) => {
     await expect(loadLatestDocs(db(), codes as unknown as string[])).rejects.toThrow("正準証券コード");
     expect(queries).toEqual([]); expect(fetch).not.toHaveBeenCalled();
   });
