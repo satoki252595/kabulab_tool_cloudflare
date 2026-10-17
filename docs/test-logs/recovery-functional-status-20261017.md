@@ -1,8 +1,8 @@
-# 全20機能の復旧状況 — 10月17日16:00 JST／17:29・18:21・19:35追記
+# 全20機能の復旧状況 — 10月17日16:00 JST／17:29・18:21・19:35・20:35追記
 
 追跡: [#348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)。[当初の機能別監査](feature-gap-audit-20261014.md)と[受入台帳](recovery-acceptance-20261016.md)の保存証拠を集約した時点記録。全サービスを16時に一括再照会した結果ではない。全20機能の完了には未到達で、原典にない値を埋めない。
 
-最新の追加受入は[19:35 JSTの記録](#1935-jstの追加受入と通常macへの配備)を参照。次の20項目表は16:00時点の履歴で、後続の時点記録を上書きしない。
+最新の追加受入は[20:35 JSTの記録](#2035-jstの実20時受入と後続補完)を参照。次の20項目表は16:00時点の履歴で、後続の時点記録を上書きしない。
 
 ## 機能別の受入と残件（16:00時点）
 
@@ -28,6 +28,48 @@
 | 18 | 有価証券保有明細 | 原本列1,667行115文書を全値・全原表・物理PRE/POSTで受入。1911のunknown行は通常の保全置換で閉鎖 | 次の固定範囲を通常publisherで継続。新規価格資格0、価格・株数basisの証拠不足HOLD5,362行（全原表の単位欠測という意味ではない）。分割前期末株数の明示根拠8社と、候補28行を価格確定へ読み替えない |
 | 19 | API・MCP | JSS private strict v1/v2/v3を配備、実コード・6bindings・health200・未認証401を確認 | 既存キーはCloudflareのみ。実認証付きv2/v3 payloadの通し受入は未完。鍵の取得・新規発行・変更はしていない |
 | 20 | 監視・Notion案内 | coverage/receipt監視、現行カタログ89blocks/5views等を反映 | 最新正常定時の終了receipt、Mac配備版と次20/21時、翌朝readcheckを別確認。配備成功だけで全機能完了にしない |
+
+## 20:35 JSTの実20時受入と後続補完
+
+19:35以前の記録は保持する。以下は通常処理の終端と保存済み原応答を照合した追加記録であり、全20機能の完了ではない。
+
+| 項目 | この時点の確認 | 残件・境界 |
+|---|---|---|
+| Mac実20時 | 10/17 20:00:05.967〜20:23:40.404 JST、`4a66929c`の全親子正常終端・local/R2 receipt全bytes一致 | 定刻起動・終了の受入。全3,687社の処理完了を意味しない |
+| 事業タグ本体 | 1,236社訪問、skip1,080・再判定8・本文同期148、新規モデル推論0・保存出力再利用10・Notion2,085要求・429/一時retry0 | 6038/9344は既存の根拠確認HOLDを保持。未知結果を再送しない |
+| 通常競合準備 | 次5社の原本gzip・物理保存を通常処理で確認、ready0/HOLD5、Notion52要求・モデル/競合書込0 | 候補側の入力資格不足を空競合・意味判定済みへ変えない |
+| 保存済みClef104社 | 通常journalのcode/doc/target/sourceを独立再生し45社完了＝先行3625＋初回36＋実20時8 | 残59＝原文変更57＋既知根拠HOLD2。旧モデル出力の現在入力への再利用資格は未確認 |
+| 本文固定2,417社 | 独立物理照合済み1,450社に加え、通常durable completion258社の39列・4identity・旧判定保持を保存のみで照合 | 同集合の暫定union1,708・残709。追加258の独立物理全GET・現在原本再照会は未実施で、旧1,450の受入を上書きしない |
+| Mac優待の切替 | 同じ`4a66929c`へ通常installer/bootstrapを各1回、20:27:37〜20:27:38 JSTのRunAtLoad終了・local/R2一致、対象/モデル0 | `scheduledFor`は10/16 21時で、10/17実21時は未受入。#496の新しい優待文法はこのMac版に未配備 |
+| 監視の期待版 | 両4a rollout受入後、既存GitHub secretの更新を1回ACK・更新時刻まで確認 | 値の読み戻し・他secret変更0。実21時・23:30 ops・翌朝監視は別受入 |
+| RAW単発pilot69 | 500件検証、491新規/9既完、cursor20,911・残57,921、3,185.120秒 | 全体受入18,412/78,832との未集約差を維持。hosted追加/D1追加/API追加attempt上限0 |
+| RAW通常継続70 | 元pool ordinal70のinitialを1回dispatch、固定execution `4d76e9b1`・successor最大130、run39029029650が実行中 | 元200回枠・origin・旧unknown/STOPを保持。actual checkout/全結果・全量anti-joinは未受入 |
+| 保有主体の限定訂正 | #497の別名義guardと#498の4行限定quarantine CLIをmain・実Cloudflareへ配備 | 208Aの旧4行の実訂正は未実施。新規価格資格0、原数値を保持して明示保留にする |
+| 増資の原表診断 | #499をmainへマージ、実Cloudflare build成功 | 同一原表・完全注記の第三者割当だけの追加診断。法的効力日/市場落日/価格係数・全面権利台帳は未完 |
+
+RAW pilotは旧65の53分02秒に対し53分05秒で、異なるbatchのCDN取得量は約2.47倍だった。速度改善の因果効果は確定しない。この観測速度を残57,921件へそのまま当て、停止なく継続できる場合は約102.5時間（4.27日）となる。準備・待機・失敗・原本不在等を含む保証ではなく、全20機能の完了日時でもない。Mac21時を含む今夜の起動確認は正常終端を条件に21:30ごろ、原本補完は4〜5日を目安とする。権利適用・優待tier/併用・公式資格・原本欠測等の残件があるため、全体の完了日は未確定。
+
+私有証跡（Git対象外、秘密値・署名URL・raw本文をGitへ保存しない）:
+
+- [実20時・両rollout・期待版のroot受入](../../tmp/feature-audit-20261017/mac-main4a66929c-cutover-v1/root-actual20-and-both-rollouts-secret-acceptance-v1.json): `857128a55e189c795686c475759f69ea4ea9f0eab3e6b18c4687d61c24da4612`。
+- [旧104社とのroot交差再生](../../tmp/feature-audit-20261017/mac4a-actual20-old104-publication-union-v1/root-result-v1.json): `e2a3e47304486a2725fe6e34386ce0261c8a710ea9e1abde73211863d5b96da3`。
+- [固定2,417社と通常258社のroot交差再生](../../tmp/feature-audit-20261017/mac4a-G2417-mechanical-intersection-v1/root-result-v1.json): `dd2d506f072768628ca87b3da832225aa55e9fc321b13f18d353302cc80362e4`。追加分の独立物理全GETを受入した証跡ではない。
+- [RAW69のroot保存監査](../../tmp/feature-audit-20261017/raw-hosted-main02-single-pilot-v1/root-independent-pilot69-acceptance-v1.json): `853a984fa307c14fa84690a47218163dbd00672ff78425e44297844178089900`。
+- [RAW70の1回送信ACK](../../tmp/feature-audit-20261017/raw-main4d76-continuation70-proposal-v1/dispatch70-ack.private.json): `28d9530aff9995229572a2f8a10bd8c2952891c0c54e3846c1438eeae1e5d085`。
+- [#495](../../tmp/feature-audit-20261017/continuation/pr495-root-final-review.json): `d3314724837b45a68b63d45b7f7d63a52968b4b14141c449da631a30d2b6d19f`、[#496](../../tmp/feature-audit-20261017/continuation/pr496-root-final-review.json): `812f25578c9d281f0ff0899db30e32e2973e55598b1bb5e0539cae71fba412e3`、[#497](../../tmp/feature-audit-20261017/continuation/pr497-root-final-review.json): `a35c9d71434163b908b81bb6229a9895ab0d7a0cc3bb5adb06f32e0727272c43`、[#498](../../tmp/feature-audit-20261017/continuation/pr498-root-final-review.json): `c515febd8e703b034bdf28a5d944eb8222328fb76b3cf22965ecff835e34c3ec`。
+
+### 20:42 JSTの配備確認と全体の完了条件
+
+#499はmain `8e5e126f`、version `607546e0-e014-478e-a54b-b6219ded454e`へ20:33:01 JSTに配信し、mainの3 CIも受入した。#500の`install-next`はmain `cfc4d308`、version `60ea2942-c397-4de0-827b-ab9ea6327b19`へ20:38:17 JSTに配信、mainの3 CIは20:42:17までに終了した。新しいinstallerは既存の実行条件を使い、`RunAtLoad=false`で次の定刻を待てる。今夜の稼働Macは4aのまま、500の候補runtimeはNixでsource1,690・同一依存5・モデルrecipe12不変＋review済みlauncher1変更まで通信/モデル0で準備しただけである。候補を配備済み・#496の優待文法を本番実行済みへ数えない。
+
+残件を再分類した。RAW・本文・保有・海外の有限補完と定時receiptは、すでにある共有ツールの実行・照合が中心。一方、権利の種類別台帳と訂正/失効鎖、日付とChart OHLCV単位の結合・計算適用、優待の複数tier/同一名義/名簿回数/併用と公式制度照合は、まだ本番ロジックの対応が残る。財務要素や受注/海外の追加表形式も、原典がある未対応パターンを個別に扱う。これらの全残母集団と工数が未確定で、RAWの4.27日を全体完了日へ読み替えない。
+
+原典非開示・失われた原本・非金銭優待・一意評価不能を理由付き状態として正しく保存することは、元の機能要件を満たし得る。すべてのNULLを埋めることや、認証付き代表11ケースを受入済みのAPIに全payload網羅を新しく要求することはしない。機能としての成立、固定cohortの補完、最新定時の受入をそれぞれ記録する。Macの事業タグ/優待/競合は同じkernelで順番に行い、RAW継続と通信0のparser検証を並行する。
+
+- [#499 main受入](../../tmp/feature-audit-20261017/continuation/pr499-root-final-review.json): `7e7f6e48761d431e48455602c110675a84121d2d90f33347ef31ece50a6e5e2e`。
+- [#500 main受入](../../tmp/feature-audit-20261017/continuation/pr500-root-final-review.json): `2233c0e4bb4fcee5a064fb12d3c81776365d692ac930351b9dfafad7876d8789`。
+- [未配備500候補のNix検査](../../tmp/feature-audit-20261017/mac-next-maincfc4d308-preflight-v1/result.json): `51193beb4a6f4e9c0174955269c3194456d38b26793d61426145eb750f84375d`。
+- [20機能の残件再分類](../../tmp/feature-audit-20261017/whole20-critical-path-readonly-v1/result.json): `b8c669cc514d1e7c8a4e52694202e75ee5075f03990bea5d338487cf129b4ca7`。保存資料と31source pinsの監査で、追加HTTP/DB/model0。
 
 ## 19:35 JSTの追加受入と通常Macへの配備
 
