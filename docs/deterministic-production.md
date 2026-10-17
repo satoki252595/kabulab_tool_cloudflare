@@ -26,6 +26,12 @@ JPX配当落・権利落等の短期掲載原本は、既存18時 `scheduled-sto
 
 ツール化とWorkers単独での実行は同義ではない。Workersの[Node API対応範囲](https://developers.cloudflare.com/workers/runtime-apis/nodejs/)や[実行制限](https://developers.cloudflare.com/workers/platform/limits/)を踏まえ、Node/Python・大きなファイル・長時間処理はActionsへ置く。Mac専用のMPS/MLXをWorkersや通常Linux runnerで実行できるとは扱わない。
 
+## 株式日次の業種集計
+
+通常Node入口`sync:daily:core`のPhase 5は、当日行の置換と30日より古い行の掃除を既存`createD1HttpBatchSender`の単一batchで送る。先に全SQL/束縛値を組み立て、1000文/各100bindを検査してから既存期限guardを一度通す。16行チャンク・集計値・順位・90%coverageによる無送信を維持する。結果不明はthrowして止まり、個別文や同じbatchを再送しない。
+
+書込はNodeのD1 HTTP経路で、Workerは同じ保存表をbindingで読む。Worker書込adapterや新DDLは追加しない。公開画面は`macro.date`をキーに読むので、当日置換の途中状態がその日付で表示される問題を閉じる。[SQL protocol回帰と実受入の境界](test-logs/sector-daily-atomic-20261018.md)を参照。実D1の新再測定・本番定時の受入は未実施。
+
 ## RAW原本の有限継続
 
 `raw_index_backfill.yml`の`execution_revision`は実行する完全40桁commit SHAを指定する。初回の空欄だけそのrunの`github.sha`を採用し、checkout前の形式検査とcheckout後のHEAD一致を依存準備・データ処理より先に行う。通常continuationは実HEADと明示入力の一致を確認し、同SHAを次dispatchへ渡す。これによりrawコード・依存lock・Nix定義を同じcommitから使う。
