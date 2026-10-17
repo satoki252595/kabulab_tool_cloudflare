@@ -1,0 +1,21 @@
+{
+  "provenance": {
+    "sourceGroup": "b461d16329ef774b",
+    "sourceSha256": "1d0b318a45b5c967ac66e2db3c793b6da54c1b9cd9264a71daf924478993bbdc",
+    "privateFixtureSha256": "7e016b4df744f49840b7cc0bc9554792ded4e6c2ff0483c94b36466b62304c05",
+    "sourceInventorySha256": "cf75176596e3515ff264c8541189934388ea374f92dfdd33d3d01f04d2e91f38",
+    "readbackSha256": "82317d87aedf4877a1a6b16fb899832fc395223e85523d45123a5207a70f8dfb"
+  },
+  "code": "1899",
+  "rowId": 49050,
+  "recipients": [
+    {
+      "minShares": 200,
+      "recordMonth": 12,
+      "recordDate": null
+    }
+  ],
+  "expectedSummary": "保有1年未満はQUOカード2,000円相当、1年以上は5,000円相当（継続・株主名簿3回以上）",
+  "expectedValue": null,
+  "oldValueReason": "ambiguous_condition_tiers"
+}
