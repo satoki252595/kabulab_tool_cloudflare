@@ -19,7 +19,7 @@ function changed(change: (body: string) => string, target = sample) {
   entries.set(target.p.instance, Buffer.from(entries.get(target.p.instance)!.toString().replace(re, (_, a, b, c) => a + change(b.normalize("NFKC")) + c)));
   return observeIssuedShares(target.zip, target.p.source, target.evidence, entries);
 }
-const legacy = (value: ReturnType<typeof observeIssuedShares>) => { const { reportedCancellations: _new, ...old } = value; return old; };
+const legacy = (value: ReturnType<typeof observeIssuedShares>) => { const { reportedCancellations: _new, reportedPaidIssuance: _paid, ...old } = value; return old; };
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("原文で実施済み普通株消却を明示する実3源", () => {
