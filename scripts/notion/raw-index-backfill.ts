@@ -892,7 +892,8 @@ async function main() {
       list: (cutoff, guard) => listCanonicalRawFiles(cutoff, guard, observeInventory), download: createRawDownloader(undefined, undefined, opts.hostedMaxRps), index: readRawIndex, insert: insertRawIndex,
       antiJoin: (items) => auditRawIndexMembership(items, sharedEnv.R2_BUCKET_RAW()), now: Date.now, emit });
     const after = notionStats();
-    console.info(JSON.stringify({ ...result, notionRequests: after.requests - before.requests }));
+    console.info(JSON.stringify({ ...result, notionRequests: after.requests - before.requests,
+      notionRateLimited: after.rateLimited - before.rateLimited, notionTransientRetries: after.transientRetries - before.transientRetries }));
   } catch (error) {
     // 生URL/body/causeをログへ出さない。remote stateに結果不明phaseが残る。
     const failurePhase = lastPhase;
