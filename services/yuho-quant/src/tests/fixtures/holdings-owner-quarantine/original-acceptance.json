@@ -1,0 +1,492 @@
+{
+  "status": "NORMAL_RANGE_FULL_NATIVE_ROWS_OLD_PROPS_SOURCE_AND_PHYSICAL_INDEPENDENTLY_VERIFIED",
+  "auditorPath": "/Users/satoki252595/projects/kabulab-cf/tmp/feature-audit-20261017/holdings-next8h-rate075-pure-v1/audit-range-v3.mts",
+  "auditorSha256": "87d7a4761cf2a7ebb225434f0a8a72bb7e171bc9b98c8f90d22db1fc1b184357",
+  "oldStoppedAuditorPreserved": true,
+  "at": "2026-10-17T05:28:31.091Z",
+  "rangeNumber": 8,
+  "sealSha256": "dc29389a965cc6dd4d7761fd3303a27491ba85513b6ad6cfa4976df6d717b26a",
+  "successSha256": "7dd994ce95ed898fb1239cb29bba31d8839e314d5fc5a925f3a8673083f9a509",
+  "rows": 195,
+  "documents": 12,
+  "legacy": 143,
+  "created": 52,
+  "extraOldRowsPreserved": 18,
+  "sourcePagesProtected": 17,
+  "physical": [
+    {
+      "pageId": "3fcd74ff-84cd-81d1-bd46-e18b84269838",
+      "filename": "S100YDX8_xbrl.zip",
+      "sha256": "7817b1f107764791c6946ffe3d6e95079bdf72621b47b70c7122d22e62403f05",
+      "bytes": 543728,
+      "nativeUpload": 118,
+      "nativeAttachment": 119,
+      "nativeDownload": 121,
+      "uploadId": "3fcd74ff84cd8154bc3400b2aabfba35"
+    },
+    {
+      "key": "holdings-legacy/S100YDX8/0/PRE/2dbb783c1fcf522af35bb6dd3e797a37d8b537064992aea23688a8c4055cfab5",
+      "filename": "holdings-legacy-PRE.json",
+      "sha256": "2dbb783c1fcf522af35bb6dd3e797a37d8b537064992aea23688a8c4055cfab5",
+      "bytes": 48198,
+      "pageId": "3fcd74ff-84cd-81bc-b4bc-e2d1aa18ef03",
+      "nativeUpload": 132,
+      "nativeAttachment": 133,
+      "nativeDownload": 135,
+      "uploadId": "3fcd74ff84cd81aeb0f800b2bc7a466a"
+    },
+    {
+      "key": "holdings-legacy/S100YDX8/0/POST/21bc6def20afe178240edd18cecda077c4d4f1d501222665cc2ccab82b0febe0",
+      "filename": "holdings-legacy-POST.json",
+      "sha256": "21bc6def20afe178240edd18cecda077c4d4f1d501222665cc2ccab82b0febe0",
+      "bytes": 74238,
+      "pageId": "3fcd74ff-84cd-8153-bae5-c47a0a7d2fb3",
+      "nativeUpload": 190,
+      "nativeAttachment": 191,
+      "nativeDownload": 193,
+      "uploadId": "3fcd74ff84cd8102921a00b266aacc1a"
+    },
+    {
+      "pageId": "3fcd74ff-84cd-81f1-a240-d7b698f090ed",
+      "filename": "S100YQYG_xbrl.zip",
+      "sha256": "c2eae7a538d754f76d76cb31559e623d30430b21f94a26d278af99be9e7e4f7f",
+      "bytes": 724032,
+      "nativeUpload": 205,
+      "nativeAttachment": 206,
+      "nativeDownload": 208,
+      "uploadId": "3fcd74ff84cd814d898600b2c6938dfd"
+    },
+    {
+      "key": "holdings-legacy/S100YQYG/0/PRE/a18e1b729b9e70ee42cc38b0238b8a64ef9c1d989ece2fe749dc4e9b022ea7b8",
+      "filename": "holdings-legacy-PRE.json",
+      "sha256": "a18e1b729b9e70ee42cc38b0238b8a64ef9c1d989ece2fe749dc4e9b022ea7b8",
+      "bytes": 52724,
+      "pageId": "3fcd74ff-84cd-81bd-a6c4-f62d1d2f44e7",
+      "nativeUpload": 218,
+      "nativeAttachment": 219,
+      "nativeDownload": 221,
+      "uploadId": "3fcd74ff84cd81c4b82a00b2844ab7f6"
+    },
+    {
+      "key": "holdings-legacy/S100YQYG/0/POST/93670277c4769d4cc1b1fadf04663ecc103566015f11e7fb7d8a4b4a94aa81e9",
+      "filename": "holdings-legacy-POST.json",
+      "sha256": "93670277c4769d4cc1b1fadf04663ecc103566015f11e7fb7d8a4b4a94aa81e9",
+      "bytes": 81292,
+      "pageId": "3fcd74ff-84cd-8101-9ad6-dee7d283cd42",
+      "nativeUpload": 278,
+      "nativeAttachment": 279,
+      "nativeDownload": 281,
+      "uploadId": "3fcd74ff84cd812b856e00b2b9c66de1"
+    },
+    {
+      "pageId": "3fcd74ff-84cd-81e7-8f5d-d32f906f5648",
+      "filename": "S100Y9QZ_xbrl.zip",
+      "sha256": "0329e11d272ea9c3988935883d4c56ae22d7548f12f14654fd63de4e5f72ae0d",
+      "bytes": 551402,
+      "nativeUpload": 293,
+      "nativeAttachment": 294,
+      "nativeDownload": 296,
+      "uploadId": "3fcd74ff84cd81da85e800b2e6d9153c"
+    },
+    {
+      "key": "holdings-legacy/S100Y9QZ/0/PRE/aac37c668880888d44f3adbe4502bb527dc8c3ae937450acd2229d18645fb9dc",
+      "filename": "holdings-legacy-PRE.json",
+      "sha256": "aac37c668880888d44f3adbe4502bb527dc8c3ae937450acd2229d18645fb9dc",
+      "bytes": 30475,
+      "pageId": "3fcd74ff-84cd-8128-98fe-e468499cfd6f",
+      "nativeUpload": 306,
+      "nativeAttachment": 307,
+      "nativeDownload": 309,
+      "uploadId": "3fcd74ff84cd81faa73b00b2c2ddef16"
+    },
+    {
+      "key": "holdings-legacy/S100Y9QZ/0/POST/92b1ee64ff8be131d5aaac30e6dcd24401e94ae854444c70f2383c8ece5537bf",
+      "filename": "holdings-legacy-POST.json",
+      "sha256": "92b1ee64ff8be131d5aaac30e6dcd24401e94ae854444c70f2383c8ece5537bf",
+      "bytes": 47320,
+      "pageId": "3fcd74ff-84cd-81ae-a226-c8652f1174e6",
+      "nativeUpload": 346,
+      "nativeAttachment": 347,
+      "nativeDownload": 349,
+      "uploadId": "3fcd74ff84cd81d7934a00b20bdfc2ab"
+    },
+    {
+      "pageId": "3fcd74ff-84cd-814e-a10f-e8d3e4790a84",
+      "filename": "S100XUAO_xbrl.zip",
+      "sha256": "06a60b20d4c2da2cc8f8af2fc822ea77f340aab45385d2330e4da83b9008b05f",
+      "bytes": 505755,
+      "nativeUpload": 361,
+      "nativeAttachment": 362,
+      "nativeDownload": 364,
+      "uploadId": "3fcd74ff84cd8174a4f200b273d56acc"
+    },
+    {
+      "pageId": "3fcd74ff-84cd-8164-a2cb-ec71bb029538",
+      "filename": "S100X59V_xbrl.zip",
+      "sha256": "576ab92c37382839ec4321b4b615e4df8c263ae56e64d9d37a97ec90f607ca54",
+      "bytes": 433987,
+      "nativeUpload": 389,
+      "nativeAttachment": 390,
+      "nativeDownload": 392,
+      "uploadId": "3fcd74ff84cd81e3ba8c00b24d341114"
+    },
+    {
+      "key": "holdings-legacy/S100X59V/0/PRE/fb98f7919109e8ca99cd596ee3c57898679411daa0a950fd76110659349a5665",
+      "filename": "holdings-legacy-PRE.json",
+      "sha256": "fb98f7919109e8ca99cd596ee3c57898679411daa0a950fd76110659349a5665",
+      "bytes": 13524,
+      "pageId": "3fcd74ff-84cd-81c9-8b0d-cfe8515922a0",
+      "nativeUpload": 402,
+      "nativeAttachment": 403,
+      "nativeDownload": 405,
+      "uploadId": "3fcd74ff84cd814c819400b24cb0f9cd"
+    },
+    {
+      "key": "holdings-legacy/S100X59V/0/POST/c0e5bb287096cffb99c9cbdc056b9c6d225a34a56ea7c06daad070cfd9c95812",
+      "filename": "holdings-legacy-POST.json",
+      "sha256": "c0e5bb287096cffb99c9cbdc056b9c6d225a34a56ea7c06daad070cfd9c95812",
+      "bytes": 20801,
+      "pageId": "3fcd74ff-84cd-81d8-b376-d2e78380c6a0",
+      "nativeUpload": 420,
+      "nativeAttachment": 421,
+      "nativeDownload": 423,
+      "uploadId": "3fcd74ff84cd815eb7b800b2c68ffc03"
+    },
+    {
+      "pageId": "3fcd74ff-84cd-814e-a75f-fdfdbb920f83",
+      "filename": "S100YIC9_xbrl.zip",
+      "sha256": "7bfcdaf70e1175c325a97e9dd33c390c784ce2b4c60fc54cb299d1dd623596d1",
+      "bytes": 1363704,
+      "nativeUpload": 435,
+      "nativeAttachment": 436,
+      "nativeDownload": 438,
+      "uploadId": "3fcd74ff84cd81ea8c0500b2454a76a7"
+    },
+    {
+      "key": "holdings-legacy/S100YIC9/0/PRE/db0eeae481a28ef8e95e90613a232e2788ab2a7ffda2c0c0c87172621cc77c9f",
+      "filename": "holdings-legacy-PRE.json",
+      "sha256": "db0eeae481a28ef8e95e90613a232e2788ab2a7ffda2c0c0c87172621cc77c9f",
+      "bytes": 195226,
+      "pageId": "3fcd74ff-84cd-8102-af31-dd40040c6eba",
+      "nativeUpload": 448,
+      "nativeAttachment": 449,
+      "nativeDownload": 451,
+      "uploadId": "3fcd74ff84cd81f38b5700b2d7f8c90b"
+    },
+    {
+      "key": "holdings-legacy/S100YIC9/0/POST/b5234fc43dedcdd55a4b3138ad16d5d959ed5ad6423e4dd5f4747d53caed10f5",
+      "filename": "holdings-legacy-POST.json",
+      "sha256": "b5234fc43dedcdd55a4b3138ad16d5d959ed5ad6423e4dd5f4747d53caed10f5",
+      "bytes": 300981,
+      "pageId": "3fcd74ff-84cd-818a-9b47-c6e32ff32324",
+      "nativeUpload": 638,
+      "nativeAttachment": 639,
+      "nativeDownload": 641,
+      "uploadId": "3fcd74ff84cd8124b35b00b2b19db679"
+    },
+    {
+      "pageId": "3fcd74ff-84cd-81fa-8cf8-f9ff184950e6",
+      "filename": "S100YK99_xbrl.zip",
+      "sha256": "f2d16d3852806628b7a0b5cfaefe3691b86b039abf7ab96d3f8fb235815c5dbf",
+      "bytes": 734371,
+      "nativeUpload": 653,
+      "nativeAttachment": 654,
+      "nativeDownload": 656,
+      "uploadId": "3fcd74ff84cd815aae6c00b283ee3cb8"
+    },
+    {
+      "key": "holdings-legacy/S100YK99/0/PRE/f52852d902899530c9a4028a7c9d44425a1d76aaa8a77a8304667ec02cc6b669",
+      "filename": "holdings-legacy-PRE.json",
+      "sha256": "f52852d902899530c9a4028a7c9d44425a1d76aaa8a77a8304667ec02cc6b669",
+      "bytes": 48081,
+      "pageId": "3fcd74ff-84cd-81d7-9086-ce15677ba0fb",
+      "nativeUpload": 666,
+      "nativeAttachment": 667,
+      "nativeDownload": 669,
+      "uploadId": "3fcd74ff84cd81c1bc6700b216d3600c"
+    },
+    {
+      "key": "holdings-legacy/S100YK99/0/POST/ed9b7ebacc66ea65aea0040e5ad7732d2371497296bcf1bfcdc0ca0a909b421b",
+      "filename": "holdings-legacy-POST.json",
+      "sha256": "ed9b7ebacc66ea65aea0040e5ad7732d2371497296bcf1bfcdc0ca0a909b421b",
+      "bytes": 74118,
+      "pageId": "3fcd74ff-84cd-8111-a9c4-c5e3da992f76",
+      "nativeUpload": 724,
+      "nativeAttachment": 725,
+      "nativeDownload": 727,
+      "uploadId": "3fcd74ff84cd81808efc00b248b9cc00"
+    },
+    {
+      "pageId": "3fcd74ff-84cd-819a-bce6-c194b4e5b2be",
+      "filename": "S100YGEO_xbrl.zip",
+      "sha256": "12e89c2a4e91e2718ae14a23b3ab4b7ec9f4b9a7ecb7c10923d7f961ac395bc9",
+      "bytes": 1431851,
+      "nativeUpload": 739,
+      "nativeAttachment": 740,
+      "nativeDownload": 742,
+      "uploadId": "3fcd74ff84cd81c8954a00b2822e5e24"
+    },
+    {
+      "key": "holdings-legacy/S100YGEO/0/PRE/a49d2b32b6dc8f1be6120796787a068c030fa6c3536c28e5f54aaa1f5ea2ac69",
+      "filename": "holdings-legacy-PRE.json",
+      "sha256": "a49d2b32b6dc8f1be6120796787a068c030fa6c3536c28e5f54aaa1f5ea2ac69",
+      "bytes": 143806,
+      "pageId": "3fcd74ff-84cd-818e-bcf6-d4c7c95e03cf",
+      "nativeUpload": 752,
+      "nativeAttachment": 753,
+      "nativeDownload": 755,
+      "uploadId": "3fcd74ff84cd81f88f8600b29c820873"
+    },
+    {
+      "key": "holdings-legacy/S100YGEO/0/POST/4cf30510ca7b6f18df20c9f611d711a21b140b3ed7b8d806de542dba4d9bf535",
+      "filename": "holdings-legacy-POST.json",
+      "sha256": "4cf30510ca7b6f18df20c9f611d711a21b140b3ed7b8d806de542dba4d9bf535",
+      "bytes": 221419,
+      "pageId": "3fcd74ff-84cd-81cf-b082-f125718e183b",
+      "nativeUpload": 906,
+      "nativeAttachment": 907,
+      "nativeDownload": 909,
+      "uploadId": "3fcd74ff84cd81f7879500b2cffd8efc"
+    },
+    {
+      "pageId": "3fcd74ff-84cd-81e8-b688-d3f57c0563ec",
+      "filename": "S100XTAP_xbrl.zip",
+      "sha256": "f54379b3a90194cd2bf349f97c9130fee4c67beba8e4c6c900a61ec92c9fe7bd",
+      "bytes": 638998,
+      "nativeUpload": 921,
+      "nativeAttachment": 922,
+      "nativeDownload": 924,
+      "uploadId": "3fcd74ff84cd815dbd3700b2da390e3d"
+    },
+    {
+      "pageId": "3fcd74ff-84cd-8143-b213-d654c147a7c3",
+      "filename": "S100YF88_xbrl.zip",
+      "sha256": "6fa0c812a0093ecc4b48ddea2879efb8dee6d196a4d38685946ea4d7c7e9975c",
+      "bytes": 589590,
+      "nativeUpload": 985,
+      "nativeAttachment": 986,
+      "nativeDownload": 988,
+      "uploadId": "3fcd74ff84cd814a93d500b2fd560b7f"
+    },
+    {
+      "key": "holdings-legacy/S100YF88/0/PRE/e7d97d584de096523ac5bd1b1668364c1e34a058cc4ab6491daa8883885f4909",
+      "filename": "holdings-legacy-PRE.json",
+      "sha256": "e7d97d584de096523ac5bd1b1668364c1e34a058cc4ab6491daa8883885f4909",
+      "bytes": 70028,
+      "pageId": "3fcd74ff-84cd-8119-bcef-e3f3c1e6edb0",
+      "nativeUpload": 998,
+      "nativeAttachment": 999,
+      "nativeDownload": 1001,
+      "uploadId": "3fcd74ff84cd814580bb00b26cf6b0d6"
+    },
+    {
+      "key": "holdings-legacy/S100YF88/0/POST/3820521b78c81715910dde3f7c33ce54da1aff7684ca0dc8d3e214c42b813129",
+      "filename": "holdings-legacy-POST.json",
+      "sha256": "3820521b78c81715910dde3f7c33ce54da1aff7684ca0dc8d3e214c42b813129",
+      "bytes": 107784,
+      "pageId": "3fcd74ff-84cd-811c-b274-e138211db65c",
+      "nativeUpload": 1068,
+      "nativeAttachment": 1069,
+      "nativeDownload": 1071,
+      "uploadId": "3fcd74ff84cd813fba3800b231ec90f3"
+    },
+    {
+      "pageId": "3fcd74ff-84cd-8110-a733-f67d3bad4b19",
+      "filename": "S100YIEA_xbrl.zip",
+      "sha256": "8b3feb5be1d744434a49ac47007215caa9d019854565d500e1aa4965ae2d4616",
+      "bytes": 447161,
+      "nativeUpload": 1083,
+      "nativeAttachment": 1084,
+      "nativeDownload": 1086,
+      "uploadId": "3fcd74ff84cd8126a37800b2acd20fa8"
+    },
+    {
+      "key": "holdings-legacy/S100YIEA/0/PRE/f2fbfc6da715964e3b924d9027824c2ca33dd91814eedada05e533451c76faec",
+      "filename": "holdings-legacy-PRE.json",
+      "sha256": "f2fbfc6da715964e3b924d9027824c2ca33dd91814eedada05e533451c76faec",
+      "bytes": 22077,
+      "pageId": "3fcd74ff-84cd-810c-8369-e617292e8404",
+      "nativeUpload": 1096,
+      "nativeAttachment": 1097,
+      "nativeDownload": 1099,
+      "uploadId": "3fcd74ff84cd8199afec00b2c7bf378a"
+    },
+    {
+      "key": "holdings-legacy/S100YIEA/0/POST/e01f705ca7db7b9b1e5517b95b6c72bd183488e9007520f3623a39a7d7a7339c",
+      "filename": "holdings-legacy-POST.json",
+      "sha256": "e01f705ca7db7b9b1e5517b95b6c72bd183488e9007520f3623a39a7d7a7339c",
+      "bytes": 34041,
+      "pageId": "3fcd74ff-84cd-816e-8393-c3eb498ce8a3",
+      "nativeUpload": 1122,
+      "nativeAttachment": 1123,
+      "nativeDownload": 1125,
+      "uploadId": "3fcd74ff84cd8130a1a600b22947d685"
+    }
+  ],
+  "existingTypedOriginals": [
+    {
+      "pageId": "3eed74ff-84cd-815c-abeb-d255e866e176",
+      "filename": "S100Z0JO_xbrl.zip",
+      "sha256": "f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10",
+      "bytes": 926421,
+      "nativeDownload": 66
+    }
+  ],
+  "stats": {
+    "requests": 1204,
+    "notion": 1097,
+    "hosted": 58,
+    "d1": 49,
+    "rowsRead": 2913,
+    "requestBytes": 10509599,
+    "responseBytes": 47149623,
+    "observedResponseBytes": 47149623,
+    "mutations": 306
+  },
+  "normalLogicalWrites": 307,
+  "normalJournal": {
+    "version": 2,
+    "path": "/Users/satoki252595/projects/kabulab-cf/tmp/feature-audit-20261017/holdings-next8h-rate075-pure-v1/actual-range08-v5/range-08/normal/apply-1792212634922.json.write-events.jsonl",
+    "sha256": "5f930c7dd263fcd69187b034235642a8c5704cbaffaa7e23734094f500ac694f",
+    "pendingSha256": "456aae53f387aa2933765e9e7214083111e4d5831b4c9ee786dbc1330586bc8b"
+  },
+  "sources": [
+    {
+      "source": {
+        "docId": "S100YDX8",
+        "stockCode": "1981",
+        "edinetCode": "E00189",
+        "fiscalYearEnd": "2026-03-31"
+      },
+      "rows": 15,
+      "archivePageId": "3fcd74ff-84cd-81d1-bd46-e18b84269838",
+      "pricePending": true
+    },
+    {
+      "source": {
+        "docId": "S100YQYG",
+        "stockCode": "1982",
+        "edinetCode": "E00168",
+        "fiscalYearEnd": "2026-03-31"
+      },
+      "rows": 15,
+      "archivePageId": "3fcd74ff-84cd-81f1-a240-d7b698f090ed",
+      "pricePending": true
+    },
+    {
+      "source": {
+        "docId": "S100Y9QZ",
+        "stockCode": "1992",
+        "edinetCode": "E00182",
+        "fiscalYearEnd": "2026-03-31"
+      },
+      "rows": 10,
+      "archivePageId": "3fcd74ff-84cd-81e7-8f5d-d32f906f5648",
+      "pricePending": true
+    },
+    {
+      "source": {
+        "docId": "S100XUAO",
+        "stockCode": "1994",
+        "edinetCode": "E00222",
+        "fiscalYearEnd": "2025-12-31"
+      },
+      "rows": 3,
+      "archivePageId": "3fcd74ff-84cd-814e-a10f-e8d3e4790a84",
+      "pricePending": true
+    },
+    {
+      "source": {
+        "docId": "S100X59V",
+        "stockCode": "1997",
+        "edinetCode": "E00246",
+        "fiscalYearEnd": "2025-08-31"
+      },
+      "rows": 3,
+      "archivePageId": "3fcd74ff-84cd-8164-a2cb-ec71bb029538",
+      "pricePending": true
+    },
+    {
+      "source": {
+        "docId": "S100YIC9",
+        "stockCode": "2001",
+        "edinetCode": "E00345",
+        "fiscalYearEnd": "2026-03-31"
+      },
+      "rows": 47,
+      "archivePageId": "3fcd74ff-84cd-814e-a75f-fdfdbb920f83",
+      "pricePending": true
+    },
+    {
+      "source": {
+        "docId": "S100YK99",
+        "stockCode": "2003",
+        "edinetCode": "E00347",
+        "fiscalYearEnd": "2026-03-31"
+      },
+      "rows": 15,
+      "archivePageId": "3fcd74ff-84cd-81fa-8cf8-f9ff184950e6",
+      "pricePending": true
+    },
+    {
+      "source": {
+        "docId": "S100YGEO",
+        "stockCode": "2004",
+        "edinetCode": "E00348",
+        "fiscalYearEnd": "2026-03-31"
+      },
+      "rows": 41,
+      "archivePageId": "3fcd74ff-84cd-819a-bce6-c194b4e5b2be",
+      "pricePending": true
+    },
+    {
+      "source": {
+        "docId": "S100XTAP",
+        "stockCode": "2009",
+        "edinetCode": "E00351",
+        "fiscalYearEnd": "2025-12-31"
+      },
+      "rows": 21,
+      "archivePageId": "3fcd74ff-84cd-81e8-b688-d3f57c0563ec",
+      "pricePending": true
+    },
+    {
+      "source": {
+        "docId": "S100YF88",
+        "stockCode": "2053",
+        "edinetCode": "E00439",
+        "fiscalYearEnd": "2026-03-31"
+      },
+      "rows": 16,
+      "archivePageId": "3fcd74ff-84cd-8143-b213-d654c147a7c3",
+      "pricePending": true
+    },
+    {
+      "source": {
+        "docId": "S100YIEA",
+        "stockCode": "2055",
+        "edinetCode": "E00454",
+        "fiscalYearEnd": "2026-03-31"
+      },
+      "rows": 5,
+      "archivePageId": "3fcd74ff-84cd-8110-a733-f67d3bad4b19",
+      "pricePending": true
+    },
+    {
+      "source": {
+        "docId": "S100Z0JO",
+        "stockCode": "208A",
+        "edinetCode": "E39505",
+        "fiscalYearEnd": "2026-06-30"
+      },
+      "rows": 4,
+      "archivePageId": "3eed74ff-84cd-815c-abeb-d255e866e176",
+      "pricePending": true
+    }
+  ],
+  "sourceAPI": 0,
+  "models": 0,
+  "newPriceWrites": 0,
+  "HTTP": 0,
+  "fullUniverseAccepted": false
+}

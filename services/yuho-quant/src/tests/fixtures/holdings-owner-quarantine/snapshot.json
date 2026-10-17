@@ -1,0 +1,4309 @@
+{
+  "version": 1,
+  "kind": "holding-owner-quarantine-PRE",
+  "source": {
+    "docId": "S100Z0JO",
+    "stockCode": "208A",
+    "edinetCode": "E39505",
+    "fiscalYearEnd": "2026-06-30"
+  },
+  "ownerName": "株式会社構造計画研究所ホールディングス",
+  "zipSha256": "f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10",
+  "expectedSource": {
+    "object": "page",
+    "id": "3eed74ff-84cd-815c-abeb-d255e866e176",
+    "parent": {
+      "type": "database_id",
+      "database_id": "364d74ff-84cd-81a1-838b-d973ac329270"
+    },
+    "archived": false,
+    "in_trash": false,
+    "created_time": "2026-10-03T19:31:00.000Z",
+    "last_edited_time": "2026-10-17T05:23:00.000Z",
+    "properties": {
+      "保有価格理由": {
+        "id": "GLu%40",
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "原本明細は完了。保存価格の資格確認は未実施",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "原本明細は完了。保存価格の資格確認は未実施",
+            "href": null
+          }
+        ]
+      },
+      "保有明細理由": {
+        "id": "H%7DP%7C",
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "全明細の保存値・原典キー・旧値保全を読戻し済み",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "全明細の保存値・原典キー・旧値保全を読戻し済み",
+            "href": null
+          }
+        ]
+      },
+      "保有明細再開情報": {
+        "id": "IxYK",
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "{\"source\":{\"docId\":\"S100Z0JO\",\"stockCode\":\"208A\",\"edinetCode\":\"E39505\",\"fiscalYearEnd\":\"2026-06-30\"},\"ownerName\":\"株式会社構造計画研究所ホールディングス\",\"zipBytes\":926421,\"zipSha256\":\"f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10\",\"parsed\":4,\"factsSha256\":\"68afaac1cc72cff12ad5a5ec67bf60bbe87850dad074a6c612cab42f50d159b0\",\"sourceQueueVersion\":1,\"sourceNextHoldingOffset\":4,\"issuedSharesObservation\":{\"version\":1,\"status\":\"observed-with-holds\",\"reason\":\"未資格の観測はHOLDのまま保持します\",\"source\":{\"docId\":\"S100Z0JO\",\"stockCode\":\"208A\",\"edinetCode\":\"E39505\",\"fiscalYearEnd\":\"2026-06-30\"},\"zipSha256\":\"f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10\",\"candidateCount\":4,\"instance\":{\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04.xbrl\",\"memberSha256\":\"747194e3018a84dd7e29bb070bd8fbba7fc3c36cc30c4c055e64ec55b840553d\",\"namespaces\":{\"xmlns:iso4217\":\"http://www.xbrl.org/2003/iso4217\",\"xmlns:jpcrp030000-asr_E39505-000\":\"http://disclosure.edinet-fsa.go.jp/jpcrp030000/asr/001/E39505-000/2026-06-30/01/2026-09-04\",\"xmlns:jpcrp_cor\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\",\"xmlns:jpdei_cor\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpdei/2013-08-31/jpdei_cor\",\"xmlns:jppfs_cor\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jppfs/2025-11-01/jppfs_cor\",\"xmlns:link\":\"http://www.xbrl.org/2003/linkbase\",\"xmlns:xbrldi\":\"http://xbrl.org/2006/xbrldi\",\"xmlns:xbrli\":\"http://www.xbrl.org/2003/instance\",\"xmlns:xlink\":\"http://www.w3.org/1999/xlink\",\"xmlns:xsi\":\"http://www.w3.org/2001/XMLSchema-instance\"}},\"observations\":[{\"element\":\"jpcrp_cor:NumberOfIssuedSharesAsOfFiscalYearEndIssuedSharesTotalNumberOfSharesEtc\",\"namespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\",\"occurrence\":0,\"attributes\":{\"contextRef\":\"FilingDateInstant_OrdinaryShareMember\",\"decimals\":\"0\",\"unitRef\":\"shares\"},\"rawAttributes\":\" contextRef=\\\"FilingDateInstant_OrdinaryShareMember\\\" decimals=\\\"0\\\" unitRef=\\\"shares\\\"\",\"rawValue\":",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "{\"source\":{\"docId\":\"S100Z0JO\",\"stockCode\":\"208A\",\"edinetCode\":\"E39505\",\"fiscalYearEnd\":\"2026-06-30\"},\"ownerName\":\"株式会社構造計画研究所ホールディングス\",\"zipBytes\":926421,\"zipSha256\":\"f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10\",\"parsed\":4,\"factsSha256\":\"68afaac1cc72cff12ad5a5ec67bf60bbe87850dad074a6c612cab42f50d159b0\",\"sourceQueueVersion\":1,\"sourceNextHoldingOffset\":4,\"issuedSharesObservation\":{\"version\":1,\"status\":\"observed-with-holds\",\"reason\":\"未資格の観測はHOLDのまま保持します\",\"source\":{\"docId\":\"S100Z0JO\",\"stockCode\":\"208A\",\"edinetCode\":\"E39505\",\"fiscalYearEnd\":\"2026-06-30\"},\"zipSha256\":\"f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10\",\"candidateCount\":4,\"instance\":{\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04.xbrl\",\"memberSha256\":\"747194e3018a84dd7e29bb070bd8fbba7fc3c36cc30c4c055e64ec55b840553d\",\"namespaces\":{\"xmlns:iso4217\":\"http://www.xbrl.org/2003/iso4217\",\"xmlns:jpcrp030000-asr_E39505-000\":\"http://disclosure.edinet-fsa.go.jp/jpcrp030000/asr/001/E39505-000/2026-06-30/01/2026-09-04\",\"xmlns:jpcrp_cor\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\",\"xmlns:jpdei_cor\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpdei/2013-08-31/jpdei_cor\",\"xmlns:jppfs_cor\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jppfs/2025-11-01/jppfs_cor\",\"xmlns:link\":\"http://www.xbrl.org/2003/linkbase\",\"xmlns:xbrldi\":\"http://xbrl.org/2006/xbrldi\",\"xmlns:xbrli\":\"http://www.xbrl.org/2003/instance\",\"xmlns:xlink\":\"http://www.w3.org/1999/xlink\",\"xmlns:xsi\":\"http://www.w3.org/2001/XMLSchema-instance\"}},\"observations\":[{\"element\":\"jpcrp_cor:NumberOfIssuedSharesAsOfFiscalYearEndIssuedSharesTotalNumberOfSharesEtc\",\"namespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\",\"occurrence\":0,\"attributes\":{\"contextRef\":\"FilingDateInstant_OrdinaryShareMember\",\"decimals\":\"0\",\"unitRef\":\"shares\"},\"rawAttributes\":\" contextRef=\\\"FilingDateInstant_OrdinaryShareMember\\\" decimals=\\\"0\\\" unitRef=\\\"shares\\\"\",\"rawValue\":",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": "\"11000000\",\"factSha256\":\"21c63cb30aa2108c980f7ebc2279aa7f3daf226d29ebcb9e1c9da30c08e2d8b1\",\"contextRef\":\"FilingDateInstant_OrdinaryShareMember\",\"unitRef\":\"shares\",\"decimals\":\"0\",\"contexts\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant_OrdinaryShareMember\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant_OrdinaryShareMember\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E39505-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-09-04</xbrli:instant>\\n</xbrli:period>\\n<xbrli:scenario>\\n<xbrldi:explicitMember dimension=\\\"jpcrp_cor:ClassesOfSharesAxis\\\">jpcrp_cor:OrdinaryShareMember</xbrldi:explicitMember>\\n</xbrli:scenario>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04.xbrl\",\"memberSha256\":\"747194e3018a84dd7e29bb070bd8fbba7fc3c36cc30c4c055e64ec55b840553d\"}],\"entity\":\"E39505-000\",\"instantDate\":\"2026-09-04\",\"dimensions\":[{\"axis\":\"jpcrp_cor:ClassesOfSharesAxis\",\"member\":\"jpcrp_cor:OrdinaryShareMember\",\"axisNamespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\",\"memberNamespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\"}],\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant_OrdinaryShareMember\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant_OrdinaryShareMember\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E39505-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-09-04</xbrli:instant>\\n</xbrli:period>\\n<xbrli:scenario>\\n<xbrldi:explicitMember dimension=\\\"jpcrp_cor:ClassesOfSharesAxis\\\">jpcrp_cor:OrdinaryShareMember</xbrldi:explicitMember>\\n</xbrli:scenario>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm\",\"memberSha256\":\"23ac1ea52ac3072affca48c6b29bae154dab5c910337b606105bf3e9fffcbb10",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "\"11000000\",\"factSha256\":\"21c63cb30aa2108c980f7ebc2279aa7f3daf226d29ebcb9e1c9da30c08e2d8b1\",\"contextRef\":\"FilingDateInstant_OrdinaryShareMember\",\"unitRef\":\"shares\",\"decimals\":\"0\",\"contexts\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant_OrdinaryShareMember\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant_OrdinaryShareMember\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E39505-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-09-04</xbrli:instant>\\n</xbrli:period>\\n<xbrli:scenario>\\n<xbrldi:explicitMember dimension=\\\"jpcrp_cor:ClassesOfSharesAxis\\\">jpcrp_cor:OrdinaryShareMember</xbrldi:explicitMember>\\n</xbrli:scenario>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04.xbrl\",\"memberSha256\":\"747194e3018a84dd7e29bb070bd8fbba7fc3c36cc30c4c055e64ec55b840553d\"}],\"entity\":\"E39505-000\",\"instantDate\":\"2026-09-04\",\"dimensions\":[{\"axis\":\"jpcrp_cor:ClassesOfSharesAxis\",\"member\":\"jpcrp_cor:OrdinaryShareMember\",\"axisNamespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\",\"memberNamespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\"}],\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant_OrdinaryShareMember\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant_OrdinaryShareMember\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E39505-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-09-04</xbrli:instant>\\n</xbrli:period>\\n<xbrli:scenario>\\n<xbrldi:explicitMember dimension=\\\"jpcrp_cor:ClassesOfSharesAxis\\\">jpcrp_cor:OrdinaryShareMember</xbrldi:explicitMember>\\n</xbrli:scenario>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm\",\"memberSha256\":\"23ac1ea52ac3072affca48c6b29bae154dab5c910337b606105bf3e9fffcbb10",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": "\"}],\"entity\":\"E39505-000\",\"instantDate\":\"2026-09-04\",\"dimensions\":[{\"axis\":\"jpcrp_cor:ClassesOfSharesAxis\",\"member\":\"jpcrp_cor:OrdinaryShareMember\",\"axisNamespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\",\"memberNamespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\"}],\"valid\":true}],\"units\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04.xbrl\",\"memberSha256\":\"747194e3018a84dd7e29bb070bd8fbba7fc3c36cc30c4c055e64ec55b840553d\"}],\"measure\":\"xbrli:shares\",\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm\",\"memberSha256\":\"23ac1ea52ac3072affca48c6b29bae154dab5c910337b606105bf3e9fffcbb10\"}],\"measure\":\"xbrli:shares\",\"valid\":true}],\"qualification\":{\"status\":\"observed-kind\",\"reason\":null,\"kind\":\"fiscal-year-end\",\"economicDate\":\"2026-06-30\",\"nativeContextDate\":\"2026-09-04\",\"shareClass\":\"ordinary\",\"rightsApplication\":\"unknown\"}},{\"element\":\"jpcrp_cor:NumberOfIssuedSharesAsOfFilingDateIssuedSharesTotalNumberOfSharesEtc\",\"namespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\",\"occurrence\":1,\"attributes\":{\"contextRef\":\"FilingDateInstant_OrdinaryShareMember\",\"decimals\":\"0\",\"unitRef\":\"shares\"},\"rawAttributes\":\" contextRef=\\\"FilingDateInstant_OrdinaryShareMember\\\" decimals=\\\"0\\\" unitRef=\\\"shares\\\"\",\"rawValue\":\"11000000\",\"factSha256\":\"ed67c3a6edd013ec6b13a3d48e05bebe9e38b0b3060f18031e640c53aa6e365a\",\"contextRef\":\"FilingDateInstant_OrdinaryShareMember\",\"unitRef\":\"shares\",\"decimals\":\"0\",\"contexts\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateIn",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "\"}],\"entity\":\"E39505-000\",\"instantDate\":\"2026-09-04\",\"dimensions\":[{\"axis\":\"jpcrp_cor:ClassesOfSharesAxis\",\"member\":\"jpcrp_cor:OrdinaryShareMember\",\"axisNamespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\",\"memberNamespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\"}],\"valid\":true}],\"units\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04.xbrl\",\"memberSha256\":\"747194e3018a84dd7e29bb070bd8fbba7fc3c36cc30c4c055e64ec55b840553d\"}],\"measure\":\"xbrli:shares\",\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm\",\"memberSha256\":\"23ac1ea52ac3072affca48c6b29bae154dab5c910337b606105bf3e9fffcbb10\"}],\"measure\":\"xbrli:shares\",\"valid\":true}],\"qualification\":{\"status\":\"observed-kind\",\"reason\":null,\"kind\":\"fiscal-year-end\",\"economicDate\":\"2026-06-30\",\"nativeContextDate\":\"2026-09-04\",\"shareClass\":\"ordinary\",\"rightsApplication\":\"unknown\"}},{\"element\":\"jpcrp_cor:NumberOfIssuedSharesAsOfFilingDateIssuedSharesTotalNumberOfSharesEtc\",\"namespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\",\"occurrence\":1,\"attributes\":{\"contextRef\":\"FilingDateInstant_OrdinaryShareMember\",\"decimals\":\"0\",\"unitRef\":\"shares\"},\"rawAttributes\":\" contextRef=\\\"FilingDateInstant_OrdinaryShareMember\\\" decimals=\\\"0\\\" unitRef=\\\"shares\\\"\",\"rawValue\":\"11000000\",\"factSha256\":\"ed67c3a6edd013ec6b13a3d48e05bebe9e38b0b3060f18031e640c53aa6e365a\",\"contextRef\":\"FilingDateInstant_OrdinaryShareMember\",\"unitRef\":\"shares\",\"decimals\":\"0\",\"contexts\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateIn",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": "stant_OrdinaryShareMember\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant_OrdinaryShareMember\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E39505-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-09-04</xbrli:instant>\\n</xbrli:period>\\n<xbrli:scenario>\\n<xbrldi:explicitMember dimension=\\\"jpcrp_cor:ClassesOfSharesAxis\\\">jpcrp_cor:OrdinaryShareMember</xbrldi:explicitMember>\\n</xbrli:scenario>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04.xbrl\",\"memberSha256\":\"747194e3018a84dd7e29bb070bd8fbba7fc3c36cc30c4c055e64ec55b840553d\"}],\"entity\":\"E39505-000\",\"instantDate\":\"2026-09-04\",\"dimensions\":[{\"axis\":\"jpcrp_cor:ClassesOfSharesAxis\",\"member\":\"jpcrp_cor:OrdinaryShareMember\",\"axisNamespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\",\"memberNamespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\"}],\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant_OrdinaryShareMember\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant_OrdinaryShareMember\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E39505-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-09-04</xbrli:instant>\\n</xbrli:period>\\n<xbrli:scenario>\\n<xbrldi:explicitMember dimension=\\\"jpcrp_cor:ClassesOfSharesAxis\\\">jpcrp_cor:OrdinaryShareMember</xbrldi:explicitMember>\\n</xbrli:scenario>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm\",\"memberSha256\":\"23ac1ea52ac3072affca48c6b29bae154dab5c910337b606105bf3e9fffcbb10\"}],\"entity\":\"E39505-000\",\"instantDate\":\"2026-09-04\",\"dimensions\":[{\"axis\":\"jpcrp_cor:ClassesOfSharesAxis\",\"member\":\"jpcrp_cor:OrdinaryShareMember\",\"axisNamespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\",\"memberNamespace\":\"",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "stant_OrdinaryShareMember\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant_OrdinaryShareMember\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E39505-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-09-04</xbrli:instant>\\n</xbrli:period>\\n<xbrli:scenario>\\n<xbrldi:explicitMember dimension=\\\"jpcrp_cor:ClassesOfSharesAxis\\\">jpcrp_cor:OrdinaryShareMember</xbrldi:explicitMember>\\n</xbrli:scenario>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04.xbrl\",\"memberSha256\":\"747194e3018a84dd7e29bb070bd8fbba7fc3c36cc30c4c055e64ec55b840553d\"}],\"entity\":\"E39505-000\",\"instantDate\":\"2026-09-04\",\"dimensions\":[{\"axis\":\"jpcrp_cor:ClassesOfSharesAxis\",\"member\":\"jpcrp_cor:OrdinaryShareMember\",\"axisNamespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\",\"memberNamespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\"}],\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant_OrdinaryShareMember\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant_OrdinaryShareMember\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E39505-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-09-04</xbrli:instant>\\n</xbrli:period>\\n<xbrli:scenario>\\n<xbrldi:explicitMember dimension=\\\"jpcrp_cor:ClassesOfSharesAxis\\\">jpcrp_cor:OrdinaryShareMember</xbrldi:explicitMember>\\n</xbrli:scenario>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm\",\"memberSha256\":\"23ac1ea52ac3072affca48c6b29bae154dab5c910337b606105bf3e9fffcbb10\"}],\"entity\":\"E39505-000\",\"instantDate\":\"2026-09-04\",\"dimensions\":[{\"axis\":\"jpcrp_cor:ClassesOfSharesAxis\",\"member\":\"jpcrp_cor:OrdinaryShareMember\",\"axisNamespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\",\"memberNamespace\":\"",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": "http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\"}],\"valid\":true}],\"units\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04.xbrl\",\"memberSha256\":\"747194e3018a84dd7e29bb070bd8fbba7fc3c36cc30c4c055e64ec55b840553d\"}],\"measure\":\"xbrli:shares\",\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm\",\"memberSha256\":\"23ac1ea52ac3072affca48c6b29bae154dab5c910337b606105bf3e9fffcbb10\"}],\"measure\":\"xbrli:shares\",\"valid\":true}],\"qualification\":{\"status\":\"observed-kind\",\"reason\":null,\"kind\":\"filing-date\",\"economicDate\":\"2026-09-04\",\"nativeContextDate\":\"2026-09-04\",\"shareClass\":\"ordinary\",\"rightsApplication\":\"unknown\"}},{\"element\":\"jpcrp_cor:NumberOfIssuedSharesAsOfFiscalYearEndIssuedSharesTotalNumberOfSharesEtc\",\"namespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\",\"occurrence\":2,\"attributes\":{\"contextRef\":\"FilingDateInstant\",\"decimals\":\"0\",\"unitRef\":\"shares\"},\"rawAttributes\":\" contextRef=\\\"FilingDateInstant\\\" decimals=\\\"0\\\" unitRef=\\\"shares\\\"\",\"rawValue\":\"11000000\",\"factSha256\":\"9633ffe533f4d18b4fdf2be1554838bd4d93b6de076abc605251f2ece35c9288\",\"contextRef\":\"FilingDateInstant\",\"unitRef\":\"shares\",\"decimals\":\"0\",\"contexts\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E39505-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-09-04</xbrli:instant>\\n</xbrli:period>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/j",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\"}],\"valid\":true}],\"units\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04.xbrl\",\"memberSha256\":\"747194e3018a84dd7e29bb070bd8fbba7fc3c36cc30c4c055e64ec55b840553d\"}],\"measure\":\"xbrli:shares\",\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm\",\"memberSha256\":\"23ac1ea52ac3072affca48c6b29bae154dab5c910337b606105bf3e9fffcbb10\"}],\"measure\":\"xbrli:shares\",\"valid\":true}],\"qualification\":{\"status\":\"observed-kind\",\"reason\":null,\"kind\":\"filing-date\",\"economicDate\":\"2026-09-04\",\"nativeContextDate\":\"2026-09-04\",\"shareClass\":\"ordinary\",\"rightsApplication\":\"unknown\"}},{\"element\":\"jpcrp_cor:NumberOfIssuedSharesAsOfFiscalYearEndIssuedSharesTotalNumberOfSharesEtc\",\"namespace\":\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\",\"occurrence\":2,\"attributes\":{\"contextRef\":\"FilingDateInstant\",\"decimals\":\"0\",\"unitRef\":\"shares\"},\"rawAttributes\":\" contextRef=\\\"FilingDateInstant\\\" decimals=\\\"0\\\" unitRef=\\\"shares\\\"\",\"rawValue\":\"11000000\",\"factSha256\":\"9633ffe533f4d18b4fdf2be1554838bd4d93b6de076abc605251f2ece35c9288\",\"contextRef\":\"FilingDateInstant\",\"unitRef\":\"shares\",\"decimals\":\"0\",\"contexts\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E39505-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-09-04</xbrli:instant>\\n</xbrli:period>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/j",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": "pcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04.xbrl\",\"memberSha256\":\"747194e3018a84dd7e29bb070bd8fbba7fc3c36cc30c4c055e64ec55b840553d\"}],\"entity\":\"E39505-000\",\"instantDate\":\"2026-09-04\",\"dimensions\":[],\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E39505-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-09-04</xbrli:instant>\\n</xbrli:period>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm\",\"memberSha256\":\"23ac1ea52ac3072affca48c6b29bae154dab5c910337b606105bf3e9fffcbb10\"}],\"entity\":\"E39505-000\",\"instantDate\":\"2026-09-04\",\"dimensions\":[],\"valid\":true}],\"units\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04.xbrl\",\"memberSha256\":\"747194e3018a84dd7e29bb070bd8fbba7fc3c36cc30c4c055e64ec55b840553d\"}],\"measure\":\"xbrli:shares\",\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm\",\"memberSha256\":\"23ac1ea52ac3072affca48c6b29bae154dab5c910337b606105bf3e9fffcbb10\"}],\"measure\":\"xbrli:shares\",\"valid\":true}],\"qualification\":{\"status\":\"hold\",\"reason\":\"share-class-unspecified;dimension-free-is-not-ordinary\",\"kind\":null,\"economicDate\":null,\"nativeContextDate\":\"2026-09-04\",\"shareClass\":\"unknown\",\"rightsApplication\":\"unknown\"}},{\"element\":\"jpcrp_cor:NumberOfIssuedSharesAsOfFilingDateIssuedSharesTotalNumberOfSharesEtc\",\"namespace\":\"http://disclosure.edinet-fsa.go.jp",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "pcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04.xbrl\",\"memberSha256\":\"747194e3018a84dd7e29bb070bd8fbba7fc3c36cc30c4c055e64ec55b840553d\"}],\"entity\":\"E39505-000\",\"instantDate\":\"2026-09-04\",\"dimensions\":[],\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E39505-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-09-04</xbrli:instant>\\n</xbrli:period>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm\",\"memberSha256\":\"23ac1ea52ac3072affca48c6b29bae154dab5c910337b606105bf3e9fffcbb10\"}],\"entity\":\"E39505-000\",\"instantDate\":\"2026-09-04\",\"dimensions\":[],\"valid\":true}],\"units\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04.xbrl\",\"memberSha256\":\"747194e3018a84dd7e29bb070bd8fbba7fc3c36cc30c4c055e64ec55b840553d\"}],\"measure\":\"xbrli:shares\",\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm\",\"memberSha256\":\"23ac1ea52ac3072affca48c6b29bae154dab5c910337b606105bf3e9fffcbb10\"}],\"measure\":\"xbrli:shares\",\"valid\":true}],\"qualification\":{\"status\":\"hold\",\"reason\":\"share-class-unspecified;dimension-free-is-not-ordinary\",\"kind\":null,\"economicDate\":null,\"nativeContextDate\":\"2026-09-04\",\"shareClass\":\"unknown\",\"rightsApplication\":\"unknown\"}},{\"element\":\"jpcrp_cor:NumberOfIssuedSharesAsOfFilingDateIssuedSharesTotalNumberOfSharesEtc\",\"namespace\":\"http://disclosure.edinet-fsa.go.jp",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": "/taxonomy/jpcrp/2025-11-01/jpcrp_cor\",\"occurrence\":3,\"attributes\":{\"contextRef\":\"FilingDateInstant\",\"decimals\":\"0\",\"unitRef\":\"shares\"},\"rawAttributes\":\" contextRef=\\\"FilingDateInstant\\\" decimals=\\\"0\\\" unitRef=\\\"shares\\\"\",\"rawValue\":\"11000000\",\"factSha256\":\"d78b5f06995ed99aee37f40f2b818651e191dd96a8507e95ade41bfe89f7a790\",\"contextRef\":\"FilingDateInstant\",\"unitRef\":\"shares\",\"decimals\":\"0\",\"contexts\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E39505-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-09-04</xbrli:instant>\\n</xbrli:period>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04.xbrl\",\"memberSha256\":\"747194e3018a84dd7e29bb070bd8fbba7fc3c36cc30c4c055e64ec55b840553d\"}],\"entity\":\"E39505-000\",\"instantDate\":\"2026-09-04\",\"dimensions\":[],\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E39505-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-09-04</xbrli:instant>\\n</xbrli:period>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm\",\"memberSha256\":\"23ac1ea52ac3072affca48c6b29bae154dab5c910337b606105bf3e9fffcbb10\"}],\"entity\":\"E39505-000\",\"instantDate\":\"2026-09-04\",\"dimensions\":[],\"valid\":true}],\"units\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04.xbrl\",\"memberSha256\":\"747194e3018a84dd7e29bb070bd8fbba7fc3c36cc30c4c055e64ec55b840553d\"}],\"measure\":\"xb",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "/taxonomy/jpcrp/2025-11-01/jpcrp_cor\",\"occurrence\":3,\"attributes\":{\"contextRef\":\"FilingDateInstant\",\"decimals\":\"0\",\"unitRef\":\"shares\"},\"rawAttributes\":\" contextRef=\\\"FilingDateInstant\\\" decimals=\\\"0\\\" unitRef=\\\"shares\\\"\",\"rawValue\":\"11000000\",\"factSha256\":\"d78b5f06995ed99aee37f40f2b818651e191dd96a8507e95ade41bfe89f7a790\",\"contextRef\":\"FilingDateInstant\",\"unitRef\":\"shares\",\"decimals\":\"0\",\"contexts\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E39505-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-09-04</xbrli:instant>\\n</xbrli:period>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04.xbrl\",\"memberSha256\":\"747194e3018a84dd7e29bb070bd8fbba7fc3c36cc30c4c055e64ec55b840553d\"}],\"entity\":\"E39505-000\",\"instantDate\":\"2026-09-04\",\"dimensions\":[],\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"FilingDateInstant\"},\"rawDefinition\":\"<xbrli:context id=\\\"FilingDateInstant\\\">\\n<xbrli:entity>\\n<xbrli:identifier scheme=\\\"http://disclosure.edinet-fsa.go.jp\\\">E39505-000</xbrli:identifier>\\n</xbrli:entity>\\n<xbrli:period>\\n<xbrli:instant>2026-09-04</xbrli:instant>\\n</xbrli:period>\\n</xbrli:context>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm\",\"memberSha256\":\"23ac1ea52ac3072affca48c6b29bae154dab5c910337b606105bf3e9fffcbb10\"}],\"entity\":\"E39505-000\",\"instantDate\":\"2026-09-04\",\"dimensions\":[],\"valid\":true}],\"units\":[{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04.xbrl\",\"memberSha256\":\"747194e3018a84dd7e29bb070bd8fbba7fc3c36cc30c4c055e64ec55b840553d\"}],\"measure\":\"xb",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": "rli:shares\",\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm\",\"memberSha256\":\"23ac1ea52ac3072affca48c6b29bae154dab5c910337b606105bf3e9fffcbb10\"}],\"measure\":\"xbrli:shares\",\"valid\":true}],\"qualification\":{\"status\":\"hold\",\"reason\":\"share-class-unspecified;dimension-free-is-not-ordinary\",\"kind\":null,\"economicDate\":null,\"nativeContextDate\":\"2026-09-04\",\"shareClass\":\"unknown\",\"rightsApplication\":\"unknown\"}}],\"sourceQualification\":{\"status\":\"verified\",\"reason\":null},\"filingDateEvidence\":{\"rawSubmitDateTime\":\"2026-09-04 15:37\",\"provenance\":\"saved-archive-metadata\"}}}",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "rli:shares\",\"valid\":true},{\"definitions\":[{\"prefix\":\"xbrli\",\"attributes\":{\"id\":\"shares\"},\"rawDefinition\":\"<xbrli:unit id=\\\"shares\\\">\\n<xbrli:measure>xbrli:shares</xbrli:measure>\\n</xbrli:unit>\",\"filename\":\"XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm\",\"memberSha256\":\"23ac1ea52ac3072affca48c6b29bae154dab5c910337b606105bf3e9fffcbb10\"}],\"measure\":\"xbrli:shares\",\"valid\":true}],\"qualification\":{\"status\":\"hold\",\"reason\":\"share-class-unspecified;dimension-free-is-not-ordinary\",\"kind\":null,\"economicDate\":null,\"nativeContextDate\":\"2026-09-04\",\"shareClass\":\"unknown\",\"rightsApplication\":\"unknown\"}}],\"sourceQualification\":{\"status\":\"verified\",\"reason\":null},\"filingDateEvidence\":{\"rawSubmitDateTime\":\"2026-09-04 15:37\",\"provenance\":\"saved-archive-metadata\"}}}",
+            "href": null
+          }
+        ]
+      },
+      "Source": {
+        "id": "KXwe",
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "EDINET API v2 /documents/S100Z0JO?type=1",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "EDINET API v2 /documents/S100Z0JO?type=1",
+            "href": null
+          }
+        ]
+      },
+      "Obsoleted At": {
+        "id": "Oa%5C_",
+        "type": "date",
+        "date": null
+      },
+      "保有価格状態": {
+        "id": "Q%3Bpz",
+        "type": "select",
+        "select": {
+          "id": "3919a293-29d3-461b-b704-31b112b63c68",
+          "name": "再開待ち",
+          "color": "default"
+        }
+      },
+      "Origin Page": {
+        "id": "RAl%3D",
+        "type": "url",
+        "url": null
+      },
+      "Obsoleted Reason": {
+        "id": "aZ%5Ci",
+        "type": "rich_text",
+        "rich_text": []
+      },
+      "Status": {
+        "id": "cqix",
+        "type": "select",
+        "select": {
+          "id": "f46cb8a2-e822-4e39-9893-d75eea6f834f",
+          "name": "recorded",
+          "color": "yellow"
+        }
+      },
+      "保有価格再開情報": {
+        "id": "dv%7DK",
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "{\"source\":{\"docId\":\"S100Z0JO\",\"stockCode\":\"208A\",\"edinetCode\":\"E39505\",\"fiscalYearEnd\":\"2026-06-30\"},\"ownerName\":\"株式会社構造計画研究所ホールディングス\",\"zipBytes\":926421,\"zipSha256\":\"f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10\",\"parsed\":4,\"factsSha256\":\"68afaac1cc72cff12ad5a5ec67bf60bbe87850dad074a6c612cab42f50d159b0\",\"priceQueueVersion\":1,\"nextHoldingOffset\":0,\"unavailableRows\":0}",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "{\"source\":{\"docId\":\"S100Z0JO\",\"stockCode\":\"208A\",\"edinetCode\":\"E39505\",\"fiscalYearEnd\":\"2026-06-30\"},\"ownerName\":\"株式会社構造計画研究所ホールディングス\",\"zipBytes\":926421,\"zipSha256\":\"f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10\",\"parsed\":4,\"factsSha256\":\"68afaac1cc72cff12ad5a5ec67bf60bbe87850dad074a6c612cab42f50d159b0\",\"priceQueueVersion\":1,\"nextHoldingOffset\":0,\"unavailableRows\":0}",
+            "href": null
+          }
+        ]
+      },
+      "Service": {
+        "id": "k%3BjX",
+        "type": "select",
+        "select": {
+          "id": "4ae71ae8-acc7-44df-9cce-daf627ec1729",
+          "name": "yuho-quant",
+          "color": "brown"
+        }
+      },
+      "Metadata": {
+        "id": "lPug",
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "{\"docID\":\"S100Z0JO\",\"edinetCode\":\"E39505\",\"secCode\":\"208A0\",\"filerName\":\"株式会社構造計画研究所ホールディングス\",\"docTypeCode\":\"120\",\"docDescription\":\"有価証券報告書－第2期(2025/07/01－2026/06/30)\",\"periodStart\":\"2025-07-01\",\"periodEnd\":\"2026-06-30\",\"submitDateTime\":\"2026-09-04 15:37\",\"parseStatus\":\"table_unrecognized\",\"honbunFile\":\"XBRL/PublicDoc/0102010_honbun_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm\",\"factCount\":0,\"overseasParseStatus\":\"geo_present_unstructured\",\"overseasHonbunFile\":null,\"overseasFactCount\":0,\"textParseStatus\":\"ok\",\"textSectionCount\":35,\"xbrlUnavailable\":false,\"edinetDocType\":1,\"_fileManifest\":{\"version\":1,\"files\":[{\"originalFilename\":\"S100Z0JO_xbrl.zip\",\"uploadFilename\":\"S100Z0JO_xbrl.zip\",\"originalMime\":\"application/zip\",\"uploadMime\":\"application/zip\",\"byteLength\":926421,\"sha256\":\"f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10\",\"upload\":\"uploaded\"}],\"inputFingerprint\":\"d93105441242b4c45f9dc0c4ef6de7e8dc511ded18faaa11e5c143be6d494a4c\"}}",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "{\"docID\":\"S100Z0JO\",\"edinetCode\":\"E39505\",\"secCode\":\"208A0\",\"filerName\":\"株式会社構造計画研究所ホールディングス\",\"docTypeCode\":\"120\",\"docDescription\":\"有価証券報告書－第2期(2025/07/01－2026/06/30)\",\"periodStart\":\"2025-07-01\",\"periodEnd\":\"2026-06-30\",\"submitDateTime\":\"2026-09-04 15:37\",\"parseStatus\":\"table_unrecognized\",\"honbunFile\":\"XBRL/PublicDoc/0102010_honbun_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm\",\"factCount\":0,\"overseasParseStatus\":\"geo_present_unstructured\",\"overseasHonbunFile\":null,\"overseasFactCount\":0,\"textParseStatus\":\"ok\",\"textSectionCount\":35,\"xbrlUnavailable\":false,\"edinetDocType\":1,\"_fileManifest\":{\"version\":1,\"files\":[{\"originalFilename\":\"S100Z0JO_xbrl.zip\",\"uploadFilename\":\"S100Z0JO_xbrl.zip\",\"originalMime\":\"application/zip\",\"uploadMime\":\"application/zip\",\"byteLength\":926421,\"sha256\":\"f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10\",\"upload\":\"uploaded\"}],\"inputFingerprint\":\"d93105441242b4c45f9dc0c4ef6de7e8dc511ded18faaa11e5c143be6d494a4c\"}}",
+            "href": null
+          }
+        ]
+      },
+      "Fetched At": {
+        "id": "mzD%7C",
+        "type": "date",
+        "date": {
+          "start": "2026-10-03T19:31:00.000+00:00",
+          "end": null,
+          "time_zone": null
+        }
+      },
+      "保有明細状態": {
+        "id": "pZyo",
+        "type": "select",
+        "select": {
+          "id": "e6cce938-7352-4e26-a1ad-60487b9c0b04",
+          "name": "明細原本照合済",
+          "color": "default"
+        }
+      },
+      "Files": {
+        "id": "~kw%3E",
+        "type": "files",
+        "files": [
+          {
+            "name": "S100Z0JO_xbrl.zip",
+            "type": "file",
+            "file": {
+              "url": "https://offline.invalid/S100Z0JO_xbrl.zip",
+              "expiry_time": "2026-10-17T06:24:20.849Z"
+            }
+          }
+        ]
+      },
+      "Key": {
+        "id": "title",
+        "type": "title",
+        "title": [
+          {
+            "type": "text",
+            "text": {
+              "content": "S100Z0JO:type1",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "S100Z0JO:type1",
+            "href": null
+          }
+        ]
+      }
+    }
+  },
+  "expectedRows": [
+    {
+      "object": "page",
+      "id": "3fcd74ff-84cd-816e-9110-dfb1f2f1077d",
+      "parent": {
+        "type": "database_id",
+        "database_id": "5ad4d311-b06f-42b4-b78a-b3801cd509e2"
+      },
+      "archived": false,
+      "in_trash": false,
+      "created_time": "2026-10-17T05:23:00.000Z",
+      "last_edited_time": "2026-10-17T05:23:00.000Z",
+      "properties": {
+        "出典文書ID": {
+          "id": "%3BQm%3F",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "S100Z0JO",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "S100Z0JO",
+              "href": null
+            }
+          ]
+        },
+        "欠測理由": {
+          "id": "%3CEpO",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+              "href": null
+            }
+          ]
+        },
+        "保有株数": {
+          "id": "%3D_fn",
+          "type": "number",
+          "number": 35349
+        },
+        "旧試算時価（未検証）": {
+          "id": "%40IA_",
+          "type": "number",
+          "number": null
+        },
+        "価格照合根拠": {
+          "id": "Bj%3Dg",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "旧分類（未検証）": {
+          "id": "DGfn",
+          "type": "select",
+          "select": null
+        },
+        "確定銘柄コード": {
+          "id": "DdCb",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有時価": {
+          "id": "GbBc",
+          "type": "number",
+          "number": null
+        },
+        "旧処理基準日（観測日未確認）": {
+          "id": "K%60%3Dj",
+          "type": "date",
+          "date": null
+        },
+        "価格状態": {
+          "id": "QE%3AD",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "未取得（価格・通貨・株数単位の照合未成立）"
+          }
+        },
+        "出典要素ID": {
+          "id": "QEf%3E",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "jpcrp_cor:ShareholdingsTextBlock",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "jpcrp_cor:ShareholdingsTextBlock",
+              "href": null
+            }
+          ]
+        },
+        "保有会社": {
+          "id": "Q%7BEH",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "株式会社構造計画研究所ホールディングス",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "株式会社構造計画研究所ホールディングス",
+              "href": null
+            }
+          ]
+        },
+        "株価": {
+          "id": "Txw%3B",
+          "type": "number",
+          "number": null
+        },
+        "価格照合済": {
+          "id": "U%3Fw%5C",
+          "type": "checkbox",
+          "checkbox": false
+        },
+        "検証状態": {
+          "id": "UCyH",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "明細原本照合済"
+          }
+        },
+        "帳簿価額（円）": {
+          "id": "UbUr",
+          "type": "number",
+          "number": 273707000
+        },
+        "株数単位": {
+          "id": "%5DPr%7B",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "株",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "株",
+              "href": null
+            }
+          ]
+        },
+        "銘柄名": {
+          "id": "%5EPJG",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "(株)みずほフィナンシャルグループ",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "(株)みずほフィナンシャルグループ",
+              "href": null
+            }
+          ]
+        },
+        "銘柄コード": {
+          "id": "%5EWgM",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "旧株価（通貨・観測日未確認）": {
+          "id": "%5Ezbz",
+          "type": "number",
+          "number": null
+        },
+        "通貨": {
+          "id": "eMOW",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "原本照合済": {
+          "id": "eePV",
+          "type": "checkbox",
+          "checkbox": true
+        },
+        "区分": {
+          "id": "gXtr",
+          "type": "select",
+          "select": {
+            "id": "04895bf5-ab00-4102-91aa-e6bc22125dad",
+            "name": "未確認",
+            "color": "gray"
+          }
+        },
+        "期末": {
+          "id": "ggrt",
+          "type": "date",
+          "date": {
+            "start": "2026-06-30",
+            "end": null,
+            "time_zone": null
+          }
+        },
+        "銘柄照合根拠": {
+          "id": "kA%5Bi",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有会社コード": {
+          "id": "lABv",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "208A",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "208A",
+              "href": null
+            }
+          ]
+        },
+        "出典原本SHA256": {
+          "id": "lJC%7D",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10",
+              "href": null
+            }
+          ]
+        },
+        "旧抽出株数（単位未確認）": {
+          "id": "lTPG",
+          "type": "number",
+          "number": null
+        },
+        "出典明細行": {
+          "id": "tQbj",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "3:3",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "3:3",
+              "href": null
+            }
+          ]
+        },
+        "基準日": {
+          "id": "tdWc",
+          "type": "date",
+          "date": null
+        },
+        "出典Context": {
+          "id": "ubZV",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "FilingDateInstant",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "FilingDateInstant",
+              "href": null
+            }
+          ]
+        },
+        "保有種別": {
+          "id": "ujZY",
+          "type": "select",
+          "select": {
+            "id": "283b5186-568c-45d3-aeab-3335d7ae3bc6",
+            "name": "特定投資株式",
+            "color": "blue"
+          }
+        },
+        "出典ファイル": {
+          "id": "x%3B%3D%3A",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm",
+              "href": null
+            }
+          ]
+        },
+        "Name": {
+          "id": "title",
+          "type": "title",
+          "title": [
+            {
+              "type": "text",
+              "text": {
+                "content": "208A 株式会社構造計画研究所ホールディングス → (株)みずほフィナンシャルグループ",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "208A 株式会社構造計画研究所ホールディングス → (株)みずほフィナンシャルグループ",
+              "href": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "object": "page",
+      "id": "3fcd74ff-84cd-8123-a85e-cc9bd968edd3",
+      "parent": {
+        "type": "database_id",
+        "database_id": "5ad4d311-b06f-42b4-b78a-b3801cd509e2"
+      },
+      "archived": false,
+      "in_trash": false,
+      "created_time": "2026-10-17T05:23:00.000Z",
+      "last_edited_time": "2026-10-17T05:23:00.000Z",
+      "properties": {
+        "出典文書ID": {
+          "id": "%3BQm%3F",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "S100Z0JO",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "S100Z0JO",
+              "href": null
+            }
+          ]
+        },
+        "欠測理由": {
+          "id": "%3CEpO",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+              "href": null
+            }
+          ]
+        },
+        "保有株数": {
+          "id": "%3D_fn",
+          "type": "number",
+          "number": 14300
+        },
+        "旧試算時価（未検証）": {
+          "id": "%40IA_",
+          "type": "number",
+          "number": null
+        },
+        "価格照合根拠": {
+          "id": "Bj%3Dg",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "旧分類（未検証）": {
+          "id": "DGfn",
+          "type": "select",
+          "select": null
+        },
+        "確定銘柄コード": {
+          "id": "DdCb",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有時価": {
+          "id": "GbBc",
+          "type": "number",
+          "number": null
+        },
+        "旧処理基準日（観測日未確認）": {
+          "id": "K%60%3Dj",
+          "type": "date",
+          "date": null
+        },
+        "価格状態": {
+          "id": "QE%3AD",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "未取得（価格・通貨・株数単位の照合未成立）"
+          }
+        },
+        "出典要素ID": {
+          "id": "QEf%3E",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "jpcrp_cor:ShareholdingsTextBlock",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "jpcrp_cor:ShareholdingsTextBlock",
+              "href": null
+            }
+          ]
+        },
+        "保有会社": {
+          "id": "Q%7BEH",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "株式会社構造計画研究所ホールディングス",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "株式会社構造計画研究所ホールディングス",
+              "href": null
+            }
+          ]
+        },
+        "株価": {
+          "id": "Txw%3B",
+          "type": "number",
+          "number": null
+        },
+        "価格照合済": {
+          "id": "U%3Fw%5C",
+          "type": "checkbox",
+          "checkbox": false
+        },
+        "検証状態": {
+          "id": "UCyH",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "明細原本照合済"
+          }
+        },
+        "帳簿価額（円）": {
+          "id": "UbUr",
+          "type": "number",
+          "number": 30115000
+        },
+        "株数単位": {
+          "id": "%5DPr%7B",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "株",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "株",
+              "href": null
+            }
+          ]
+        },
+        "銘柄名": {
+          "id": "%5EPJG",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "(株)りそなホールディングス （注）",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "(株)りそなホールディングス （注）",
+              "href": null
+            }
+          ]
+        },
+        "銘柄コード": {
+          "id": "%5EWgM",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "旧株価（通貨・観測日未確認）": {
+          "id": "%5Ezbz",
+          "type": "number",
+          "number": null
+        },
+        "通貨": {
+          "id": "eMOW",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "原本照合済": {
+          "id": "eePV",
+          "type": "checkbox",
+          "checkbox": true
+        },
+        "区分": {
+          "id": "gXtr",
+          "type": "select",
+          "select": {
+            "id": "04895bf5-ab00-4102-91aa-e6bc22125dad",
+            "name": "未確認",
+            "color": "gray"
+          }
+        },
+        "期末": {
+          "id": "ggrt",
+          "type": "date",
+          "date": {
+            "start": "2026-06-30",
+            "end": null,
+            "time_zone": null
+          }
+        },
+        "銘柄照合根拠": {
+          "id": "kA%5Bi",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有会社コード": {
+          "id": "lABv",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "208A",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "208A",
+              "href": null
+            }
+          ]
+        },
+        "出典原本SHA256": {
+          "id": "lJC%7D",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10",
+              "href": null
+            }
+          ]
+        },
+        "旧抽出株数（単位未確認）": {
+          "id": "lTPG",
+          "type": "number",
+          "number": null
+        },
+        "出典明細行": {
+          "id": "tQbj",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "3:5",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "3:5",
+              "href": null
+            }
+          ]
+        },
+        "基準日": {
+          "id": "tdWc",
+          "type": "date",
+          "date": null
+        },
+        "出典Context": {
+          "id": "ubZV",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "FilingDateInstant",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "FilingDateInstant",
+              "href": null
+            }
+          ]
+        },
+        "保有種別": {
+          "id": "ujZY",
+          "type": "select",
+          "select": {
+            "id": "283b5186-568c-45d3-aeab-3335d7ae3bc6",
+            "name": "特定投資株式",
+            "color": "blue"
+          }
+        },
+        "出典ファイル": {
+          "id": "x%3B%3D%3A",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm",
+              "href": null
+            }
+          ]
+        },
+        "Name": {
+          "id": "title",
+          "type": "title",
+          "title": [
+            {
+              "type": "text",
+              "text": {
+                "content": "208A 株式会社構造計画研究所ホールディングス → (株)りそなホールディングス （注）",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "208A 株式会社構造計画研究所ホールディングス → (株)りそなホールディングス （注）",
+              "href": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "object": "page",
+      "id": "3fcd74ff-84cd-81ec-abea-e59894e14163",
+      "parent": {
+        "type": "database_id",
+        "database_id": "5ad4d311-b06f-42b4-b78a-b3801cd509e2"
+      },
+      "archived": false,
+      "in_trash": false,
+      "created_time": "2026-10-17T05:23:00.000Z",
+      "last_edited_time": "2026-10-17T05:23:00.000Z",
+      "properties": {
+        "出典文書ID": {
+          "id": "%3BQm%3F",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "S100Z0JO",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "S100Z0JO",
+              "href": null
+            }
+          ]
+        },
+        "欠測理由": {
+          "id": "%3CEpO",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+              "href": null
+            }
+          ]
+        },
+        "保有株数": {
+          "id": "%3D_fn",
+          "type": "number",
+          "number": 1700
+        },
+        "旧試算時価（未検証）": {
+          "id": "%40IA_",
+          "type": "number",
+          "number": null
+        },
+        "価格照合根拠": {
+          "id": "Bj%3Dg",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "旧分類（未検証）": {
+          "id": "DGfn",
+          "type": "select",
+          "select": null
+        },
+        "確定銘柄コード": {
+          "id": "DdCb",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有時価": {
+          "id": "GbBc",
+          "type": "number",
+          "number": null
+        },
+        "旧処理基準日（観測日未確認）": {
+          "id": "K%60%3Dj",
+          "type": "date",
+          "date": null
+        },
+        "価格状態": {
+          "id": "QE%3AD",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "未取得（価格・通貨・株数単位の照合未成立）"
+          }
+        },
+        "出典要素ID": {
+          "id": "QEf%3E",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "jpcrp_cor:ShareholdingsTextBlock",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "jpcrp_cor:ShareholdingsTextBlock",
+              "href": null
+            }
+          ]
+        },
+        "保有会社": {
+          "id": "Q%7BEH",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "株式会社構造計画研究所ホールディングス",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "株式会社構造計画研究所ホールディングス",
+              "href": null
+            }
+          ]
+        },
+        "株価": {
+          "id": "Txw%3B",
+          "type": "number",
+          "number": null
+        },
+        "価格照合済": {
+          "id": "U%3Fw%5C",
+          "type": "checkbox",
+          "checkbox": false
+        },
+        "検証状態": {
+          "id": "UCyH",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "明細原本照合済"
+          }
+        },
+        "帳簿価額（円）": {
+          "id": "UbUr",
+          "type": "number",
+          "number": 4457000
+        },
+        "株数単位": {
+          "id": "%5DPr%7B",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "株",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "株",
+              "href": null
+            }
+          ]
+        },
+        "銘柄名": {
+          "id": "%5EPJG",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "(株)メディパルホールディングス",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "(株)メディパルホールディングス",
+              "href": null
+            }
+          ]
+        },
+        "銘柄コード": {
+          "id": "%5EWgM",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "旧株価（通貨・観測日未確認）": {
+          "id": "%5Ezbz",
+          "type": "number",
+          "number": null
+        },
+        "通貨": {
+          "id": "eMOW",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "原本照合済": {
+          "id": "eePV",
+          "type": "checkbox",
+          "checkbox": true
+        },
+        "区分": {
+          "id": "gXtr",
+          "type": "select",
+          "select": {
+            "id": "04895bf5-ab00-4102-91aa-e6bc22125dad",
+            "name": "未確認",
+            "color": "gray"
+          }
+        },
+        "期末": {
+          "id": "ggrt",
+          "type": "date",
+          "date": {
+            "start": "2026-06-30",
+            "end": null,
+            "time_zone": null
+          }
+        },
+        "銘柄照合根拠": {
+          "id": "kA%5Bi",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有会社コード": {
+          "id": "lABv",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "208A",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "208A",
+              "href": null
+            }
+          ]
+        },
+        "出典原本SHA256": {
+          "id": "lJC%7D",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10",
+              "href": null
+            }
+          ]
+        },
+        "旧抽出株数（単位未確認）": {
+          "id": "lTPG",
+          "type": "number",
+          "number": null
+        },
+        "出典明細行": {
+          "id": "tQbj",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "3:7",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "3:7",
+              "href": null
+            }
+          ]
+        },
+        "基準日": {
+          "id": "tdWc",
+          "type": "date",
+          "date": null
+        },
+        "出典Context": {
+          "id": "ubZV",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "FilingDateInstant",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "FilingDateInstant",
+              "href": null
+            }
+          ]
+        },
+        "保有種別": {
+          "id": "ujZY",
+          "type": "select",
+          "select": {
+            "id": "283b5186-568c-45d3-aeab-3335d7ae3bc6",
+            "name": "特定投資株式",
+            "color": "blue"
+          }
+        },
+        "出典ファイル": {
+          "id": "x%3B%3D%3A",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm",
+              "href": null
+            }
+          ]
+        },
+        "Name": {
+          "id": "title",
+          "type": "title",
+          "title": [
+            {
+              "type": "text",
+              "text": {
+                "content": "208A 株式会社構造計画研究所ホールディングス → (株)メディパルホールディングス",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "208A 株式会社構造計画研究所ホールディングス → (株)メディパルホールディングス",
+              "href": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "object": "page",
+      "id": "3fcd74ff-84cd-8161-b874-faa42c470c97",
+      "parent": {
+        "type": "database_id",
+        "database_id": "5ad4d311-b06f-42b4-b78a-b3801cd509e2"
+      },
+      "archived": false,
+      "in_trash": false,
+      "created_time": "2026-10-17T05:23:00.000Z",
+      "last_edited_time": "2026-10-17T05:23:00.000Z",
+      "properties": {
+        "出典文書ID": {
+          "id": "%3BQm%3F",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "S100Z0JO",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "S100Z0JO",
+              "href": null
+            }
+          ]
+        },
+        "欠測理由": {
+          "id": "%3CEpO",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+              "href": null
+            }
+          ]
+        },
+        "保有株数": {
+          "id": "%3D_fn",
+          "type": "number",
+          "number": 10000
+        },
+        "旧試算時価（未検証）": {
+          "id": "%40IA_",
+          "type": "number",
+          "number": null
+        },
+        "価格照合根拠": {
+          "id": "Bj%3Dg",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "旧分類（未検証）": {
+          "id": "DGfn",
+          "type": "select",
+          "select": null
+        },
+        "確定銘柄コード": {
+          "id": "DdCb",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有時価": {
+          "id": "GbBc",
+          "type": "number",
+          "number": null
+        },
+        "旧処理基準日（観測日未確認）": {
+          "id": "K%60%3Dj",
+          "type": "date",
+          "date": null
+        },
+        "価格状態": {
+          "id": "QE%3AD",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "未取得（価格・通貨・株数単位の照合未成立）"
+          }
+        },
+        "出典要素ID": {
+          "id": "QEf%3E",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "jpcrp_cor:ShareholdingsTextBlock",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "jpcrp_cor:ShareholdingsTextBlock",
+              "href": null
+            }
+          ]
+        },
+        "保有会社": {
+          "id": "Q%7BEH",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "株式会社構造計画研究所ホールディングス",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "株式会社構造計画研究所ホールディングス",
+              "href": null
+            }
+          ]
+        },
+        "株価": {
+          "id": "Txw%3B",
+          "type": "number",
+          "number": null
+        },
+        "価格照合済": {
+          "id": "U%3Fw%5C",
+          "type": "checkbox",
+          "checkbox": false
+        },
+        "検証状態": {
+          "id": "UCyH",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "明細原本照合済"
+          }
+        },
+        "帳簿価額（円）": {
+          "id": "UbUr",
+          "type": "number",
+          "number": 1450000
+        },
+        "株数単位": {
+          "id": "%5DPr%7B",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "株",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "株",
+              "href": null
+            }
+          ]
+        },
+        "銘柄名": {
+          "id": "%5EPJG",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "ＮＴＴ(株)",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "ＮＴＴ(株)",
+              "href": null
+            }
+          ]
+        },
+        "銘柄コード": {
+          "id": "%5EWgM",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "旧株価（通貨・観測日未確認）": {
+          "id": "%5Ezbz",
+          "type": "number",
+          "number": null
+        },
+        "通貨": {
+          "id": "eMOW",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "原本照合済": {
+          "id": "eePV",
+          "type": "checkbox",
+          "checkbox": true
+        },
+        "区分": {
+          "id": "gXtr",
+          "type": "select",
+          "select": {
+            "id": "04895bf5-ab00-4102-91aa-e6bc22125dad",
+            "name": "未確認",
+            "color": "gray"
+          }
+        },
+        "期末": {
+          "id": "ggrt",
+          "type": "date",
+          "date": {
+            "start": "2026-06-30",
+            "end": null,
+            "time_zone": null
+          }
+        },
+        "銘柄照合根拠": {
+          "id": "kA%5Bi",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有会社コード": {
+          "id": "lABv",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "208A",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "208A",
+              "href": null
+            }
+          ]
+        },
+        "出典原本SHA256": {
+          "id": "lJC%7D",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10",
+              "href": null
+            }
+          ]
+        },
+        "旧抽出株数（単位未確認）": {
+          "id": "lTPG",
+          "type": "number",
+          "number": null
+        },
+        "出典明細行": {
+          "id": "tQbj",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "3:9",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "3:9",
+              "href": null
+            }
+          ]
+        },
+        "基準日": {
+          "id": "tdWc",
+          "type": "date",
+          "date": null
+        },
+        "出典Context": {
+          "id": "ubZV",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "FilingDateInstant",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "FilingDateInstant",
+              "href": null
+            }
+          ]
+        },
+        "保有種別": {
+          "id": "ujZY",
+          "type": "select",
+          "select": {
+            "id": "283b5186-568c-45d3-aeab-3335d7ae3bc6",
+            "name": "特定投資株式",
+            "color": "blue"
+          }
+        },
+        "出典ファイル": {
+          "id": "x%3B%3D%3A",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm",
+              "href": null
+            }
+          ]
+        },
+        "Name": {
+          "id": "title",
+          "type": "title",
+          "title": [
+            {
+              "type": "text",
+              "text": {
+                "content": "208A 株式会社構造計画研究所ホールディングス → ＮＴＴ(株)",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "208A 株式会社構造計画研究所ホールディングス → ＮＴＴ(株)",
+              "href": null
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "expectedPeriod": [
+    {
+      "object": "page",
+      "id": "3fcd74ff-84cd-8161-b874-faa42c470c97",
+      "parent": {
+        "type": "database_id",
+        "database_id": "5ad4d311-b06f-42b4-b78a-b3801cd509e2"
+      },
+      "archived": false,
+      "in_trash": false,
+      "created_time": "2026-10-17T05:23:00.000Z",
+      "last_edited_time": "2026-10-17T05:23:00.000Z",
+      "properties": {
+        "出典文書ID": {
+          "id": "%3BQm%3F",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "S100Z0JO",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "S100Z0JO",
+              "href": null
+            }
+          ]
+        },
+        "欠測理由": {
+          "id": "%3CEpO",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+              "href": null
+            }
+          ]
+        },
+        "保有株数": {
+          "id": "%3D_fn",
+          "type": "number",
+          "number": 10000
+        },
+        "旧試算時価（未検証）": {
+          "id": "%40IA_",
+          "type": "number",
+          "number": null
+        },
+        "価格照合根拠": {
+          "id": "Bj%3Dg",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "旧分類（未検証）": {
+          "id": "DGfn",
+          "type": "select",
+          "select": null
+        },
+        "確定銘柄コード": {
+          "id": "DdCb",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有時価": {
+          "id": "GbBc",
+          "type": "number",
+          "number": null
+        },
+        "旧処理基準日（観測日未確認）": {
+          "id": "K%60%3Dj",
+          "type": "date",
+          "date": null
+        },
+        "価格状態": {
+          "id": "QE%3AD",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "未取得（価格・通貨・株数単位の照合未成立）"
+          }
+        },
+        "出典要素ID": {
+          "id": "QEf%3E",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "jpcrp_cor:ShareholdingsTextBlock",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "jpcrp_cor:ShareholdingsTextBlock",
+              "href": null
+            }
+          ]
+        },
+        "保有会社": {
+          "id": "Q%7BEH",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "株式会社構造計画研究所ホールディングス",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "株式会社構造計画研究所ホールディングス",
+              "href": null
+            }
+          ]
+        },
+        "株価": {
+          "id": "Txw%3B",
+          "type": "number",
+          "number": null
+        },
+        "価格照合済": {
+          "id": "U%3Fw%5C",
+          "type": "checkbox",
+          "checkbox": false
+        },
+        "検証状態": {
+          "id": "UCyH",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "明細原本照合済"
+          }
+        },
+        "帳簿価額（円）": {
+          "id": "UbUr",
+          "type": "number",
+          "number": 1450000
+        },
+        "株数単位": {
+          "id": "%5DPr%7B",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "株",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "株",
+              "href": null
+            }
+          ]
+        },
+        "銘柄名": {
+          "id": "%5EPJG",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "ＮＴＴ(株)",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "ＮＴＴ(株)",
+              "href": null
+            }
+          ]
+        },
+        "銘柄コード": {
+          "id": "%5EWgM",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "旧株価（通貨・観測日未確認）": {
+          "id": "%5Ezbz",
+          "type": "number",
+          "number": null
+        },
+        "通貨": {
+          "id": "eMOW",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "原本照合済": {
+          "id": "eePV",
+          "type": "checkbox",
+          "checkbox": true
+        },
+        "区分": {
+          "id": "gXtr",
+          "type": "select",
+          "select": {
+            "id": "04895bf5-ab00-4102-91aa-e6bc22125dad",
+            "name": "未確認",
+            "color": "gray"
+          }
+        },
+        "期末": {
+          "id": "ggrt",
+          "type": "date",
+          "date": {
+            "start": "2026-06-30",
+            "end": null,
+            "time_zone": null
+          }
+        },
+        "銘柄照合根拠": {
+          "id": "kA%5Bi",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有会社コード": {
+          "id": "lABv",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "208A",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "208A",
+              "href": null
+            }
+          ]
+        },
+        "出典原本SHA256": {
+          "id": "lJC%7D",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10",
+              "href": null
+            }
+          ]
+        },
+        "旧抽出株数（単位未確認）": {
+          "id": "lTPG",
+          "type": "number",
+          "number": null
+        },
+        "出典明細行": {
+          "id": "tQbj",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "3:9",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "3:9",
+              "href": null
+            }
+          ]
+        },
+        "基準日": {
+          "id": "tdWc",
+          "type": "date",
+          "date": null
+        },
+        "出典Context": {
+          "id": "ubZV",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "FilingDateInstant",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "FilingDateInstant",
+              "href": null
+            }
+          ]
+        },
+        "保有種別": {
+          "id": "ujZY",
+          "type": "select",
+          "select": {
+            "id": "283b5186-568c-45d3-aeab-3335d7ae3bc6",
+            "name": "特定投資株式",
+            "color": "blue"
+          }
+        },
+        "出典ファイル": {
+          "id": "x%3B%3D%3A",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm",
+              "href": null
+            }
+          ]
+        },
+        "Name": {
+          "id": "title",
+          "type": "title",
+          "title": [
+            {
+              "type": "text",
+              "text": {
+                "content": "208A 株式会社構造計画研究所ホールディングス → ＮＴＴ(株)",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "208A 株式会社構造計画研究所ホールディングス → ＮＴＴ(株)",
+              "href": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "object": "page",
+      "id": "3fcd74ff-84cd-81ec-abea-e59894e14163",
+      "parent": {
+        "type": "database_id",
+        "database_id": "5ad4d311-b06f-42b4-b78a-b3801cd509e2"
+      },
+      "archived": false,
+      "in_trash": false,
+      "created_time": "2026-10-17T05:23:00.000Z",
+      "last_edited_time": "2026-10-17T05:23:00.000Z",
+      "properties": {
+        "出典文書ID": {
+          "id": "%3BQm%3F",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "S100Z0JO",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "S100Z0JO",
+              "href": null
+            }
+          ]
+        },
+        "欠測理由": {
+          "id": "%3CEpO",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+              "href": null
+            }
+          ]
+        },
+        "保有株数": {
+          "id": "%3D_fn",
+          "type": "number",
+          "number": 1700
+        },
+        "旧試算時価（未検証）": {
+          "id": "%40IA_",
+          "type": "number",
+          "number": null
+        },
+        "価格照合根拠": {
+          "id": "Bj%3Dg",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "旧分類（未検証）": {
+          "id": "DGfn",
+          "type": "select",
+          "select": null
+        },
+        "確定銘柄コード": {
+          "id": "DdCb",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有時価": {
+          "id": "GbBc",
+          "type": "number",
+          "number": null
+        },
+        "旧処理基準日（観測日未確認）": {
+          "id": "K%60%3Dj",
+          "type": "date",
+          "date": null
+        },
+        "価格状態": {
+          "id": "QE%3AD",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "未取得（価格・通貨・株数単位の照合未成立）"
+          }
+        },
+        "出典要素ID": {
+          "id": "QEf%3E",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "jpcrp_cor:ShareholdingsTextBlock",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "jpcrp_cor:ShareholdingsTextBlock",
+              "href": null
+            }
+          ]
+        },
+        "保有会社": {
+          "id": "Q%7BEH",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "株式会社構造計画研究所ホールディングス",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "株式会社構造計画研究所ホールディングス",
+              "href": null
+            }
+          ]
+        },
+        "株価": {
+          "id": "Txw%3B",
+          "type": "number",
+          "number": null
+        },
+        "価格照合済": {
+          "id": "U%3Fw%5C",
+          "type": "checkbox",
+          "checkbox": false
+        },
+        "検証状態": {
+          "id": "UCyH",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "明細原本照合済"
+          }
+        },
+        "帳簿価額（円）": {
+          "id": "UbUr",
+          "type": "number",
+          "number": 4457000
+        },
+        "株数単位": {
+          "id": "%5DPr%7B",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "株",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "株",
+              "href": null
+            }
+          ]
+        },
+        "銘柄名": {
+          "id": "%5EPJG",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "(株)メディパルホールディングス",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "(株)メディパルホールディングス",
+              "href": null
+            }
+          ]
+        },
+        "銘柄コード": {
+          "id": "%5EWgM",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "旧株価（通貨・観測日未確認）": {
+          "id": "%5Ezbz",
+          "type": "number",
+          "number": null
+        },
+        "通貨": {
+          "id": "eMOW",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "原本照合済": {
+          "id": "eePV",
+          "type": "checkbox",
+          "checkbox": true
+        },
+        "区分": {
+          "id": "gXtr",
+          "type": "select",
+          "select": {
+            "id": "04895bf5-ab00-4102-91aa-e6bc22125dad",
+            "name": "未確認",
+            "color": "gray"
+          }
+        },
+        "期末": {
+          "id": "ggrt",
+          "type": "date",
+          "date": {
+            "start": "2026-06-30",
+            "end": null,
+            "time_zone": null
+          }
+        },
+        "銘柄照合根拠": {
+          "id": "kA%5Bi",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有会社コード": {
+          "id": "lABv",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "208A",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "208A",
+              "href": null
+            }
+          ]
+        },
+        "出典原本SHA256": {
+          "id": "lJC%7D",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10",
+              "href": null
+            }
+          ]
+        },
+        "旧抽出株数（単位未確認）": {
+          "id": "lTPG",
+          "type": "number",
+          "number": null
+        },
+        "出典明細行": {
+          "id": "tQbj",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "3:7",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "3:7",
+              "href": null
+            }
+          ]
+        },
+        "基準日": {
+          "id": "tdWc",
+          "type": "date",
+          "date": null
+        },
+        "出典Context": {
+          "id": "ubZV",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "FilingDateInstant",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "FilingDateInstant",
+              "href": null
+            }
+          ]
+        },
+        "保有種別": {
+          "id": "ujZY",
+          "type": "select",
+          "select": {
+            "id": "283b5186-568c-45d3-aeab-3335d7ae3bc6",
+            "name": "特定投資株式",
+            "color": "blue"
+          }
+        },
+        "出典ファイル": {
+          "id": "x%3B%3D%3A",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm",
+              "href": null
+            }
+          ]
+        },
+        "Name": {
+          "id": "title",
+          "type": "title",
+          "title": [
+            {
+              "type": "text",
+              "text": {
+                "content": "208A 株式会社構造計画研究所ホールディングス → (株)メディパルホールディングス",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "208A 株式会社構造計画研究所ホールディングス → (株)メディパルホールディングス",
+              "href": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "object": "page",
+      "id": "3fcd74ff-84cd-8123-a85e-cc9bd968edd3",
+      "parent": {
+        "type": "database_id",
+        "database_id": "5ad4d311-b06f-42b4-b78a-b3801cd509e2"
+      },
+      "archived": false,
+      "in_trash": false,
+      "created_time": "2026-10-17T05:23:00.000Z",
+      "last_edited_time": "2026-10-17T05:23:00.000Z",
+      "properties": {
+        "出典文書ID": {
+          "id": "%3BQm%3F",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "S100Z0JO",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "S100Z0JO",
+              "href": null
+            }
+          ]
+        },
+        "欠測理由": {
+          "id": "%3CEpO",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+              "href": null
+            }
+          ]
+        },
+        "保有株数": {
+          "id": "%3D_fn",
+          "type": "number",
+          "number": 14300
+        },
+        "旧試算時価（未検証）": {
+          "id": "%40IA_",
+          "type": "number",
+          "number": null
+        },
+        "価格照合根拠": {
+          "id": "Bj%3Dg",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "旧分類（未検証）": {
+          "id": "DGfn",
+          "type": "select",
+          "select": null
+        },
+        "確定銘柄コード": {
+          "id": "DdCb",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有時価": {
+          "id": "GbBc",
+          "type": "number",
+          "number": null
+        },
+        "旧処理基準日（観測日未確認）": {
+          "id": "K%60%3Dj",
+          "type": "date",
+          "date": null
+        },
+        "価格状態": {
+          "id": "QE%3AD",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "未取得（価格・通貨・株数単位の照合未成立）"
+          }
+        },
+        "出典要素ID": {
+          "id": "QEf%3E",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "jpcrp_cor:ShareholdingsTextBlock",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "jpcrp_cor:ShareholdingsTextBlock",
+              "href": null
+            }
+          ]
+        },
+        "保有会社": {
+          "id": "Q%7BEH",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "株式会社構造計画研究所ホールディングス",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "株式会社構造計画研究所ホールディングス",
+              "href": null
+            }
+          ]
+        },
+        "株価": {
+          "id": "Txw%3B",
+          "type": "number",
+          "number": null
+        },
+        "価格照合済": {
+          "id": "U%3Fw%5C",
+          "type": "checkbox",
+          "checkbox": false
+        },
+        "検証状態": {
+          "id": "UCyH",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "明細原本照合済"
+          }
+        },
+        "帳簿価額（円）": {
+          "id": "UbUr",
+          "type": "number",
+          "number": 30115000
+        },
+        "株数単位": {
+          "id": "%5DPr%7B",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "株",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "株",
+              "href": null
+            }
+          ]
+        },
+        "銘柄名": {
+          "id": "%5EPJG",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "(株)りそなホールディングス （注）",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "(株)りそなホールディングス （注）",
+              "href": null
+            }
+          ]
+        },
+        "銘柄コード": {
+          "id": "%5EWgM",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "旧株価（通貨・観測日未確認）": {
+          "id": "%5Ezbz",
+          "type": "number",
+          "number": null
+        },
+        "通貨": {
+          "id": "eMOW",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "原本照合済": {
+          "id": "eePV",
+          "type": "checkbox",
+          "checkbox": true
+        },
+        "区分": {
+          "id": "gXtr",
+          "type": "select",
+          "select": {
+            "id": "04895bf5-ab00-4102-91aa-e6bc22125dad",
+            "name": "未確認",
+            "color": "gray"
+          }
+        },
+        "期末": {
+          "id": "ggrt",
+          "type": "date",
+          "date": {
+            "start": "2026-06-30",
+            "end": null,
+            "time_zone": null
+          }
+        },
+        "銘柄照合根拠": {
+          "id": "kA%5Bi",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有会社コード": {
+          "id": "lABv",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "208A",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "208A",
+              "href": null
+            }
+          ]
+        },
+        "出典原本SHA256": {
+          "id": "lJC%7D",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10",
+              "href": null
+            }
+          ]
+        },
+        "旧抽出株数（単位未確認）": {
+          "id": "lTPG",
+          "type": "number",
+          "number": null
+        },
+        "出典明細行": {
+          "id": "tQbj",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "3:5",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "3:5",
+              "href": null
+            }
+          ]
+        },
+        "基準日": {
+          "id": "tdWc",
+          "type": "date",
+          "date": null
+        },
+        "出典Context": {
+          "id": "ubZV",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "FilingDateInstant",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "FilingDateInstant",
+              "href": null
+            }
+          ]
+        },
+        "保有種別": {
+          "id": "ujZY",
+          "type": "select",
+          "select": {
+            "id": "283b5186-568c-45d3-aeab-3335d7ae3bc6",
+            "name": "特定投資株式",
+            "color": "blue"
+          }
+        },
+        "出典ファイル": {
+          "id": "x%3B%3D%3A",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm",
+              "href": null
+            }
+          ]
+        },
+        "Name": {
+          "id": "title",
+          "type": "title",
+          "title": [
+            {
+              "type": "text",
+              "text": {
+                "content": "208A 株式会社構造計画研究所ホールディングス → (株)りそなホールディングス （注）",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "208A 株式会社構造計画研究所ホールディングス → (株)りそなホールディングス （注）",
+              "href": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "object": "page",
+      "id": "3fcd74ff-84cd-816e-9110-dfb1f2f1077d",
+      "parent": {
+        "type": "database_id",
+        "database_id": "5ad4d311-b06f-42b4-b78a-b3801cd509e2"
+      },
+      "archived": false,
+      "in_trash": false,
+      "created_time": "2026-10-17T05:23:00.000Z",
+      "last_edited_time": "2026-10-17T05:23:00.000Z",
+      "properties": {
+        "出典文書ID": {
+          "id": "%3BQm%3F",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "S100Z0JO",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "S100Z0JO",
+              "href": null
+            }
+          ]
+        },
+        "欠測理由": {
+          "id": "%3CEpO",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "銘柄同定・個別価格・分割観測の保存原本が未指定です",
+              "href": null
+            }
+          ]
+        },
+        "保有株数": {
+          "id": "%3D_fn",
+          "type": "number",
+          "number": 35349
+        },
+        "旧試算時価（未検証）": {
+          "id": "%40IA_",
+          "type": "number",
+          "number": null
+        },
+        "価格照合根拠": {
+          "id": "Bj%3Dg",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "旧分類（未検証）": {
+          "id": "DGfn",
+          "type": "select",
+          "select": null
+        },
+        "確定銘柄コード": {
+          "id": "DdCb",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有時価": {
+          "id": "GbBc",
+          "type": "number",
+          "number": null
+        },
+        "旧処理基準日（観測日未確認）": {
+          "id": "K%60%3Dj",
+          "type": "date",
+          "date": null
+        },
+        "価格状態": {
+          "id": "QE%3AD",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "未取得（価格・通貨・株数単位の照合未成立）"
+          }
+        },
+        "出典要素ID": {
+          "id": "QEf%3E",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "jpcrp_cor:ShareholdingsTextBlock",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "jpcrp_cor:ShareholdingsTextBlock",
+              "href": null
+            }
+          ]
+        },
+        "保有会社": {
+          "id": "Q%7BEH",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "株式会社構造計画研究所ホールディングス",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "株式会社構造計画研究所ホールディングス",
+              "href": null
+            }
+          ]
+        },
+        "株価": {
+          "id": "Txw%3B",
+          "type": "number",
+          "number": null
+        },
+        "価格照合済": {
+          "id": "U%3Fw%5C",
+          "type": "checkbox",
+          "checkbox": false
+        },
+        "検証状態": {
+          "id": "UCyH",
+          "type": "formula",
+          "formula": {
+            "type": "string",
+            "string": "明細原本照合済"
+          }
+        },
+        "帳簿価額（円）": {
+          "id": "UbUr",
+          "type": "number",
+          "number": 273707000
+        },
+        "株数単位": {
+          "id": "%5DPr%7B",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "株",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "株",
+              "href": null
+            }
+          ]
+        },
+        "銘柄名": {
+          "id": "%5EPJG",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "(株)みずほフィナンシャルグループ",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "(株)みずほフィナンシャルグループ",
+              "href": null
+            }
+          ]
+        },
+        "銘柄コード": {
+          "id": "%5EWgM",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "旧株価（通貨・観測日未確認）": {
+          "id": "%5Ezbz",
+          "type": "number",
+          "number": null
+        },
+        "通貨": {
+          "id": "eMOW",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "原本照合済": {
+          "id": "eePV",
+          "type": "checkbox",
+          "checkbox": true
+        },
+        "区分": {
+          "id": "gXtr",
+          "type": "select",
+          "select": {
+            "id": "04895bf5-ab00-4102-91aa-e6bc22125dad",
+            "name": "未確認",
+            "color": "gray"
+          }
+        },
+        "期末": {
+          "id": "ggrt",
+          "type": "date",
+          "date": {
+            "start": "2026-06-30",
+            "end": null,
+            "time_zone": null
+          }
+        },
+        "銘柄照合根拠": {
+          "id": "kA%5Bi",
+          "type": "rich_text",
+          "rich_text": []
+        },
+        "保有会社コード": {
+          "id": "lABv",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "208A",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "208A",
+              "href": null
+            }
+          ]
+        },
+        "出典原本SHA256": {
+          "id": "lJC%7D",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10",
+              "href": null
+            }
+          ]
+        },
+        "旧抽出株数（単位未確認）": {
+          "id": "lTPG",
+          "type": "number",
+          "number": null
+        },
+        "出典明細行": {
+          "id": "tQbj",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "3:3",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "3:3",
+              "href": null
+            }
+          ]
+        },
+        "基準日": {
+          "id": "tdWc",
+          "type": "date",
+          "date": null
+        },
+        "出典Context": {
+          "id": "ubZV",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "FilingDateInstant",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "FilingDateInstant",
+              "href": null
+            }
+          ]
+        },
+        "保有種別": {
+          "id": "ujZY",
+          "type": "select",
+          "select": {
+            "id": "283b5186-568c-45d3-aeab-3335d7ae3bc6",
+            "name": "特定投資株式",
+            "color": "blue"
+          }
+        },
+        "出典ファイル": {
+          "id": "x%3B%3D%3A",
+          "type": "rich_text",
+          "rich_text": [
+            {
+              "type": "text",
+              "text": {
+                "content": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm",
+              "href": null
+            }
+          ]
+        },
+        "Name": {
+          "id": "title",
+          "type": "title",
+          "title": [
+            {
+              "type": "text",
+              "text": {
+                "content": "208A 株式会社構造計画研究所ホールディングス → (株)みずほフィナンシャルグループ",
+                "link": null
+              },
+              "annotations": {
+                "bold": false,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false,
+                "code": false,
+                "color": "default"
+              },
+              "plain_text": "208A 株式会社構造計画研究所ホールディングス → (株)みずほフィナンシャルグループ",
+              "href": null
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "schema": {
+    "id": "5ad4d311-b06f-42b4-b78a-b3801cd509e2",
+    "description": [
+      {
+        "type": "text",
+        "text": {
+          "content": "有報の保有株式明細。原本照合済の列だけ確定値として扱い、旧取込の値は未検証列に保持する。期末参考時価は同日期末株数×終値で、価格・通貨・単位・分割を照合できない場合は欠測理由を示す。",
+          "link": null
+        },
+        "annotations": {
+          "bold": false,
+          "italic": false,
+          "strikethrough": false,
+          "underline": false,
+          "code": false,
+          "color": "default"
+        },
+        "plain_text": "有報の保有株式明細。原本照合済の列だけ確定値として扱い、旧取込の値は未検証列に保持する。期末参考時価は同日期末株数×終値で、価格・通貨・単位・分割を照合できない場合は欠測理由を示す。",
+        "href": null
+      }
+    ],
+    "properties": {
+      "出典文書ID": {
+        "id": "%3BQm%3F",
+        "name": "出典文書ID",
+        "description": null,
+        "type": "rich_text",
+        "rich_text": {}
+      },
+      "欠測理由": {
+        "id": "%3CEpO",
+        "name": "欠測理由",
+        "description": null,
+        "type": "rich_text",
+        "rich_text": {}
+      },
+      "保有株数": {
+        "id": "%3D_fn",
+        "name": "保有株数",
+        "description": null,
+        "type": "number",
+        "number": {
+          "format": "number"
+        }
+      },
+      "旧試算時価（未検証）": {
+        "id": "%40IA_",
+        "name": "旧試算時価（未検証）",
+        "description": null,
+        "type": "number",
+        "number": {
+          "format": "number"
+        }
+      },
+      "価格照合根拠": {
+        "id": "Bj%3Dg",
+        "name": "価格照合根拠",
+        "description": null,
+        "type": "rich_text",
+        "rich_text": {}
+      },
+      "旧分類（未検証）": {
+        "id": "DGfn",
+        "name": "旧分類（未検証）",
+        "description": null,
+        "type": "select",
+        "select": {
+          "options": [
+            {
+              "id": "6cbdc909-12b5-4d08-b8e0-13bec96563a1",
+              "name": "上場",
+              "color": "blue",
+              "description": null
+            },
+            {
+              "id": "b76e879c-b475-44a9-83e1-091e82df300d",
+              "name": "非上場",
+              "color": "gray",
+              "description": null
+            }
+          ]
+        }
+      },
+      "確定銘柄コード": {
+        "id": "DdCb",
+        "name": "確定銘柄コード",
+        "description": null,
+        "type": "rich_text",
+        "rich_text": {}
+      },
+      "保有時価": {
+        "id": "GbBc",
+        "name": "保有時価",
+        "description": null,
+        "type": "number",
+        "number": {
+          "format": "number"
+        }
+      },
+      "旧処理基準日（観測日未確認）": {
+        "id": "K%60%3Dj",
+        "name": "旧処理基準日（観測日未確認）",
+        "description": null,
+        "type": "date",
+        "date": {}
+      },
+      "価格状態": {
+        "id": "QE%3AD",
+        "name": "価格状態",
+        "description": null,
+        "type": "formula",
+        "formula": {
+          "expression": "if(prop(\"価格照合済\"), \"期末参考時価（同日期末株数×終値）\", \"未取得（価格・通貨・株数単位の照合未成立）\")"
+        }
+      },
+      "出典要素ID": {
+        "id": "QEf%3E",
+        "name": "出典要素ID",
+        "description": null,
+        "type": "rich_text",
+        "rich_text": {}
+      },
+      "保有会社": {
+        "id": "Q%7BEH",
+        "name": "保有会社",
+        "description": null,
+        "type": "rich_text",
+        "rich_text": {}
+      },
+      "株価": {
+        "id": "Txw%3B",
+        "name": "株価",
+        "description": null,
+        "type": "number",
+        "number": {
+          "format": "number"
+        }
+      },
+      "価格照合済": {
+        "id": "U%3Fw%5C",
+        "name": "価格照合済",
+        "description": null,
+        "type": "checkbox",
+        "checkbox": {}
+      },
+      "検証状態": {
+        "id": "UCyH",
+        "name": "検証状態",
+        "description": null,
+        "type": "formula",
+        "formula": {
+          "expression": "if(prop(\"原本照合済\"), \"明細原本照合済\", \"未検証（旧取込）\")"
+        }
+      },
+      "帳簿価額（円）": {
+        "id": "UbUr",
+        "name": "帳簿価額（円）",
+        "description": null,
+        "type": "number",
+        "number": {
+          "format": "number"
+        }
+      },
+      "株数単位": {
+        "id": "%5DPr%7B",
+        "name": "株数単位",
+        "description": null,
+        "type": "rich_text",
+        "rich_text": {}
+      },
+      "銘柄名": {
+        "id": "%5EPJG",
+        "name": "銘柄名",
+        "description": null,
+        "type": "rich_text",
+        "rich_text": {}
+      },
+      "銘柄コード": {
+        "id": "%5EWgM",
+        "name": "銘柄コード",
+        "description": null,
+        "type": "rich_text",
+        "rich_text": {}
+      },
+      "旧株価（通貨・観測日未確認）": {
+        "id": "%5Ezbz",
+        "name": "旧株価（通貨・観測日未確認）",
+        "description": null,
+        "type": "number",
+        "number": {
+          "format": "number"
+        }
+      },
+      "通貨": {
+        "id": "eMOW",
+        "name": "通貨",
+        "description": null,
+        "type": "rich_text",
+        "rich_text": {}
+      },
+      "原本照合済": {
+        "id": "eePV",
+        "name": "原本照合済",
+        "description": null,
+        "type": "checkbox",
+        "checkbox": {}
+      },
+      "区分": {
+        "id": "gXtr",
+        "name": "区分",
+        "description": null,
+        "type": "select",
+        "select": {
+          "options": [
+            {
+              "id": "04895bf5-ab00-4102-91aa-e6bc22125dad",
+              "name": "未確認",
+              "color": "gray",
+              "description": null
+            },
+            {
+              "id": "9a7c3425-6dba-476e-8d67-a828119539e6",
+              "name": "上場（コードリスト基準日）",
+              "color": "blue",
+              "description": null
+            }
+          ]
+        }
+      },
+      "期末": {
+        "id": "ggrt",
+        "name": "期末",
+        "description": null,
+        "type": "date",
+        "date": {}
+      },
+      "銘柄照合根拠": {
+        "id": "kA%5Bi",
+        "name": "銘柄照合根拠",
+        "description": null,
+        "type": "rich_text",
+        "rich_text": {}
+      },
+      "保有会社コード": {
+        "id": "lABv",
+        "name": "保有会社コード",
+        "description": null,
+        "type": "rich_text",
+        "rich_text": {}
+      },
+      "出典原本SHA256": {
+        "id": "lJC%7D",
+        "name": "出典原本SHA256",
+        "description": null,
+        "type": "rich_text",
+        "rich_text": {}
+      },
+      "旧抽出株数（単位未確認）": {
+        "id": "lTPG",
+        "name": "旧抽出株数（単位未確認）",
+        "description": null,
+        "type": "number",
+        "number": {
+          "format": "number"
+        }
+      },
+      "出典明細行": {
+        "id": "tQbj",
+        "name": "出典明細行",
+        "description": null,
+        "type": "rich_text",
+        "rich_text": {}
+      },
+      "基準日": {
+        "id": "tdWc",
+        "name": "基準日",
+        "description": null,
+        "type": "date",
+        "date": {}
+      },
+      "出典Context": {
+        "id": "ubZV",
+        "name": "出典Context",
+        "description": null,
+        "type": "rich_text",
+        "rich_text": {}
+      },
+      "保有種別": {
+        "id": "ujZY",
+        "name": "保有種別",
+        "description": null,
+        "type": "select",
+        "select": {
+          "options": [
+            {
+              "id": "283b5186-568c-45d3-aeab-3335d7ae3bc6",
+              "name": "特定投資株式",
+              "color": "blue",
+              "description": null
+            },
+            {
+              "id": "5dd2b5bd-6aa9-44f3-9a62-f59064a6db26",
+              "name": "みなし保有株式",
+              "color": "purple",
+              "description": null
+            }
+          ]
+        }
+      },
+      "出典ファイル": {
+        "id": "x%3B%3D%3A",
+        "name": "出典ファイル",
+        "description": null,
+        "type": "rich_text",
+        "rich_text": {}
+      },
+      "Name": {
+        "id": "title",
+        "name": "Name",
+        "description": null,
+        "type": "title",
+        "title": {}
+      }
+    }
+  },
+  "acceptedHoldings": [
+    {
+      "name": "(株)みずほフィナンシャルグループ",
+      "kind": "特定投資株式",
+      "shares": 35349,
+      "sharesRaw": 35349,
+      "sharesUnit": "株",
+      "bookValueYen": 273707000,
+      "bookValueRaw": 273707,
+      "bookValueUnit": "千円",
+      "listingStatus": "unknown",
+      "price": null,
+      "priceDate": null,
+      "priceCurrency": null,
+      "tableIndex": 3,
+      "rowIndex": 3
+    },
+    {
+      "name": "(株)りそなホールディングス （注）",
+      "kind": "特定投資株式",
+      "shares": 14300,
+      "sharesRaw": 14300,
+      "sharesUnit": "株",
+      "bookValueYen": 30115000,
+      "bookValueRaw": 30115,
+      "bookValueUnit": "千円",
+      "listingStatus": "unknown",
+      "price": null,
+      "priceDate": null,
+      "priceCurrency": null,
+      "tableIndex": 3,
+      "rowIndex": 5
+    },
+    {
+      "name": "(株)メディパルホールディングス",
+      "kind": "特定投資株式",
+      "shares": 1700,
+      "sharesRaw": 1700,
+      "sharesUnit": "株",
+      "bookValueYen": 4457000,
+      "bookValueRaw": 4457,
+      "bookValueUnit": "千円",
+      "listingStatus": "unknown",
+      "price": null,
+      "priceDate": null,
+      "priceCurrency": null,
+      "tableIndex": 3,
+      "rowIndex": 7
+    },
+    {
+      "name": "ＮＴＴ(株)",
+      "kind": "特定投資株式",
+      "shares": 10000,
+      "sharesRaw": 10000,
+      "sharesUnit": "株",
+      "bookValueYen": 1450000,
+      "bookValueRaw": 1450,
+      "bookValueUnit": "千円",
+      "listingStatus": "unknown",
+      "price": null,
+      "priceDate": null,
+      "priceCurrency": null,
+      "tableIndex": 3,
+      "rowIndex": 9
+    }
+  ],
+  "sourceSchema": {
+    "id": "364d74ff-84cd-81a1-838b-d973ac329270",
+    "description": [],
+    "properties": {
+      "保有価格理由": {
+        "id": "GLu%40",
+        "name": "保有価格理由",
+        "description": null,
+        "type": "rich_text",
+        "rich_text": {}
+      },
+      "保有明細理由": {
+        "id": "H%7DP%7C",
+        "name": "保有明細理由",
+        "description": null,
+        "type": "rich_text",
+        "rich_text": {}
+      },
+      "保有明細再開情報": {
+        "id": "IxYK",
+        "name": "保有明細再開情報",
+        "description": null,
+        "type": "rich_text",
+        "rich_text": {}
+      },
+      "Source": {
+        "id": "KXwe",
+        "name": "Source",
+        "description": null,
+        "type": "rich_text",
+        "rich_text": {}
+      },
+      "Obsoleted At": {
+        "id": "Oa%5C_",
+        "name": "Obsoleted At",
+        "description": null,
+        "type": "date",
+        "date": {}
+      },
+      "保有価格状態": {
+        "id": "Q%3Bpz",
+        "name": "保有価格状態",
+        "description": null,
+        "type": "select",
+        "select": {
+          "options": [
+            {
+              "id": "3919a293-29d3-461b-b704-31b112b63c68",
+              "name": "再開待ち",
+              "color": "default",
+              "description": null
+            },
+            {
+              "id": "f593ac7e-26a4-45d3-aae3-76f49fafa9c7",
+              "name": "要確認",
+              "color": "default",
+              "description": null
+            },
+            {
+              "id": "a946bec2-1f7d-4277-bcc1-2290ddfcefeb",
+              "name": "実行中（結果未確定）",
+              "color": "default",
+              "description": null
+            },
+            {
+              "id": "6be20773-130b-478b-a610-a5180583223f",
+              "name": "価格照合完了",
+              "color": "default",
+              "description": null
+            }
+          ]
+        }
+      },
+      "Origin Page": {
+        "id": "RAl%3D",
+        "name": "Origin Page",
+        "description": null,
+        "type": "url",
+        "url": {}
+      },
+      "Obsoleted Reason": {
+        "id": "aZ%5Ci",
+        "name": "Obsoleted Reason",
+        "description": null,
+        "type": "rich_text",
+        "rich_text": {}
+      },
+      "Status": {
+        "id": "cqix",
+        "name": "Status",
+        "description": null,
+        "type": "select",
+        "select": {
+          "options": [
+            {
+              "id": "f46cb8a2-e822-4e39-9893-d75eea6f834f",
+              "name": "recorded",
+              "color": "yellow",
+              "description": null
+            }
+          ]
+        }
+      },
+      "保有価格再開情報": {
+        "id": "dv%7DK",
+        "name": "保有価格再開情報",
+        "description": null,
+        "type": "rich_text",
+        "rich_text": {}
+      },
+      "Service": {
+        "id": "k%3BjX",
+        "name": "Service",
+        "description": null,
+        "type": "select",
+        "select": {
+          "options": [
+            {
+              "id": "4ae71ae8-acc7-44df-9cce-daf627ec1729",
+              "name": "yuho-quant",
+              "color": "brown",
+              "description": null
+            }
+          ]
+        }
+      },
+      "Metadata": {
+        "id": "lPug",
+        "name": "Metadata",
+        "description": null,
+        "type": "rich_text",
+        "rich_text": {}
+      },
+      "Fetched At": {
+        "id": "mzD%7C",
+        "name": "Fetched At",
+        "description": null,
+        "type": "date",
+        "date": {}
+      },
+      "保有明細状態": {
+        "id": "pZyo",
+        "name": "保有明細状態",
+        "description": null,
+        "type": "select",
+        "select": {
+          "options": [
+            {
+              "id": "c52e4d60-b68f-4cf6-8673-1c1d61ccf6d4",
+              "name": "再開待ち",
+              "color": "default",
+              "description": null
+            },
+            {
+              "id": "d12d0243-f222-4d77-9db8-94f74a3492c3",
+              "name": "要確認",
+              "color": "default",
+              "description": null
+            },
+            {
+              "id": "72d4faf8-a94e-4e9a-b114-00d493de78a2",
+              "name": "実行中（結果未確定）",
+              "color": "default",
+              "description": null
+            },
+            {
+              "id": "e6cce938-7352-4e26-a1ad-60487b9c0b04",
+              "name": "明細原本照合済",
+              "color": "default",
+              "description": null
+            }
+          ]
+        }
+      },
+      "Files": {
+        "id": "~kw%3E",
+        "name": "Files",
+        "description": null,
+        "type": "files",
+        "files": {}
+      },
+      "Key": {
+        "id": "title",
+        "name": "Key",
+        "description": null,
+        "type": "title",
+        "title": {}
+      }
+    }
+  }
+}

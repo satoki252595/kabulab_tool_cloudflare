@@ -6,7 +6,7 @@ import { constants, existsSync, readFileSync, unlinkSync, writeFileSync, openSyn
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseShareholdingsData } from "../../services/yuho-quant/src/services/edinet/shareholdings.js";
-import { applyHoldingsSchema, buildHoldingsSchemaPatch, inspectHoldingPatch, publishSavedShareholdings, replaceUnknownHoldingPatch, qualifyHoldingPatchJournal } from "../../src/shared/notion-archive/shareholdings.js";
+import { applyHoldingsSchema, buildHoldingsSchemaPatch, inspectHoldingPatch, publishSavedShareholdings, replaceUnknownHoldingPatch, qualifyHoldingPatchJournal, quarantineSavedHoldingSource } from "../../src/shared/notion-archive/shareholdings.js";
 import { NotionConfigError } from "../../src/shared/notion-archive/env.js";
 
 const [mode, ...args] = process.argv.slice(2);
@@ -116,10 +116,65 @@ export async function inspectPendingHoldingPatch(paths: { pending: string; inten
 }
 
 /** canonical state内の一度intent。別outputでも同じ旧IDへの結果不明操作を繰り返さない。 */
-export function claimHoldingPatchReplacement(state: string, value: unknown): void {
+export function claimHoldingPatchReplacement(state: string, value: unknown, filename: "replacement-started.json" | "quarantine-started.json" = "replacement-started.json"): void {
   if (!existsSync(state)) { mkdirSync(state, { recursive: true, mode: 0o700 }); syncParent(state); }
   const st = lstatSync(state); assert(st.isDirectory() && !st.isSymbolicLink()); assert.equal(st.uid, process.getuid!()); assert.equal(st.mode & 0o777, 0o700);
-  writeHoldingsArtifact(join(state, "replacement-started.json"), JSON.stringify(value, null, 2) + "\n");
+  writeHoldingsArtifact(join(state, filename), JSON.stringify(value, null, 2) + "\n");
+}
+
+/** A completed source is downgraded only by this explicit, canonical-once operation. */
+export async function quarantineSavedHoldings(inputPath: string, out: string): Promise<void> {
+  assert.equal(mutationGuardActive, false); assert(!existsSync(out));
+  const input = read(inputPath);
+  assert.deepEqual(Object.keys(input).sort(), ["source", "ownerName", "archivePageId", "zipPath", "snapshotPath", "originalIntentPath", "originalAcceptancePath", "writerOrderGatePath"].sort());
+  const source = input.source; assert.match(source.stockCode, /^[0-9]{3}[0-9A-Z]$/); assert.match(source.docId, /^S[0-9A-Z]{7}$/);
+  assert.deepEqual(Object.keys(source).sort(), ["docId", "stockCode", "edinetCode", "fiscalYearEnd"].sort());
+  assert.match(source.edinetCode, /^E[0-9]{5}$/); assert.equal(new Date(`${source.fiscalYearEnd}T00:00:00Z`).toISOString().slice(0, 10), source.fiscalYearEnd);
+  assert.match(input.archivePageId.replaceAll("-", ""), /^[a-f0-9]{32}$/);
+  const paths = [inputPath, input.zipPath, input.snapshotPath, input.originalIntentPath, input.originalAcceptancePath, input.writerOrderGatePath].map(path => resolve(path));
+  assert.equal(new Set(paths).size, paths.length); assert(!paths.includes(resolve(out)));
+  for (const path of paths) assert(statSync(path).isFile() && statSync(path).size > 0 && statSync(path).size <= 20 * 1024 * 1024);
+  const pins = paths.map(path => ({ path, sha256: sha(readFileSync(path)) }));
+  const snapshot = read(input.snapshotPath), originalIntent = read(input.originalIntentPath), originalAcceptance = read(input.originalAcceptancePath);
+  assert.equal(snapshot.version, 1); assert.equal(snapshot.kind, "holding-owner-quarantine-PRE"); assert.deepEqual(snapshot.source, source);
+  assert.equal(snapshot.ownerName, input.ownerName); assert.equal(snapshot.expectedSource.id, input.archivePageId);
+  assert.equal(snapshot.expectedRows.length, 4); assert.equal(snapshot.acceptedHoldings.length, 4);
+  assert.deepEqual(originalIntent.source, source); assert.equal(originalIntent.zipSha256, snapshot.zipSha256);
+  assert.equal(originalIntent.result.status, "published"); assert.equal(originalIntent.result.parsed, 4);
+  assert.equal(originalAcceptance.status, "NORMAL_RANGE_FULL_NATIVE_ROWS_OLD_PROPS_SOURCE_AND_PHYSICAL_INDEPENDENTLY_VERIFIED");
+  assert.equal(originalAcceptance.newPriceWrites, 0);
+  assert.equal(originalAcceptance.sources.filter((item: { source: Record<string, string>; rows: number; archivePageId: string }) =>
+    ["docId", "stockCode", "edinetCode", "fiscalYearEnd"].every(name => item.source[name] === source[name]) && item.rows === 4 && item.archivePageId === input.archivePageId).length, 1);
+  const zip = readFileSync(input.zipPath); assert.equal(sha(zip), snapshot.zipSha256);
+  const assertInputsAndOrder = () => {
+    for (const pin of pins) assert.equal(sha(readFileSync(pin.path)), pin.sha256, "明示保留の原本/PRE/元intent/gateを変更しません");
+    const gate = read(input.writerOrderGatePath);
+    assert.equal(gate.kind, "holding-owner-quarantine-writer-order"); assert.deepEqual(gate.source, source);
+    assert.equal(gate.archivePageId, input.archivePageId); assert.equal(gate.allConflictingActorsTerminal, true);
+    assert.equal(gate.exclusiveSourceWriterReserved, true, "canonical onceはMac/G/診断writerの排他証明ではありません");
+    assert.equal(new Date(gate.notAfter).toISOString(), gate.notAfter); assert(Date.now() < Date.parse(gate.notAfter));
+  };
+  assertInputsAndOrder();
+  const envPath = realpathSync(".env"), env = lstatSync(envPath); assert(env.isFile()); assert.equal(env.uid, process.getuid!()); assert.equal(env.mode & 0o777, 0o600);
+  const state = join(dirname(envPath), "tmp/holdings-source-quarantine", `${source.stockCode}-${source.fiscalYearEnd}-${source.docId}-${snapshot.zipSha256}`);
+  claimHoldingPatchReplacement(state, { version: 1, at: new Date().toISOString(), source, archivePageId: input.archivePageId, inputPins: pins, out, noAutomaticReplay: true }, "quarantine-started.json");
+  const result = await guardedHoldingsMutation(out, "explicit-owner-source-quarantine", async () => {
+    const { createD1HttpDb } = await import("../../src/shared/db/d1-http-client.js"), schema = await import("../../services/yuho-quant/src/db/schema.js");
+    const { selectLatestHoldingsDocuments } = await import("../../services/yuho-quant/data-scripts/lib/shareholdings-backfill.js");
+    const db = createD1HttpDb(schema);
+    const assertLatestSource = async () => {
+      assertInputsAndOrder(); const selected = await selectLatestHoldingsDocuments(db, { limit: 1, afterCode: null, onlyCode: source.stockCode });
+      assert.equal(selected.rows.length, 1); const latest = selected.rows[0];
+      assert.deepEqual({ docId: latest.docId, stockCode: latest.stockCode, edinetCode: latest.edinetCode, fiscalYearEnd: latest.fiscalYearEnd }, source);
+      assert.equal(latest.ownerName, input.ownerName); assertInputsAndOrder();
+    };
+    const value = await quarantineSavedHoldingSource({ source, ownerName: input.ownerName, archivePageId: input.archivePageId, zip,
+      expectedSource: snapshot.expectedSource, expectedPeriod: snapshot.expectedPeriod, expectedRows: snapshot.expectedRows, schema: snapshot.schema,
+      acceptedHoldings: snapshot.acceptedHoldings, originalIntent: { originalIntent, originalAcceptance, inputPins: pins }, assertLatestSource });
+    assertInputsAndOrder(); return value;
+  });
+  save(join(state, "quarantine-completed.json"), { at: new Date().toISOString(), result, out, outSha256: sha(readFileSync(out)), inputPins: pins,
+    originalIntentPreserved: true, originalSourceInfoPreserved: true, pricesAccepted: 0 });
 }
 
 /** 元journalは読み取りだけ。物理PRE/退役/別ID/fullPOSTを共有publisherへ渡す明示正常CLI。 */
@@ -229,11 +284,14 @@ async function main() {
   } else if (mode === "resolve-pending-patch") {
     assert.equal(args.length, 2);
     await resolvePendingHoldingPatch(resolve(args[0]), resolve(args[1]));
+  } else if (mode === "quarantine-saved-source") {
+    assert.equal(args.length, 2);
+    await quarantineSavedHoldings(resolve(args[0]), resolve(args[1]));
   } else if (mode === "apply-schema" || mode === "publish-saved") {
     assert.equal(args.length, mode === "apply-schema" ? 2 : 3);
     await guardedHoldingsMutation<unknown>(args[args.length - 1], mode, () => mode === "apply-schema" ? applyHoldingsSchema(read(args[0]))
       : publishSavedShareholdings(publishInput(args[0], args[1])));
-  } else throw new Error("diagnose / schema-plan / parse-saved / inspect-pending-patch / resolve-pending-patch / apply-schema / publish-saved を指定してください");
+  } else throw new Error("diagnose / schema-plan / parse-saved / inspect-pending-patch / resolve-pending-patch / quarantine-saved-source / apply-schema / publish-saved を指定してください");
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

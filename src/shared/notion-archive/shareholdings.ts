@@ -253,13 +253,14 @@ function assertSameHoldingPage(actual: HoldingPage, expected: HoldingPage): void
   for (const name of ["object", "id", "parent", "archived", "in_trash", "created_time", "last_edited_time"] as const) assert.deepEqual(actual[name], expected[name], "保有明細のfresh PRE/POSTが変更されています");
   assert.deepEqual(stableProperties(actual.properties), stableProperties(expected.properties), "保有明細のfresh全propsが変更されています");
 }
-function assertMigrationPost(actual: HoldingPage, before: HoldingPage, changed: Record<string, HoldingProperty>, schema: HoldingsSchema): void {
+function assertMigrationPost(actual: HoldingPage, before: HoldingPage, changed: Record<string, HoldingProperty>, schema: HoldingsSchema, sourceVerified = true): void {
   assert.equal(actual.object, "page"); assert.equal(actual.id, before.id); assert.deepEqual(actual.parent, before.parent);
   assert.equal(actual.archived, false); assert.equal(actual.in_trash, false); assert.equal(actual.created_time, before.created_time);
   assertProperties(actual.properties, changed);
   assert.equal(actual.properties["検証状態"].id, schema.properties["検証状態"].id);
   assert.equal(actual.properties["検証状態"].type, "formula");
-  assert.deepEqual(actual.properties["検証状態"].formula, { type: "string", string: "明細原本照合済" });
+  assert.equal(actual.properties["原本照合済"].checkbox, sourceVerified);
+  assert.deepEqual(actual.properties["検証状態"].formula, { type: "string", string: sourceVerified ? "明細原本照合済" : "未検証（旧取込）" });
   assertPriceStatus(actual.properties, schema);
   assert.deepEqual(Object.keys(actual.properties).sort(), Object.keys(before.properties).sort());
   for (const [name, value] of Object.entries(before.properties)) {
@@ -556,6 +557,127 @@ export function holdingsFactsSha256(holdings: readonly Shareholding[]): string {
   return createHash("sha256").update(JSON.stringify(holdings.map(h => [h.name, h.kind, h.shares, h.sharesRaw,
     h.sharesUnit, h.bookValueYen, h.bookValueRaw, h.bookValueUnit, h.listingStatus, h.price, h.priceDate,
     h.priceCurrency, h.tableIndex, h.rowIndex]))).digest("hex");
+}
+
+/** Explicit one-source operation only. Automatic ingest may not downgrade a completed source. */
+export async function quarantineSavedHoldingSource(args: {
+  source: ShareholdingsSource; ownerName: string; archivePageId: string; zip: Buffer;
+  expectedSource: HoldingPage; expectedPeriod: HoldingPage[]; expectedRows: HoldingPage[];
+  schema: HoldingsSchema; acceptedHoldings: Shareholding[]; originalIntent: unknown;
+  assertLatestSource: () => Promise<void>;
+}): Promise<{ status: "quarantined"; rows: 4; pre: MigrationFile; post: MigrationFile; pricesAccepted: 0 }> {
+  assert(args.zip.length > 0 && args.zip.length <= HOLDINGS_ZIP_MAX_BYTES);
+  assert.equal(args.expectedRows.length, 4); assert.equal(args.acceptedHoldings.length, 4);
+  assert.equal(new Set(args.expectedRows.map(row => row.id)).size, 4);
+  const parsed = parseShareholdingsData(args.zip, args.source, { qualifySource: entries => verifyHoldingsSourceEntries(entries, args.source) });
+  assert.equal(parsed.status, "unsupported"); assert.equal(parsed.holderScope, "unqualified");
+  assert.equal(parsed.holdings.length, 0); assert(typeof parsed.reason === "string" && parsed.reason.startsWith("最大保有会社「"));
+  const reason = parsed.reason, zipSha256 = holdingHash(args.zip), factsSha256 = holdingsFactsSha256(args.acceptedHoldings);
+  const sourceDbId = await sourceDatabase(), sourceSchema = await notionRequest<HoldingsSchema>("GET", `/databases/${sourceDbId}`);
+  for (const [name, definition] of Object.entries(RECOVERY)) assert.equal(sourceSchema.properties[name]?.type, Object.keys(definition)[0], "明示保留でschemaを作成しません");
+  for (const name of ["保有明細状態", "保有価格状態"]) assert(sourceSchema.properties[name].select?.options.some(option => option.name === "要確認"), "明示保留でselect optionを追加しません");
+  const schema = await readHoldingsSchema(); assert.deepEqual(schema, args.schema);
+  assert.equal(Object.keys(buildHoldingsSchemaPatch(schema).properties).length, 0);
+  await args.assertLatestSource(); await assertNoUnknownHoldingPeriod(args.source, args.archivePageId);
+  const saved = await readSavedHoldingsZip(args.source); assert.equal(saved.status, "ready");
+  assert.equal(saved.archivePageId, args.archivePageId); assert.equal(saved.sha256, zipSha256); assert(saved.bytes.equals(args.zip));
+  const before = await notionRequest<HoldingPage>("GET", `/pages/${args.archivePageId}`, undefined, { singleAttempt: true });
+  qualifyRecoveryPage(before, args.archivePageId, sourceDbId, args.source); assertSameHoldingPage(before, args.expectedSource);
+  assert.equal(before.properties["保有明細状態"].select?.name, "明細原本照合済");
+  assert.equal(before.properties["保有価格状態"].select?.name, "再開待ち");
+  const info = JSON.parse(richValue(before.properties["保有明細再開情報"])) as RecoveryInfo;
+  const priceInfo = JSON.parse(richValue(before.properties["保有価格再開情報"])) as RecoveryInfo;
+  for (const value of [info, priceInfo]) {
+    assert.deepEqual(value.source, args.source); assert.equal(value.ownerName, args.ownerName);
+    assert.equal(value.zipSha256, zipSha256); assert.equal(value.zipBytes, args.zip.length);
+    assert.equal(value.parsed, 4); assert.equal(value.factsSha256, factsSha256);
+  }
+  assertSourceQueueVersion(info); assert.equal(info.sourceNextHoldingOffset, 4);
+  assert.equal(priceInfo.priceQueueVersion, 1); assert.equal(priceInfo.nextHoldingOffset, 0); assert.equal(priceInfo.unavailableRows, 0);
+  const period = await readHoldingPeriodRows(schema.id, args.source);
+  assert.equal(period.length, args.expectedPeriod.length);
+  for (const page of [before, ...period]) {
+    assert(typeof page.created_time === "string" && Number.isFinite(Date.parse(page.created_time)));
+    assert(typeof page.last_edited_time === "string" && Number.isFinite(Date.parse(page.last_edited_time)));
+    assert(Date.parse(page.created_time) <= Date.parse(page.last_edited_time));
+  }
+  for (const row of period) assertSameHoldingPage(row, args.expectedPeriod.find(expected => expected.id === row.id)!);
+  const resolved = resolveHoldingRows(args.source, args.ownerName, args.acceptedHoldings, args.acceptedHoldings, period);
+  assert.equal(resolved.status, "ready");
+  for (const [i, choice] of resolved.selected.entries()) {
+    const row = choice.existing; assert(row); assert.equal(choice.migrateLegacy, false);
+    assertSameHoldingPage(row, args.expectedRows[i]);
+    assertProperties(row.properties, Object.fromEntries(Object.entries({ ...holdingProperties(args.source, args.ownerName, args.acceptedHoldings[i]),
+      ...sourceProperties(parsed, args.acceptedHoldings[i], zipSha256) }).filter(([name]) => !VALUATION_COLUMNS.has(name))));
+    assert.equal(row.properties["原本照合済"].checkbox, true); assert.equal(row.properties["価格照合済"].checkbox, false);
+    for (const name of ["株価", "保有時価"]) assert.equal(row.properties[name].number, null, "価格値がある行は明示保留の対象外です");
+    assertPriceStatus(row.properties, schema);
+  }
+  const appendReason = (property: HoldingProperty) => {
+    const original = richValue(property); return rt(original.length === 0 ? reason : `${original}。${reason}`);
+  };
+  const changes = args.expectedRows.map(row => ({ "原本照合済": { checkbox: false }, "欠測理由": appendReason(row.properties["欠測理由"]) }));
+  const sourceChanges = { "保有明細状態": { select: { name: "要確認" } }, "保有明細理由": appendReason(before.properties["保有明細理由"]),
+    "保有価格状態": { select: { name: "要確認" } }, "保有価格理由": appendReason(before.properties["保有価格理由"]) };
+  for (const properties of [...changes, sourceChanges]) {
+    for (const value of Object.values(properties)) if ("rich_text" in value) assert(value.rich_text.length <= 100);
+    assert(Buffer.byteLength(JSON.stringify({ properties })) <= 400_000, "値を切り詰めず保留操作を停止します");
+  }
+  const archive = async (phase: "PRE" | "POST", value: unknown): Promise<MigrationFile> => {
+    const bytes = Buffer.from(JSON.stringify(value) + "\n"), sha256 = holdingHash(bytes);
+    assert(bytes.length <= 20 * 1024 * 1024);
+    const file = { key: `holdings-owner-quarantine/${args.source.docId}/${phase}/${sha256}`, filename: `holdings-owner-${phase}.json`, sha256, bytes: bytes.length };
+    const stored = await recordPrimaryData({ service: "yuho-quant", key: file.key, source: "保有主体の明示保留・原値保全", requireExistingDatabase: true, metadata: {
+      source: args.source, zipSha256, factsSha256, reason, originalValuesPreserved: true, pricesAccepted: 0,
+    }, files: [{ filename: file.filename, contentType: "application/json", bytes }] });
+    assert.equal(stored.fileTooLarge, false); assert(stored.manifestMatch === "written" || stored.manifestMatch === "same");
+    await verifyArchivedAttachments(stored.pageId, [{ filename: file.filename, bytes }], "保有主体の明示保留の物理全文");
+    return { ...file, pageId: stored.pageId };
+  };
+  const evidence = { version: 1, kind: "holding-owner-quarantine", source: args.source, ownerName: args.ownerName, zipSha256,
+    factsSha256, reason, acceptedHoldings: args.acceptedHoldings, originalIntent: args.originalIntent, sourcePage: before, periodRows: period, targetRowIds: args.expectedRows.map(row => row.id), changes, sourceChanges };
+  const pre = await archive("PRE", evidence), observed: HoldingPage[] = [];
+  const assertFresh = async () => {
+    await args.assertLatestSource();
+    assertSameHoldingPage(await notionRequest<HoldingPage>("GET", `/pages/${before.id}`, undefined, { singleAttempt: true }), before);
+    const current = await readHoldingPeriodRows(schema.id, args.source); assert.equal(current.length, period.length);
+    for (const row of current) {
+      const prior = observed.find(after => after.id === row.id);
+      assertSameHoldingPage(row, prior === undefined ? period.find(old => old.id === row.id)! : prior);
+    }
+  };
+  for (const [i, row] of args.expectedRows.entries()) {
+    await assertFresh();
+    assertSameHoldingPage(await notionRequest<HoldingPage>("GET", `/pages/${row.id}`, undefined, { singleAttempt: true }), row);
+    const ack = await notionRequest<HoldingPage>("PATCH", `/pages/${row.id}`, { properties: changes[i] }, { singleAttempt: true });
+    assertMigrationPost(ack, row, changes[i], schema, false);
+    assert(typeof ack.last_edited_time === "string" && Number.isFinite(Date.parse(ack.last_edited_time)) && Date.parse(ack.last_edited_time) >= Date.parse(row.last_edited_time!));
+    const actual = await notionRequest<HoldingPage>("GET", `/pages/${row.id}`, undefined, { singleAttempt: true });
+    assertMigrationPost(actual, row, changes[i], schema, false); assertSameHoldingPage(actual, ack); observed.push(actual);
+  }
+  await assertFresh();
+  const ack = await notionRequest<HoldingPage>("PATCH", `/pages/${before.id}`, { properties: sourceChanges }, { singleAttempt: true });
+  const sourceAfter = await notionRequest<HoldingPage>("GET", `/pages/${before.id}`, undefined, { singleAttempt: true });
+  for (const actual of [ack, sourceAfter]) {
+    assertProperties(actual.properties, sourceChanges);
+    for (const name of ["object", "id", "parent", "archived", "in_trash", "created_time"] as const) assert.deepEqual(actual[name], before[name]);
+    assert.deepEqual(Object.keys(actual.properties).sort(), Object.keys(before.properties).sort());
+    assert(typeof actual.last_edited_time === "string" && Number.isFinite(Date.parse(actual.last_edited_time)));
+    assert(Date.parse(actual.last_edited_time) >= Date.parse(before.last_edited_time!));
+    for (const [name, value] of Object.entries(before.properties)) if (!Object.hasOwn(sourceChanges, name)) assert.deepEqual(stableProperty(actual.properties[name]), stableProperty(value));
+  }
+  assertSameHoldingPage(sourceAfter, ack);
+  const periodAfter = await readHoldingPeriodRows(schema.id, args.source); assert.equal(periodAfter.length, period.length);
+  for (const row of periodAfter) {
+    const prior = observed.find(after => after.id === row.id);
+    assertSameHoldingPage(row, prior === undefined ? period.find(old => old.id === row.id)! : prior);
+  }
+  const post = await archive("POST", { ...evidence, pre, sourceAfter, periodAfter });
+  await args.assertLatestSource();
+  assertSameHoldingPage(await notionRequest<HoldingPage>("GET", `/pages/${before.id}`, undefined, { singleAttempt: true }), sourceAfter);
+  const finalPeriod = await readHoldingPeriodRows(schema.id, args.source); assert.equal(finalPeriod.length, periodAfter.length);
+  for (const row of finalPeriod) assertSameHoldingPage(row, periodAfter.find(expected => expected.id === row.id)!);
+  return { status: "quarantined", rows: 4, pre, post, pricesAccepted: 0 };
 }
 interface PublishHoldingsArgs {
   source: ShareholdingsSource; ownerName: string; zip: Buffer; archivePageId: string; maxRows: number;
