@@ -9,6 +9,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ## 2026-10-17
 
+- 本番作業: 10/17実20時のMac正常終端・両4a rolloutと監視期待版の1回更新、RAW500件の実測と元pool内継続を記録。21時の定刻・全量補完・権利/優待残件は別受入とする。[20:35状況](test-logs/recovery-functional-status-20261017.md#2035-jstの実20時受入と後続補完)。
 - Mac定時処理の既存installerに`install-next`を追加。20時・21時の予定と実行条件を保ち、`RunAtLoad=false`で次のcalendarだけを待つ。通常`install`の即時起動は維持し、稼働runtimeの切替・bootstrapは別受入。
 - 有報の通常共有診断に、完全な原文と7列表が一致する第三者割当の「明記払込期日・普通株増加数」を追加。旧株数・option・消却・価格を保持し、[実6原本の同値と追加負荷](test-logs/issued-paid-issuance-observation-20261017.md)を確認した。法的効力日/市場日付/係数・本番定時の受入は別途。
 - 保有明細: 別名義の最大保有会社に属する旧4行を、原値と元出典を保全して明示保留へ移す限定通常CLIを追加。自動ingestの完了降格は禁止したまま、両queue・全行・物理PRE/POSTと永続onceを照合する。[実208Aの回帰](test-logs/holdings-owner-quarantine-20261017.md)。実行・既存4行の表示訂正は別受入。
