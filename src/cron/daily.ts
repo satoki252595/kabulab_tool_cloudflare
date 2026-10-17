@@ -100,6 +100,7 @@ import {
   pctChange1d,
 } from "../shared/indicators/technical.js";
 import { screenStock } from "../shared/screener.js";
+import { STOCK_SPLIT_WINDOW_HOLD } from "../shared/yahoo/stock-corporate-events.js";
 import { detectAllPatterns, type IndicatorSnapshot } from "../shared/patterns.js";
 import { judgeMacro } from "../shared/macro.js";
 import {
@@ -2008,7 +2009,9 @@ export function buildStockSnapshot(
   const sma25Val = sma(closes6mo, 25);
   const sma60Val = sma(closes6mo, 60);
   const sma75Val = sma(closes6mo, 75);
-  const atr = atr14(ohlcv6mo);
+  // 同じ原本の実使用窓を報告splitが跨ぐ場合だけ保留。原OHLCV/adjや係数は変更しない。
+  const basisHolds = new Set(raw.corporateDiagnostics?.unknownReasons);
+  const atr = basisHolds.has(STOCK_SPLIT_WINDOW_HOLD.atr130) ? null : atr14(ohlcv6mo);
   const latestRow = ohlcv6mo[ohlcv6mo.length - 1];
   const latestClose = latestRow?.close ?? null;
   // SMAと同じ受領adjclose系列で比較する。約定用のlatestCloseは変更しない。
@@ -2020,11 +2023,13 @@ export function buildStockSnapshot(
   const atrPct = atrPctRatio !== null ? atrPctRatio * 100 : null;
   const rsiVal = rsi14(closes6mo);
   const macdResult = calcMacd(closes6mo);
-  const range = rangeAndFib(ohlcv6mo, 20);
-  const turnover = avgTurnover(ohlcv6mo, 20);
-  const vol20 = avgVolume(ohlcv6mo, 20);
-  const volRatio = volumeRatio(ohlcv6mo, 20);
-  const pct1d = pctChange1d(ohlcv6mo);
+  const range = basisHolds.has(STOCK_SPLIT_WINDOW_HOLD.range20)
+    ? { high: null, low: null, width: null, fib382: null, fib500: null, fib618: null }
+    : rangeAndFib(ohlcv6mo, 20);
+  const turnover = basisHolds.has(STOCK_SPLIT_WINDOW_HOLD.turnover20) ? null : avgTurnover(ohlcv6mo, 20);
+  const vol20 = basisHolds.has(STOCK_SPLIT_WINDOW_HOLD.volume20) ? null : avgVolume(ohlcv6mo, 20);
+  const volRatio = basisHolds.has(STOCK_SPLIT_WINDOW_HOLD.volume21) ? null : volumeRatio(ohlcv6mo, 20);
+  const pct1d = basisHolds.has(STOCK_SPLIT_WINDOW_HOLD.close2) ? null : pctChange1d(ohlcv6mo);
 
   const trendLong =
     sma5Val !== null &&

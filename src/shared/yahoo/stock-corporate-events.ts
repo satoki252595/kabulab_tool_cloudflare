@@ -127,6 +127,36 @@ export interface StockCorporateDiagnostics {
   unknownReasons: readonly string[];
 }
 
+/** 報告splitを跨ぐ計算だけ保留する。比率の再適用や法的効力日の推定には使わない。 */
+export const STOCK_SPLIT_WINDOW_HOLD = {
+  atr130: "atr130:reported-split-crossing;provider-ohlcv-basis-unproven",
+  volume20: "volume20:reported-split-crossing;provider-ohlcv-basis-unproven",
+  volume21: "volume21:reported-split-crossing;provider-ohlcv-basis-unproven",
+  turnover20: "turnover20:reported-split-crossing;provider-ohlcv-basis-unproven",
+  range20: "range20:reported-split-crossing;provider-ohlcv-basis-unproven",
+  close2: "close2:reported-split-crossing;provider-ohlcv-basis-unproven",
+} as const;
+
+function reportedSplitWindowHolds(events: StockCorporateEvents, bars: readonly DailyOhlcv[]): string[] {
+  const recent = bars.slice(-130), last20 = recent.slice(-20), last21 = recent.slice(-21);
+  const finite = (v: number | null | undefined): boolean => typeof v === "number" && Number.isFinite(v);
+  const atr = recent.filter(b => finite(b.high) && finite(b.low) && finite(b.close));
+  const range = last20.filter(b => finite(b.high) || finite(b.low));
+  const windows = {
+    atr130: atr.length >= 15 ? atr : [],
+    volume20: last20.length === 20 && last20.every(b => finite(b.volume)) ? last20 : [],
+    volume21: last21.length === 21 && last21.every(b => finite(b.volume)) ? last21 : [],
+    turnover20: last20.length === 20 && last20.every(b => finite(b.close) && finite(b.volume)) ? last20 : [],
+    range20: range.some(b => finite(b.high)) && range.some(b => finite(b.low)) ? range : [],
+    close2: recent.filter(b => finite(b.close)).slice(-2),
+  };
+  return (Object.keys(windows) as (keyof typeof windows)[]).filter(key => {
+    const used = windows[key];
+    return used.length >= 2 && events.reported.some(event => event.kind === "splits" &&
+      used[0].date < event.date && event.date <= used[used.length - 1].date);
+  }).map(key => STOCK_SPLIT_WINDOW_HOLD[key]);
+}
+
 /** normal/replayが実際に採用した同一バー列へ結ぶ純関数。指標・価格・出来高は変更しない。 */
 export function buildStockCorporateDiagnostics(args: {
   events: StockCorporateEvents; code: string; bodySha256: string; receivedAt: string;
@@ -159,6 +189,7 @@ export function buildStockCorporateDiagnostics(args: {
     }, basis: { ohlc: "unknown", volume: "unknown", dividendShareBasis: "unknown", localAdjustment: "none" },
     eventDateBasis: "UTC-calendar-date-as-stock-bars;legal-effective-date-unverified",
     unknownReasons: ["reported-events-only;omission-is-not-none", "provider-ohlc-and-volume-adjustment-basis-not-proven",
-      "capitalGains-not-requested", "rights-issues-capital-increases-and-other-legal-actions-not-covered"],
+      "capitalGains-not-requested", "rights-issues-capital-increases-and-other-legal-actions-not-covered",
+      ...reportedSplitWindowHolds(events, qualifiedBars)],
   };
 }

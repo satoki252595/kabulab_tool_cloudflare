@@ -1,0 +1,109 @@
+{
+  "version": 1,
+  "source": "Unmodified Yahoo response bodies physically archived stock-sync38877553046.1/2026-10-16; transport headers/URLs are not copied. Tests reconstruct declared direct-URL protocol captures, not new source observations. Fault tests explicitly change only noted values/dates.",
+  "manifestSha256": "077eed39585f750c430b85efbd3a6e64415ac23b79beafbda45a78742361e57a",
+  "gzipSha256": "4f932d8fb15696205d27df7145e156e7178a21157177ec29146f8bce15f3c585",
+  "gzipBytes": 126056,
+  "members": [
+    {
+      "key": "4374-chart",
+      "sourceSha256": "035cb1f0551a48dcd1089d2707ff0a67156ddd87d1c2d0d11408c7ffb092452c",
+      "sourceBytes": 74353,
+      "receivedAt": "2026-10-16T09:04:15.029Z",
+      "archivePageId": "3fbd74ff-84cd-8153-b6c4-cf3882bb1377",
+      "gzipSha256": "482f5ce6aa3613a2bd9f94bd0067bd4014587b7f3b95f11d241b3aaa846b763f",
+      "filename": "yahoo-raw-38877553046.1-stocks-first-part-0.json.gz",
+      "memberIndex": 150
+    },
+    {
+      "key": "4374-quote-summary",
+      "sourceSha256": "53066c1c0c218d39ac28edf49c0b3af4dd51887ad093f363ce584d499161b551",
+      "sourceBytes": 9412,
+      "receivedAt": "2026-10-16T09:04:15.999Z",
+      "archivePageId": "3fbd74ff-84cd-8153-b6c4-cf3882bb1377",
+      "gzipSha256": "482f5ce6aa3613a2bd9f94bd0067bd4014587b7f3b95f11d241b3aaa846b763f",
+      "filename": "yahoo-raw-38877553046.1-stocks-first-part-0.json.gz",
+      "memberIndex": 151
+    },
+    {
+      "key": "9252-chart",
+      "sourceSha256": "c0b30ffe3dce1446887195b2c524f64041373a31076f7509b1749f7d813fc21c",
+      "sourceBytes": 88845,
+      "receivedAt": "2026-10-16T09:20:35.772Z",
+      "archivePageId": "3fbd74ff-84cd-81f8-a4b8-f1f4603e771f",
+      "gzipSha256": "0502789896d151abd1f570b69fa2cd43c5da5a28b08977db072560c735bc795b",
+      "filename": "yahoo-raw-38877553046.1-stocks-first-part-4.json.gz",
+      "memberIndex": 86
+    },
+    {
+      "key": "9252-quote-summary",
+      "sourceSha256": "73e95b9efa959854ab6b3577ac2237109ac1a5ae5d804cce68b149709eda6931",
+      "sourceBytes": 9425,
+      "receivedAt": "2026-10-16T09:20:36.747Z",
+      "archivePageId": "3fbd74ff-84cd-81f8-a4b8-f1f4603e771f",
+      "gzipSha256": "0502789896d151abd1f570b69fa2cd43c5da5a28b08977db072560c735bc795b",
+      "filename": "yahoo-raw-38877553046.1-stocks-first-part-4.json.gz",
+      "memberIndex": 87
+    },
+    {
+      "key": "2814-chart",
+      "sourceSha256": "129a068b77c2ddf8ce42286b638a8be3f2235524895d0cfdbbfdb670980d7759",
+      "sourceBytes": 73902,
+      "receivedAt": "2026-10-16T09:23:55.790Z",
+      "archivePageId": "3fbd74ff-84cd-81b7-91ff-d8ac9714aced",
+      "gzipSha256": "e73e39dcdcdd47e789e1bc59cda919f6e210c17dfb1950613d991c448d20f736",
+      "filename": "yahoo-raw-38877553046.1-stocks-first-part-5.json.gz",
+      "memberIndex": 50
+    },
+    {
+      "key": "2814-quote-summary",
+      "sourceSha256": "b6267facc235f6e1d556d1d7419fac9a1361a6ccfbd9f649c4740a8631abadea",
+      "sourceBytes": 9401,
+      "receivedAt": "2026-10-16T09:23:56.753Z",
+      "archivePageId": "3fbd74ff-84cd-81b7-91ff-d8ac9714aced",
+      "gzipSha256": "e73e39dcdcdd47e789e1bc59cda919f6e210c17dfb1950613d991c448d20f736",
+      "filename": "yahoo-raw-38877553046.1-stocks-first-part-5.json.gz",
+      "memberIndex": 51
+    },
+    {
+      "key": "8303-chart",
+      "sourceSha256": "b0036e56398ab324dae9ff7007136ed744d020bf3327e1a94302b5e0ef547283",
+      "sourceBytes": 66893,
+      "receivedAt": "2026-10-16T10:14:55.838Z",
+      "archivePageId": "3fbd74ff-84cd-81fc-8934-c31dcee6bef3",
+      "gzipSha256": "6808ae95bb9a4be6079e8afd17b0f7aa9c4a8a51f150d6d889b7db842a9fb10e",
+      "filename": "yahoo-raw-38877553046.1-stocks-first-part-20.json.gz",
+      "memberIndex": 11
+    },
+    {
+      "key": "8303-quote-summary",
+      "sourceSha256": "205e0cc7f7dd2ce3b2cc8c1360020630af64000115cec010ac4056fb17debc7f",
+      "sourceBytes": 9455,
+      "receivedAt": "2026-10-16T10:14:56.803Z",
+      "archivePageId": "3fbd74ff-84cd-81fc-8934-c31dcee6bef3",
+      "gzipSha256": "6808ae95bb9a4be6079e8afd17b0f7aa9c4a8a51f150d6d889b7db842a9fb10e",
+      "filename": "yahoo-raw-38877553046.1-stocks-first-part-20.json.gz",
+      "memberIndex": 12
+    },
+    {
+      "key": "7203-chart",
+      "sourceSha256": "60f341e31cc402f5ab7f74c7dfdc69a922524cfcf63ca9df4c33304511a110aa",
+      "sourceBytes": 81320,
+      "receivedAt": "2026-10-16T10:29:43.915Z",
+      "archivePageId": "3fbd74ff-84cd-81d3-b683-c7abe457b371",
+      "gzipSha256": "407f103de303e044111e904013c40e7db5ee7cb34a52beb93a3fb40593bca457",
+      "filename": "yahoo-raw-38877553046.1-stocks-first-part-24.json.gz",
+      "memberIndex": 150
+    },
+    {
+      "key": "7203-quote-summary",
+      "sourceSha256": "ea2ba8554ef500e8a05e62a224cf2d2a33d70eae194f6f70dc212184b9009a90",
+      "sourceBytes": 10044,
+      "receivedAt": "2026-10-16T10:29:44.850Z",
+      "archivePageId": "3fbd74ff-84cd-81d3-b683-c7abe457b371",
+      "gzipSha256": "407f103de303e044111e904013c40e7db5ee7cb34a52beb93a3fb40593bca457",
+      "filename": "yahoo-raw-38877553046.1-stocks-first-part-24.json.gz",
+      "memberIndex": 151
+    }
+  ]
+}
