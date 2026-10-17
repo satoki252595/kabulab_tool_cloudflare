@@ -28,4 +28,4 @@ source queueは明示置換だけversion2を使う。旧version1 publisher/resum
 
 負例は意図SHA改変、退役解除body、legacy SHA、source facts、旧値のdrift、未対応property、同issuer/FYの別未知source、退役/新規/物理POSTのACK不明、最終物理POST失敗、未対応queue versionとproof欠落を含む。別の実1897 unknownは対象1911の置換を妨げない。全テストでlive HTTPを禁止した。
 
-Nixで関連8 suite 189 tests、全体TypeScriptを確認した。明示対象は原表100行以下・旧移行100行以下・各物理file20MiB以下に限定する。実施時は最新source/全PREの別有限readとroot releaseが必要で、追加D1照合・物理PRE/POST・読戻し分の費用はその対象専用budgetへ計上する。本番の一般処理で追加照合を一括発生させない。
+Nixで関連8 suite 190 tests、全体TypeScriptを確認した。DB環境変数を空にしても実fixtureに束縛したCLI回帰を通す。定期処理の行予算を模した10/10/10/10/5の複数windowでもv2と原40行proofを維持し、最後だけ物理LEGACY-POSTと価格queueへ進む。明示対象は原表100行以下・旧移行100行以下・各物理file20MiB以下に限定する。実施時は最新source/全PREの別有限readとroot releaseが必要で、追加D1照合・物理PRE/POST・読戻し分の費用はその対象専用budgetへ計上する。本番の一般処理で追加照合を一括発生させない。

@@ -128,6 +128,20 @@ describe("actual1911 normal constructive unknown replacement", () => {
     expect(await publishVerifiedShareholdings({ source, ownerName, archivePageId: page.id, zip: input.zip, maxRows: 45 })).toMatchObject({ status: "published", parsed: 0 });
     expect(writes).toHaveLength(beforeReplay); expect(archives.size).toBe(archiveCount);
   });
+  it("ordinary scheduled row budgets keep v2 and original40 proof until the final10/10/10/10/5 window", async () => {
+    const input = args(); await replaceUnknownHoldingPatch(input); const replacedWrites = writes.length;
+    for (const end of [10, 20, 30, 40, 45]) {
+      const result = await publishVerifiedShareholdings({ source, ownerName, archivePageId: page.id, zip: input.zip, maxRows: 10 });
+      expect(checkpoint().sourceQueueVersion).toBe(2); expect(checkpoint().sourceNextHoldingOffset).toBe(end);
+      expect(result.status).toBe(end === 45 ? "published" : "held");
+      expect(page.properties["保有価格状態"].select).toEqual(end === 45 ? { name: "再開待ち" } : null);
+      if (end < 45) expect(checkpoint().patchResolution.legacyPost).toBeUndefined();
+    }
+    expect(writes.slice(replacedWrites).filter(v => v.path !== `/pages/${page.id}`)).toHaveLength(13);
+    expect(checkpoint().patchResolution.legacyPost).toBeDefined(); expect(rows).toHaveLength(47);
+    const final = [...archives.values()].find(v => v.filename === "holdings-patch-LEGACY-POST.json")!;
+    expect(JSON.parse(Buffer.from(final.bytes).toString()).mapping).toHaveLength(40); expect(input.journal.journal).toBe(journal().journal);
+  });
   it("a delayed original properties-only PATCH can change only the retired ID, never the replacement/price values", async () => {
     const input = args(), result = await replaceUnknownHoldingPatch(input), replacement = structuredClone(rows.find((v: { id: string }) => v.id === result.newId));
     // Declared delayed-commit protocol, not an assertion that the actual unknown ACK has been recovered.
