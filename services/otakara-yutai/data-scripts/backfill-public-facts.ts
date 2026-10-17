@@ -463,7 +463,8 @@ async function upgradeV1Main(mode: string, sourcePath: string, dir: string, scop
   console.info(`v1条件${plan.targetRows}行のversion/構造のみ更新し、全列・物理PRE/POST照合一致`);
 }
 
-async function main() {
+/** CLIと有限observerが同じ引数検査・通常処理を一度呼ぶ入口。 */
+export async function runPublicFactsBackfillCLI() {
   const [mode, sourceArg, dirArg, ...extra] = process.argv.slice(2);
   if (mode === "prepare-upgrade-v1" || mode === "apply-upgrade-v1" || mode === "prepare-upgrade-holding-v1" || mode === "apply-upgrade-holding-v1" || mode === "resume-upgrade-holding-v1-zero-native" || mode === "resume-upgrade-holding-v1-read-only-stop") {
     const resume = mode === "resume-upgrade-holding-v1-zero-native" || mode === "resume-upgrade-holding-v1-read-only-stop";
@@ -520,5 +521,5 @@ async function main() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch(() => { console.error("優待条件の保全・計画・適用・全列照合のいずれかで停止。原文はprivate証跡を確認し、自動再送しないでください。"); process.exitCode = 1; });
+  runPublicFactsBackfillCLI().catch(() => { console.error("優待条件の保全・計画・適用・全列照合のいずれかで停止。原文はprivate証跡を確認し、自動再送しないでください。"); process.exitCode = 1; });
 }
