@@ -9,6 +9,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ## 2026-10-18
 
+- 株式日次の業種集計で、当日削除・保持期限掃除・全業種の再挿入を共有D1 senderの一つのbatchへまとめる。集計値・順位・16行チャンクは維持し、途中失敗による部分表示を防ぐ。[停止・途中制約違反・応答不明の回帰](test-logs/sector-daily-atomic-20261018.md)を追加した。本番定時での受入は別途。
 - 通常事業タグCLIの`--codes`指定を共通最新有報読取のD1 SQLへ渡し、全市場応答を取得してから絞る処理を省く。省略時の全量SQL・最新書類の保留・単社の書込前照合を維持し、[保存50社の全値同値とscope/bind検証](test-logs/biztag-scoped-latest-docs-20261018.md)を追加した。新metadata READ・本文補完・本番runtime切替は別受入。
 - RAWのhosted送信前に残時間が不足した場合、未知書込を含まない全検証済みprefixだけを通常partialとして閉じる。実送信直前の65秒検査・unknown停止・元poolを維持し、拒否されたattemptと成功download数を分ける。[実RAW74の停止SHA・保存3原本比較](test-logs/raw-read-budget-partial-20261018.md)で検証。旧STOPの解除・本番再開は別受入。
 
