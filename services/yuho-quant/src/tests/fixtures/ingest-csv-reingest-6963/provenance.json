@@ -1,0 +1,32 @@
+{
+  "sourceDocument": "S100YF41",
+  "stockCode": "6963",
+  "issuer": "ローム株式会社",
+  "fiscalYearEnd": "2026-03-31",
+  "ZIP": {
+    "path": "/Users/satoki252595/projects/kabulab-cf/tmp/feature-audit-20261017/overseas-remaining66-normal-operation-v1/stage-02/prepare-v1/6963-S100YF41.zip",
+    "sha256": "84cc6e927d5d1d282c5bc845b3dbe2c1dbd9bd390291f5dde37ce0f75d4e6fe6",
+    "bytes": 1322750
+  },
+  "sourcePOSTCapsule": {
+    "path": "/Users/satoki252595/projects/kabulab-cf/tmp/feature-audit-20261017/overseas-remaining66-normal-operation-v1/stage-02/apply-v1/POST-capsule.json.gz",
+    "sha256": "b4e0b3cd97bd8baf06b6c643d88b7ddba2bd1a80233b10531cbc586d92a8e12c"
+  },
+  "rootAccepted140": {
+    "path": "/Users/satoki252595/projects/kabulab-cf/tmp/feature-audit-20261017/overseas-remaining66-normal-operation-v1/stage-02/root-final-acceptance-v1.json",
+    "sha256": "9fa579357e3f46afbe787b056f357a001afa14029203466243c3f264be25f790"
+  },
+  "savedBusinessSha256": "f88afe0a4587373e8ecd0d851e25a4ba478e8168e809785c299e7acb7d171038",
+  "projection": "Exact saved target document/core/facts/text rows only; no generated financial values. Growth rows not used. This is historical accepted data, not fresh current PRE.",
+  "faultProjection": "Actual same-doc type1 ZIP deliberately supplied as the invalid type5 response. Source archive ACK/reported eligibility0 are declared transport projections, not current source qualification. Pointer NULL is an explicit state fault only in pointer recovery test.",
+  "counts": {
+    "core_stocks": 1,
+    "yuho_documents": 1,
+    "yuho_order_facts": 6,
+    "yuho_overseas_facts": 6,
+    "yuho_text_sections": 37,
+    "p_yuho_growth": 0
+  },
+  "sourceAPI": 0,
+  "businessWrites": 0
+}
