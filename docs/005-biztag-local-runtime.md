@@ -9,7 +9,8 @@ goldenの定期実行、競合判定は再開しない。
 ## 起動経路
 
 `com.kabulab-cf.biztag` LaunchAgentが毎日Macの現地時刻20:00に起動する。
-このMacはAsia/Tokyo。ログイン時の`RunAtLoad`も同じ入口を通る。
+このMacはAsia/Tokyo。通常の`install`ではログイン時の`RunAtLoad`も同じ入口を通る。
+`install-next`で作成した場合は`RunAtLoad=false`とし、次のcalendar起動を待つ。
 優待要約は別label `com.kabulab-cf.yutai-summary`で毎日21:00に同じ入口の
 `run yutai-summary`を実行する。原文変更・未要約・契約違反の最大60群について、全文が単純な種類＋額面なら定型処理し、残りだけ既存固定モデルで処理する。
 定型分も同じ共有取込契約と物理PRE/POST照合を通す。配備状況と例外は[決定的な本番処理](deterministic-production.md)を参照。
@@ -67,7 +68,7 @@ closure保存→cursor原子的更新→pending除去の順に閉じる。途中
    優待要約の既存モデル用`SEMIF_PYTHON`は別設定。秘密値をコマンド引数・ログ・Gitへ出さない。
 3. runtimeで`nix develop --command pnpm install --frozen-lockfile`を実行し、
    Nix shell/model cacheを準備する。定時起動は`--offline`でNix環境を使う。
-4. 以下のpreflight/installは外部取得・事業タグ保存をしない。
+4. 以下のpreflight/install/install-nextは外部取得・事業タグ保存をしない。
 
 Clefの依存は`services/yuho-quant/local-model/uv.lock`で固定する。実行環境とローカル検証で
 同じinterpreterとlockを使い、環境構築時だけNixから次を実行する。既存venvも
@@ -91,6 +92,16 @@ nix develop --command pnpm exec tsx scripts/biztag-local/main.ts install yutai-s
 ```
 
 `install`はplist作成・構文検証まで。既存plistを黙って上書きしない。
+受入済みの定時receiptを後日の即時起動で置き換えず、更新後の次の定刻から始める場合は、
+同じ承認SHAのruntimeで`install`の代わりに次を使う。
+
+```bash
+nix develop --command pnpm exec tsx scripts/biztag-local/main.ts install-next
+nix develop --command pnpm exec tsx scripts/biztag-local/main.ts install-next yutai-summary
+```
+
+`install-next`もplist作成・構文検証だけを行い、既存plistを上書きしない。
+20時・21時calendar、実行引数、ログ先、umask、preflightは`install`と同じで、`RunAtLoad`だけがfalseになる。
 bootstrap直前にGitHubの旧catchup/backfillのqueued/in_progressが無いこと、
 共有Notion writerが空いていることを確認する。
 
@@ -99,7 +110,8 @@ launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.kabulab-cf.bi
 launchctl print "gui/$(id -u)/com.kabulab-cf.biztag"
 ```
 
-bootstrapは`RunAtLoad`の実処理を起動する。設定が存在することだけで完了にしない。
+通常の`install`で作成したplistはbootstrapで`RunAtLoad`の実処理を起動する。
+`install-next`の場合はbootstrap時に実処理せず、次のcalendar起動を待つ。設定が存在することだけで完了にしない。
 終了status・同じSHAの私有receipt・Notionの保存後確認を受入として残す。
 AI対象0ならClefモデルのspawnは0。Macが停止/ログアウトしていた時刻の
 実行を、実行済みの予定時刻へ置換しない。
