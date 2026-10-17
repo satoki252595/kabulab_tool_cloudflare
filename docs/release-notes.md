@@ -9,6 +9,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ## 2026-10-18
 
+- 有報の既存文書でCSV再解析に失敗した場合、取得済み原本を通常保管してから明示停止し、旧受注・海外・本文索引と状態・ポインタを空で置換しない。新規文書の失敗記録と未知保管停止を維持し、[保存実6963の全旧値保全](test-logs/ingest-csv-reingest-preserve-20261018.md)を検証した。
 - 最新有報の保留計算列に短いSQL別名を付け、式全文が応答JSONのキーとして書類ごとに繰り返される問題を直す。同helperの通常3読取経路で値とHOLD条件を維持し、[保存36,929書類の同値・サイズ比較](test-logs/biztag-reported-hold-alias-20261018.md)を確認した。実D1通信量・本番runtime切替は別受入。
 - 通常事業タグCLIの`--codes`指定を共通最新有報読取のD1 SQLへ渡し、全市場応答を取得してから絞る処理を省く。省略時の全量SQL・最新書類の保留・単社の書込前照合を維持し、[保存50社の全値同値とscope/bind検証](test-logs/biztag-scoped-latest-docs-20261018.md)を追加した。新metadata READ・本文補完・本番runtime切替は別受入。
 - RAWのhosted送信前に残時間が不足した場合、未知書込を含まない全検証済みprefixだけを通常partialとして閉じる。実送信直前の65秒検査・unknown停止・元poolを維持し、拒否されたattemptと成功download数を分ける。[実RAW74の停止SHA・保存3原本比較](test-logs/raw-read-budget-partial-20261018.md)で検証。旧STOPの解除・本番再開は別受入。
