@@ -246,15 +246,15 @@ const ZeroNativeQualification = z.strictObject({
 });
 
 /** 明示CLI専用。旧startedを消さず、全native0の保存証拠だけを一度のsidecarへ束縛する。 */
-export function qualifyHoldingUpgradeZeroNative(state: string, directory: string, manifest: {
+function qualifyOriginalHoldingUpgradeZeroNative(state: string, directory: string, manifest: {
   scopeSha256: string; preimageSha256: string; planSha256: string;
-}, qualificationPath: string) {
+}, qualificationPath: string, afterReadOnlyStop = false) {
   assertNotCommittable(qualificationPath);
   const proof = ZeroNativeQualification.parse(JSON.parse(readFileSync(qualificationPath, "utf8")));
   const read = (path: string): Record<string, unknown> => JSON.parse(readFileSync(path, "utf8"));
   const st = lstatSync(state);
   if (!st.isDirectory() || st.isSymbolicLink() || st.uid !== process.getuid?.() || (st.mode & 0o777) !== 0o700 ||
-      !isDeepStrictEqual(readdirSync(state), ["upgrade-v1-started.json"]) || realpathSync(directory) !== proof.directory) {
+      !isDeepStrictEqual(readdirSync(state).sort(), afterReadOnlyStop ? ["upgrade-v1-started.json", "upgrade-v1-zero-native-resume-started.json"] : ["upgrade-v1-started.json"]) || realpathSync(directory) !== proof.directory) {
     throw new Error("zero-native再資格は元state/同じ計画dir/未再開のstartedだけが必要です");
   }
   const startedPath = join(state, "upgrade-v1-started.json"), started = read(startedPath);
@@ -298,6 +298,82 @@ export function qualifyHoldingUpgradeZeroNative(state: string, directory: string
     qualificationSha256: digest(readFileSync(qualificationPath)), originalPins: proof.pins, originalACKInvented: false };
 }
 
+/** 全native0の元停止だけを資格化する。別の停止からこの入口へは再入しない。 */
+export function qualifyHoldingUpgradeZeroNative(state: string, directory: string, manifest: {
+  scopeSha256: string; preimageSha256: string; planSha256: string;
+}, qualificationPath: string) {
+  return qualifyOriginalHoldingUpgradeZeroNative(state, directory, manifest, qualificationPath);
+}
+
+const ReadOnlyStopQualification = z.strictObject({
+  version: z.literal(1), kind: z.literal("holding-upgrade-single-read-stop"), allOwnedProcessesTerminal: z.literal(true),
+  zeroNativeQualificationPath: z.string(), priorAttemptDir: z.string(), priorReleasePath: z.string(), priorObserverPath: z.string(),
+  priorSourceHead: z.string().check(z.regex(/^[a-f0-9]{40}$/)), pins: z.record(z.string(), z.string()),
+});
+
+/** 明示CLI専用。既知search READ1件だけの停止を、旧2intentを保持して一度だけ再資格する。 */
+export function qualifyHoldingUpgradeReadOnlyStop(state: string, directory: string, manifest: {
+  scopeSha256: string; preimageSha256: string; planSha256: string;
+}, qualificationPath: string) {
+  assertNotCommittable(qualificationPath);
+  const proof = ReadOnlyStopQualification.parse(JSON.parse(readFileSync(qualificationPath, "utf8")));
+  const original = qualifyOriginalHoldingUpgradeZeroNative(state, directory, manifest, proof.zeroNativeQualificationPath, true);
+  const read = (path: string): Record<string, unknown> => JSON.parse(readFileSync(path, "utf8"));
+  const priorSidecar = join(state, "upgrade-v1-zero-native-resume-started.json"), sidecar = read(priorSidecar);
+  if (sidecar.qualificationSha256 !== digest(readFileSync(proof.zeroNativeQualificationPath)) ||
+      sidecar.originalStartedSha256 !== original.originalStartedSha256 || sidecar.directory !== directory ||
+      !isDeepStrictEqual(sidecar.originalPins, original.originalPins)) throw new Error("READ停止前のzero-native資格・旧intentが不一致です");
+  const names = ["NATIVE-STOP-0.json", "STOP.json", "attempt-once.json", "intent-1.json", "request-1.body", "response-1.body", "response-1.json"];
+  const st = lstatSync(proof.priorAttemptDir);
+  if (!st.isDirectory() || st.isSymbolicLink() || st.uid !== process.getuid?.() || (st.mode & 0o777) !== 0o700 ||
+      !isDeepStrictEqual(readdirSync(proof.priorAttemptDir).sort(), names)) throw new Error("READ1件以外のnative・進捗があります。再送しません");
+  for (const path of [proof.zeroNativeQualificationPath, priorSidecar, proof.priorReleasePath, proof.priorObserverPath,
+    ...names.map(name => join(proof.priorAttemptDir, name))]) if (!Object.hasOwn(proof.pins, path)) throw new Error("READ停止の必須pinがありません");
+  for (const [path, hash] of Object.entries(original.originalPins)) if (proof.pins[path] !== hash) throw new Error("元zero-native全pinsが不一致です");
+  for (const [path, hash] of Object.entries(proof.pins)) if (!/^[a-f0-9]{64}$/.test(hash) || digest(readFileSync(path)) !== hash) throw new Error("READ停止の保存inputが変化しました");
+  const attempt = read(join(proof.priorAttemptDir, "attempt-once.json")), stop = read(join(proof.priorAttemptDir, "STOP.json")),
+    nativeStop = read(join(proof.priorAttemptDir, "NATIVE-STOP-0.json")), intent = read(join(proof.priorAttemptDir, "intent-1.json")),
+    response = read(join(proof.priorAttemptDir, "response-1.json")), release = read(proof.priorReleasePath),
+    requestBytes = readFileSync(join(proof.priorAttemptDir, "request-1.body")), responseBytes = readFileSync(join(proof.priorAttemptDir, "response-1.body"));
+  for (const value of [stop, nativeStop]) if (value.seq !== 1 || value.notion !== 1 || value.hosted !== 0 || value.d1Read !== 0 || value.d1Batch !== 0 ||
+      value.responseBytes !== responseBytes.length || value.observedResponseBytes !== responseBytes.length) throw new Error("READ以外のIO又は結果不明があります");
+  if (stop.unknownResend !== false || nativeStop.resend !== 0 || nativeStop.name !== "AssertionError" || attempt.sourceAPI !== 0 || attempt.models !== 0 ||
+      attempt.unknownResend !== false || attempt.releaseSha256 !== digest(readFileSync(proof.priorReleasePath)) ||
+      attempt.qualificationSha256 !== sidecar.qualificationSha256 || attempt.originalStartedSha256 !== original.originalStartedSha256 ||
+      release.status !== "ROOT_RELEASED_NORMAL_HOLDING4_ZERO_NATIVE_RESUME_ONCE" || release.wrapperSha256 !== digest(readFileSync(proof.priorObserverPath)) ||
+      release.sourceHead !== proof.priorSourceHead || attempt.sourceHead !== proof.priorSourceHead || attempt.codeRoot !== release.codeRoot ||
+      release.qualificationSha256 !== sidecar.qualificationSha256 || release.originalStartedSha256 !== original.originalStartedSha256 || typeof release.codeRoot !== "string") {
+    throw new Error("READ停止の元release/source/送信境界が不一致です");
+  }
+  const sourcePins = z.record(z.string(), z.string()).parse(attempt.sourcePins), inputPins = z.record(z.string(), z.string()).parse(attempt.originalPins);
+  if (Object.keys(sourcePins).length === 0 || Object.keys(inputPins).length === 0) throw new Error("READ停止の元producer/input pinsがありません");
+  for (const [path, hash] of Object.entries(sourcePins)) {
+    if (proof.pins[join(release.codeRoot, path)] !== hash) throw new Error("READ停止の元producer pinsが不一致です");
+  }
+  for (const [path, hash] of Object.entries(inputPins)) {
+    if (proof.pins[path] !== hash) throw new Error("READ停止の元入力pinsが不一致です");
+  }
+  if (intent.kind !== "notion" || intent.method !== "POST" || intent.path !== "/v1/search" ||
+      intent.urlSha256 !== digest("https://api.notion.com/v1/search") || intent.resend !== 0 || intent.bytes !== requestBytes.length || intent.sha256 !== digest(requestBytes) ||
+      !isDeepStrictEqual(JSON.parse(requestBytes.toString("utf8")), { query: "一次データ｜otakara-yutai", filter: { property: "object", value: "database" }, page_size: 100 }) ||
+      response.kind !== "notion" || response.status !== 200 || response.bytes !== responseBytes.length || response.sha256 !== digest(responseBytes)) throw new Error("既知search READ1件の全文ACKが不一致です");
+  const search = read(join(proof.priorAttemptDir, "response-1.body"));
+  if (search.object !== "list" || !Array.isArray(search.results) || search.has_more !== false || search.next_cursor !== null) throw new Error("READ1件の完全search応答が未資格です");
+  const clocks = [attempt.at, sidecar.at, intent.at, response.at, nativeStop.at, stop.at].map(value => typeof value === "string" ? Date.parse(value) : NaN);
+  if (clocks.some(value => !Number.isFinite(value)) || clocks.some((value, index) => index > 0 && value < clocks[index - 1]!)) throw new Error("READ停止の元時計順序が不明です");
+  return { version: 1, kind: "holding-upgrade-single-read-stop", directory, originalStartedSha256: original.originalStartedSha256,
+    zeroNativeResumeIntentSha256: digest(readFileSync(priorSidecar)), qualificationSha256: digest(readFileSync(qualificationPath)), originalPins: proof.pins,
+    priorReadRequests: 1, priorArchiveMutations: 0, priorD1Requests: 0, originalACKInvented: false };
+}
+
+export function claimHoldingUpgradeReadOnlyStop(state: string, directory: string, manifest: {
+  scopeSha256: string; preimageSha256: string; planSha256: string;
+}, qualificationPath: string): void {
+  const qualified = qualifyHoldingUpgradeReadOnlyStop(state, directory, manifest, qualificationPath);
+  const path = join(state, "upgrade-v1-read-only-resume-started.json");
+  writeFileSync(path, json({ ...qualified, at: new Date().toISOString() }), { mode: 0o600, flag: "wx", flush: true }); syncParent(path);
+}
+
 export function claimHoldingUpgradeZeroNative(state: string, directory: string, manifest: {
   scopeSha256: string; preimageSha256: string; planSha256: string;
 }, qualificationPath: string): void {
@@ -327,7 +403,7 @@ export async function applyPublicFactsBackfillOnce(input: {
 
 /** 有限upgradeの通常prepare/apply。旧NULL移行を装わず、全列PRE/POSTを物理保全する。 */
 async function upgradeV1Main(mode: string, sourcePath: string, dir: string, scopePath: string, qualificationPath?: string) {
-  const resume = mode === "resume-upgrade-holding-v1-zero-native";
+  const readOnlyResume = mode === "resume-upgrade-holding-v1-read-only-stop", resume = mode === "resume-upgrade-holding-v1-zero-native" || readOnlyResume;
   const holding = mode === "prepare-upgrade-holding-v1" || mode === "apply-upgrade-holding-v1" || resume;
   const qualification = holding ? { kind: "single-holding-period-v1", targetVersion: 3 } as const : {};
   const state = join(dirname(realpathSync(".env")), holding ? "tmp/yutai-public-facts-v1-holding-upgrade" : "tmp/yutai-public-facts-v1-upgrade");
@@ -372,8 +448,9 @@ async function upgradeV1Main(mode: string, sourcePath: string, dir: string, scop
   // 同じ長さの完全SHAで両phaseの添付名を事前検査し、純粋な名前エラーでlatchを残さない。
   for (const phase of ["pre", "post"] as const) publicFactsUpgradeFilename(holding, phase, manifest.preimageSha256);
   if (resume) {
-    if (qualificationPath === undefined) throw new Error("zero-nativeの明示資格ファイルが必要です");
-    claimHoldingUpgradeZeroNative(state, dir, manifest, qualificationPath);
+    if (qualificationPath === undefined) throw new Error("明示再開の資格ファイルが必要です");
+    if (readOnlyResume) claimHoldingUpgradeReadOnlyStop(state, dir, manifest, qualificationPath);
+    else claimHoldingUpgradeZeroNative(state, dir, manifest, qualificationPath);
   } else claimPublicFactsUpgrade(state, { at: new Date().toISOString(), ...qualification, dir, scopeSha256: manifest.scopeSha256, preimageSha256: manifest.preimageSha256, planSha256: manifest.planSha256 });
   await archive("pre", preimage);
   await applyPublicFactsBackfillOnce({ dir, expected: plan.expected, statements: plan.statements, sender: createD1HttpBatchSender(),
@@ -381,15 +458,16 @@ async function upgradeV1Main(mode: string, sourcePath: string, dir: string, scop
   const path = join(state, "upgrade-v1-completed.json"); writeFileSync(path, json({ at: new Date().toISOString(), ...qualification, intentSha256: digest(readFileSync(join(state, "upgrade-v1-started.json"))),
     scopeSha256: manifest.scopeSha256, planSha256: manifest.planSha256, readbackSha256: digest(readFileSync(join(dir, "readback.json"))),
     postArchiveReceiptSha256: digest(readFileSync(join(dir, "archive-post-receipt.json"))),
-    ...(resume ? { zeroNativeResumeIntentSha256: digest(readFileSync(join(state, "upgrade-v1-zero-native-resume-started.json"))) } : {}) }), { mode: 0o600, flag: "wx", flush: true }); syncParent(path);
+    ...(resume ? { zeroNativeResumeIntentSha256: digest(readFileSync(join(state, "upgrade-v1-zero-native-resume-started.json"))) } : {}),
+    ...(readOnlyResume ? { readOnlyResumeIntentSha256: digest(readFileSync(join(state, "upgrade-v1-read-only-resume-started.json"))) } : {}) }), { mode: 0o600, flag: "wx", flush: true }); syncParent(path);
   console.info(`v1条件${plan.targetRows}行のversion/構造のみ更新し、全列・物理PRE/POST照合一致`);
 }
 
 async function main() {
   const [mode, sourceArg, dirArg, ...extra] = process.argv.slice(2);
-  if (mode === "prepare-upgrade-v1" || mode === "apply-upgrade-v1" || mode === "prepare-upgrade-holding-v1" || mode === "apply-upgrade-holding-v1" || mode === "resume-upgrade-holding-v1-zero-native") {
-    const resume = mode === "resume-upgrade-holding-v1-zero-native";
-    if (!sourceArg || !dirArg || extra.length !== (resume ? 2 : 1)) throw new Error("使い方: backfill-public-facts.ts <prepare/apply-upgrade-v1|prepare/apply-upgrade-holding-v1|resume-upgrade-holding-v1-zero-native> <source-snapshot.json> <private-output-dir> <explicit-scope.json> [zero-native-qualification.json]");
+  if (mode === "prepare-upgrade-v1" || mode === "apply-upgrade-v1" || mode === "prepare-upgrade-holding-v1" || mode === "apply-upgrade-holding-v1" || mode === "resume-upgrade-holding-v1-zero-native" || mode === "resume-upgrade-holding-v1-read-only-stop") {
+    const resume = mode === "resume-upgrade-holding-v1-zero-native" || mode === "resume-upgrade-holding-v1-read-only-stop";
+    if (!sourceArg || !dirArg || extra.length !== (resume ? 2 : 1)) throw new Error("使い方: backfill-public-facts.ts <prepare/apply-upgrade-v1|prepare/apply-upgrade-holding-v1|resume-upgrade-holding-v1-zero-native|resume-upgrade-holding-v1-read-only-stop> <source-snapshot.json> <private-output-dir> <explicit-scope.json> [explicit-resume-qualification.json]");
     const dir = resolve(dirArg); assertNotCommittable(join(dir, "upgrade-failure.json"));
     try { await upgradeV1Main(mode, resolve(sourceArg), dir, resolve(extra[0]), resume ? resolve(extra[1]) : undefined); }
     catch (error) {
