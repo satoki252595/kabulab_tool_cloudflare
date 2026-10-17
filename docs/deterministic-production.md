@@ -105,3 +105,10 @@ Cloudflareはmain `c1ad90e2`（#430）の通常buildで23:44:59 JSTのdeployとv
 `version_bump`は既存`writeRowWithEvidence`を使い、最新文書guard・物理PRE・旧値CAS・全POST・永続journalを維持する。別文書への付替えはHOLD。現行normal plannerはこのkindを生成せず、既存の機械同期/意味判定の対象数は増えない。通常createにはページ/childrenの最小2 GETと長文property/根拠階層分の追加GETがある。追加取得元アクセス・モデル・依存・DDLは0だが、全量時間の改善や次定時成功は未受入である。
 
 未閉鎖publicationを実PRE/target/source/fullPOST/根拠と照合する正規read-only CLIはまだ無い。journalからcompletionを自動生成せず、原記録を保持してoperator調査で止める。手動`master-dedup-3681-7129.ts`の`updateSupplementRow`は独自の保存snapshot/guardを使う旧経路で、このjournalへ移行していない。汎用update APIは今回変更しない。[回帰と未受入の範囲](test-logs/biztag-create-publication-20261017.md)を参照。
+
+
+## PRE保管POSTだけが結果不明の場合の明示照合
+
+通常`biztag run --reconcile-pre-archive`は固定1社・mechanical-only・明示15分以内budget・捕捉全送信baselineのSHAが必要。元intent以降がPRE query/upload/send/ページPOST応答欠測だけの4 nativeであり、業務未送信、Key一意1件、全PRE実体、現在target/根拠/source metadata/最新D1 pointerが一致した場合だけ、同key/inputの通常PATCH/readbackへ進む。原本再upload/page POSTは0、任意unknown businessは従来のglobal STOPを維持する。
+
+once/資格phaseは別canonical sidecarへ保存し、元PRE/intentを変更せず通常completionの3ファイル/schemaを維持する。これにより凍結した旧E4 publisherとの互換を保つ。無指定定時の追加HTTPは0、明示照合ではKey/metadata/physical PREを資格時とpublish時、source metadataを資格時とPATCH直前に読む。全通信hard stop・native/bytes上限は有限実行側の別契約で、CLIのbudgetは新規着手budget。汎用のunknown business再開やcompletion生成は追加しない。[保存原本回帰と運用制約](test-logs/biztag-pre-archive-reconciliation-20261017.md)を参照。

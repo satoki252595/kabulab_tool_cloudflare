@@ -409,6 +409,8 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
   for (let i = 0; i < items.length; i++) {
     publicationJournal.assertReady();
     const item: WorkItem = items[i];
+    publicationJournal.bindSource?.({ stockCode: item.stockCode, docId: item.doc === null ? null : item.doc.docId,
+      sourcePageId: item.doc === null ? null : item.doc.notionDocPageId });
     currentItem = item; currentInput = undefined; currentDecisionAt = undefined; batchIndex = 0;
     if (item.kind !== "skip") {
       if (workBudgetLeft <= 0 || Date.now() - start > opts.budgetMs) {
