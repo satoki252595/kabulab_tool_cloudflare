@@ -12,14 +12,15 @@ const FROM = "2026-09-25";
 const TODAY = "2026-09-30";
 let sqlite: DatabaseSync;
 let queries: string[];
-let responses: Array<{ params: unknown[]; rows: number }>;
+let responses: Array<{ params: unknown[]; rows: number; columns: string[] }>;
 
 function db() {
   return drizzle(async (sql, params, method) => {
     queries.push(sql);
     if (method === "run" || !sql.toLowerCase().startsWith("select")) throw new Error("source test: SELECT 以外は禁止");
-    const rows = sqlite.prepare(sql).all(...params as (string | number | null)[]).map((row) => Object.values(row));
-    responses.push({ params, rows: rows.length });
+    const statement = sqlite.prepare(sql);
+    const rows = statement.all(...params as (string | number | null)[]).map((row) => Object.values(row));
+    responses.push({ params, rows: rows.length, columns: statement.columns().map(column => column.name) });
     return { rows: method === "get" ? rows[0] : rows };
   });
 }
@@ -64,6 +65,17 @@ describe("固定コードの最新有報をSQLから限定する", () => {
       row.id, row.stock_id, row.doc_id, row.doc_type_code, row.period_end, row.submitted_at, row.notion_doc_page_id, row.text_parse_status);
   }
   const byCode = <T extends { stockCode: string }>(rows: T[]) => rows.sort((a, b) => a.stockCode.localeCompare(b.stockCode));
+
+  it("全量取得の計算列は短い列名だけを返し、SQL式全文を各書類のJSON keyにしない", async () => {
+    installSavedRows(); const latest = await loadLatestDocs(db());
+    expect(responses[1].columns).toEqual(["id", "stock_id", "doc_id", "doc_type_code", "period_end",
+      "submitted_at", "notion_doc_page_id", "text_parse_status", "reported_hold"]);
+    expect(Buffer.byteLength(JSON.stringify(responses[1].columns))).toBeLessThanOrEqual(128);
+    const current = latest.find(row => row.doc !== null)!;
+    await assertLatestDocCurrent(db(), current.stockCode, current.doc!);
+    expect(responses[2].columns.at(-1)).toBe("reported_hold");
+    expect(fetch).not.toHaveBeenCalled();
+  });
 
   it("実保存50銘柄は旧全量＋Set filterと全値同値、2 SELECTともD1返却scopeを限定する", async () => {
     installSavedRows();

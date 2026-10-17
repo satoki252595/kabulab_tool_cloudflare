@@ -30,7 +30,7 @@ export async function selectLatestHoldingsDocuments(
     inArray(yuhoDocuments.stockId, candidates))).as("latest_holdings");
   const rows = await db.select({ stockId: latest.stockId, stockCode: sql<string>`${stocks.code}`, docId: latest.docId,
     edinetCode: latest.edinetCode, ownerName: latest.ownerName, fiscalYearEnd: latest.fiscalYearEnd, submittedAt: latest.submittedAt,
-    reportedHold: reportedLatestSelectionHold(latest.docId,latest.stockId,latest.fiscalYearEnd,latest.submittedAt),
+    reportedHold: reportedLatestSelectionHold(latest.docId,latest.stockId,latest.fiscalYearEnd,latest.submittedAt).as("reported_hold"),
   // NOT INDEXEDでもINTEGER PRIMARY KEYは使える。候補だけをrowidで引き、active全株を再走査しない。
   }).from(latest).innerJoin(sql`${stocks} NOT INDEXED`, eq(stocks.id, latest.stockId))
     .where(and(eq(latest.rank, 1), activeEquityCondition(), args.afterCode === null ? undefined : gt(stocks.code, args.afterCode),

@@ -206,7 +206,7 @@ export async function loadLatestDocs(db: BiztagSourceDb, codes?: readonly string
       submittedAt: yuhoDocuments.submittedAt,
       notionDocPageId: yuhoDocuments.notionDocPageId,
       textParseStatus: yuhoDocuments.textParseStatus,
-      reportedHold: reportedLatestSelectionHold(yuhoDocuments.docId,yuhoDocuments.stockId,yuhoDocuments.periodEnd,yuhoDocuments.submittedAt),
+      reportedHold: reportedLatestSelectionHold(yuhoDocuments.docId,yuhoDocuments.stockId,yuhoDocuments.periodEnd,yuhoDocuments.submittedAt).as("reported_hold"),
     })
     .from(yuhoDocuments)
     .where(
@@ -256,7 +256,7 @@ export async function assertLatestDocCurrent(
     docId: yuhoDocuments.docId, docTypeCode: yuhoDocuments.docTypeCode,
     periodEnd: yuhoDocuments.periodEnd, submittedAt: yuhoDocuments.submittedAt,
     notionDocPageId: yuhoDocuments.notionDocPageId, textParseStatus: yuhoDocuments.textParseStatus,
-    reportedHold: reportedLatestSelectionHold(yuhoDocuments.docId,yuhoDocuments.stockId,yuhoDocuments.periodEnd,yuhoDocuments.submittedAt),
+    reportedHold: reportedLatestSelectionHold(yuhoDocuments.docId,yuhoDocuments.stockId,yuhoDocuments.periodEnd,yuhoDocuments.submittedAt).as("reported_hold"),
   }).from(yuhoDocuments).innerJoin(stocks, eq(yuhoDocuments.stockId, stocks.id)).where(and(
     activeEquityCondition(), eq(stocks.code, stockCode), inArray(yuhoDocuments.docTypeCode, DOC_TYPE_CODES)
   )).orderBy(desc(yuhoDocuments.periodEnd), desc(yuhoDocuments.submittedAt), desc(yuhoDocuments.id)).limit(1);
