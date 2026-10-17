@@ -1,0 +1,456 @@
+{
+  "observedAt": "2026-10-17T05:23:32.989Z",
+  "source": {
+    "docId": "S100Z0JO",
+    "stockCode": "208A",
+    "edinetCode": "E39505",
+    "fiscalYearEnd": "2026-06-30"
+  },
+  "zipSha256": "f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10",
+  "result": {
+    "status": "published",
+    "parsed": 4,
+    "created": 4,
+    "updated": 0,
+    "unchanged": 0,
+    "issuedSharesObservation": {
+      "version": 1,
+      "status": "observed-with-holds",
+      "reason": "未資格の観測はHOLDのまま保持します",
+      "source": {
+        "docId": "S100Z0JO",
+        "stockCode": "208A",
+        "edinetCode": "E39505",
+        "fiscalYearEnd": "2026-06-30"
+      },
+      "zipSha256": "f790c39dab53fe4b86a4d7173cc21abbe69c65735a1083402a3ad51b376ced10",
+      "candidateCount": 4,
+      "instance": {
+        "filename": "XBRL/PublicDoc/jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04.xbrl",
+        "memberSha256": "747194e3018a84dd7e29bb070bd8fbba7fc3c36cc30c4c055e64ec55b840553d",
+        "namespaces": {
+          "xmlns:iso4217": "http://www.xbrl.org/2003/iso4217",
+          "xmlns:jpcrp030000-asr_E39505-000": "http://disclosure.edinet-fsa.go.jp/jpcrp030000/asr/001/E39505-000/2026-06-30/01/2026-09-04",
+          "xmlns:jpcrp_cor": "http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor",
+          "xmlns:jpdei_cor": "http://disclosure.edinet-fsa.go.jp/taxonomy/jpdei/2013-08-31/jpdei_cor",
+          "xmlns:jppfs_cor": "http://disclosure.edinet-fsa.go.jp/taxonomy/jppfs/2025-11-01/jppfs_cor",
+          "xmlns:link": "http://www.xbrl.org/2003/linkbase",
+          "xmlns:xbrldi": "http://xbrl.org/2006/xbrldi",
+          "xmlns:xbrli": "http://www.xbrl.org/2003/instance",
+          "xmlns:xlink": "http://www.w3.org/1999/xlink",
+          "xmlns:xsi": "http://www.w3.org/2001/XMLSchema-instance"
+        }
+      },
+      "observations": [
+        {
+          "element": "jpcrp_cor:NumberOfIssuedSharesAsOfFiscalYearEndIssuedSharesTotalNumberOfSharesEtc",
+          "namespace": "http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor",
+          "occurrence": 0,
+          "attributes": {
+            "contextRef": "FilingDateInstant_OrdinaryShareMember",
+            "decimals": "0",
+            "unitRef": "shares"
+          },
+          "rawAttributes": " contextRef=\"FilingDateInstant_OrdinaryShareMember\" decimals=\"0\" unitRef=\"shares\"",
+          "rawValue": "11000000",
+          "factSha256": "21c63cb30aa2108c980f7ebc2279aa7f3daf226d29ebcb9e1c9da30c08e2d8b1",
+          "contextRef": "FilingDateInstant_OrdinaryShareMember",
+          "unitRef": "shares",
+          "decimals": "0",
+          "contexts": [
+            {
+              "definitions": [
+                {
+                  "prefix": "xbrli",
+                  "attributes": {
+                    "id": "FilingDateInstant_OrdinaryShareMember"
+                  },
+                  "rawDefinition": "<xbrli:context id=\"FilingDateInstant_OrdinaryShareMember\">\n<xbrli:entity>\n<xbrli:identifier scheme=\"http://disclosure.edinet-fsa.go.jp\">E39505-000</xbrli:identifier>\n</xbrli:entity>\n<xbrli:period>\n<xbrli:instant>2026-09-04</xbrli:instant>\n</xbrli:period>\n<xbrli:scenario>\n<xbrldi:explicitMember dimension=\"jpcrp_cor:ClassesOfSharesAxis\">jpcrp_cor:OrdinaryShareMember</xbrldi:explicitMember>\n</xbrli:scenario>\n</xbrli:context>",
+                  "filename": "XBRL/PublicDoc/jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04.xbrl",
+                  "memberSha256": "747194e3018a84dd7e29bb070bd8fbba7fc3c36cc30c4c055e64ec55b840553d"
+                }
+              ],
+              "entity": "E39505-000",
+              "instantDate": "2026-09-04",
+              "dimensions": [
+                {
+                  "axis": "jpcrp_cor:ClassesOfSharesAxis",
+                  "member": "jpcrp_cor:OrdinaryShareMember",
+                  "axisNamespace": "http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor",
+                  "memberNamespace": "http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor"
+                }
+              ],
+              "valid": true
+            },
+            {
+              "definitions": [
+                {
+                  "prefix": "xbrli",
+                  "attributes": {
+                    "id": "FilingDateInstant_OrdinaryShareMember"
+                  },
+                  "rawDefinition": "<xbrli:context id=\"FilingDateInstant_OrdinaryShareMember\">\n<xbrli:entity>\n<xbrli:identifier scheme=\"http://disclosure.edinet-fsa.go.jp\">E39505-000</xbrli:identifier>\n</xbrli:entity>\n<xbrli:period>\n<xbrli:instant>2026-09-04</xbrli:instant>\n</xbrli:period>\n<xbrli:scenario>\n<xbrldi:explicitMember dimension=\"jpcrp_cor:ClassesOfSharesAxis\">jpcrp_cor:OrdinaryShareMember</xbrldi:explicitMember>\n</xbrli:scenario>\n</xbrli:context>",
+                  "filename": "XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm",
+                  "memberSha256": "23ac1ea52ac3072affca48c6b29bae154dab5c910337b606105bf3e9fffcbb10"
+                }
+              ],
+              "entity": "E39505-000",
+              "instantDate": "2026-09-04",
+              "dimensions": [
+                {
+                  "axis": "jpcrp_cor:ClassesOfSharesAxis",
+                  "member": "jpcrp_cor:OrdinaryShareMember",
+                  "axisNamespace": "http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor",
+                  "memberNamespace": "http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor"
+                }
+              ],
+              "valid": true
+            }
+          ],
+          "units": [
+            {
+              "definitions": [
+                {
+                  "prefix": "xbrli",
+                  "attributes": {
+                    "id": "shares"
+                  },
+                  "rawDefinition": "<xbrli:unit id=\"shares\">\n<xbrli:measure>xbrli:shares</xbrli:measure>\n</xbrli:unit>",
+                  "filename": "XBRL/PublicDoc/jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04.xbrl",
+                  "memberSha256": "747194e3018a84dd7e29bb070bd8fbba7fc3c36cc30c4c055e64ec55b840553d"
+                }
+              ],
+              "measure": "xbrli:shares",
+              "valid": true
+            },
+            {
+              "definitions": [
+                {
+                  "prefix": "xbrli",
+                  "attributes": {
+                    "id": "shares"
+                  },
+                  "rawDefinition": "<xbrli:unit id=\"shares\">\n<xbrli:measure>xbrli:shares</xbrli:measure>\n</xbrli:unit>",
+                  "filename": "XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm",
+                  "memberSha256": "23ac1ea52ac3072affca48c6b29bae154dab5c910337b606105bf3e9fffcbb10"
+                }
+              ],
+              "measure": "xbrli:shares",
+              "valid": true
+            }
+          ],
+          "qualification": {
+            "status": "observed-kind",
+            "reason": null,
+            "kind": "fiscal-year-end",
+            "economicDate": "2026-06-30",
+            "nativeContextDate": "2026-09-04",
+            "shareClass": "ordinary",
+            "rightsApplication": "unknown"
+          }
+        },
+        {
+          "element": "jpcrp_cor:NumberOfIssuedSharesAsOfFilingDateIssuedSharesTotalNumberOfSharesEtc",
+          "namespace": "http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor",
+          "occurrence": 1,
+          "attributes": {
+            "contextRef": "FilingDateInstant_OrdinaryShareMember",
+            "decimals": "0",
+            "unitRef": "shares"
+          },
+          "rawAttributes": " contextRef=\"FilingDateInstant_OrdinaryShareMember\" decimals=\"0\" unitRef=\"shares\"",
+          "rawValue": "11000000",
+          "factSha256": "ed67c3a6edd013ec6b13a3d48e05bebe9e38b0b3060f18031e640c53aa6e365a",
+          "contextRef": "FilingDateInstant_OrdinaryShareMember",
+          "unitRef": "shares",
+          "decimals": "0",
+          "contexts": [
+            {
+              "definitions": [
+                {
+                  "prefix": "xbrli",
+                  "attributes": {
+                    "id": "FilingDateInstant_OrdinaryShareMember"
+                  },
+                  "rawDefinition": "<xbrli:context id=\"FilingDateInstant_OrdinaryShareMember\">\n<xbrli:entity>\n<xbrli:identifier scheme=\"http://disclosure.edinet-fsa.go.jp\">E39505-000</xbrli:identifier>\n</xbrli:entity>\n<xbrli:period>\n<xbrli:instant>2026-09-04</xbrli:instant>\n</xbrli:period>\n<xbrli:scenario>\n<xbrldi:explicitMember dimension=\"jpcrp_cor:ClassesOfSharesAxis\">jpcrp_cor:OrdinaryShareMember</xbrldi:explicitMember>\n</xbrli:scenario>\n</xbrli:context>",
+                  "filename": "XBRL/PublicDoc/jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04.xbrl",
+                  "memberSha256": "747194e3018a84dd7e29bb070bd8fbba7fc3c36cc30c4c055e64ec55b840553d"
+                }
+              ],
+              "entity": "E39505-000",
+              "instantDate": "2026-09-04",
+              "dimensions": [
+                {
+                  "axis": "jpcrp_cor:ClassesOfSharesAxis",
+                  "member": "jpcrp_cor:OrdinaryShareMember",
+                  "axisNamespace": "http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor",
+                  "memberNamespace": "http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor"
+                }
+              ],
+              "valid": true
+            },
+            {
+              "definitions": [
+                {
+                  "prefix": "xbrli",
+                  "attributes": {
+                    "id": "FilingDateInstant_OrdinaryShareMember"
+                  },
+                  "rawDefinition": "<xbrli:context id=\"FilingDateInstant_OrdinaryShareMember\">\n<xbrli:entity>\n<xbrli:identifier scheme=\"http://disclosure.edinet-fsa.go.jp\">E39505-000</xbrli:identifier>\n</xbrli:entity>\n<xbrli:period>\n<xbrli:instant>2026-09-04</xbrli:instant>\n</xbrli:period>\n<xbrli:scenario>\n<xbrldi:explicitMember dimension=\"jpcrp_cor:ClassesOfSharesAxis\">jpcrp_cor:OrdinaryShareMember</xbrldi:explicitMember>\n</xbrli:scenario>\n</xbrli:context>",
+                  "filename": "XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm",
+                  "memberSha256": "23ac1ea52ac3072affca48c6b29bae154dab5c910337b606105bf3e9fffcbb10"
+                }
+              ],
+              "entity": "E39505-000",
+              "instantDate": "2026-09-04",
+              "dimensions": [
+                {
+                  "axis": "jpcrp_cor:ClassesOfSharesAxis",
+                  "member": "jpcrp_cor:OrdinaryShareMember",
+                  "axisNamespace": "http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor",
+                  "memberNamespace": "http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor"
+                }
+              ],
+              "valid": true
+            }
+          ],
+          "units": [
+            {
+              "definitions": [
+                {
+                  "prefix": "xbrli",
+                  "attributes": {
+                    "id": "shares"
+                  },
+                  "rawDefinition": "<xbrli:unit id=\"shares\">\n<xbrli:measure>xbrli:shares</xbrli:measure>\n</xbrli:unit>",
+                  "filename": "XBRL/PublicDoc/jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04.xbrl",
+                  "memberSha256": "747194e3018a84dd7e29bb070bd8fbba7fc3c36cc30c4c055e64ec55b840553d"
+                }
+              ],
+              "measure": "xbrli:shares",
+              "valid": true
+            },
+            {
+              "definitions": [
+                {
+                  "prefix": "xbrli",
+                  "attributes": {
+                    "id": "shares"
+                  },
+                  "rawDefinition": "<xbrli:unit id=\"shares\">\n<xbrli:measure>xbrli:shares</xbrli:measure>\n</xbrli:unit>",
+                  "filename": "XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm",
+                  "memberSha256": "23ac1ea52ac3072affca48c6b29bae154dab5c910337b606105bf3e9fffcbb10"
+                }
+              ],
+              "measure": "xbrli:shares",
+              "valid": true
+            }
+          ],
+          "qualification": {
+            "status": "observed-kind",
+            "reason": null,
+            "kind": "filing-date",
+            "economicDate": "2026-09-04",
+            "nativeContextDate": "2026-09-04",
+            "shareClass": "ordinary",
+            "rightsApplication": "unknown"
+          }
+        },
+        {
+          "element": "jpcrp_cor:NumberOfIssuedSharesAsOfFiscalYearEndIssuedSharesTotalNumberOfSharesEtc",
+          "namespace": "http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor",
+          "occurrence": 2,
+          "attributes": {
+            "contextRef": "FilingDateInstant",
+            "decimals": "0",
+            "unitRef": "shares"
+          },
+          "rawAttributes": " contextRef=\"FilingDateInstant\" decimals=\"0\" unitRef=\"shares\"",
+          "rawValue": "11000000",
+          "factSha256": "9633ffe533f4d18b4fdf2be1554838bd4d93b6de076abc605251f2ece35c9288",
+          "contextRef": "FilingDateInstant",
+          "unitRef": "shares",
+          "decimals": "0",
+          "contexts": [
+            {
+              "definitions": [
+                {
+                  "prefix": "xbrli",
+                  "attributes": {
+                    "id": "FilingDateInstant"
+                  },
+                  "rawDefinition": "<xbrli:context id=\"FilingDateInstant\">\n<xbrli:entity>\n<xbrli:identifier scheme=\"http://disclosure.edinet-fsa.go.jp\">E39505-000</xbrli:identifier>\n</xbrli:entity>\n<xbrli:period>\n<xbrli:instant>2026-09-04</xbrli:instant>\n</xbrli:period>\n</xbrli:context>",
+                  "filename": "XBRL/PublicDoc/jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04.xbrl",
+                  "memberSha256": "747194e3018a84dd7e29bb070bd8fbba7fc3c36cc30c4c055e64ec55b840553d"
+                }
+              ],
+              "entity": "E39505-000",
+              "instantDate": "2026-09-04",
+              "dimensions": [],
+              "valid": true
+            },
+            {
+              "definitions": [
+                {
+                  "prefix": "xbrli",
+                  "attributes": {
+                    "id": "FilingDateInstant"
+                  },
+                  "rawDefinition": "<xbrli:context id=\"FilingDateInstant\">\n<xbrli:entity>\n<xbrli:identifier scheme=\"http://disclosure.edinet-fsa.go.jp\">E39505-000</xbrli:identifier>\n</xbrli:entity>\n<xbrli:period>\n<xbrli:instant>2026-09-04</xbrli:instant>\n</xbrli:period>\n</xbrli:context>",
+                  "filename": "XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm",
+                  "memberSha256": "23ac1ea52ac3072affca48c6b29bae154dab5c910337b606105bf3e9fffcbb10"
+                }
+              ],
+              "entity": "E39505-000",
+              "instantDate": "2026-09-04",
+              "dimensions": [],
+              "valid": true
+            }
+          ],
+          "units": [
+            {
+              "definitions": [
+                {
+                  "prefix": "xbrli",
+                  "attributes": {
+                    "id": "shares"
+                  },
+                  "rawDefinition": "<xbrli:unit id=\"shares\">\n<xbrli:measure>xbrli:shares</xbrli:measure>\n</xbrli:unit>",
+                  "filename": "XBRL/PublicDoc/jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04.xbrl",
+                  "memberSha256": "747194e3018a84dd7e29bb070bd8fbba7fc3c36cc30c4c055e64ec55b840553d"
+                }
+              ],
+              "measure": "xbrli:shares",
+              "valid": true
+            },
+            {
+              "definitions": [
+                {
+                  "prefix": "xbrli",
+                  "attributes": {
+                    "id": "shares"
+                  },
+                  "rawDefinition": "<xbrli:unit id=\"shares\">\n<xbrli:measure>xbrli:shares</xbrli:measure>\n</xbrli:unit>",
+                  "filename": "XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm",
+                  "memberSha256": "23ac1ea52ac3072affca48c6b29bae154dab5c910337b606105bf3e9fffcbb10"
+                }
+              ],
+              "measure": "xbrli:shares",
+              "valid": true
+            }
+          ],
+          "qualification": {
+            "status": "hold",
+            "reason": "share-class-unspecified;dimension-free-is-not-ordinary",
+            "kind": null,
+            "economicDate": null,
+            "nativeContextDate": "2026-09-04",
+            "shareClass": "unknown",
+            "rightsApplication": "unknown"
+          }
+        },
+        {
+          "element": "jpcrp_cor:NumberOfIssuedSharesAsOfFilingDateIssuedSharesTotalNumberOfSharesEtc",
+          "namespace": "http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor",
+          "occurrence": 3,
+          "attributes": {
+            "contextRef": "FilingDateInstant",
+            "decimals": "0",
+            "unitRef": "shares"
+          },
+          "rawAttributes": " contextRef=\"FilingDateInstant\" decimals=\"0\" unitRef=\"shares\"",
+          "rawValue": "11000000",
+          "factSha256": "d78b5f06995ed99aee37f40f2b818651e191dd96a8507e95ade41bfe89f7a790",
+          "contextRef": "FilingDateInstant",
+          "unitRef": "shares",
+          "decimals": "0",
+          "contexts": [
+            {
+              "definitions": [
+                {
+                  "prefix": "xbrli",
+                  "attributes": {
+                    "id": "FilingDateInstant"
+                  },
+                  "rawDefinition": "<xbrli:context id=\"FilingDateInstant\">\n<xbrli:entity>\n<xbrli:identifier scheme=\"http://disclosure.edinet-fsa.go.jp\">E39505-000</xbrli:identifier>\n</xbrli:entity>\n<xbrli:period>\n<xbrli:instant>2026-09-04</xbrli:instant>\n</xbrli:period>\n</xbrli:context>",
+                  "filename": "XBRL/PublicDoc/jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04.xbrl",
+                  "memberSha256": "747194e3018a84dd7e29bb070bd8fbba7fc3c36cc30c4c055e64ec55b840553d"
+                }
+              ],
+              "entity": "E39505-000",
+              "instantDate": "2026-09-04",
+              "dimensions": [],
+              "valid": true
+            },
+            {
+              "definitions": [
+                {
+                  "prefix": "xbrli",
+                  "attributes": {
+                    "id": "FilingDateInstant"
+                  },
+                  "rawDefinition": "<xbrli:context id=\"FilingDateInstant\">\n<xbrli:entity>\n<xbrli:identifier scheme=\"http://disclosure.edinet-fsa.go.jp\">E39505-000</xbrli:identifier>\n</xbrli:entity>\n<xbrli:period>\n<xbrli:instant>2026-09-04</xbrli:instant>\n</xbrli:period>\n</xbrli:context>",
+                  "filename": "XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm",
+                  "memberSha256": "23ac1ea52ac3072affca48c6b29bae154dab5c910337b606105bf3e9fffcbb10"
+                }
+              ],
+              "entity": "E39505-000",
+              "instantDate": "2026-09-04",
+              "dimensions": [],
+              "valid": true
+            }
+          ],
+          "units": [
+            {
+              "definitions": [
+                {
+                  "prefix": "xbrli",
+                  "attributes": {
+                    "id": "shares"
+                  },
+                  "rawDefinition": "<xbrli:unit id=\"shares\">\n<xbrli:measure>xbrli:shares</xbrli:measure>\n</xbrli:unit>",
+                  "filename": "XBRL/PublicDoc/jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04.xbrl",
+                  "memberSha256": "747194e3018a84dd7e29bb070bd8fbba7fc3c36cc30c4c055e64ec55b840553d"
+                }
+              ],
+              "measure": "xbrli:shares",
+              "valid": true
+            },
+            {
+              "definitions": [
+                {
+                  "prefix": "xbrli",
+                  "attributes": {
+                    "id": "shares"
+                  },
+                  "rawDefinition": "<xbrli:unit id=\"shares\">\n<xbrli:measure>xbrli:shares</xbrli:measure>\n</xbrli:unit>",
+                  "filename": "XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E39505-000_2026-06-30_01_2026-09-04_ixbrl.htm",
+                  "memberSha256": "23ac1ea52ac3072affca48c6b29bae154dab5c910337b606105bf3e9fffcbb10"
+                }
+              ],
+              "measure": "xbrli:shares",
+              "valid": true
+            }
+          ],
+          "qualification": {
+            "status": "hold",
+            "reason": "share-class-unspecified;dimension-free-is-not-ordinary",
+            "kind": null,
+            "economicDate": null,
+            "nativeContextDate": "2026-09-04",
+            "shareClass": "unknown",
+            "rightsApplication": "unknown"
+          }
+        }
+      ],
+      "sourceQualification": {
+        "status": "verified",
+        "reason": null
+      },
+      "filingDateEvidence": {
+        "rawSubmitDateTime": "2026-09-04 15:37",
+        "provenance": "saved-archive-metadata"
+      }
+    }
+  }
+}
