@@ -87,6 +87,10 @@ SQL/snapshotはNixの通常`drizzle-kit generate --name=edinet_reported_changes`
 
 共有`reportedGrowthHold`の入口だけを修正する。非relation観測の資格済みstock IDと、exact doc IDを実documentへ結ぶstock IDの非相関unionを一度構成し、`CASE`で影響候補だけを従来の厳格guardへ渡す。NULL identityのexact HOLD・未取込qualified報告の両方を保持し、global空表だけに依存しない。旧guardの意味・DDL・金融値・SQL発行回数は変えない。性能修正後もNix full TypeScript/lintと関連23 suites **435 tests**はPASS。実NULL提出者の取下げが無関係ならpublic4出力同値、実3113/3382 metadataに宣言した未取込/facts0は引き続きscreen/sectorを保留する。保存入力の新旧比較とv2 actual READは別証跡で資格化し、後者の受入前に本番の費用増が小さいと確約しない。
 
+v2の本番13 SELECTも全結果は一致したが、旧read 16,620/7,374/16,130/7,374に対し新read 93,060/45,594/92,570/45,594となり、**各SQL一律38,220行**が増えた。受注screenは14.59→774.85msで再び棄却した。原証跡 `edinet-lineage-market-readonly-probe-v2/root-final-acceptance-v1.json` SHA `183a2eab4ae7862fdd4019fa19b7957491f883f7d11437f8f3a66cb7e0b0aa81`と同dir性能判断SHA `6aa2a4543f5b03aa22dd2dc3c6b0374a5d2031dc71e284dd3569555c1b8777b2`を保持する。native EXPLAINは行っておらず、documents側が先行して全走査したという原因は実read差分からの推定である。
+
+v3はunion内のexact doc経路だけを`observations CROSS JOIN documents WHERE documents.doc_id=observations.doc_id`へ変更する。既存のdoc ID UNIQUE索引を使い、観測を外側に固定する。rootが2026-10-17に確認したSQLite一次仕様は、[CROSS JOINの左右順を入れ替えない](https://www.sqlite.org/optoverview.html#manual_control_of_query_plans_using_cross_join)こと、[CASEのlazy評価と非相関副問合せの一度だけの評価](https://www.sqlite.org/lang_expr.html#the_case_expression)を明記する。純EXPLAINでも既存unique doc lookupを確認し、document全走査を拒否する回帰を追加した。原v1/v2の性能棄却を上書きせず、v3の本番read改善は別実測の受入を待つ。 保存163観測を市場selector用SQLiteへ合わせたpublic4関数の合成比較は、元schemaに必要な列が揃わず構築前に停止したため未受入。原値を補作せず、163候補/38 HOLDの原状態保持と歴史selectorの一致、435回帰の資格範囲を分けて残す。
+
 ## I/Oと上限
 
 通常cronの一覧原本capture/Notion物理保管は既存処理を再用するので追加source/Notionは0。変更観測が0なら観測保存のD1 IOも0。観測ありは2 SELECT＋ceil(未保存行/9) INSERT。原metadataが完全なHOLD候補に限り、既存issuer逆引きとnormal core集合を各90件以内で照合するD1 SELECTが増える。保存38 HOLDの候補0にはこのlookupを発行しない。新captureで変更観測ありの場合はsnapshot保全の進捗CAS1回、保存一覧からの再開時は`@list`予約/解除CAS2回が増える。

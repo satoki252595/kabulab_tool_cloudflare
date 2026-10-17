@@ -235,8 +235,8 @@ export function reportedGrowthHold(kind: "orders" | "overseas", stockId: AnyColu
   // NULL identityのexact docは実metadataへjoin、未取込の資格済み報告はstock_id側で保持する。
   return sql`case when ${outer(stockId)} in (
     select affected.stock_id from ${table} affected where affected.reported_state <> 'unqualified_relation' and affected.stock_id is not null
-    union select document.stock_id from ${table} affected join yuho_documents document on document.doc_id=affected.doc_id
-      where affected.reported_state <> 'unqualified_relation'
+    union select document.stock_id from ${table} affected cross join yuho_documents document
+      where document.doc_id=affected.doc_id and affected.reported_state <> 'unqualified_relation'
   ) then (${reportedOverallLatestHold(stockId)} or ${qualifiedProjectionHold(kind,stockId,firstFy,lastFy)} or ${reportedUnrepresentedDocumentHold(kind, stockId, firstFy, lastFy)} or exists (select 1 from ${facts} f join yuho_documents d on d.id = f.document_id
     where f.stock_id = ${outer(stockId)} and f.fiscal_year_end between ${outer(firstFy)} and ${outer(lastFy)}
       and ${used} and ${reportedDocumentHold(sql`d.doc_id`)}

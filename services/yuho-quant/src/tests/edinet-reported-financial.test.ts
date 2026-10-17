@@ -196,6 +196,10 @@ describe("reported exact-document HOLD never selects older financial values", ()
       const plan = sqlite.prepare(`explain query plan ${query.sql}`).all(...query.params as (string | number | null)[]);
       expect(JSON.stringify(plan)).toContain("order_facts_stock_period_idx");
       expect(JSON.stringify(plan)).toContain("yuho_edinet_reported_doc_idx");
+      // The affected-observation loop must use the existing unique doc lookup, never scan all documents.
+      const details=plan.map(row=>String((row as {detail:unknown}).detail));
+      expect(details.some(detail=>/SEARCH document .*yuho_documents_doc_id_unique/.test(detail))).toBe(true);
+      expect(details.some(detail=>/^SCAN document\b/.test(detail))).toBe(false);
     } finally { sqlite.close(); }
   });
 });
