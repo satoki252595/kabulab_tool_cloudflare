@@ -31,6 +31,7 @@ import { semifEnv } from "../../../src/shared/semif/env.js";
 import { z } from "../../../src/shared/zod-mini.js";
 import { parseBenefitChoiceStructure } from "./choice-structure.js";
 import { parseBenefitHoldingStructure } from "./holding-structure.js";
+import { parseBenefitRecordTierStructure } from "./record-tier-structure.js";
 import { benefitKey } from "./benefit-key.js";
 import { loadBenefitRows, openOtakaraD1 } from "./benefit-rows.js";
 import { evaluateCompanyValue } from "./public-facts.js";
@@ -132,25 +133,19 @@ export function compileSimpleSummary(task: SummaryTask): SummaryResult | null {
   if (holding !== null) return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion,
     shortSummary: holding.ast.benefit.kind === "coupon" ? "半年以上保有・クーポン優待" : `1年以上保有・施設入場招待券${holding.ast.benefit.quantity}枚`,
     estimatedValue: companyValue(task).value });
+  const tier = parseBenefitRecordTierStructure(task.description);
+  if (tier !== null) {
+    const amount = companyValue(task);
+    if (amount.value !== null || amount.reason !== "ambiguous_condition_tiers") return null;
+    const [below, above] = tier.ast.tiers;
+    const shortSummary = `保有${below.holdingPeriod}はQUOカード${below.listedYen.toLocaleString("en-US")}円${below.notation}、${above.holdingPeriod}は${above.listedYen.toLocaleString("en-US")}円${above.notation}（継続・株主名簿${tier.ast.registryDefinition.minimumEntries}回以上）`;
+    if (checkSummary(shortSummary).length > 0) return null;
+    return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion, shortSummary, estimatedValue: null });
+  }
   const source = splitHeadedDescription(task.description);
   if (source.malformed) return null;
   const grammar = /^(QUOカードPay|QUOカード|クオカード|図書カードNEXT|図書カード|商品券|ギフトカード|自社商品|カタログギフト)[ \t]*(?:([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)円(分|相当))(?:を贈呈|贈呈)?[。]?$/u;
   const body = source.body.normalize("NFKC").trim();
-  // 互いに補完する2期間・各額面・名簿記録回数・贈呈時期まで全文一致する形だけ。
-  // 名義・連続回数・本人の適用は推定せず、単一評価額と構造化DTOは未確定のまま。
-  const tier = source.heading !== null && /^(?:オリジナル)?QUOカード$/u.test(source.heading.normalize("NFKC").trim())
-    ? /^【([1-9][0-9]*)年未満保有株主】\n([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)円(相当|分)\n【([1-9][0-9]*)年以上保有株主】\n([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)円\3\n■継続保有期間について\n([1-9][0-9]*)年以上継続保有:株主名簿に([1-9][0-9]*)回以上記載または記録\n\n■贈呈時期\n毎年([1-9][0-9]*)月(?:上|中|下)旬発送予定$/u.exec(body) : null;
-  if (tier !== null) {
-    const [years, below, aboveYears, above, definitionYears, records, deliveryMonth] = [tier[1], tier[2], tier[4], tier[5], tier[6], tier[7], tier[8]]
-      .map(value => Number(value.replaceAll(",", "")));
-    if (![years, below, aboveYears, above, definitionYears, records, deliveryMonth].every(value => Number.isSafeInteger(value) && value > 0) ||
-        years !== aboveYears || years !== definitionYears || below === above || deliveryMonth > 12) return null;
-    const amount = companyValue(task);
-    if (amount.value !== null || amount.reason !== "ambiguous_condition_tiers") return null;
-    const shortSummary = `保有${years}年未満はQUOカード${below.toLocaleString("en-US")}円${tier[3]}、${years}年以上は${above.toLocaleString("en-US")}円${tier[3]}（継続・株主名簿${records}回以上）`;
-    if (checkSummary(shortSummary).length > 0) return null;
-    return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion, shortSummary, estimatedValue: null });
-  }
   let match = grammar.exec(body);
   // 種類だけの表見出し＋本文の額面も同じ全文文法で読む。金額は本文で認定する。
   if (match === null && source.heading !== null) match = grammar.exec(`${source.heading.normalize("NFKC").trim()} ${body}`);

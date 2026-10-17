@@ -54,6 +54,17 @@ Mac停止やmirror失敗はreceipt未取得/未完として検出し、過去の
 明示する。条件の異なる優待を同じ要約だけで統合せず、銘柄全体の金額を合計しない。
 認定額は既存の厳密判定と保存額の両方が一致した場合だけ表示する。
 
+全文対応済みのQUOカード2期間だけは`version=4`・`holding-record-tiers-v1`で、
+期間別の掲載円額・名簿定義・毎年の発送予定を保持する。原文SHAと順序を束縛し、
+名簿の記載または記録回数を「同じ名義」「連続記録」や本人の権利取得回数へ読み替えない。
+発送予定は権利月・基準日へ変換せず、評価額はNULL、本人適用は`unverified`のまま。
+旧v1〜v3は同値で再読できる。他の期間・株数段階・併用は未解析を保つ。
+既存の正常compilerとproducerが同じ全文parserを使う。既存行の自動更新・全件再生成は追加しない。
+既存v1の1群/1行/1銘柄だけを明示する`prepare-upgrade-record-tier-v1` / `apply-upgrade-record-tier-v1`は、
+通常の全列CAS・物理PRE/POST・canonical `.env`起点の専用once stateを使う。
+scopeの`kind`は`holding-record-tiers-v1`。原文SHA・全recipient・旧v1全値の現在一致が必要で、
+結果不明・既更新では再送しない。consumer配備とfresh scoped PREを受け入れてから実行する。
+
 通常の全量取込でDTOを保存する。本文修正時は旧DTOを無効化し、再生成までは
 未確認と表示する。既存行の再生成では、同一本文の全株数・権利月を判定対象に含める。
 追加のモデル実行や外部通信は不要である。認証付きJSS `/v1/yutai/:code` も同じDTOを

@@ -80,6 +80,7 @@ kabuMCP の `edinet_*` とは分けてある（クライアントに両方登録
 掲載URLを公式出典として扱わず、公式未照合と再配布権の未確認も維持する。
 新規producerの `public_facts.version=2` は `conditionStructure` に正規化前原文の全文SHAと、対応済み全文文法の `take: 1`・選択肢の連続番号・掲載円額・`相当`/`分` を持つ。商品ラベル・原文は含まない。掲載円額は `qualifiedAmount` や合計額ではなく、評価額はNULLを保つ。未対応は `status: unparsed`・`ast: null`・理由を返し、保有期間別・併用の構造は未解析のまま。旧v1も変更せず再読できる。既存v1を全件書き換える処理は追加しない。
 厳密な全文2文法だけは `version=3`・`single-holding-period-v1` で掲載期間と円相当額または入場券枚数の対応を返す。原文・施設名は含めず、`applicability: unverified` とする。旧資格済み掲載額・理由・時計は保持し、券枚数から円評価しない。本人、株数段階、同株主番号・記録回数、複数期間、併用は未確認。共有strict parserを使うprivate JSS consumerを配備してからv3実データを採用する。コード配備だけで既存行を更新する処理はない。
+既存全文定型と同じQUOカードの2期間は `version=4`・`holding-record-tiers-v1` で、原文SHA、順序付きの掲載期間と円額、明記された継続保有期間の名簿記載/記録回数、毎年の発送予定を返す。本人適用は `unverified`、`qualifiedAmount` はNULL、`can_aggregate: false` を保つ。回数を連続・同一名義や本人の権利取得回数に読み替えず、発送月を権利月へ変換しない。旧v1〜v3も同値で再読する。一般の期間/株数tierと併用は未解析で、v4対応consumer配備と既存1行の明示通常CLIによる有限採用は別受入とする。
 応答は `personal-only`。公開Workerの同経路は引き続き404である。
 
 ## 需給の出典契約
