@@ -1095,13 +1095,47 @@ export class SupplementWriteHeldError extends Error {
 /** Node production supplies the same durable sink for every normal publisher call. */
 export interface SupplementPublicationJournal {
   assertReady(): void;
+  /** Explicit reconciliation additionally binds the normal planner's current source pointer. */
+  bindSource?(input: { stockCode: string; docId: string | null; sourcePageId: string | null }): void;
   /** Creation has no previous page ID; bind the actual target before the first POST. */
   reserveCreate?(input: { dbId: string; stockCode: string; nextDocId: string | null; snapshot: string }): {
     complete(output: { pageId: string; postPageSha256: string }): void;
   };
   reserve(input: { pageId: string; nextDocId: string; archiveKey: string; snapshot: string }): {
+    /** Explicit, once-only reconciliation of a PRE archive POST; never an unknown business write. */
+    preArchive?: { pageId: string; createRequest: SupplementPreArchiveRequest; beforeWrite(): Promise<void> };
     complete(output: { archivePageId: string; postPageSha256: string }): void;
   };
+}
+
+export interface SupplementPreArchiveRequest {
+  parent: { database_id: string };
+  properties: Record<string, Record<string, unknown>>;
+}
+
+/** Read only: unique original key, exact submitted metadata and full physical PRE. No adoption/write. */
+export async function verifySupplementPreArchive(pageId: string, archiveKey: string, snapshot: string, request: SupplementPreArchiveRequest): Promise<void> {
+  const fail = (): never => { throw new SupplementWriteHeldError("明示PRE照合のkey/主体/metadata/実体が不一致。未閉鎖intentを保持"); };
+  const query = await notionRequest<{ results: Array<{ id: string }>; has_more: boolean; next_cursor: string | null }>(
+    "POST", `/databases/${request.parent.database_id}/query`, { filter: { property: "Key", title: { equals: archiveKey } }, page_size: 2 }, { singleAttempt: true });
+  if (!Array.isArray(query.results) || query.has_more !== false || query.next_cursor !== null || query.results.length !== 1 || query.results[0].id !== pageId) fail();
+  const page = await evidencePage(pageId) as EvidencePage & { parent: { database_id: string }; object: string };
+  if (page.object !== "page" || page.archived !== false || page.in_trash !== false || page.parent.database_id.replaceAll("-", "") !== request.parent.database_id.replaceAll("-", "")) fail();
+  for (const name of ["Key", "Service", "Source", "Status", "Metadata"]) {
+    if (JSON.stringify(propertyValue(page.properties[name])) !== JSON.stringify(propertyValue(request.properties[name]))) fail();
+  }
+  if (propertyValue(page.properties.Key) !== archiveKey || propertyValue(page.properties.Service) !== "yuho-quant" || propertyValue(page.properties.Status) !== "recorded") fail();
+  const submitted = Date.parse(propertyValue(request.properties["Fetched At"]) as string), current = Date.parse(propertyValue(page.properties["Fetched At"]) as string);
+  if (!Number.isFinite(submitted) || !Number.isFinite(current) || current !== submitted && current !== Math.floor(submitted / 60_000) * 60_000) fail();
+  const metadata = JSON.parse(propertyValue(page.properties.Metadata) as string);
+  if (metadata.sha256 !== await sha256Hex(snapshot) || metadata.pageId === undefined || metadata.nextDocId === undefined ||
+      metadata._fileManifest?.version !== 1 || typeof metadata._fileManifest.inputFingerprint !== "string" || !/^[a-f0-9]{64}$/.test(metadata._fileManifest.inputFingerprint) ||
+      !Array.isArray(metadata._fileManifest?.files) || metadata._fileManifest.files.length !== 1 ||
+      metadata._fileManifest.files[0].originalFilename !== "biztag-pre.json" || metadata._fileManifest.files[0].uploadFilename !== "biztag-pre.json" ||
+      metadata._fileManifest.files[0].originalMime !== "application/json" || metadata._fileManifest.files[0].uploadMime !== "application/json" || metadata._fileManifest.files[0].upload !== "uploaded" ||
+      metadata._fileManifest.files[0].byteLength !== new TextEncoder().encode(snapshot).length ||
+      metadata._fileManifest.files[0].sha256 !== metadata.sha256) fail();
+  await verifyArchivedAttachments(pageId, [{ filename: "biztag-pre.json", bytes: new TextEncoder().encode(snapshot) }], "明示照合済み事業タグPRE");
 }
 
 /**
@@ -1152,29 +1186,41 @@ export async function replaceEvidenceBlock(
   const publication = journal.reserve({ pageId, nextDocId: input.docId, archiveKey, snapshot });
   const filename = "biztag-pre.json";
   const file = { filename, bytes: new TextEncoder().encode(snapshot), contentType: "application/json" };
-  const stored = await recordPrimaryData({ service: "yuho-quant", key: archiveKey,
-    source: `Notion supplement ${pageId}`, metadata: { pageId, sha256: preSha, nextDocId: input.docId }, files: [file] });
-  if (stored.outcome === "skipped_existing") throw new NotionUnknownResultError(`同じPREの既存実行あり。自動再送せず照合してください。PRE=${stored.pageId}`);
-  await verifyArchivedAttachments(stored.pageId, [file], "事業タグ更新前PRE");
+  let archivePageId: string;
+  if (publication.preArchive !== undefined) {
+    if (block !== undefined) throw new SupplementWriteHeldError("PRE保管照合の再開は機械的本文同期だけです");
+    archivePageId = publication.preArchive.pageId;
+    await verifySupplementPreArchive(archivePageId, archiveKey, snapshot, publication.preArchive.createRequest);
+  } else {
+    const stored = await recordPrimaryData({ service: "yuho-quant", key: archiveKey,
+      source: `Notion supplement ${pageId}`, metadata: { pageId, sha256: preSha, nextDocId: input.docId }, files: [file] });
+    if (stored.outcome === "skipped_existing") throw new NotionUnknownResultError(`同じPREの既存実行あり。自動再送せず照合してください。PRE=${stored.pageId}`);
+    archivePageId = stored.pageId;
+    await verifyArchivedAttachments(archivePageId, [file], "事業タグ更新前PRE");
+  }
   const fresh = await evidencePage(pageId);
   if (JSON.stringify(canonicalizeForHash(fresh)) !== JSON.stringify(canonicalizeForHash(before))) throw new SupplementWriteHeldError("PRE保管中に補足が変更 (旧根拠保持・HOLD)");
+  if (publication.preArchive !== undefined && JSON.stringify(canonicalizeForHash(await evidenceChildren(pageId))) !== JSON.stringify(canonicalizeForHash(children))) {
+    throw new SupplementWriteHeldError("PRE照合中に旧根拠が変更。未閉鎖intentを保持");
+  }
   await beforeWrite(); // 対象1社のD1最新doc/pointer。ここまではbusiness write 0。
+  if (publication.preArchive !== undefined) await publication.preArchive.beforeWrite();
   if (block !== null && block !== undefined) {
     try {
       const appended = await notionRequest<{ results: ChildBlock[] }>("PATCH", `/blocks/${pageId}/children`, { children: [block] }, { singleAttempt: true });
       if (!Array.isArray(appended.results) || appended.results.length !== 1 || typeof appended.results[0].id !== "string") {
-        throw new NotionUnknownResultError(`新根拠append ACKが不正。旧根拠保持、PRE=${stored.pageId}`);
+        throw new NotionUnknownResultError(`新根拠append ACKが不正。旧根拠保持、PRE=${archivePageId}`);
       }
       const got = await notionRequest<ChildBlock>("GET", `/blocks/${appended.results[0].id}`);
-      if (got.id !== appended.results[0].id || got.archived === true || got.in_trash === true) throw new Error(`新根拠ID/状態の読戻し不一致。PRE=${stored.pageId}`);
+      if (got.id !== appended.results[0].id || got.archived === true || got.in_trash === true) throw new Error(`新根拠ID/状態の読戻し不一致。PRE=${archivePageId}`);
       if (got.has_children) {
         got[got.type] = { ...(got[got.type] as Record<string, unknown>), children: await evidenceChildren(got.id) };
       }
       if (JSON.stringify(evidenceValue(got)) !== JSON.stringify(evidenceValue(block))) {
-        throw new Error(`新根拠の全文読戻し不一致 (旧根拠・旧properties保持)。PRE=${stored.pageId}`);
+        throw new Error(`新根拠の全文読戻し不一致 (旧根拠・旧properties保持)。PRE=${archivePageId}`);
       }
     } catch (cause) {
-      throw new NotionUnknownResultError(`新根拠の結果確認が未完。再送せずPREと現値を照合してください。PRE=${stored.pageId}`, { cause });
+      throw new NotionUnknownResultError(`新根拠の結果確認が未完。再送せずPREと現値を照合してください。PRE=${archivePageId}`, { cause });
     }
   }
   let postPageSha256: string;
@@ -1191,19 +1237,25 @@ export async function replaceEvidenceBlock(
         throw new Error(`補足の保持対象が読戻し時に変更: ${name}`);
       }
     }
+    if (publication.preArchive !== undefined) {
+      for (const [name, expected] of Object.entries(before.properties)) {
+        if (!(name in props) && JSON.stringify(propertyValue(after.properties[name])) !== JSON.stringify(propertyValue(expected))) throw new Error(`明示PRE再開の保持列が変更: ${name}`);
+      }
+      if (JSON.stringify(canonicalizeForHash(await evidenceChildren(pageId))) !== JSON.stringify(canonicalizeForHash(children))) throw new Error("明示PRE再開の旧根拠が変更");
+    }
     postPageSha256 = await sha256Hex(JSON.stringify(canonicalizeForHash(after)));
   } catch (cause) {
-    throw new NotionUnknownResultError(`補足propertiesの結果確認が未完。再送・旧根拠削除を停止しPREと現値を照合してください。PRE=${stored.pageId}`, { cause });
+    throw new NotionUnknownResultError(`補足propertiesの結果確認が未完。再送・旧根拠削除を停止しPREと現値を照合してください。PRE=${archivePageId}`, { cause });
   }
   try {
     for (const previous of block === undefined ? [] : old) {
       const retired = await notionRequest<{ id: string; archived: boolean }>("DELETE", `/blocks/${previous.id}`, undefined, { singleAttempt: true });
-      if (retired.id !== previous.id || retired.archived !== true) throw new NotionUnknownResultError(`旧根拠退役ACKが不正。PRE=${stored.pageId}`);
+      if (retired.id !== previous.id || retired.archived !== true) throw new NotionUnknownResultError(`旧根拠退役ACKが不正。PRE=${archivePageId}`);
       const check = await notionRequest<{ id: string; archived: boolean }>("GET", `/blocks/${previous.id}`);
-      if (check.id !== previous.id || check.archived !== true) throw new NotionUnknownResultError(`旧根拠退役の読戻し不一致。PRE=${stored.pageId}`);
+      if (check.id !== previous.id || check.archived !== true) throw new NotionUnknownResultError(`旧根拠退役の読戻し不一致。PRE=${archivePageId}`);
     }
   } catch (cause) {
-    throw new NotionUnknownResultError(`旧根拠退役の結果確認が未完。再送せずPREと現値を照合してください。PRE=${stored.pageId}`, { cause });
+    throw new NotionUnknownResultError(`旧根拠退役の結果確認が未完。再送せずPREと現値を照合してください。PRE=${archivePageId}`, { cause });
   }
-  publication.complete({ archivePageId: stored.pageId, postPageSha256 });
+  publication.complete({ archivePageId, postPageSha256 });
 }

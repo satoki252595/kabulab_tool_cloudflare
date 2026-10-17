@@ -15,6 +15,7 @@ import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createClefJournal } from "../../../scripts/biztag-local/clef-journal.js";
+import { reconcileSupplementPreArchive } from "../../../scripts/biztag-local/publication-journal.js";
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import {
   createLedgerEntry,
@@ -113,8 +114,22 @@ async function runCommand(): Promise<void> {
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
   const dryRun = hasFlag("dry-run");
+  const reconciliationStartedAt = Date.now();
+  const reconciliationPath = arg("reconcile-pre-archive"), reconciliationSha256 = arg("reconcile-proof-sha256");
+  let reconciliation: Awaited<ReturnType<typeof reconcileSupplementPreArchive>> | undefined;
+  if (reconciliationPath !== undefined || reconciliationSha256 !== undefined) {
+    if (reconciliationPath === undefined || reconciliationSha256 === undefined || !hasFlag("mechanical-only") || dryRun ||
+        hasFlag("refresh-text-receipt") || codes?.length !== 1 || limit !== 1 || arg("budget-min") === undefined ||
+        !Number.isFinite(budgetMin) || budgetMin <= 0 || budgetMin > 15) {
+      throw new Error("PRE保管の明示照合はproof/SHA・固定1code/limit1・mechanical-only・明示15分以内budgetが必要です");
+    }
+    reconciliation = await reconcileSupplementPreArchive({ proofPath: reconciliationPath, proofSha256: reconciliationSha256, stockCode: codes[0] });
+  }
+  const remainingBudgetMs = reconciliation === undefined ? budgetMin * 60_000 : budgetMin * 60_000 - (Date.now() - reconciliationStartedAt);
+  if (reconciliation !== undefined && remainingBudgetMs <= 0) throw new Error("PRE照合で有限budgetを消費。未閉鎖intentを保持して停止します");
 
   const summary = await runBiztag({
+    publicationJournal: reconciliation?.journal,
     localJournal: input => {
       // Same canonical .env directory and kernel writer boundary as withBiztagWriter; values never enter the journal.
       journal ??= createClefJournal(join(dirname(realpathSync(fileURLToPath(new URL("../../../.env", import.meta.url)))), "tmp/biztag-local"), {
@@ -123,7 +138,7 @@ async function runCommand(): Promise<void> {
       });
       return journal(input);
     },
-    budgetMs: budgetMin * 60_000,
+    budgetMs: remainingBudgetMs,
     limit,
     codes,
     dryRun,
@@ -137,6 +152,7 @@ async function runCommand(): Promise<void> {
     },
     model: CLEF_MODEL,
   });
+  reconciliation?.assertComplete();
   if (summary.judge === undefined) {
     throw new Error("Clef-Flash の実行計測がありません。STOP");
   }
