@@ -1,0 +1,31 @@
+{
+  "description": "保存EDINET type1実原本。新GET/原文変更0。報告消却実施日・明示普通株数だけの根拠で、法的効力日/市場落日/価格係数へ昇格しない。",
+  "source": {
+    "docId": "S100YH48",
+    "stockCode": "6484",
+    "edinetCode": "E01434",
+    "fiscalYearEnd": "2026-03-31"
+  },
+  "zipBytes": 502916,
+  "zipSha256": "97d7bfa91030bc4c30a8e6d367be62a555f97faa2fea4c46f65e22c20a1507ec",
+  "instance": "XBRL/PublicDoc/jpcrp030000-asr-001_E01434-000_2026-03-31_01_2026-06-23.xbrl",
+  "memberSha256": "8783f731312436d946809682b3fc9a3eeeff8c9bf61fde28f0e88c14830fea0a",
+  "historyFactSha256": "fc9f63f45ce1f0aea70bfbf16f776d2697ca30f6dc72063409f53a97b43ef005",
+  "normalizedTextSha256": "1e63648537167dadfb53b7e25912b30a6e5a0bde64a2db6b4ea1e6307a91088f",
+  "rawSubmitDateTime": "2026-06-23 10:00",
+  "expectedReportedDate": "2024-01-31",
+  "expectedReportedCancelledShares": "24900",
+  "expectedOrdinaryFiscalYearEndShares": "8322178",
+  "sourceManifestSha256": "5fa05d6ce0245679af3ed0d22dba1a371420eb700ba0a4f494dd19a025af87aa",
+  "savedSourceAuditSha256": "1aac3ab6d2ab2c29d7288ecf21ff3c11d0923aeccd1dbda3738b56fd1c4ce63b",
+  "ownerName": "株式会社ＫＶＫ",
+  "sourceMetadata": {
+    "docID": "S100YH48",
+    "edinetCode": "E01434",
+    "secCode": "64840",
+    "filerName": "株式会社ＫＶＫ",
+    "periodEnd": "2026-03-31",
+    "submitDateTime": "2026-06-23 10:00"
+  },
+  "sourceMetadataProjectionNote": "保存正準itemの実identity/提出日時だけをprotocol境界へ投影。財務値や原典clockを補完しない。"
+}

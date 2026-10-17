@@ -1,0 +1,31 @@
+{
+  "description": "保存EDINET type1実原本。新GET/原文変更0。報告消却実施日・明示普通株数だけの根拠で、法的効力日/市場落日/価格係数へ昇格しない。",
+  "source": {
+    "docId": "S100YCXB",
+    "stockCode": "7313",
+    "edinetCode": "E02380",
+    "fiscalYearEnd": "2026-03-31"
+  },
+  "zipBytes": 996376,
+  "zipSha256": "51152562b9bd2cf480e4a59bb024d7bfeb2cfdd9f8da57750755997a8a960e5f",
+  "instance": "XBRL/PublicDoc/jpcrp030000-asr-001_E02380-000_2026-03-31_01_2026-06-17.xbrl",
+  "memberSha256": "b4af84024854a70f0fa81e66ff18ffc7a85c416eb5202482492434c66bfe77a9",
+  "historyFactSha256": "eb7ad7a9f8cbce231731389193ba48276fee06b3951ab4a5e95c7c66ac885b76",
+  "normalizedTextSha256": "890215d88493a1abc9d807e69ae709290975c1f64a2fcd96eab17d6a55fab126",
+  "rawSubmitDateTime": "2026-06-17 16:11",
+  "expectedReportedDate": "2025-05-30",
+  "expectedReportedCancelledShares": "12000000",
+  "expectedOrdinaryFiscalYearEndShares": "124000000",
+  "sourceManifestSha256": "5fa05d6ce0245679af3ed0d22dba1a371420eb700ba0a4f494dd19a025af87aa",
+  "savedSourceAuditSha256": "1aac3ab6d2ab2c29d7288ecf21ff3c11d0923aeccd1dbda3738b56fd1c4ce63b",
+  "ownerName": "テイ・エス　テック株式会社",
+  "sourceMetadata": {
+    "docID": "S100YCXB",
+    "edinetCode": "E02380",
+    "secCode": "73130",
+    "filerName": "テイ・エス　テック株式会社",
+    "periodEnd": "2026-03-31",
+    "submitDateTime": "2026-06-17 16:11"
+  },
+  "sourceMetadataProjectionNote": "保存正準itemの実identity/提出日時だけをprotocol境界へ投影。財務値や原典clockを補完しない。"
+}

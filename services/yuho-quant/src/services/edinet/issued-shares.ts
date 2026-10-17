@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { readFilingDateInstant } from "./duration-context.js";
 import { stripHtml } from "./text-sections.js";
+import { extractTables, tableToGrid } from "./html-table.js";
 import { verifyHoldingsSourceEntries, type ShareholdingsSource } from "./shareholdings.js";
 import { unzip, type ZipEntries } from "./zip.js";
 
@@ -103,6 +104,82 @@ export interface ReportedOptionExercises {
     individualExerciseDate: null; legalEffectiveDate: null; rightsApplication: "unknown" }>;
 }
 
+/** 会社が原文で報告した普通株消却。法的効力日/市場落日/価格係数にはしない。 */
+export interface ReportedCancellations {
+  status: "observed" | "held" | "not-observed"; reason: string | null;
+  historyFactSha256: string | null; normalizedTextSha256: string | null;
+  nativeContext: { entity: string; instantDate: string } | null;
+  statements: Array<{ normalizedLiteral: string; reportedCancellationDate: string; reportedCancelledShares: string;
+    shareClass: "ordinary"; unit: "shares"; legalEffectiveDate: null; marketExDate: null; rightsApplication: "unknown";
+    tableSha256: string; rowSha256: string; dateCell: string; deltaCell: string; ordinaryFiscalYearFactSha256: string }>;
+}
+
+function reportedCancellations(instance: Native, history: ReportedOptionExercises | undefined,
+  observations: NonNullable<IssuedShareObservation["observations"]>, filingDate: string | null, fiscalYearEnd: string): ReportedCancellations {
+  const out: ReportedCancellations = { status: "not-observed", reason: "限定した普通株消却の原文は未観測です",
+    historyFactSha256: history?.factSha256 === undefined ? null : history.factSha256,
+    normalizedTextSha256: history?.normalizedTextSha256 === undefined ? null : history.normalizedTextSha256,
+    nativeContext: history?.nativeContext === undefined ? null : history.nativeContext, statements: [] };
+  const hold = (reason: string): ReportedCancellations => ({ ...out, status: "held", reason, statements: [] });
+  // 既存診断が資格化した同一history fact/native contextだけを再利用する。
+  if (history?.status === "not-observed" && history.factSha256 === null) return out;
+  if (history === undefined || history.factSha256 === null || history.normalizedTextSha256 === null || history.nativeContext === null)
+    return hold("cancellation-history-unqualified");
+  const facts = [...instance.masked.matchAll(/<([\w.-]+):ChangesInNumberOfIssuedSharesStatedCapitalEtcTextBlock\b([^>]*?)>([\s\S]*?)<\/\1:ChangesInNumberOfIssuedSharesStatedCapitalEtcTextBlock\s*>/g)];
+  if (facts.length !== 1 || sha(instance.raw.slice(facts[0].index, facts[0].index + facts[0][0].length)) !== history.factSha256)
+    return hold("cancellation-history-proof-mismatch");
+  if (facts[0][3].length > 512 * 1024) return hold("cancellation-history-size-unqualified");
+  const html = stripHtml(facts[0][3]), text = stripHtml(html).normalize("NFKC");
+  if (sha(text) !== history.normalizedTextSha256) return hold("cancellation-history-text-mismatch");
+  if (!text.includes("消却")) return out;
+  if (/子会社|関連会社|第三者割当|取得|処分|予定|計画|取消|訂正/.test(text)) return hold("cancellation-competing-or-planned-wording");
+  const ordinary = observations.filter(o => o.qualification.status === "observed-kind" && o.qualification.kind === "fiscal-year-end" && o.qualification.shareClass === "ordinary");
+  if (filingDate === null || history.nativeContext.instantDate !== filingDate || ordinary.length !== 1)
+    return hold("cancellation-ordinary-fact-or-filing-clock-unqualified");
+  const tables = extractTables(html);
+  if (tables.length !== 1 || [...html.matchAll(/<table\b/gi)].length !== 1 || [...html.matchAll(/<\/table\s*>/gi)].length !== 1 ||
+      /\b(?:colspan|rowspan)\s*=/i.test(tables[0])) return hold("cancellation-history-table-shape-unqualified");
+  for (const tag of ["tr", "td", "th"]) if ([...tables[0].matchAll(new RegExp(`<${tag}\\b`, "gi"))].length !==
+    [...tables[0].matchAll(new RegExp(`<\\/${tag}\\s*>`, "gi"))].length) return hold("cancellation-history-table-shape-unqualified");
+  const grid = tableToGrid(tables[0]).map(row => row.map(cell => cell.normalize("NFKC")));
+  const compact = (v: string) => v.replace(/\s/g, "");
+  if (grid.length < 2 || grid.length > 64 || grid.some(row => row.length !== 7) ||
+      grid[0].slice(0, 3).map(compact).join("|") !== "年月日|発行済株式総数増減数(株)|発行済株式総数残高(株)")
+    return hold("cancellation-history-table-columns-or-unit-unqualified");
+  const integer = (v: string) => /^(?:[1-9]\d*|[1-9]\d{0,2}(?:,\d{3})+)$/.test(v) && Number.isSafeInteger(Number(v.replaceAll(",", "")));
+  if (!integer(grid.at(-1)![2]) || grid.at(-1)![2].replaceAll(",", "") !== ordinary[0].rawValue.trim())
+    return hold("cancellation-history-balance-fy-fact-mismatch");
+  const notes = stripHtml(html.replace(tables[0], " ")).normalize("NFKC")
+    .replace(/^\(4\)\s*【発行済株式総数、資本金等の推移】\s*/, "");
+  const sentences = notes.split("。").map(s => s.trim()).filter(s => s.includes("消却"));
+  if (sentences.length === 0 || sentences.length > 8) return hold("cancellation-wording-or-count-unqualified");
+  const statements: ReportedCancellations["statements"] = [];
+  for (const literal of sentences) {
+    const m = /^(?:\(注\)\s*)?(?:自己株式の消却\s*)?当社は(\d{4})年(\d{1,2})月(\d{1,2})日開催の取締役会決議に基づき、(\d{4})年(\d{1,2})月(\d{1,2})日付で普通株式([\d,]+)株の自己株式を消却いたしました$/.exec(literal);
+    const n = /^(?:\(注\)\s*)?(\d{4})年(\d{1,2})月(\d{1,2})日付で実施した、普通株式([\d,]+)株の消却によるものであります$/.exec(literal);
+    const p = /^(\d+)\s+(\d{4})年(\d{1,2})月(\d{1,2})日付で普通株式([\d,]+)株を消却し、発行済株式総数が([\d,]+)株減少しています$/.exec(literal);
+    if (m === null && n === null && p === null) return hold("cancellation-wording-unqualified");
+    const parts = m !== null ? m.slice(4, 7) : n !== null ? n.slice(1, 4) : p!.slice(2, 5);
+    const reportedDate = `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}`;
+    const count = m !== null ? m[7] : n !== null ? n[4] : p![5];
+    if (!date(reportedDate) || reportedDate > fiscalYearEnd || reportedDate > filingDate || !integer(count) || p !== null && p[5] !== p[6])
+      return hold("cancellation-date-or-quantity-unqualified");
+    if (m !== null) {
+      const decision = `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+      if (!date(decision) || decision > reportedDate) return hold("cancellation-decision-date-unqualified");
+    }
+    const shares = count.replaceAll(",", "");
+    const matches = grid.slice(1).filter(row => compact(row[0]) ===
+      `${parts[0]}年${Number(parts[1])}月${Number(parts[2])}日(注${p === null ? "" : p[1]})` && row[1] === `△${count}`);
+    if (matches.length !== 1 || statements.some(s => s.reportedCancellationDate === reportedDate)) return hold("cancellation-table-row-or-uniqueness-unqualified");
+    statements.push({ normalizedLiteral: copyText(`${literal}。`), reportedCancellationDate: reportedDate, reportedCancelledShares: shares,
+      shareClass: "ordinary", unit: "shares", legalEffectiveDate: null, marketExDate: null, rightsApplication: "unknown",
+      tableSha256: sha(tables[0]), rowSha256: sha(JSON.stringify(matches[0])), dateCell: copyText(matches[0][0]), deltaCell: copyText(matches[0][1]),
+      ordinaryFiscalYearFactSha256: ordinary[0].factSha256 });
+  }
+  return { ...out, status: "observed", reason: null, statements };
+}
+
 function reportedOptionExercises(instance: Native, natives: readonly Native[], filingDate: string | null, expectedEntity: string): ReportedOptionExercises {
   const out: ReportedOptionExercises = { status: "not-observed", reason: "限定した原文行使期間は未観測です", element: null,
     namespace: null, factSha256: null, normalizedTextSha256: null, contextRef: null, nativeContext: null, statements: [] };
@@ -143,6 +220,8 @@ function reportedOptionExercises(instance: Native, natives: readonly Native[], f
 
 export interface IssuedShareObservation {
   reportedOptionExercises?: ReportedOptionExercises;
+  /** 欠測は未資格。予算外の省略は別の構造化HOLDログへ通知し、観測0としない。 */
+  reportedCancellations?: ReportedCancellations;
   version: 1; status: "observed" | "observed-with-holds" | "not-observed" | "held" | "unknown";
   reason: string | null; source: ShareholdingsSource | null; zipSha256: string; candidateCount: number | null;
   sourceQualification: { status: "verified" | "held" | "unknown"; reason: string | null };
@@ -244,8 +323,20 @@ export function observeIssuedShares(zip: Buffer, source: ShareholdingsSource | n
     }
     if (optionHold !== null) optionExercises = { status: "held", reason: optionHold, element: null, namespace: null,
       factSha256: null, normalizedTextSha256: null, contextRef: null, nativeContext: null, statements: [] };
-    // Old fields retain their 64KiB contract; this separately bounded addition makes total <=72KiB.
-    return { ...result, reportedOptionExercises: optionExercises };
+    let cancellations: ReportedCancellations;
+    try { cancellations = reportedCancellations(instance, optionExercises, observations, declaredFilingDate, source.fiscalYearEnd); }
+    catch { cancellations = { status: "held", reason: "cancellation-parser-exception;original-observations-preserved",
+      historyFactSha256: null, normalizedTextSha256: null, nativeContext: null, statements: [] }; }
+    const additionBytes = () => Buffer.byteLength(JSON.stringify({ reportedOptionExercises: optionExercises, reportedCancellations: cancellations })) - 1;
+    if (additionBytes() > 8 * 1024) cancellations = { status: "held", reason: "cancellation-diagnostic-budget-exceeded",
+      historyFactSha256: null, normalizedTextSha256: null, nativeContext: null, statements: [] };
+    if (additionBytes() > 8 * 1024) {
+      console.warn(JSON.stringify({ diagnostic: "reportedCancellations", status: "held", reason: "diagnostic-budget",
+        code: source.stockCode, docId: source.docId, zipSha256: base.zipSha256 }));
+      return { ...result, reportedOptionExercises: optionExercises };
+    }
+    // Old fields retain 64KiB; both additions share the existing 8KiB envelope.
+    return { ...result, reportedOptionExercises: optionExercises, reportedCancellations: cancellations };
   } catch (error) {
     const reason = `原本/DEI資格を確定できません: ${error instanceof Error ? error.message : String(error)}`;
     return { ...base, status: "held", reason, sourceQualification: base.sourceQualification.status === "verified" ? base.sourceQualification : { status: "held", reason } };
