@@ -18,6 +18,8 @@ subprocess で呼ぶ 1 経路のみ。`ctx.upload_raw` / local / R2 原本 SDK �
   の sector33 不足が残れば partial (exit 1) → moneyflow は進まない。
 - D1 設定は必須。想定外の local 設定は `run_job` 前の typed config STOP。
   `--limit` / `--codes` は部分 scope を作るため受けない (config STOP)。
+- `--archive-only` は物理 custody 後に終了し、業種 DML はしない。
+  共通 runner の D1 実行記録は通常どおり残す。
 """
 
 from __future__ import annotations
@@ -433,6 +435,10 @@ def execute(ctx: JobContext) -> SectorReport:
     else:
         logger.info("dry-run: archive CLI と D1 書込を省く (fetch/parse/gate/plan のみ)")
 
+    if ctx.args.archive_only:
+        logger.info("archive-only: 業種更新を省く (archive_page_id=%s)", report.archive_page_id)
+        return report
+
     try:
         _validate_current_snapshot(current)
     except SectorPrewriteStop as exc:
@@ -490,13 +496,14 @@ def execute(ctx: JobContext) -> SectorReport:
 def main(argv: list[str] | None = None, *, env: dict[str, str] | None = None) -> int:
     """D1 必須 + 想定外 local 拒否を `run_job` の前に typed STOP (exit 2)。"""
     parser = build_parser("EDINET sector33 のみ同期 (cadence)")
+    parser.add_argument("--archive-only", action="store_true", help="原本の物理照合後に終了し、業種を更新しない")
     args = parser.parse_args(argv)
     try:
         check_sector_config(load_settings(env=env), args)
     except SectorConfigError as exc:
         logger.error("config STOP: %s", exc)
         return 2
-    return run_job(JOB_NAME, execute, argv, parser=parser, env=env)
+    return run_job("sector33_archive" if args.archive_only else JOB_NAME, execute, argv, parser=parser, env=env)
 
 
 if __name__ == "__main__":
