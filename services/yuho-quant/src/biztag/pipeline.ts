@@ -125,6 +125,8 @@ export interface RunSummary {
   qualificationHeld?: string[];
   /** このrunで実際に39本文を完全検査した銘柄。旧summaryは省略可能、現在runは常に返す。 */
   textCheckedCodes?: string[];
+  /** textCheckedCodesと同じ実検査母集団の39列別空欄数。非開示の理由を推測しない。 */
+  textEmptyCounts?: Record<string, number>;
   /** このrunの有限検査scope。exit0や旧タグ判定率を全補足充足へ転用しない。 */
   fieldCoverage?: { scope: "explicit_codes" | "daily_window"; selectedForTextCheck: number; textChecked: number; textUnchecked: number;
     textMismatched: number; textRepaired: number; metadataRepaired: number; status: "checked_scope_complete" | "partial" | "attention";
@@ -439,6 +441,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
   let jevOutputTokens = 0;
   let workBudgetLeft = opts.limit ?? Infinity;
   const checked = new Set<string>(); let textMismatched = 0, textRepaired = 0, metadataRepaired = 0;
+  const textEmptyCounts = Object.fromEntries(TEXT_SECTIONS.map(({ title }) => [title, 0]));
 
   for (let i = 0; i < items.length; i++) {
     publicationJournal.assertReady();
@@ -464,7 +467,12 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     if (codes !== undefined && ["create_row", "sync_and_tag", "retag", "retry", "sync_metadata", "verify_text", "sync_text"].includes(item.kind)) await loadMaster();
     try {
       const outcome = await processStock(item, deps);
-      if (outcome.textChecked && verification.has(item.stockCode)) checked.add(item.stockCode);
+      if (outcome.textChecked && verification.has(item.stockCode)) {
+        if (!Array.isArray(outcome.textEmptySections) || new Set(outcome.textEmptySections).size !== outcome.textEmptySections.length ||
+            outcome.textEmptySections.some(title => typeof title !== "string" || !Object.hasOwn(textEmptyCounts, title))) throw new Error("実検査39本文の空欄計数が不正です");
+        checked.add(item.stockCode);
+        for (const title of outcome.textEmptySections) textEmptyCounts[title]++;
+      }
       if (outcome.textMismatch) textMismatched++;
       if (outcome.textRepaired && !opts.dryRun) textRepaired++;
       if (outcome.metadataRepaired && !opts.dryRun) metadataRepaired++;
@@ -532,6 +540,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     billingBlocked: [...billingBlocked].sort(),
     qualificationHeld: [...new Set(qualificationHeld)].sort(),
     textCheckedCodes: [...checked].sort(),
+    textEmptyCounts,
     fieldCoverage: { scope: codes === undefined ? "daily_window" : "explicit_codes", selectedForTextCheck: verification.size,
       textChecked: checked.size, textUnchecked: verification.size - checked.size, textMismatched, textRepaired, metadataRepaired,
       status: failures.length > 0 || qualificationHeld.length > 0 ? "attention" : verification.size > checked.size || items.length > processed ? "partial" : "checked_scope_complete",

@@ -82,12 +82,15 @@ export interface ProcessOutcome {
   /** 旧判定が残っていても新入力に対する判定完了には数えない。 */
   qualificationHeld?: boolean;
   textChecked?: boolean;
+  /** 実検査した現在39、または正常全文POST後の空欄。未検査は省略する。 */
+  textEmptySections?: string[];
   textMismatch?: boolean;
   textRepaired?: boolean;
   metadataRepaired?: boolean;
 }
 
 const ZERO_JEV_STATS = { jevCalls: 0, jevInputTokens: 0, jevOutputTokens: 0 };
+const emptySectionsOf = (texts: Record<string, string | null>) => TEXT_SECTIONS.filter(({ title }) => [null, ""].includes(normalizeSupplementText(texts[title]))).map(({ title }) => title);
 
 /** 失敗 n 回目の後の再試行間隔 = 2^(n-1) 日 (1, 2, 4, 8, 16 日。§5.2)。 */
 function nextRetryDate(today: string, attemptsAfter: number): string {
@@ -216,24 +219,33 @@ async function syncMetadata(item: WorkItem, deps: ProcessDeps): Promise<ProcessO
 async function verifyTexts(item: WorkItem, deps: ProcessDeps): Promise<ProcessOutcome> {
   if (item.row === null || item.doc === null || !deps.readSupplementRowFully) throw new Error("現在本文検査の完全読取がありません");
   const current = await deps.readSupplementRowFully(item.row.pageId);
-  if (current.pageId !== item.row.pageId || current.stockCode !== item.stockCode ||
-      JSON.stringify(savedRowGuard(current)) !== JSON.stringify(savedRowGuard(item.row)) || current.masterLinked !== item.row.masterLinked) {
-    throw new SupplementWriteHeldError("本文検査中に補足メタ/判定が変更。現在値を保持してHOLD");
-  }
-  const receipt = readTextSyncReceipt(current.judgeInput);
-  if (receipt === null || receipt.docId !== item.doc.docId || receipt.textPageId !== item.doc.notionDocPageId) throw new SupplementWriteHeldError("現在本文検査の同期出典が不一致です");
+  if (current.pageId !== item.row.pageId || current.stockCode !== item.stockCode) throw new SupplementWriteHeldError("現在本文検査の対象銘柄が不一致です");
   const texts = Object.fromEntries(TEXT_SECTIONS.map(({ title }) => {
     if (typeof current.texts[title] !== "string") throw new Error("現在39本文の読取が未完です");
     const value = normalizeSupplementText(current.texts[title]); return [title, value === "" ? null : value];
   }));
-  const digest = await sha256Hex(JSON.stringify(TEXT_SECTIONS.map(({ title }) => [title, texts[title]])));
-  if (digest === (receipt.notionTextsSha256 === undefined ? receipt.textsSha256 : receipt.notionTextsSha256)) {
-    const outcome = await syncMetadata(item, deps);
-    return { ...outcome, textChecked: true, textMismatch: false };
+  const currentEmpty = emptySectionsOf(texts);
+  try {
+    if (JSON.stringify(savedRowGuard(current)) !== JSON.stringify(savedRowGuard(item.row)) || current.masterLinked !== item.row.masterLinked) {
+      throw new SupplementWriteHeldError("本文検査中に補足メタ/判定が変更。現在値を保持してHOLD");
+    }
+    const receipt = readTextSyncReceipt(current.judgeInput);
+    if (receipt === null || receipt.docId !== item.doc.docId || receipt.textPageId !== item.doc.notionDocPageId) throw new SupplementWriteHeldError("現在本文検査の同期出典が不一致です");
+    const digest = await sha256Hex(JSON.stringify(TEXT_SECTIONS.map(({ title }) => [title, texts[title]])));
+    if (digest === (receipt.notionTextsSha256 === undefined ? receipt.textsSha256 : receipt.notionTextsSha256)) {
+      const outcome = await syncMetadata(item, deps);
+      return { ...outcome, textChecked: true, textMismatch: false, textEmptySections: currentEmpty };
+    }
+    const outcome = await syncTexts({ ...item, repairTextDrift: true }, deps, texts);
+    return { ...outcome, textChecked: true, textMismatch: outcome.textMismatch === true,
+      textEmptySections: outcome.textChecked && outcome.textEmptySections !== undefined ? outcome.textEmptySections : currentEmpty,
+      textRepaired: outcome.textMismatch === true && !outcome.qualificationHeld && outcome.outcome === "updated" && !deps.dryRun };
+  } catch (error) {
+    if (!(error instanceof SupplementWriteHeldError)) throw error;
+    return { stockCode: item.stockCode, kind: item.kind, outcome: "skipped", tagStatus: item.row.tagStatus,
+      candidateCount: item.row.candidateCount, qualificationHeld: true, error: error.message,
+      textChecked: true, textEmptySections: currentEmpty, ...ZERO_JEV_STATS };
   }
-  const outcome = await syncTexts({ ...item, repairTextDrift: true }, deps, texts);
-  return { ...outcome, textChecked: true, textMismatch: outcome.textMismatch === true,
-    textRepaired: outcome.textMismatch === true && !outcome.qualificationHeld && outcome.outcome === "updated" };
 }
 
 async function textReceipt(doc: Doc, texts: Record<string, string | null>, judgment: InputReceipt | null) {
@@ -300,7 +312,8 @@ async function syncTexts(item: WorkItem, deps: ProcessDeps, expectedTexts?: Reco
   else await writeRowWithEvidence(item, deps, { docId: item.doc.docId, ...metadata, ...(item.refreshTextReceipt || textMismatch === false ? {} : { texts }), textStatus: "取得済",
     judgeInput: withTextSyncReceipt(item.row.judgeInput, receipt) }, undefined, expectedTexts === undefined ? item.refreshTextReceipt ? texts : undefined : expectedTexts);
   return { stockCode: item.stockCode, kind: item.kind, outcome: same && !item.repairTextDrift && !metadataChanged ? "skipped" : "updated",
-    tagStatus: item.row.tagStatus, candidateCount: item.row.candidateCount, metadataRepaired: metadataChanged, textChecked: publish === true, textMismatch, ...ZERO_JEV_STATS };
+    tagStatus: item.row.tagStatus, candidateCount: item.row.candidateCount, metadataRepaired: metadataChanged, textChecked: publish === true && !deps.dryRun,
+    ...(publish && !deps.dryRun ? { textEmptySections: emptySectionsOf(texts) } : {}), textMismatch, ...ZERO_JEV_STATS };
 }
 
 /** 今のタグ (labelJa の配列) を今の単語帳の id へ変換する。version_bump の前提上、必ず見つかる。 */
@@ -435,7 +448,7 @@ export async function processStock(item: WorkItem, deps: ProcessDeps): Promise<P
         throw new Error(`processStock: ${item.kind} に必要な最新有報が無い (${item.stockCode})`);
       }
       const outcome = await syncAndTag(item, item.doc, deps);
-      return { ...outcome, textChecked: outcome.tagStatus === "判定済" && outcome.outcome !== "skipped" };
+      return { ...outcome, textChecked: outcome.tagStatus === "判定済" && outcome.outcome !== "skipped" && !deps.dryRun };
     }
   }
 }
@@ -510,7 +523,7 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
         }),
       }, undefined);
       return { stockCode: item.stockCode, kind: item.kind, outcome: "updated", tagStatus: item.row.tagStatus,
-        candidateCount: item.row.candidateCount, ...ZERO_JEV_STATS };
+        candidateCount: item.row.candidateCount, ...(!deps.dryRun ? { textEmptySections: emptySectionsOf(textsByColumn) } : {}), ...ZERO_JEV_STATS };
     }
   }
   const localJudge = item.initialSemif === true || item.sourceChangedLocalJudge === true;
@@ -563,6 +576,7 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
       outcome: outcomeKindOf(item),
       tagStatus: "判定済",
       candidateCount: 0,
+      ...(!deps.dryRun ? { textEmptySections: emptySectionsOf(textsByColumn) } : {}),
       ...ZERO_JEV_STATS,
     };
   }
@@ -638,6 +652,7 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
       outcome: outcomeKindOf(item),
       tagStatus: "判定済",
       candidateCount,
+      ...(!deps.dryRun ? { textEmptySections: emptySectionsOf(textsByColumn) } : {}),
       ...stats,
     };
   } catch (e) {

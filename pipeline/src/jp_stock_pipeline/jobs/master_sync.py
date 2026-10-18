@@ -26,7 +26,8 @@
 - **差分だけ書く。** `SELECT code, sector33 FROM core_stocks` を 1 文読み、
   現在owner/identityも同じ1文で読み、値が変わる行だけ UPDATE する。
 - **コードリストに現れない銘柄は触らない**（一時的な欠落で既存値を NULL に潰さない）
-- `--dry-run` は読むだけで書かない。`--limit` は部分取得なので読みもしない
+- `--dry-run` は読むだけで書かない。`--limit` のみは読みもしない。
+  `--codes` は limit 後の選択銘柄だけを読み、同じ差分writerで更新する
 - D1 の失敗は `ctx.add_failure` に記録し、Notion / ローカルの同期は止めない
 - `ctx.cloud` を経由しない。runner は dry-run で `ctx.cloud` を張らないので、
   依存すると dry-run で件数を出せない（`freshness_probe` と同じ）
@@ -40,7 +41,7 @@ import time
 from functools import partial
 
 from ..cloud_store import core_stocks, notion_pages
-from ..cloud_store.d1 import D1Error, D1Store
+from ..cloud_store.d1 import MAX_BOUND_PARAMS, D1Error, D1Store
 from ..collectors import codelist_identity, edinet_codelist
 from ..contracts.stock_code import parse_stock_code
 from ..notion import schema as S, upsert
@@ -206,13 +207,31 @@ def execute(ctx: JobContext) -> None:
     if skipped:
         logger.info("① 同値 skip: %d 件の PATCH を省いた", skipped)
 
-    # 7. コードリスト不在は HOLD 診断のみ。listed/status は変更しない。
-    #    --limit は部分取得なので診断しない。
-    # 8. D1 core_stocks.sector33 の充填も --limit では行わない。差分は「コードリストに
-    #    居る銘柄」だけを対象にするので部分取得でも既存値は潰れないが、部分取得で
-    #    本番へ書くと「一部だけ最新」の状態を作るため、欠損診断と同じ扱いにする。
-    if ctx.args.limit or scope is not None:
-        logger.info("--limit/--codes の部分実行: 全市場の欠損診断・sector33・写し更新を行わない")
+    if scope is not None:
+        logger.info("--codes の部分実行: 選択銘柄のsector33のみ対象、全市場の欠損診断・写し更新なし")
+        store = _sector33_store(ctx)
+        if store is not None:
+            # parse時のcurrent=Noneは維持。後読取でblank tickerの資格を増やさない。
+            codes = [record.code for record in upsert_records]
+            current = []
+            try:
+                for offset in range(0, len(codes), MAX_BOUND_PARAMS):
+                    batch = codes[offset:offset + MAX_BOUND_PARAMS]
+                    current.extend(store.query(
+                        f"SELECT {codelist_identity.SNAPSHOT_COLUMNS} FROM core_stocks c "
+                        f"WHERE c.code IN ({', '.join('?' for _ in batch)}) ORDER BY c.code",
+                        batch,
+                    ))
+            except D1Error as exc:
+                ctx.add_failure("core_stocks.sector33", f"現在値を読めない: {exc}")
+                return
+            selected_codes = set(codes)
+            _sync_sector33(ctx, [r for r in inspected.sector if r.code in selected_codes],
+                           store=store, current=current, certified=set())
+        return
+    # 7. 不在はHOLD診断だけ。limitのみの部分実行はsectorも従来どおり触らない。
+    if ctx.args.limit:
+        logger.info("--limit の部分実行: 全市場の欠損診断・sector33・写し更新を行わない")
         return
     _hold_absent_codes(ctx, fetched_codes, master_map, map_ok)
     # sector には資格側だけ渡す (blank issuer を sector tuple へ渡さない)。

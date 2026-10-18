@@ -19,6 +19,8 @@ export const INITIAL_SEMIF_INPUT_PREFIX = "SemIf新規銘柄の初回判定";
 export const INITIAL_CLEF_INPUT_PREFIX = "Clef-Flash新規銘柄の初回判定";
 export const INPUT_RECEIPT_PREFIX = "\n[biztag-input-v1] ";
 const TEXT_SYNC_RECEIPT_PREFIX = "\n[biztag-text-sync-v1] ";
+// 現active/同一コードの表示比較だけ。提出主体のstrict legal identityには使用しない。
+const displayName = (value: string) => value.normalize("NFKC").trim().replace(/^(?:株式会社|\(株\))|(?:株式会社|\(株\))$/u, "").trim();
 
 /** 現在の39本文同期の証拠。歴史的なタグ判定入力の証拠とは分ける。 */
 export interface TextSyncReceipt {
@@ -210,7 +212,7 @@ function planOne(
   }
 
   if (row !== null && !hasUsableText(latest.doc) && (
-    row.companyName.trim() !== "" && row.companyName !== latest.companyName ||
+    row.companyName.trim() !== "" && displayName(row.companyName) !== displayName(latest.companyName) ||
     row.sector33 !== null && latest.sector33 !== null && row.sector33 !== latest.sector33
   )) {
     return { ...base, kind: "skip", qualificationHeld: true, reason: "本文欠測かつ非空の基本メタが不同。別の欠落も上書きせずHOLD" };
@@ -258,7 +260,7 @@ function planOne(
       return { ...base, kind: "retag", sourceChangedLocalJudge: true,
         reason: `判定根拠の書類が最新と異なる (${savedTagDocId} → ${doc.docId})。最新39本文とローカル再判定を同期` };
     }
-    if (row.companyName.trim() !== "" && row.companyName !== latest.companyName ||
+    if (row.companyName.trim() !== "" && displayName(row.companyName) !== displayName(latest.companyName) ||
         row.docType !== null && row.docType !== (doc.docTypeCode === "120" ? "有報" : "訂正有報") ||
         row.periodEnd !== null && row.periodEnd !== doc.periodEnd ||
         row.submittedAt !== null && Date.parse(row.submittedAt) !== Date.parse(doc.submittedAt) ||
