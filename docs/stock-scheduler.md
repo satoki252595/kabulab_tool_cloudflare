@@ -69,8 +69,9 @@ D=2026-10-08 の原文で 00:15 以降が null）の中だった。全銘柄 run
   時刻のバックデート・原本日付の上書きなし。
 - 新 dispatch target `scheduled-stocks` は株式 only。株式成功後のmoneyflowは
   `sector-turnover`だけを連鎖する。他の取得元は独立CF起動が担当し、株式停止で止めない。
-- 独立moneyflowは非Yahoo27取得元とYahoo1取得元を別jobで取得し、joinだけが両jobの
-  成功を待つ。Yahoo共通排他と各Notion枠1.6/1.0 RPSは保持する。両laneの同run・同attempt・
+- 独立moneyflowは非Yahoo27取得元とYahoo1取得元を別jobで取得し、joinは両jobの
+  成功を待つ。ジョブ間の共有Notion枠が未成立のため、取得順は非Yahoo→Yahooを維持する。
+  Yahoo共通排他と各Notion枠1.6/1.0 RPSは保持し、全体の2.9 RPS保証とは扱わない。両laneの同run・同attempt・
   全source・実期限を共有検証し、readcheckも両producerと後続joinの3job成功を要求する。
   片側失敗・結果不明・欠落summaryは全体成功にせず、LLMは使用しない。
   これは既存本番DB/schema準備済みの運用改善であり、初回構築を並列化するものではない。

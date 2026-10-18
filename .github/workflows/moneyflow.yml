@@ -133,13 +133,13 @@ env:
   SCHEDULED_DATE: ${{ inputs.scheduled_date }}
 
 jobs:
-  # ponytail: existing DB/schema required; bootstrap serially before first parallel run.
+  # ponytail: shared cross-job budget未成立; 取得は直列。初回DB/schemaは単一CLIで準備する。
   ingest-non-yahoo:
     # Yahooを呼ばない27sourceは、株式/VWAPの全量jobを待たない。
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      NOTION_MAX_RPS: "1.0" # Yahoo専有側1.6＋このjob1.0＋背景予約0.3=2.9。
+      NOTION_MAX_RPS: "1.0"
     steps:
       - uses: actions/checkout@v4
 
@@ -177,7 +177,8 @@ jobs:
           summary: "${{ github.workflow }} が失敗しました。"
 
   ingest-yahoo:
-    # 非Yahoo取得とは独立。sector-turnover/非Yahoo subsetはYahoo排他を取得しない。
+    needs: ingest-non-yahoo
+    # 非Yahoo完了後に取得。sector-turnover/非Yahoo subsetはYahoo排他を取得しない。
     concurrency:
       group: ${{ (inputs.only == '' || inputs.only == 'independent' || contains(inputs.only, 'global-indices')) && 'yahoo-source' || 'moneyflow-non-yahoo-join' }}
       cancel-in-progress: false
@@ -217,7 +218,7 @@ jobs:
           summary: "${{ github.workflow }} が失敗しました。"
 
   join:
-    # 取得元間に先行条件はない。全取得元の成功判定だけ両laneの正常完了を待つ。
+    # 取得は直列。全取得元の成功判定は別jobで両laneの正常完了を待つ。
     needs: [ingest-non-yahoo, ingest-yahoo]
     runs-on: ubuntu-latest
     timeout-minutes: 10

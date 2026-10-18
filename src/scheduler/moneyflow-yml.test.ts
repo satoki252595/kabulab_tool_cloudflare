@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 
 const yml = readFileSync(new URL("../../.github/workflows/moneyflow.yml", import.meta.url), "utf8");
-it("両producerは独立して取得し、同run両summaryのjoinだけが正常完了を待つ", () => {
+it("両producerは旧rateで直列取得し、別joinが同run両summaryの正常完了を待つ", () => {
   const first = yml.split("  ingest-non-yahoo:\n")[1].split("  ingest-yahoo:\n")[0];
   const second = yml.split("  ingest-yahoo:\n")[1].split("  join:\n")[0];
   const join = yml.split("  join:\n")[1];
@@ -10,7 +10,7 @@ it("両producerは独立して取得し、同run両summaryのjoinだけが正常
   expect(first).not.toContain("needs:");
   expect(first).toContain("--lane=non-yahoo");
   expect(first).toContain("moneyflow-non-yahoo-${{ github.run_attempt }}");
-  expect(second).not.toContain("needs:");
+  expect(second).toContain("needs: ingest-non-yahoo");
   expect(second).toContain("'yahoo-source' || 'moneyflow-non-yahoo-join'");
   expect(second).toContain("--lane=yahoo");
   expect(second).toContain("moneyflow-yahoo-${{ github.run_attempt }}");
