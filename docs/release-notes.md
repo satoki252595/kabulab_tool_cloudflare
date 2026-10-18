@@ -9,6 +9,9 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ## 2026-10-18
 
+- READMEに本番16処理の実行時刻・先行条件・LLM利用と復旧範囲を掲載。旧Cron未使用・クラウドLLM必須の記述を現行構成へ更新し、自然起動とデータ充足の未確認範囲を明記した。
+- 本番作業: 10/18の通常TDnet・EDINET確認をNixで順次実行し、観測時点0件の一覧・派生6ファイルをNotion/R2へ保管。旧ローカルR2資格の403は停止・保全し、既存の適格資格を専用envへ反映後に正常終了した。[稼働設定と受入範囲](test-logs/production-dependencies-mechanical-20261018.md#定期環境と本日分の再確認)を記録。
+
 - 本番作業（Mac）: 定期実行2labelをmain529の専用Nix runtimeへ切り替え、優待要約のモデルなし既定を反映。通常installer・全plist・11ACK・停止/PID0とkernel閉鎖を確認し、20/21時予定と旧保存物を維持した。監視の期待revisionも実配備529へ合わせ、自然起動のcode/時計判定は維持。[自然起動は別受入](test-logs/production-dependencies-mechanical-20261018.md#macの機械要約を定期環境へ反映)。
 
 - 資金フローの共有Notion枠を追加監査し、ジョブ間の全体上限が未成立のため取得の並列化を見送り、既存rate・非Yahoo→Yahooの取得順を維持。別join・厳格な3job監視と優待の機械処理標準は維持し、[全体枠と未測定性能の境界](test-logs/production-dependencies-mechanical-20261018.md#共有notion枠の追加監査)を記録した。
