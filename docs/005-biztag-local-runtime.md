@@ -1,6 +1,6 @@
 # 事業タグ・優待要約のMac定時運用
 
-更新: 2026-10-17。事業タグの唯一の定時writerをApple Silicon Macへ移す。
+更新: 2026-10-18。事業タグの唯一の定時writerをApple Silicon Macへ移す。
 適格新規の初回と、最新有報IDまたは既知の実入力SHAが変わった対象だけClef-Flash/MPSを使う。
 同一入力の保存タグは再利用し、旧失敗・不足は従来のkeywords/excludes一致で補完する。
 開始日前の上場を新規AI対象へ広げず、未保存の旧入力SHAは捏造しない。TypeSafeへの自動代替、語彙審査、
@@ -12,7 +12,8 @@ goldenの定期実行、競合判定は再開しない。
 このMacはAsia/Tokyo。通常の`install`ではログイン時の`RunAtLoad`も同じ入口を通る。
 `install-next`で作成した場合は`RunAtLoad=false`とし、次のcalendar起動を待つ。
 優待要約は別label `com.kabulab-cf.yutai-summary`で毎日21:00に同じ入口の
-`run yutai-summary`を実行する。原文変更・未要約・契約違反の最大60群について、全文が単純な種類＋額面なら定型処理し、残りだけ既存固定モデルで処理する。
+`run yutai-summary`を実行する。原文変更・未要約・契約違反の最大60群について、機械判定できるものだけを定型処理する。残りは理由付きで保留し、旧行を保持する。
+通常の定期・月次入口はモデルを起動しない。手動でsummary-localへ`--allow-model`を明示した場合だけ、既存固定モデルを使う。
 定型分も同じ共有取込契約と物理PRE/POST照合を通す。配備状況と例外は[決定的な本番処理](deterministic-production.md)を参照。
 新しい有料APIは使わない。`tmp/yutai-local`にprivate進捗・原本・送信中記録を残す。
 実行コードはCIを確認してmainへmergeした専用runtime worktreeに固定し、
@@ -65,7 +66,7 @@ closure保存→cursor原子的更新→pending除去の順に閉じる。途中
    完全SHA、`BIZTAG_NEW_LISTING_FROM`を対象開始日、`CLEF_PYTHON`をNixで用意した
    下記venvの`bin/python`絶対パス、`CLEF_MODEL_PATH`を固定revisionのローカルモデルへ設定する。
    Pythonのsymlinkをrealpathで解決しない（venvを外れ、依存パッケージを読めなくなる）。
-   優待要約の既存モデル用`SEMIF_PYTHON`は別設定。秘密値をコマンド引数・ログ・Gitへ出さない。
+   優待要約を手動で`--allow-model`実行する場合の`SEMIF_PYTHON`は別設定。秘密値をコマンド引数・ログ・Gitへ出さない。
 3. runtimeで`nix develop --command pnpm install --frozen-lockfile`を実行し、
    Nix shell/model cacheを準備する。定時起動は`--offline`でNix環境を使う。
 4. 以下のpreflight/install/install-nextは外部取得・事業タグ保存をしない。

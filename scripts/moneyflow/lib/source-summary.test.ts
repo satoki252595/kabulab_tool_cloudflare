@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SOURCES, parseOnlyArg } from "../ingest.js";
+import { SOURCES, indicatorsForSources, parseOnlyArg } from "../ingest.js";
 import { joinMoneyflowSummaries, moneyflowLaneSources, moneyflowScheduledWindow, type MoneyflowSummary } from "./source-summary.js";
 
 const requested = parseOnlyArg(["--only=independent"], SOURCES);
@@ -23,6 +23,21 @@ describe("同runのmoneyflow source集合join", () => {
     expect(a.only).toHaveLength(27); expect(b.only).toEqual(["global-indices"]);
     expect(join([a, b]).sources).toEqual(requested);
     expect(new Set([...a.only, ...b.only]).size).toBe(28);
+    const yahooKeys = new Set(indicatorsForSources(b.only).map(indicator => indicator.key));
+    expect(indicatorsForSources(moneyflowLaneSources(SOURCES, SOURCES, "non-yahoo"))
+      .filter(indicator => yahooKeys.has(indicator.key))).toEqual([]);
+  });
+  it("両laneの重なった実行とどちらが先に完了した場合も、全source成功後だけjoinする", () => {
+    const a = summary("non-yahoo"), b = summary("yahoo");
+    b.startedAt = `${date}T09:16:00.000Z`;
+    for (const finishedAt of [`${date}T10:00:00.000Z`, `${date}T13:31:00.000Z`]) {
+      b.finishedAt = finishedAt;
+      const expected = Date.parse(a.finishedAt) > Date.parse(b.finishedAt) ? a.finishedAt : b.finishedAt;
+      expect(join([b, a]).finishedAt).toBe(expected);
+      b.outcomes[0].ok = false;
+      expect(() => join([a, b])).toThrow("欠落/重複/失敗");
+      b.outcomes[0].ok = true;
+    }
   });
   it.each([
     { selected: ["sector-turnover"] }, { selected: ["global-indices"] }, { selected: ["coingecko-global", "global-indices"] },

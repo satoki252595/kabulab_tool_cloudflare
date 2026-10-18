@@ -133,6 +133,7 @@ env:
   SCHEDULED_DATE: ${{ inputs.scheduled_date }}
 
 jobs:
+  # ponytail: existing DB/schema required; bootstrap serially before first parallel run.
   ingest-non-yahoo:
     # Yahooを呼ばない27sourceは、株式/VWAPの全量jobを待たない。
     runs-on: ubuntu-latest
@@ -176,8 +177,7 @@ jobs:
           summary: "${{ github.workflow }} が失敗しました。"
 
   ingest-yahoo:
-    needs: ingest-non-yahoo
-    # sector-turnover/非Yahoo subsetだけの呼出しはYahoo排他を取得しない。
+    # 非Yahoo取得とは独立。sector-turnover/非Yahoo subsetはYahoo排他を取得しない。
     concurrency:
       group: ${{ (inputs.only == '' || inputs.only == 'independent' || contains(inputs.only, 'global-indices')) && 'yahoo-source' || 'moneyflow-non-yahoo-join' }}
       cancel-in-progress: false
@@ -194,10 +194,6 @@ jobs:
           node-version-file: .node-version
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - uses: actions/download-artifact@v4
-        with:
-          name: moneyflow-non-yahoo-${{ github.run_attempt }}
-          path: .moneyflow-summaries
       - name: moneyflow ingest (yahoo)
         run: |
           args=(--lane=yahoo --summary=.moneyflow-summaries/yahoo.json)
@@ -206,6 +202,41 @@ jobs:
           if [ -n "$TRADE_DATE" ]; then args+=("--as-of=$TRADE_DATE"); fi
           if [ -n "$SCHEDULED_DATE" ]; then args+=("--scheduled-date=$SCHEDULED_DATE"); fi
           pnpm ingest:moneyflow -- "${args[@]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: moneyflow-yahoo-${{ github.run_attempt }}
+          path: .moneyflow-summaries/yahoo.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+      - name: 失敗したら Issue を立てる
+        if: failure()
+        uses: ./.github/actions/notify-failure
+        with:
+          title: "[ジョブ失敗] ${{ github.workflow }}"
+          summary: "${{ github.workflow }} が失敗しました。"
+
+  join:
+    # 取得元間に先行条件はない。全取得元の成功判定だけ両laneの正常完了を待つ。
+    needs: [ingest-non-yahoo, ingest-yahoo]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          name: moneyflow-non-yahoo-${{ github.run_attempt }}
+          path: .moneyflow-summaries
+      - uses: actions/download-artifact@v4
+        with:
+          name: moneyflow-yahoo-${{ github.run_attempt }}
+          path: .moneyflow-summaries
       - name: moneyflow source join
         run: |
           args=(--dir=.moneyflow-summaries)

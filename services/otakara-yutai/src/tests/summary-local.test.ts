@@ -171,10 +171,38 @@ describe("local summary generation/import boundary", () => {
       expect(parseTaskFile(readFileSync(path, "utf8")).map(task => task.stockCode)).toEqual(["9002"]);
       return generate(path, run);
     });
-    expect(await runLocalSummary({ stateDir: state(), limit: 60 }, deps)).toMatchObject({ accepted: 2, pendingAfter: 0,
+    expect(await runLocalSummary({ stateDir: state(), limit: 60, allowModel: true }, deps)).toMatchObject({ accepted: 2, pendingAfter: 0,
       modelCalls: 1, modelResidents: 1, deterministic: 1 });
     expect(deps.generate).toHaveBeenCalledOnce();
     expect(rows().map(r => r.estimatedValue)).toEqual([3000, 3000]);
+  });
+  it("標準の混在batchは機械判定だけ採用し、未対応の旧値・時計を理由付きHOLDで保持する", async () => {
+    const old = row(2, { shortSummary: "※旧値", estimatedValue: 5000, estimateValueSource: "company" });
+    const { deps, events, rows } = dependencies([row(1, { description: "QUOカード 3,000円分" }), old]);
+    deps.generate = vi.fn(async () => { throw new Error("model_must_not_start"); });
+    const dir = state();
+    expect(await runLocalSummary({ stateDir: dir, limit: 60 }, deps)).toMatchObject({ selected: 2, accepted: 1,
+      rejected: 1, held: 1, pendingAfter: 1, outcome: "partial_rejection", modelCalls: 0, modelResidents: 0, deterministic: 1 });
+    expect(deps.generate).not.toHaveBeenCalled(); expect(rows()[1]).toEqual(old);
+    expect(events).toEqual(["archive-pre", "apply", "archive-post"]);
+    const run = readdirSync(dir).find(name => name !== "progress.json")!;
+    const pre = JSON.parse(gunzipSync(readFileSync(join(dir, run, "pre-import.json.gz"))).toString());
+    expect(pre).toMatchObject({ modelAllowed: false, model: null, revision: null, protocol: "", modelCalls: 0,
+      generationRejections: [{ taskId: selectSummaryTasks([old])[0].taskId, reason: "mechanical_rule_unavailable_model_disabled" }] });
+    expect(parseTaskFile(readFileSync(join(dir, run, "model-tasks.jsonl"), "utf8"))).toEqual([]);
+    for (const call of vi.mocked(deps.archive).mock.calls) expect(call[3]).toEqual({ deterministic: 1, modelTasks: 0 });
+    expect(readdirSync(dir)).not.toContain("pending-write.json");
+  });
+  it("未対応だけでも成功扱いせず、機械HOLD群のcursorを公平に進める", async () => {
+    const original = [row(1), row(2)]; const { deps, rows, events } = dependencies(original); const dir = state();
+    for (let i = 0; i < 2; i++) expect(await runLocalSummary({ stateDir: dir, limit: 1 }, deps)).toMatchObject({
+      selected: 1, accepted: 0, rejected: 1, held: 1, pendingBefore: 2, pendingAfter: 2,
+      outcome: "partial_rejection", modelCalls: 0, modelResidents: 0 });
+    expect(deps.generate).not.toHaveBeenCalled(); expect(deps.apply).not.toHaveBeenCalled(); expect(rows()).toEqual(original);
+    expect(events).toEqual(["archive-pre", "archive-pre"]);
+    const attempts = readdirSync(dir).filter(name => name !== "progress.json").map(name =>
+      parseTaskFile(readFileSync(join(dir, name, "tasks.jsonl"), "utf8"))[0].taskId);
+    expect(new Set(attempts).size).toBe(2);
   });
   it("keeps choice/holding/lottery qualifications instead of silently taking a representative benefit", () => {
     expect(missingSummaryConditions("合成商品から選択、1年以上保有、抽選で当選者に贈呈", "商品")).toEqual([
@@ -198,7 +226,7 @@ describe("local summary generation/import boundary", () => {
     });
     const { deps, events, rows } = dependencies([old]);
     const dir = state();
-    const report = await runLocalSummary({ stateDir: dir, limit: 60 }, deps);
+    const report = await runLocalSummary({ stateDir: dir, limit: 60, allowModel: true }, deps);
     expect(report).toMatchObject({ accepted: 0, rejected: 1, pendingAfter: 1, outcome: "partial_rejection" });
     expect(deps.apply).not.toHaveBeenCalled();
     expect(rows()[0]).toEqual(old);
@@ -208,7 +236,10 @@ describe("local summary generation/import boundary", () => {
   it("caps the CLI at60, requires private state, and rejects unknown flags", () => {
     expect(parseLocalArgs(["--state-dir", "/private/unit"])).toMatchObject({
       limit: 60,
+      allowModel: false,
     });
+    expect(parseLocalArgs(["--state-dir", "/private/unit", "--allow-model"])).toMatchObject({ allowModel: true });
+    expect(() => parseLocalArgs(["--state-dir", "/private/unit", "--allow-model=false"])).toThrow();
     for (const limit of ["0", "61", "1.5", "-1", "01"])
       expect(() => parseLocalArgs(["--limit", limit, "--state-dir", "/private/unit"])).toThrow();
     expect(() => parseLocalArgs([])).toThrow();
@@ -234,9 +265,9 @@ describe("local summary generation/import boundary", () => {
       return lines.map(line => JSON.stringify(line)).join("\n");
     };
     const dir = state();
-    expect(await runLocalSummary({ stateDir: dir, limit: 2 }, deps)).toMatchObject({ accepted: 1, rejected: 1, pendingAfter: 2 });
+    expect(await runLocalSummary({ stateDir: dir, limit: 2, allowModel: true }, deps)).toMatchObject({ accepted: 1, rejected: 1, pendingAfter: 2 });
     expect(selectSummaryTasks(rows()).map(task => task.stockCode)).toEqual(["9001", "9003"]);
-    expect(await runLocalSummary({ stateDir: dir, limit: 2 }, deps)).toMatchObject({ accepted: 1, rejected: 1, pendingAfter: 1 });
+    expect(await runLocalSummary({ stateDir: dir, limit: 2, allowModel: true }, deps)).toMatchObject({ accepted: 1, rejected: 1, pendingAfter: 1 });
     expect(batches).toEqual([["9001", "9002"], ["9003", "9001"]]);
     expect(rows()[0]).toEqual(row(1));
   });
@@ -302,14 +333,14 @@ describe("local summary generation/import boundary", () => {
     expect(deps.apply).not.toHaveBeenCalled();
   });
   it("physical pre readback precedes atomic import, and post readback precedes completion", async () => {
-    const { deps, events } = dependencies([row()]);
+    const { deps, events } = dependencies([row(1, { description: "QUOカード 3,000円分" })]);
     const dir = state();
     expect(await runLocalSummary({ stateDir: dir, limit: 60 }, deps)).toMatchObject({
       accepted: 1,
       rejected: 0,
       pendingAfter: 0,
     });
-    expect(events).toEqual(["generate", "archive-pre", "apply", "archive-post"]);
+    expect(events).toEqual(["archive-pre", "apply", "archive-post"]);
     expect(readdirSync(dir)).not.toContain("pending-write.json");
     const run = readdirSync(dir).find((name) => name !== "progress.json")!;
     expect(statSync(join(dir, run)).mode & 0o777).toBe(0o700);
@@ -351,7 +382,7 @@ describe("local summary generation/import boundary", () => {
       lines[2].text = '{"shortSummary":"架空の追加10%割引"}';
       return lines.map((v) => JSON.stringify(v)).join("\n");
     };
-    expect(await runLocalSummary({ stateDir: state(), limit: 60 }, deps)).toMatchObject({
+    expect(await runLocalSummary({ stateDir: state(), limit: 60, allowModel: true }, deps)).toMatchObject({
       outcome: "partial_rejection",
       accepted: 1,
       rejected: 1,
@@ -363,11 +394,11 @@ describe("local summary generation/import boundary", () => {
     const { deps } = dependencies([row()]);
     let reads = 0;
     deps.loadRows = async () => [row(1, { minShares: ++reads === 1 ? 100 : 200 })];
-    expect(await runLocalSummary({ stateDir: state(), limit: 60 }, deps)).toMatchObject({ rejected: 1, accepted: 0 });
+    expect(await runLocalSummary({ stateDir: state(), limit: 60, allowModel: true }, deps)).toMatchObject({ rejected: 1, accepted: 0 });
     expect(deps.apply).not.toHaveBeenCalled();
   });
   it("unknown apply keeps a durable latch; later automatic execution has no D1/model call", async () => {
-    const { deps } = dependencies([row()]);
+    const { deps } = dependencies([row(1, { description: "QUOカード 3,000円分" })]);
     deps.apply = vi.fn(async () => {
       throw new Error("unknown_write");
     });
@@ -380,7 +411,7 @@ describe("local summary generation/import boundary", () => {
     expect(deps.generate).not.toHaveBeenCalled();
   });
   it("a known but mismatched POST cannot release the latch or declare success", async () => {
-    const { deps } = dependencies([row()]);
+    const { deps } = dependencies([row(1, { description: "QUOカード 3,000円分" })]);
     deps.apply = vi.fn(async () => {});
     const dir = state();
     await expect(runLocalSummary({ stateDir: dir, limit: 60 }, deps)).rejects.toThrow("summary_post_mismatch");

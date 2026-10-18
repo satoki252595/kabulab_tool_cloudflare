@@ -1,4 +1,4 @@
-/** 単純な額面優待は定型処理し、残りだけローカル生成。金額・原子取込は共有契約を通す。 */
+/** 標準は機械要約のみ。未対応は保留し、明示許可時だけローカル生成。金額・原子取込は共有契約を通す。 */
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -75,7 +75,7 @@ const Ready = z.strictObject({
   artifacts: z.record(z.string(), z.string().check(z.regex(/^[0-9a-f]{64}$/))),
 });
 const GeneratedSummary = z.strictObject({ shortSummary: z.string() });
-export type LocalOptions = { limit: number; stateDir: string };
+export type LocalOptions = { limit: number; stateDir: string; allowModel?: boolean };
 
 export function parseLocalArgs(argv: readonly string[]): LocalOptions {
   const { values } = parseArgs({
@@ -84,6 +84,7 @@ export function parseLocalArgs(argv: readonly string[]): LocalOptions {
     options: {
       limit: { type: "string", default: "60" },
       "state-dir": { type: "string" },
+      "allow-model": { type: "boolean", default: false },
     },
   });
   if (!values["state-dir"] || !/^(?:[1-9]|[1-5][0-9]|60)$/.test(values.limit ?? "")) {
@@ -92,6 +93,7 @@ export function parseLocalArgs(argv: readonly string[]): LocalOptions {
   return {
     limit: Number(values.limit),
     stateDir: resolve(values["state-dir"]),
+    allowModel: values["allow-model"],
   };
 }
 
@@ -278,6 +280,7 @@ export type LocalReport = {
   selected: number;
   accepted: number;
   rejected: number;
+  held: number;
   pendingBefore: number;
   pendingAfter: number;
   equivalent: number;
@@ -301,6 +304,7 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
       selected: 0,
       accepted: 0,
       rejected: 0,
+      held: 0,
       pendingBefore: 0,
       pendingAfter: 0,
       equivalent: 0,
@@ -337,18 +341,22 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
   );
   const deterministic = tasks.flatMap(task => { const result = compileSimpleSummary(task); return result === null ? [] : [result]; });
   const deterministicIds = new Set(deterministic.map(result => result.taskId));
-  const modelTasks = tasks.filter(task => !deterministicIds.has(task.taskId));
+  const unresolved = tasks.filter(task => !deterministicIds.has(task.taskId));
+  const modelTasks = options.allowModel === true ? unresolved : [];
+  const held = options.allowModel === true ? [] : unresolved.map(task => ({ taskId: task.taskId,
+    reason: "mechanical_rule_unavailable_model_disabled" }));
   const generation = { deterministic: deterministic.length, modelTasks: modelTasks.length };
   const modelTasksText = serializeTasks(modelTasks);
   parseTaskFile(modelTasksText);
   writePrivate(join(runDir, "model-tasks.jsonl"), modelTasksText);
   writePrivate(join(runDir, "deterministic.json"), JSON.stringify({ rule: DETERMINISTIC_SUMMARY_RULE, results: deterministic,
-    modelRequired: modelTasks.map(task => task.taskId) }));
+    modelAllowed: options.allowModel === true, modelRequired: unresolved.map(task => task.taskId), held }));
   const protocol = modelTasks.length > 0 ? await deps.generate(join(runDir, "model-tasks.jsonl"), runDir) : "";
   writePrivate(join(runDir, "generation.jsonl"), protocol);
   const model = modelTasks.length > 0 ? buildLocalResults(modelTasks, protocol)
     : { resultsText: "", amountReasons: [], generationRejections: [], modelCalls: 0 };
   const generated = { ...model, resultsText: deterministic.map(result => JSON.stringify(result) + "\n").join("") + model.resultsText,
+    generationRejections: [...held, ...model.generationRejections],
     deterministicRule: DETERMINISTIC_SUMMARY_RULE, deterministicTaskIds: [...deterministicIds],
     amountReasons: [...deterministic.map(result => ({ taskId: result.taskId, value: result.estimatedValue,
       reason: "qualified_company_per_grant" })), ...model.amountReasons] };
@@ -366,6 +374,7 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
     JSON.stringify({
       version: 1,
       clock,
+      modelAllowed: options.allowModel === true,
       model: modelTasks.length > 0 ? SEMIF_HF_MODEL : null,
       revision: modelTasks.length > 0 ? SEMIF_HF_REVISION : null,
       tasksText,
@@ -426,6 +435,7 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
     selected: tasks.length,
     accepted: plan.updates.length,
     rejected,
+    held: held.length,
     equivalent: plan.skippedEquivalent,
     toNull: plan.valueChanges.toNull,
     pendingBefore: allTasks.length,
