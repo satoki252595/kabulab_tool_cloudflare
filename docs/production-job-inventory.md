@@ -9,7 +9,7 @@
 | 日証金の貸借・需給 | 平日12:17 | 公表済みの当日CSV。株式同期の完了待ちは不要 | なし | `supply_daily.yml` / Python → Notion・D1・R2 | 実行可能。通常CLIは公表中のCSVを取得し、任意の過去CSVを取り直す機能ではない |
 | VWAP日足・5分足 | 月水金17:00、CF起動 | 公式銘柄表・対象日の原本資格。Yahoo共通排他内で日足→5分足、結果不明では後続停止 | なし | `vwap-ingest.yml` → `ingest:vwap-daily`、`ingest:vwap-intra` → R2、原本Notion | 日足は10年窓。一般5分足は銘柄＋1〜60日窓。任意from/toは既存422回復の固定5銘柄だけ。同じwriterを重複起動しない |
 | 市場の信用残高 | 平日17:00 | 公表元の対象日資料。株価とのデータ依存はないが、現在はVWAPと共通workflow排他 | なし | 同workflowの`ingest:vwap-margin` → R2、原本Notion | `--date=YYYYMMDD`対応、公開元に原本が残る日だけ |
-| 株価・財務断面・RSI・スイング・モメンタム・業種騰落 | 平日18:00、CF起動 | 母集団と通常取得原本。指標は価格・分割単位の資格確認後、Yahoo共通排他 | なし | `stock-sync.yml` / `sync:daily:core --stocks-only` → D1、原本Notion/R2 | 通常CLIに任意過去日指定はない。保存原本の限定補完と最新日の通常更新を分ける |
+| 株価・財務断面・RSI・スイング・モメンタム・業種騰落 | 平日18:00、CF起動 | 母集団と通常取得原本。指標は価格・分割単位の資格確認後、Yahoo共通排他 | なし | `stock-sync.yml` / `sync:daily:core --stocks-only` → D1、原本Notion/R2 | 通常CLIに任意過去日指定はない。[固定41の保存原本補完](test-logs/stock41-financial-replay-20261018.md)と最新日の通常更新を分ける |
 | 東証33業種の対応 | 株式同期の成功後 | 現workflowは株式成功後。入力はcore銘柄集合＋公式提出者表 | なし | 同workflow / Python `sector33_sync` → D1、原本Notion | 最新の公式提出者表と現在の銘柄を照合。過去時点の業種再現ではない |
 | 価格依存の業種別資金フロー | 株式同期の成功後、許容失敗もない場合だけ | 当日の必要価格・`core_stocks.sector`。現ハーネスはstock-sync job全体の成功も要求 | なし | `moneyflow.yml` / `only=sector-turnover` → Notion | `--as-of`対応、対象日の必要価格が保存済みであることが前提 |
 | 価格非依存の資金フロー28取得元 | 平日18:15、CF起動 | 当日の株式同期は待たず、非Yahoo→Yahoo→両lane成功後join。共有Notion枠未成立のため取得直列を維持 | なし | `moneyflow.yml` / `only=independent` → Notion | 月次・週次等の公表資料もここで更新検知。`--as-of`だけで全取得元の過去資料を指定できるわけではない |
