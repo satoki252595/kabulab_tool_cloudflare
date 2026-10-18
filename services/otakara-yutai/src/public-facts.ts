@@ -142,7 +142,7 @@ function assertBenefitRegistryStructure(value: unknown, sourceSha256: string): a
     for (const value of clause.recordDates) {
       const date = record(value, ["month", "day"]);
       if (!positiveInteger(date.month) || date.month > 12 ||
-          (date.day !== "month_end" && (!positiveInteger(date.day) || date.day > [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][date.month - 1]))) throw new Error("掲載基準日が不正です");
+          (date.day !== "month_end" && (!positiveInteger(date.day) || date.day > [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][date.month - 1]!))) throw new Error("掲載基準日が不正です");
       if (named && date.day !== "month_end") throw new Error("掲載同名義の基準日が不正です");
     }
     if (new Set(clause.recordDates.map(value => { const date = record(value, ["month", "day"]); return JSON.stringify([date.month, date.day]); })).size !== clause.recordDates.length) throw new Error("掲載基準日が重複しています");
