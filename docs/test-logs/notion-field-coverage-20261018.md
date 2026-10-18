@@ -44,3 +44,19 @@ CLIは実測した検査対象数・検査済数・未検査数・本文差分/�
 この段階は読取と修正の記録であり、新writerの本番配備・現候補への実適用・初回39列全件検査は未受入。各実行後に別途結果を追記する。
 
 Nixの関連TypeScript 7suiteは305件PASS・既存private原本未配置2件SKIP。その後のHOLD重複除去の直接pipeline suiteは45件PASS。Mac receipt/競合stageの23件と監視Python22件もPASS、全体TypeScript型検査と変更したsourceのlintは通過した。追加ROAはcanonicalに既存保存された6ZIPだけを明示参照し、変更worktreeの実装で13件PASS。外部取得・モデル・業務書込0。Pythonはeditable環境の旧sourceを誤読しないよう`PYTHONPATH`を変更worktreeへ明示して検証した。
+
+## 本番反映と初回検査の入口
+
+#535はPRの3checks成功後main `ae8578291d6ecf12515c8519de92a169b103818b`へマージした。19:56:38 JSTのCloudflare build `a5dd2ec6-66c4-45fc-9add-72386848838f`でversion `4095e5bb-5aa2-41bb-9cab-46a0c1d1fbec`と設定同一の10triggerを確認。SSHも同mainへfast-forwardし、変更なしを確認した。
+
+19:57:27 JSTにMacの両定期labelを同mainの専用Nix runtimeへ切替。元の20/21時・`RunAtLoad=false`・引数・ログ・stateを保持し、plistの変更はWorkingDirectoryだけ。通常preflight/installerとkernel排他を用い、旧env/runtime/plistを保持した。監視の期待revisionも配備版へ更新。切替時の業務HTTP0、自然起動とデータ充足は別に確認する。私有根拠は`tmp/feature-audit-20261018/mac-field-coverage-main535-cutover-v1/cutover.json`。
+
+初回の有限検査は、同じ通常CLIの**明示`run --mechanical-only`だけLinux Nixでも許可**する。環境ファイルの所有者/0600・承認main・clean HEAD・ancestor・Nix Pythonのkernel flockは維持し、モデルを使う入口とMac定期の制約は変更しない。未知引数・モデル許可は通信前に拒否する。実検査済み銘柄を`textCheckedCodes`に出力し、部分停止後の残りを件数から推定しない。これはSSHの実実行受入とは別で、同時に複数hostからNotionへ書かない運用が必要。kernel flockはhost間の分散排他ではない。
+
+## 財務サマリの空欄と過去分
+
+ROEは当期・同連結区分の直接開示、ROAは年次の純利益ROAの直接開示だけを採る。四半期ROA・営業ROA・目標・平均値や、利益÷自己資本等による推計で空欄を埋めない。予想は通期、配当は適格な年額が必要で、別年度や半期合算で代用しない。従って履歴35,158行の空欄数は、そのまま要修復件数ではない。項目別の空欄理由は未保存で、現在の全件内訳は未測定。
+
+既存`pipeline/scripts/reparse_financials_from_notion.py`は、保存原本SHA照合→cached再解析→Notion更新とfresh再読→別操作のD1同期を行う。9/28には34,659財務キーの修復・同期記録がある。通常日次は対象日の文書だけで、過去全履歴を定期再解析しない。別保存type1の表参照は日次EDINET側の追加経路であり、旧CSVの汎用再解析だけでは補えない。
+
+再解析cacheのfingerprintがconverter/normalizeだけを対象にしていたため、呼出先`direct_roa.py`/`direct_roa_table.py`の改修を見逃す不具合を修正した。この2sourceを既存SHAへ追加し、helper変更後は旧成功cacheでも再解析する。新stateや数値ルールは追加せず、保存根拠の全履歴再適用は別実行。Nix関連4suite81件PASS・既存原本未配置20件SKIP、直接回帰は旧実装でFAIL→修正後PASS。Linux/検査済code出力の関連3suite59件PASS、型検査・lint通過、独立FSレビュー指摘0。
