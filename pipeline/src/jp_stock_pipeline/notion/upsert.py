@@ -98,7 +98,7 @@ def date_prop(value: date | datetime | None) -> dict:
 
 
 def url_prop(value: str | None) -> dict:
-    return {"url": str(value) if value is not None else None}
+    return {"url": str(value) if value is not None and value != "" else None}
 
 
 def checkbox_prop(value: bool) -> dict:
