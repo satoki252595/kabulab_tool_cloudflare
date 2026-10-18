@@ -110,6 +110,9 @@ class RawArtifact:
     # (scope, data_date) では文書を一意に指せない: 実測で edinet_pdf_8306_20240729 に
     # 250 個の別内容原本が存在した。一覧やコードリストのように文書単位でないものは None。
     doc_id: str | None = None
+    # ⑤の関連銘柄だけに使う、通常resolverで同定済みの①ページ。原本/R2/索引には混ぜない。
+    # ALL・主体未解決・NULL/00000からの逆引きには設定しない。
+    qualified_master_page_id: str | None = None
 
     @property
     def filename(self) -> str:

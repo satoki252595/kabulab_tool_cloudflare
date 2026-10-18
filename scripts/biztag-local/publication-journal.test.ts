@@ -26,6 +26,17 @@ function directory(root: string) { const path = join(root, "supplement-publicati
 afterEach(() => { failures.filename = ""; for (const root of temporary.splice(0)) rmSync(root, { recursive: true, force: true }); vi.unstubAllGlobals(); });
 
 describe("normal publisher durable journal", () => {
+  it("本文なし基本メタは正規nullの同一keyで閉鎖し、未閉鎖null intentも旧同様にSTOPする", () => {
+    const empty = JSON.stringify({ page: { id: native.provenance.textPageId, properties: buildSupplementProperties({ docId: null, texts: { [native.provenance.property]: native.notionReadbackText } }) },
+      children: [], expectedProperties: buildSupplementProperties({ docId: null, sector33: "機械" }) });
+    const nullInput = { ...input, nextDocId: null, archiveKey: `basic-metadata/${sha(empty)}`, snapshot: empty };
+    const root = state(), exchange = createSupplementPublicationJournal(root).reserve(nullInput); exchange.complete(output);
+    expect(JSON.parse(readFileSync(join(directory(root), "completed.json"), "utf8"))).toMatchObject({ oldDocId: null, nextDocId: null });
+    createSupplementPublicationJournal(root).assertReady(); expect(() => createSupplementPublicationJournal(root).reserve(nullInput)).toThrow();
+    const pending = state(); createSupplementPublicationJournal(pending).reserve(nullInput);
+    const original = readFileSync(join(directory(pending), "intent.json")); expect(() => createSupplementPublicationJournal(pending)).toThrow();
+    expect(readFileSync(join(directory(pending), "intent.json"))).toEqual(original);
+  });
   it("closed replace and create records retain their distinct source identities across startup", () => {
     const root = state(), journal = createSupplementPublicationJournal(root); journal.reserve(input).complete(output);
     const target = { dbId: native.provenance.textPageId, stockCode: native.provenance.stockCode, nextDocId: null };

@@ -242,18 +242,20 @@ def _roa_table_original(
         full.convert_status = ConvertStatus.FAILED
         ctx.upload_raw(full, sha_map=sha_map, sha_map_date=target_date)
         raise
-    full.notion_page_id = ctx.upload_raw(full, sha_map=sha_map, sha_map_date=target_date)
-    for name in (
+    mismatch = next((name for name in (
         "EDINETCodeDEI",
         "SecurityCodeDEI",
         "CurrentPeriodEndDateDEI",
         "CurrentFiscalYearEndDateDEI",
         "TypeOfCurrentPeriodDEI",
         "WhetherConsolidatedFinancialStatementsArePreparedDEI",
-    ):
-        original = _dei(tidy, name)
-        if original is None or _dei(full_tidy, name) != original:
-            raise ValueError("候補ROA表type1とCSVのnative DEIが一致しない: " + name)
+    ) if (original := _dei(tidy, name)) is None or _dei(full_tidy, name) != original), None)
+    # 同じ6DEIの確認結果だけを使用。未確認原本も従来どおり保全するが銘柄を結ばない。
+    if mismatch is None:
+        full.qualified_master_page_id = artifact.qualified_master_page_id
+    full.notion_page_id = ctx.upload_raw(full, sha_map=sha_map, sha_map_date=target_date)
+    if mismatch is not None:
+        raise ValueError("候補ROA表type1とCSVのnative DEIが一致しない: " + mismatch)
     after = normalize.tidy_to_financial_record(
         full_tidy, artifact.scope, prov, disclosure_type="本決算"
     )
@@ -337,6 +339,11 @@ def _process_document(
         # 原本を取る前に停止。未観測の提出者を別銘柄へ補完しない。
         raise ValueError("NULL証券コードの年次書類を①マスタで一意に特定できない")
     code = resolved if resolved is not None else ""
+    # 既存①mapと原一覧のliteral証券コードが結ぶ個社だけ。逆引き/未解決を推測しない。
+    raw_master_id = (
+        master_map.get(code)
+        if master_map_ok and doc.get("secCode") not in (None, "00000") else None
+    )
     doc_type_code = str(doc.get("docTypeCode") or "")
     submit = doc.get("submitDateTime") or ""
     data_date: date | None = None
@@ -356,6 +363,7 @@ def _process_document(
     # 送出され、PDF/構造化保存より前に書類単位を中止する (§8.1-4)。
     if doc_type_code in FINANCIAL_DOC_TYPES:
         tidy_artifact, tidy = _fetch_financial_tidy(ctx, doc_id, code, data_date, doc.get("csvFlag"))
+        tidy_artifact.qualified_master_page_id = raw_master_id
         doc_raw_page = ctx.upload_raw(tidy_artifact, sha_map=sha_map, sha_map_date=target_date)
         tidy_artifact.notion_page_id = doc_raw_page
         tidy_artifact, tidy = _roa_table_original(
@@ -369,6 +377,7 @@ def _process_document(
         pdf_artifact = edinet.fetch_document(
             ctx.settings, doc_id, 2, code=code, data_date=data_date
         )
+        pdf_artifact.qualified_master_page_id = raw_master_id
         json_to_parquet.convert_artifact(pdf_artifact, "pdf")
         pdf_page = ctx.upload_raw(pdf_artifact, sha_map=sha_map, sha_map_date=target_date)
         if doc_type_code not in FINANCIAL_DOC_TYPES:

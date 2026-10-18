@@ -17,6 +17,7 @@ import {
   type DocTypeLabel,
   type EvidenceBlockInput,
   type SupplementRowInput,
+  type SupplementRow,
   type TagStatus,
 } from "../../../../src/shared/notion-archive/index.js";
 import { normalizeSupplementText, SupplementWriteHeldError } from "../../../../src/shared/notion-archive/stock-supplement.js";
@@ -48,6 +49,7 @@ export interface ProcessDeps {
   model: string;
   /** 既知入力の同値同期だけを許可し、実入力変更の意味判定はHOLDする。 */
   mechanicalOnly?: boolean;
+  dryRun?: boolean;
   /** 判定原本の来歴を通常Node journalへ渡す。旧receiptは変更しない。 */
   localJudgeInput?: (receipt: InputReceipt, textsSha256: string) => void;
   localJudgeDate?: () => string;
@@ -57,8 +59,10 @@ export interface ProcessDeps {
   resolveMasterPageId: (stockCode: string) => string | null;
   /** Notion 有報テキスト行の読取 (`notionDocPageId` → セクション列) */
   readStockTextRow: (rowPageId: string) => Promise<StockTextSection[]>;
+  /** 期限付き完全読取。通常pipelineだけが現在target39の検査へ接続する。 */
+  readSupplementRowFully?: (pageId: string) => Promise<SupplementRow>;
   /** モデル待ち後、business writeの直前に最新doc/本文pointerを1社だけ照合する。 */
-  assertLatestDocCurrent: (stockCode: string, doc: Doc) => Promise<void>;
+  assertLatestDocCurrent: (stockCode: string, doc: LatestDoc["doc"], metadata?: Pick<LatestDoc, "companyName" | "sector33">) => Promise<void>;
   createSupplementRow: (input: SupplementRowInput, evidence?: unknown | null) => Promise<string>;
   updateSupplementRow: (pageId: string, input: SupplementRowInput) => Promise<void>;
   replaceEvidenceBlock: (pageId: string, block: unknown | null, input: SupplementRowInput, expectedProperties: Record<string, unknown>, beforeWrite: () => Promise<void>) => Promise<void>;
@@ -77,6 +81,10 @@ export interface ProcessOutcome {
   error?: string;
   /** 旧判定が残っていても新入力に対する判定完了には数えない。 */
   qualificationHeld?: boolean;
+  textChecked?: boolean;
+  textMismatch?: boolean;
+  textRepaired?: boolean;
+  metadataRepaired?: boolean;
 }
 
 const ZERO_JEV_STATS = { jevCalls: 0, jevInputTokens: 0, jevOutputTokens: 0 };
@@ -112,10 +120,13 @@ async function writeRowWithEvidence(
   evidenceBlock: unknown | null,
   expectedTexts?: Record<string, string | null>
 ): Promise<string> {
-  if (item.doc === null) throw new Error("書込前照合に必要な有報がありません");
+  if (item.doc === null && !item.basicMetadataOnly) throw new Error("書込前照合に必要な有報がありません");
   const doc = item.doc;
   const beforeWrite = async () => {
-    try { await deps.assertLatestDocCurrent(item.stockCode, doc); }
+    try {
+      if (item.basicMetadataOnly) await deps.assertLatestDocCurrent(item.stockCode, doc, { companyName: item.companyName, sector33: item.sector33 });
+      else await deps.assertLatestDocCurrent(item.stockCode, doc);
+    }
     catch (cause) { throw new SupplementWriteHeldError(`書込直前の最新有報照合をHOLD: ${cause instanceof Error ? cause.message : String(cause)}`, { cause }); }
   };
   if (item.row) {
@@ -157,6 +168,74 @@ function textColumnsOf(sections: StockTextSection[]): Record<string, string | nu
   return texts;
 }
 
+/** 保存済み現docの欠落だけを補う。非空値・タグ・判定receiptは触らない。 */
+function missingMetadata(item: WorkItem, deps: ProcessDeps): SupplementRowInput {
+  const row = item.row, doc = item.doc;
+  if (row === null || !item.basicMetadataOnly && (doc === null || row.docId !== doc.docId)) throw new Error("メタ補完の現docが未資格です");
+  const input: SupplementRowInput = {};
+  if (row.companyName.trim() === "" && item.companyName.trim() !== "") input.companyName = item.companyName;
+  if (row.sector33 === null && item.sector33 !== null) input.sector33 = item.sector33;
+  if (!item.basicMetadataOnly && doc !== null) {
+    if (row.docType === null) input.docType = docTypeLabelOf(doc.docTypeCode);
+    if (row.periodEnd === null) input.periodEnd = doc.periodEnd;
+    if (row.submittedAt === null) input.submittedAt = doc.submittedAt;
+    if (row.textStatus === null) input.textStatus = "取得済";
+  }
+  if (!row.masterLinked) {
+    const id = deps.resolveMasterPageId(item.stockCode);
+    if (id !== null) input.masterPageId = id;
+  }
+  return input;
+}
+
+async function syncMetadata(item: WorkItem, deps: ProcessDeps): Promise<ProcessOutcome> {
+  if (item.row === null || item.doc === null && !item.basicMetadataOnly) throw new Error("メタ補完の行/docがありません");
+  const input = missingMetadata(item, deps), changed = Object.keys(input).length > 0;
+  if (changed) await writeRowWithEvidence(item, deps, { docId: item.basicMetadataOnly ? item.row.docId : item.doc!.docId, ...input }, undefined);
+  else await deps.assertLatestDocCurrent(item.stockCode, item.doc, item.basicMetadataOnly ? { companyName: item.companyName, sector33: item.sector33 } : undefined);
+  const held = item.qualificationHeld === true || !item.row.masterLinked && input.masterPageId === undefined;
+  if (item.verifyCurrentTexts) {
+    const row: SupplementRow = { ...item.row,
+      ...(input.companyName === undefined ? {} : { companyName: input.companyName }),
+      ...(input.sector33 === undefined ? {} : { sector33: input.sector33 }),
+      ...(input.docType === undefined ? {} : { docType: input.docType }),
+      ...(input.periodEnd === undefined ? {} : { periodEnd: input.periodEnd }),
+      ...(input.submittedAt === undefined ? {} : { submittedAt: input.submittedAt }),
+      ...(input.textStatus === undefined ? {} : { textStatus: input.textStatus }),
+      masterLinked: item.row.masterLinked || input.masterPageId !== undefined,
+    };
+    const outcome = await verifyTexts({ ...item, row: deps.dryRun ? item.row : row, verifyCurrentTexts: false }, deps);
+    return { ...outcome, metadataRepaired: changed || outcome.metadataRepaired,
+      ...(held ? { qualificationHeld: true, error: "銘柄マスタの一意なrelation先が無いため保持してHOLD" } : {}) };
+  }
+  return { stockCode: item.stockCode, kind: item.kind, outcome: changed ? "updated" : "skipped",
+    tagStatus: item.row.tagStatus, candidateCount: item.row.candidateCount, metadataRepaired: changed,
+    ...(held ? { qualificationHeld: true, error: item.basicMetadataOnly ? "有報/本文の欠測HOLDを保持。基本メタの適格欠落だけを補完" : "銘柄マスタの一意なrelation先が無いため保持してHOLD" } : {}), ...ZERO_JEV_STATS };
+}
+
+async function verifyTexts(item: WorkItem, deps: ProcessDeps): Promise<ProcessOutcome> {
+  if (item.row === null || item.doc === null || !deps.readSupplementRowFully) throw new Error("現在本文検査の完全読取がありません");
+  const current = await deps.readSupplementRowFully(item.row.pageId);
+  if (current.pageId !== item.row.pageId || current.stockCode !== item.stockCode ||
+      JSON.stringify(savedRowGuard(current)) !== JSON.stringify(savedRowGuard(item.row)) || current.masterLinked !== item.row.masterLinked) {
+    throw new SupplementWriteHeldError("本文検査中に補足メタ/判定が変更。現在値を保持してHOLD");
+  }
+  const receipt = readTextSyncReceipt(current.judgeInput);
+  if (receipt === null || receipt.docId !== item.doc.docId || receipt.textPageId !== item.doc.notionDocPageId) throw new SupplementWriteHeldError("現在本文検査の同期出典が不一致です");
+  const texts = Object.fromEntries(TEXT_SECTIONS.map(({ title }) => {
+    if (typeof current.texts[title] !== "string") throw new Error("現在39本文の読取が未完です");
+    const value = normalizeSupplementText(current.texts[title]); return [title, value === "" ? null : value];
+  }));
+  const digest = await sha256Hex(JSON.stringify(TEXT_SECTIONS.map(({ title }) => [title, texts[title]])));
+  if (digest === (receipt.notionTextsSha256 === undefined ? receipt.textsSha256 : receipt.notionTextsSha256)) {
+    const outcome = await syncMetadata(item, deps);
+    return { ...outcome, textChecked: true, textMismatch: false };
+  }
+  const outcome = await syncTexts({ ...item, repairTextDrift: true }, deps, texts);
+  return { ...outcome, textChecked: true, textMismatch: outcome.textMismatch === true,
+    textRepaired: outcome.textMismatch === true && !outcome.qualificationHeld && outcome.outcome === "updated" };
+}
+
 async function textReceipt(doc: Doc, texts: Record<string, string | null>, judgment: InputReceipt | null) {
   if (doc.notionDocPageId === null) throw new Error("39本文同期のpointerがありません");
   const notionText = (value: string | null) => { const normalized = normalizeSupplementText(value); return normalized === "" ? null : normalized; };
@@ -188,7 +267,7 @@ function localJudgeName(deps: ProcessDeps): "Clef-Flash" | "SemIf" {
   throw new Error(`ローカル判定modelが不明です: ${deps.model}`);
 }
 
-async function syncTexts(item: WorkItem, deps: ProcessDeps): Promise<ProcessOutcome> {
+async function syncTexts(item: WorkItem, deps: ProcessDeps, expectedTexts?: Record<string, string | null>): Promise<ProcessOutcome> {
   if (item.row === null || item.doc === null || item.doc.notionDocPageId === null || item.row.docId !== item.doc.docId || item.row.judgeInput === undefined) {
     throw new Error("39本文のみの同期には同じ有報の既存補足行が必要です");
   }
@@ -197,6 +276,14 @@ async function syncTexts(item: WorkItem, deps: ProcessDeps): Promise<ProcessOutc
   const judgment = readInputReceipt(item.row.judgeInput);
   const texts = textColumnsOf(sections), receipt = await textReceipt(item.doc, texts, judgment);
   const previous = readTextSyncReceipt(item.row.judgeInput);
+  if (item.repairTextDrift && (previous === null || previous.textsSha256 !== receipt.textsSha256)) {
+    return { stockCode: item.stockCode, kind: item.kind, outcome: "skipped", tagStatus: item.row.tagStatus,
+      candidateCount: item.row.candidateCount, textMismatch: previous?.notionTextsSha256 !== undefined,
+      qualificationHeld: true, error: "保存原本39 SHAが旧同期と不同。旧タグの出典を付け替えずHOLD", ...ZERO_JEV_STATS };
+  }
+  // 旧receiptが原39 SHAしか持たない場合、正常なNotion表現差を本文欠落と数えない。
+  const textMismatch = item.repairTextDrift && expectedTexts !== undefined
+    ? await sha256Hex(JSON.stringify(TEXT_SECTIONS.map(({ title }) => [title, expectedTexts[title]]))) !== receipt.notionTextsSha256 : undefined;
   if (item.refreshTextReceipt && (previous === null || previous.docId !== receipt.docId ||
       previous.textPageId !== receipt.textPageId || previous.textsSha256 !== receipt.textsSha256)) {
     return { stockCode: item.stockCode, kind: item.kind, outcome: "skipped", tagStatus: item.row.tagStatus,
@@ -207,11 +294,13 @@ async function syncTexts(item: WorkItem, deps: ProcessDeps): Promise<ProcessOutc
       candidateCount: item.row.candidateCount, qualificationHeld: true, error: "旧原4 SHA/business SHAと実原文の同値証拠がないため再資格化をHOLD", ...ZERO_JEV_STATS };
   }
   const same = previous !== null && JSON.stringify(previous) === JSON.stringify(receipt);
-  if (same && !item.refreshTextReceipt) await deps.assertLatestDocCurrent(item.stockCode, item.doc);
-  else await writeRowWithEvidence(item, deps, { docId: item.doc.docId, ...(item.refreshTextReceipt ? {} : { texts }), textStatus: "取得済",
-    judgeInput: withTextSyncReceipt(item.row.judgeInput, receipt) }, undefined, item.refreshTextReceipt ? texts : undefined);
-  return { stockCode: item.stockCode, kind: item.kind, outcome: same ? "skipped" : "updated",
-    tagStatus: item.row.tagStatus, candidateCount: item.row.candidateCount, ...ZERO_JEV_STATS };
+  const metadata = missingMetadata(item, deps), metadataChanged = Object.keys(metadata).length > 0;
+  const publish = !same || item.refreshTextReceipt || item.repairTextDrift || metadataChanged;
+  if (!publish) await deps.assertLatestDocCurrent(item.stockCode, item.doc);
+  else await writeRowWithEvidence(item, deps, { docId: item.doc.docId, ...metadata, ...(item.refreshTextReceipt || textMismatch === false ? {} : { texts }), textStatus: "取得済",
+    judgeInput: withTextSyncReceipt(item.row.judgeInput, receipt) }, undefined, expectedTexts === undefined ? item.refreshTextReceipt ? texts : undefined : expectedTexts);
+  return { stockCode: item.stockCode, kind: item.kind, outcome: same && !item.repairTextDrift && !metadataChanged ? "skipped" : "updated",
+    tagStatus: item.row.tagStatus, candidateCount: item.row.candidateCount, metadataRepaired: metadataChanged, textChecked: publish === true, textMismatch, ...ZERO_JEV_STATS };
 }
 
 /** 今のタグ (labelJa の配列) を今の単語帳の id へ変換する。version_bump の前提上、必ず見つかる。 */
@@ -233,6 +322,14 @@ function idsFromActiveLabels(vocab: Vocabulary, labels: string[]): string[] {
  */
 export async function processStock(item: WorkItem, deps: ProcessDeps): Promise<ProcessOutcome> {
   switch (item.kind) {
+    case "sync_metadata":
+    case "verify_text":
+      try { return item.kind === "verify_text" ? await verifyTexts(item, deps) : await syncMetadata(item, deps); }
+      catch (error) {
+        if (!(error instanceof SupplementWriteHeldError)) throw error;
+        return { stockCode: item.stockCode, kind: item.kind, outcome: "skipped", tagStatus: item.row === null ? null : item.row.tagStatus,
+          candidateCount: item.row === null ? null : item.row.candidateCount, qualificationHeld: true, error: error.message, ...ZERO_JEV_STATS };
+      }
     case "sync_text":
       try { return await syncTexts(item, deps); }
       catch (error) {
@@ -337,7 +434,8 @@ export async function processStock(item: WorkItem, deps: ProcessDeps): Promise<P
       if (item.doc === null) {
         throw new Error(`processStock: ${item.kind} に必要な最新有報が無い (${item.stockCode})`);
       }
-      return syncAndTag(item, item.doc, deps);
+      const outcome = await syncAndTag(item, item.doc, deps);
+      return { ...outcome, textChecked: outcome.tagStatus === "判定済" && outcome.outcome !== "skipped" };
     }
   }
 }

@@ -66,6 +66,7 @@ def test_existing_whole_type1_is_reused_with_other_financial_fields_identical(
     monkeypatch, tmp_path, case, available
 ):
     csv, full = originals(case)
+    csv.qualified_master_page_id = "11111111-1111-4111-8111-111111111111"
     code, doc_id, issuer = case
     tidy = xbrl_to_csv.edinet_csv_zip_to_tidy(csv.local_path.read_bytes(), code, doc_id)
     calls = []
@@ -94,6 +95,7 @@ def test_existing_whole_type1_is_reused_with_other_financial_fields_identical(
         target_date=None,
     )
     assert actual_artifact is full
+    assert full.qualified_master_page_id == csv.qualified_master_page_id
     assert calls == (["saved", "archive"] if available else ["saved", "fetch1", "archive"])
     prov = Provenance(
         source=Source.EDINET,
@@ -115,6 +117,7 @@ def test_saved_errors_and_different_values_hold_without_official_replacement(
     monkeypatch, tmp_path, failure
 ):
     csv, full = originals(CASES[0])
+    csv.qualified_master_page_id = "11111111-1111-4111-8111-111111111111"
     tidy = xbrl_to_csv.edinet_csv_zip_to_tidy(csv.local_path.read_bytes(), "6963", "S100YF41")
     native = xbrl_to_csv.xbrl_zip_to_tidy(full.local_path.read_bytes(), "6963", "S100YF41")
     if failure == "native-identity":
@@ -160,3 +163,7 @@ def test_saved_errors_and_different_values_hold_without_official_replacement(
             target_date=None,
         )
     assert archived == ([] if failure in ("saved-read", "csv-code") else [full])
+    assert full.qualified_master_page_id == (
+        csv.qualified_master_page_id
+        if failure in ("other-financial-value", "table-value") else None
+    )

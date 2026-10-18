@@ -250,8 +250,19 @@ export async function loadLatestDocs(db: BiztagSourceDb, codes?: readonly string
 export async function assertLatestDocCurrent(
   db: BiztagSourceDb,
   stockCode: string,
-  expected: NonNullable<LatestDoc["doc"]>
+  expected: LatestDoc["doc"],
+  expectedStock?: Pick<LatestDoc, "companyName" | "sector33">
 ): Promise<void> {
+  if (expected === null || expectedStock !== undefined) {
+    if (expectedStock === undefined) throw new Error("本文なし基本メタの現active資格がありません");
+    const selected = await loadLatestDocs(db, [stockCode]), current = selected[0];
+    if (selected.length !== 1 || current.stockCode !== stockCode || current.companyName !== expectedStock.companyName ||
+        current.sector33 !== expectedStock.sector33 || current.reportedHoldReason !== undefined ||
+        JSON.stringify(current.doc) !== JSON.stringify(expected)) {
+      throw new Error(`書込直前に現activeの基本メタ/最新有報が変更 (${stockCode})。旧値と本文HOLDを保持`);
+    }
+    return;
+  }
   const rows = await db.select({
     docId: yuhoDocuments.docId, docTypeCode: yuhoDocuments.docTypeCode,
     periodEnd: yuhoDocuments.periodEnd, submittedAt: yuhoDocuments.submittedAt,

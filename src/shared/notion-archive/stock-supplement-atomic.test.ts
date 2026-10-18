@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { createSupplementPublicationJournal } from "../../../scripts/biztag-local/publication-journal.js";
-import { buildEvidenceBlock, buildSupplementProperties, createSupplementRow, replaceEvidenceBlock, SupplementWriteHeldError } from "./stock-supplement.js";
+import { buildEvidenceBlock, buildSupplementProperties, createSupplementRow, readSupplementRowFully, replaceEvidenceBlock, SupplementWriteHeldError } from "./stock-supplement.js";
 import { NotionUnknownResultError } from "./client.js";
 import changedDocumentNative from "./fixtures/publisher-doc-change-actual-20261017.json";
 import zeroWidthNative from "./fixtures/9273-s100z2z6-notion-zero-width.json";
@@ -100,6 +100,47 @@ const privateStates: string[] = [];
 afterEach(() => { for (const state of privateStates.splice(0)) rmSync(state, { recursive: true, force: true }); });
 
 describe("supplement evidence two-phase replacement", () => {
+  it("null原本文書の基本メタも物理PRE/CAS/POSTを通し、本文/タグ/状態を新造しない", async () => {
+    const properties = buildSupplementProperties({ docId: null, textStatus: "本文なし", tagStatus: "本文なし", judgeInput: null, texts: { [zeroWidthNative.provenance.property]: zeroWidthNative.notionReadbackText } });
+    const page = { id: "row", last_edited_time: "2026-10-18T00:00:00Z", properties }, next = { docId: null, sector33: "機械" }, after = { ...page, properties: { ...properties, ...buildSupplementProperties(next) } };
+    let patched = false;
+    io.request.mockImplementation(async (method: string, path: string, body?: { properties: object }) => {
+      if (method === "GET" && path === "/pages/row") return structuredClone(patched ? after : page);
+      if (method === "GET" && path.startsWith("/blocks/row/children")) return { results: [], has_more: false, next_cursor: null };
+      if (method === "PATCH" && path === "/pages/row") { expect(body?.properties).toEqual(buildSupplementProperties(next)); patched = true; return {}; }
+      throw Error("unexpected null-source protocol call");
+    });
+    const state = realpathSync(mkdtempSync(join(tmpdir(), "basic-metadata-publication-"))); privateStates.push(state);
+    await replaceEvidenceBlock("row", undefined, next, properties, guard, createSupplementPublicationJournal(state));
+    expect(guard).toHaveBeenCalledOnce(); expect(io.archive).toHaveBeenCalledOnce(); expect(io.verify).toHaveBeenCalledOnce();
+    expect(mutations()).toEqual(["PATCH /pages/row"]); expect(after.properties["有報書類ID"]).toEqual(properties["有報書類ID"]);
+    const dir = join(state, "supplement-publications", readdirSync(join(state, "supplement-publications"))[0]);
+    expect(JSON.parse(readFileSync(join(dir, "completed.json"), "utf8"))).toMatchObject({ oldDocId: null, nextDocId: null });
+    createSupplementPublicationJournal(state).assertReady();
+  });
+  it("現在39検査は実保存pageの長文を全paginationで読み、次GETの期限前停止を守る", async () => {
+    const saved = JSON.parse(gunzipSync(readFileSync(new URL("../../../services/yuho-quant/src/biztag/competitors/fixtures/prepare-actual-20261017.json.gz", import.meta.url))).toString());
+    const page = structuredClone(saved.pages[0]), dbId = page.parent.database_id;
+    // Committed native projection omits the transport clock; declared protocol-only metadata.
+    page.last_edited_time = "2026-10-17T00:00:00.000Z";
+    const text = page.properties["事業の内容"].rich_text.map((v: { plain_text: string }) => v.plain_text).join("");
+    const width = Math.ceil(text.length / 26), parts = Array.from({ length: Math.ceil(text.length / width) }, (_, i) => ({ plain_text: text.slice(i * width, (i + 1) * width) }));
+    expect(parts.length).toBeGreaterThanOrEqual(25);
+    page.properties["事業の内容"] = { ...page.properties["事業の内容"], rich_text: parts.slice(0, 25), has_more: true };
+    const admitted = vi.fn();
+    io.request.mockImplementation(async (method: string, path: string, _body: unknown, opts: { beforeRequest?: () => void }) => {
+      opts.beforeRequest?.(); expect(method).toBe("GET");
+      if (path === `/pages/${page.id}`) return structuredClone(page);
+      expect(path).toContain(`/pages/${page.id}/properties/`);
+      const last = path.includes("start_cursor=");
+      return { results: (last ? parts.slice(25) : parts.slice(0, 25)).map(rich_text => ({ rich_text })), has_more: !last, next_cursor: last ? null : "saved-next" };
+    });
+    expect((await readSupplementRowFully(page.id, dbId, ["事業の内容"], admitted)).texts["事業の内容"]).toBe(text);
+    expect(admitted).toHaveBeenCalledTimes(3); expect(io.archive).not.toHaveBeenCalled();
+    let count = 0;
+    await expect(readSupplementRowFully(page.id, dbId, ["事業の内容"], () => { if (++count === 2) throw Error("declared original deadline"); })).rejects.toThrow("original deadline");
+    expect(count).toBe(2);
+  });
   it.each(["single-complete", "multi-complete", "null-doc-complete", "evidence-complete", "evidence-read-unknown", "unknown-POST", "unknown-PATCH", "readback-mismatch", "db-drift"])("実4502値のcreate意図をpageID取得前から閉鎖まで保持 (%s)", async fault => {
     const fixture = JSON.parse(gunzipSync(readFileSync(new URL("./fixtures/publisher-partial-actual-20261017.json.gz", import.meta.url))).toString());
     const state = realpathSync(mkdtempSync(join(tmpdir(), "supplement-create-"))); privateStates.push(state);

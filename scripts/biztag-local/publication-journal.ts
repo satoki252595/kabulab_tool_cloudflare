@@ -23,7 +23,7 @@ function read(path: string, maximum: number): Buffer {
   privatePath(path, false); assert(lstatSync(path).size <= maximum, "publication file size"); return readFileSync(path);
 }
 const decode = (raw: Uint8Array) => new TextDecoder("utf-8", { fatal: true }).decode(raw);
-function snapshotOldDocId(raw: Uint8Array, pageId: string, nextDocId: string): string | null {
+function snapshotOldDocId(raw: Uint8Array, pageId: string, nextDocId: string | null): string | null {
   const snapshot = JSON.parse(decode(raw));
   assert.equal(snapshot.page.id, pageId);
   const doc = (properties: Record<string, { rich_text: Array<{ type: string; text: { content: string } }> }>) => {
@@ -112,7 +112,8 @@ function makeJournal(state: string, resume?: PreArchiveResume, appliedSemantic =
       keys(intent, ["version", "pageId", "oldDocId", "nextDocId", "archiveKey", "preSha256", "bytes", "at"]);
       keys(completed, ["version", "pageId", "oldDocId", "nextDocId", "intentSha256", "preSha256", "archivePageId", "postPageSha256", "at"]);
       assert.equal(intent.version, 1); assert.equal(completed.version, 1);
-      for (const key of ["pageId", "nextDocId", "archiveKey"]) assert(typeof intent[key] === "string" && intent[key].length > 0);
+      for (const key of ["pageId", "archiveKey"]) assert(typeof intent[key] === "string" && intent[key].length > 0);
+      assert(intent.nextDocId === null || typeof intent.nextDocId === "string" && intent.nextDocId.length > 0);
       assert.equal(intent.preSha256, sha(pre)); assert.equal(intent.bytes, pre.length);
       assert.equal(snapshotOldDocId(pre, intent.pageId, intent.nextDocId), intent.oldDocId);
       assert.equal(name, sha(JSON.stringify({ pageId: intent.pageId, nextDocId: intent.nextDocId, archiveKey: intent.archiveKey, preSha256: intent.preSha256 })));
@@ -150,7 +151,8 @@ function makeJournal(state: string, resume?: PreArchiveResume, appliedSemantic =
     reserve(input) { return guard(() => {
       assertReady(); const pre = Buffer.from(input.snapshot), preSha256 = sha(pre);
       assert(pre.length <= PRE_MAX && stored + pre.length + 2 * RECORD_MAX <= STORE_MAX, "publication complete-tail budget");
-      for (const value of [input.pageId, input.nextDocId, input.archiveKey]) assert(typeof value === "string" && value.length > 0);
+      for (const value of [input.pageId, input.archiveKey]) assert(typeof value === "string" && value.length > 0);
+      assert(input.nextDocId === null || typeof input.nextDocId === "string" && input.nextDocId.length > 0);
       const oldDocId = snapshotOldDocId(pre, input.pageId, input.nextDocId);
       const key = sha(JSON.stringify({ pageId: input.pageId, nextDocId: input.nextDocId, archiveKey: input.archiveKey, preSha256 })), directory = join(root, key);
       let raw: string;

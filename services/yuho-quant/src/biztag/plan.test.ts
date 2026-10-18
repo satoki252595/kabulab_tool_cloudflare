@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import type { SupplementRow } from "../../../../src/shared/notion-archive/index.js";
 import { INITIAL_CLEF_INPUT_PREFIX, INITIAL_SEMIF_INPUT_PREFIX, INPUT_RECEIPT_PREFIX, MAX_RETRY_ATTEMPTS,
-  planWork, readInputReceipt, readTextSyncReceipt, withInputReceipt, withTextSyncReceipt } from "./plan.js";
+  planWork, readInputReceipt, readTextSyncReceipt, textVerificationCodes, withInputReceipt, withTextSyncReceipt } from "./plan.js";
 import type { LatestDoc, NewStockEligibility } from "./source.js";
 
 const TODAY = "2026-09-25";
@@ -75,8 +75,25 @@ function planSingle(
 }
 
 describe("planWork (保存タグを再利用し、不足だけ補完)", () => {
+  it("通常は50以下の巡回窓、明示scopeは全件を選び、欠落メタだけでも再選定する", () => {
+    const latest = Array.from({ length: 120 }, (_, i) => latestOf({ stockCode: String(1000 + i) }));
+    expect(textVerificationCodes(latest, TODAY, false).size).toBe(50);
+    expect(textVerificationCodes(latest, TODAY, false)).not.toEqual(textVerificationCodes(latest, "2026-09-26", false));
+    expect(textVerificationCodes(latest, TODAY, true).size).toBe(120);
+    const row = rowOf({ docId: "S100AAAA", tagDoc: "S100AAAA 2026年3月期", vocabVersion: "v1", tagStatus: "判定済", masterLinked: false,
+      judgeInput: withTextSyncReceipt(null, { docId: "S100AAAA", textPageId: "notion-page-aaaa", textsSha256: "e".repeat(64) }) });
+    expect(planSingle(latestOf(), row)).toMatchObject({ kind: "sync_metadata" });
+    expect(planSingle(latestOf({ reportedHoldReason: "reported hold" }), row)).toMatchObject({ kind: "skip", qualificationHeld: true });
+    expect(planSingle(latestOf(), { ...row, companyName: "異なる保存会社", judgeInput: null })).toMatchObject({ kind: "skip", qualificationHeld: true });
+  });
   it("行も最新有報も無い場合は create_row/HOLD", () => {
     expect(planSingle(latestOf({ doc: null }), null)).toMatchObject({ kind: "create_row", qualificationHeld: true });
+  });
+  it("現activeの有報が無くても適格な基本メタ欠落は独立選定し、本文HOLDを保持", () => {
+    const item = planSingle(latestOf({ doc: null }), rowOf({ sector33: null, masterLinked: false, textStatus: "本文なし", tagStatus: "本文なし" }));
+    expect(item).toMatchObject({ kind: "sync_metadata", basicMetadataOnly: true, qualificationHeld: true, doc: null });
+    expect(item.row?.docId).toBeNull();
+    expect(planSingle(latestOf({ doc: null }), rowOf({ companyName: "相反する保存会社", sector33: null, masterLinked: false }))).toMatchObject({ kind: "skip", qualificationHeld: true });
   });
 
   it("行が無く本文が読める既存銘柄は機械補完", () => {
@@ -280,7 +297,7 @@ describe("新規上場の初回だけ SemIf を許可する計画", () => {
 
 
 describe("known input provenance", () => {
-  const row = () => rowOf({ docId: "S100AAAA", tagDoc: "S100AAAA 2026年3月期", tagStatus: "判定済", vocabVersion: "v0",
+  const row = () => rowOf({ docId: "S100AAAA", docType: "有報", periodEnd: "2026-03-31", submittedAt: "2026-06-25T00:00:00.000Z", textStatus: "取得済", tagDoc: "S100AAAA 2026年3月期", tagStatus: "判定済", vocabVersion: "v0",
     judgeInput: withInputReceipt("判定済み説明", { docId: "S100AAAA", textPageId: "old-pointer", businessSha256: "a".repeat(64), sectionsSha256: "b".repeat(64), stateSha256: "c".repeat(64), vocabVersion: "v0", model: "local-model" }) });
   it("same doc with a changed known fulltext pointer reads actual sections before choosing reuse/rejudge", () => {
     expect(planSingle(latestOf(), row())).toMatchObject({ kind: "retag", sourceChangedLocalJudge: true, checkSourceInput: true });
@@ -307,7 +324,7 @@ describe("39本文同期と初回local判定の来歴を分ける", () => {
     expect(planSingle(latestOf(), row)).toMatchObject({ kind: "sync_text" });
     const next = withTextSyncReceipt(null, { docId: "S100AAAA", textPageId: "notion-page-aaaa", textsSha256: "e".repeat(64) });
     expect(readInputReceipt(next)).toBeNull();
-    expect(planSingle(latestOf(), { ...row, judgeInput: next })).toMatchObject({ kind: "skip" });
+    expect(planSingle(latestOf(), { ...row, judgeInput: next, docType: "有報", periodEnd: "2026-03-31", submittedAt: "2026-06-25T00:00:00.000Z", textStatus: "取得済" })).toMatchObject({ kind: "skip" });
   });
   it("独立39markerを更新しても既存model判定JSONを1byteも書き換えない", () => {
     const original = withInputReceipt("SemIf新規銘柄の初回判定：保存済み説明", { docId: "S100AAAA", textPageId: "old-pointer", businessSha256: null,

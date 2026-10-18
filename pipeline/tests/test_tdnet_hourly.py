@@ -99,6 +99,10 @@ class TestProcessFinancialXbrlSavesDocId:
         )
 
         ctx = _ctx(str(tmp_path))
+        ctx.upload_raw = lambda artifact, **kw: (
+            captured.update(qualified_master_page_id=artifact.qualified_master_page_id)
+            or "raw-page-id"
+        )
         record = _record(doc_id="81234567")
         mod._process_financial_xbrl(  # noqa: SLF001
             ctx, record, "https://example/xbrl.zip", master_id="M1", master_resolved=True
@@ -106,6 +110,7 @@ class TestProcessFinancialXbrlSavesDocId:
 
         assert captured["doc_id"] == "81234567"
         assert captured["scope"] == "7203"
+        assert captured["qualified_master_page_id"] == "M1"
 
 
 class TestFinancialXbrlCommonStrict:

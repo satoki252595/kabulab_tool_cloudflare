@@ -38,6 +38,7 @@ const notionMocks = vi.hoisted(() => ({
     ): Promise<SupplementRow[]> => []
   ),
   loadStockMasterIndex: vi.fn(async () => ({ index: new Map<string, string>(), duplicates: new Map<string, string[]>() })),
+  readSupplementRowFully: vi.fn(async (): Promise<SupplementRow> => { throw new Error("test must provide current full39; native forbidden"); }),
   createSupplementRow: vi.fn(async (_dbId: string, _row: SupplementRowInput) => "new-page"),
   updateSupplementRow: vi.fn(async (_pageId: string, _row: SupplementRowInput) => {}),
   replaceEvidenceBlock: vi.fn(async (_pageId: string, _block: unknown, _input: SupplementRowInput, _expected: Record<string, unknown>, guard: () => Promise<void>) => { await guard(); }),
@@ -49,6 +50,10 @@ const notionMocks = vi.hoisted(() => ({
 vi.mock("../../../../src/shared/notion-archive/index.js", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../../../src/shared/notion-archive/index.js")>(),
   ...notionMocks,
+}));
+vi.mock("../../../../src/shared/notion-archive/stock-supplement.js", async importOriginal => ({
+  ...await importOriginal<typeof import("../../../../src/shared/notion-archive/stock-supplement.js")>(),
+  readSupplementRowFully: notionMocks.readSupplementRowFully,
 }));
 
 vi.mock("../../../../src/shared/db/d1-http-client.js", () => ({
@@ -159,11 +164,37 @@ beforeEach(() => {
   vi.mocked(loadNewStockEligibility).mockResolvedValue({ eligibleCodes: new Set(), heldCodes: new Set() });
   notionMocks.loadSupplementRows.mockReset().mockResolvedValue([]);
   notionMocks.loadStockMasterIndex.mockReset().mockResolvedValue({ index: new Map(), duplicates: new Map() });
+  notionMocks.readStockTextRow.mockReset().mockResolvedValue([]);
+  notionMocks.readSupplementRowFully.mockReset().mockRejectedValue(new Error("test must provide current full39; native forbidden"));
   setupListLedgerEntries();
 });
 afterEach(() => vi.unstubAllEnvs());
 
 describe("runBiztag dry-run スコープ", () => {
+  it("本文なしの基本メタ補完もHOLDは1銘柄1件、現在39は未検査のまま保持する", async () => {
+    const saved = JSON.parse(gunzipSync(readFileSync(new URL("./competitors/fixtures/prepare-actual-20261017.json.gz", import.meta.url))).toString());
+    // 保存metadataを使用し、原本文書欠測だけをtransport doubleで投影する。
+    const latest: LatestDoc = { ...saved.latest[0], doc: null };
+    expect(latest.sector33).not.toBeNull();
+    vi.mocked(loadLatestDocs).mockResolvedValue([latest]);
+    notionMocks.loadSupplementRows.mockResolvedValue([minimalRow({ stockCode: latest.stockCode,
+      companyName: latest.companyName, docId: null, sector33: null, masterLinked: false,
+      textStatus: "本文なし", tagStatus: "本文なし" })]);
+    notionMocks.loadStockMasterIndex.mockResolvedValue({ index: new Map([[latest.stockCode, "declared-master-api-id"]]), duplicates: new Map() });
+    const summary = await runBiztag({ budgetMs: 10_000, codes: [latest.stockCode], limit: 1, mechanicalOnly: true,
+      thresholds: { yesMin: 0.8, noMax: 0.2 }, model: CLEF_MODEL });
+    expect(summary.qualificationHeld).toEqual([latest.stockCode]);
+    expect(summary.fieldCoverage).toMatchObject({ selectedForTextCheck: 1, textChecked: 0, textUnchecked: 1,
+      metadataRepaired: 1, status: "attention", wholeSupplementComplete: false });
+    expect(notionMocks.replaceEvidenceBlock.mock.calls[0][2]).toEqual({ docId: null, sector33: latest.sector33, masterPageId: "declared-master-api-id" });
+    expect(notionMocks.readSupplementRowFully).not.toHaveBeenCalled(); expect(notionMocks.readStockTextRow).not.toHaveBeenCalled();
+    expect(createClefClient).not.toHaveBeenCalled();
+  });
+  it("明示コードが現母集団に無ければ未検査/HOLDを残し、0件を充足成功へ変えない", async () => {
+    const summary = await runBiztag({ budgetMs: 10_000, codes: ["6103"], limit: 1, mechanicalOnly: true, thresholds: { yesMin: 0.8, noMax: 0.2 }, model: CLEF_MODEL });
+    expect(summary.fieldCoverage).toMatchObject({ selectedForTextCheck: 1, textChecked: 0, textUnchecked: 1, status: "attention", wholeSupplementComplete: false });
+    expect(summary.qualificationHeld).toContain("6103"); expect(notionMocks.readSupplementRowFully).not.toHaveBeenCalled(); expect(createClefClient).not.toHaveBeenCalled();
+  });
   it("prior publisher unknown stops before all metadata and model factories", async () => {
     vi.mocked(createSupplementPublicationJournal).mockImplementationOnce(() => { throw new NotionUnknownResultError("saved publisher intent incomplete"); });
     await expect(runBiztag({ budgetMs: 10_000, thresholds: { yesMin: 0.8, noMax: 0.2 }, model: CLEF_MODEL })).rejects.toThrow("publisher intent incomplete");
@@ -279,7 +310,7 @@ describe("runBiztag 新規と既存の外部判定境界", () => {
 
   it("mechanical-onlyの本文同期は旧判定を保持し、較正・モデルに触れず共通publisherを使う", async () => {
     vi.mocked(loadLatestDocs).mockResolvedValue([latest]);
-    notionMocks.loadSupplementRows.mockResolvedValueOnce([minimalRow({ stockCode: "0001", docId: "TEST_DOC",
+    notionMocks.loadSupplementRows.mockResolvedValueOnce([minimalRow({ stockCode: "0001", companyName: latest.companyName, docId: "TEST_DOC",
       tagStatus: "判定済", tagDoc: "TEST_DOC 2026年3月期", vocabVersion: MINI_VOCAB.version, judgeInput: "保存済み旧判定" })]);
     notionMocks.readStockTextRow.mockResolvedValueOnce(text);
     const summary = await runBiztag({ ...opts, mechanicalOnly: true, get thresholds(): typeof opts.thresholds { throw new Error("機械処理では較正を読まない"); } });
@@ -294,19 +325,20 @@ describe("runBiztag 新規と既存の外部判定境界", () => {
     expect(createJevClient).not.toHaveBeenCalled();
   });
 
-  it("実保存215Aの旧receiptは既定skip、固定finite refreshだけ通常planner→同producer/publisherへ進む", async () => {
+  it("実保存215Aの旧receiptもfiniteで現在39を検査し、明示refreshは旧原39を守って再資格化する", async () => {
     const actual = JSON.parse(gunzipSync(readFileSync(new URL("./competitors/fixtures/prepare-actual-20261017.json.gz", import.meta.url))).toString());
     const latest = actual.latest[0] as LatestDoc, page = actual.pages[0];
     const rich = (name: string) => page.properties[name].rich_text.map((t: { plain_text: string }) => t.plain_text).join("");
     const row = minimalRow({ stockCode: latest.stockCode, companyName: latest.companyName, sector33: latest.sector33,
       docId: latest.doc!.docId, docType: latest.doc!.docTypeCode === "120" ? "有報" : "訂正有報", periodEnd: latest.doc!.periodEnd,
-      submittedAt: latest.doc!.submittedAt, tagStatus: "判定済", tagDoc: rich("事業タグの根拠書類"),
+      submittedAt: latest.doc!.submittedAt, textStatus: "取得済", tagStatus: "判定済", tagDoc: rich("事業タグの根拠書類"),
       vocabVersion: page.properties["単語帳の版"].select.name, judgeInput: rich("判定入力") });
     // その他の保存tag/根拠は判断し直さず、既存fixtureのlegacy入力を保持する。
     vi.mocked(loadLatestDocs).mockResolvedValue([latest]); notionMocks.loadSupplementRows.mockResolvedValue([row]);
+    notionMocks.readSupplementRowFully.mockResolvedValue({ ...row, texts: Object.fromEntries(TEXT_SECTIONS.map(s => [s.title, rich(s.title)])) });
     notionMocks.readStockTextRow.mockResolvedValue(TEXT_SECTIONS.flatMap(s => rich(s.title) === "" ? [] : [{ sectionKey: s.key, itemName: s.title, text: rich(s.title) }]));
     const finite = { ...opts, codes: [latest.stockCode], limit: 1, mechanicalOnly: true };
-    expect((await runBiztag(finite)).countsByKind.skip).toBe(1);
+    expect((await runBiztag(finite)).countsByKind.verify_text).toBe(1);
     expect(loadLatestDocs).toHaveBeenLastCalledWith(expect.anything(), finite.codes);
     expect(notionMocks.readStockTextRow).not.toHaveBeenCalled(); expect(notionMocks.replaceEvidenceBlock).not.toHaveBeenCalled();
     const summary = await runBiztag({ ...finite, refreshTextReceipt: true });
@@ -314,8 +346,8 @@ describe("runBiztag 新規と既存の外部判定境界", () => {
     expect(notionMocks.readStockTextRow).toHaveBeenCalledOnce(); expect(notionMocks.replaceEvidenceBlock).toHaveBeenCalledOnce();
     expect(notionMocks.replaceEvidenceBlock.mock.calls[0][2].judgeInput).toContain("notionTextsSha256");
     expect(notionMocks.loadSupplementRows).toHaveBeenLastCalledWith("supplement-db-id", {}, { codes: finite.codes });
-    expect(notionMocks.loadStockMasterIndex).not.toHaveBeenCalled();
-    expect(summary.masterIndexRead).toBe(false);
+    expect(notionMocks.loadStockMasterIndex).toHaveBeenCalled();
+    expect(summary.masterIndexRead).toBe(true);
     expect(notionMocks.listLedgerEntries.mock.calls.some(([, filter]) => filter?.kind === "見直し材料")).toBe(false);
     expect(notionMocks.createLedgerEntry.mock.calls.some(([, input]) => input.kind === "見直し材料")).toBe(false);
     expect(createClefClient).not.toHaveBeenCalled(); expect(createJevClient).not.toHaveBeenCalled();
@@ -362,7 +394,7 @@ describe("明示コードscopeは全市場の副処理へ広げない", () => {
     expect(notionMocks.loadStockMasterIndex).not.toHaveBeenCalled(); expect(notionMocks.createSupplementRow).not.toHaveBeenCalled();
     notionMocks.loadSupplementRows.mockResolvedValue([]);
     const empty = await runBiztag(options([saved.core[0].code]));
-    expect(empty).toMatchObject({ totalStocks: 0, processed: 0, remaining: 0, failures: [], qualificationHeld: [] });
+    expect(empty).toMatchObject({ totalStocks: 0, processed: 0, remaining: 0, failures: [], qualificationHeld: [saved.core[0].code], fieldCoverage: { textUnchecked: 1, status: "attention" } });
   });
 
   it("relationが必要な実処理だけ既存master索引を一度読み、重複コードの未設定を保持する", async () => {
@@ -419,12 +451,16 @@ describe("runBiztag — 保存済みマスタの参照", () => {
     vi.mocked(loadLatestDocs).mockResolvedValue([{ stockCode: "6103", companyName: "保存タグ確認",
       sector33: null, doc: { docId: "TEST_DOC", docTypeCode: "120", periodEnd: "2026-03-31",
         submittedAt: "2026-06-25T00:00:00.000Z", notionDocPageId: "test-text", textParseStatus: "ok" } }]);
-    notionMocks.loadSupplementRows.mockResolvedValueOnce([minimalRow({ stockCode: "6103", docId,
+    const emptyTexts = Object.fromEntries(TEXT_SECTIONS.map(s => [s.title, ""]));
+    const emptySha = createHash("sha256").update(JSON.stringify(TEXT_SECTIONS.map(s => [s.title, null]))).digest("hex");
+    const row = minimalRow({ stockCode: "6103", companyName: "保存タグ確認", docId, docType: "有報", periodEnd: "2026-03-31", submittedAt: "2026-06-25T00:00:00.000Z", textStatus: "取得済",
       tagStatus: "判定済", tagDoc: docId, vocabVersion, upstream: ["工作機械"], evidenceText: "保存済み根拠",
-      judgeInput: withTextSyncReceipt("保存済み判定説明", { docId, textPageId: "test-text", textsSha256: "1".repeat(64) }) })]);
+      judgeInput: withTextSyncReceipt("保存済み判定説明", { docId, textPageId: "test-text", textsSha256: emptySha }) });
+    notionMocks.loadSupplementRows.mockResolvedValueOnce([row]); notionMocks.readSupplementRowFully.mockResolvedValue({ ...row, texts: emptyTexts });
     const summary = await runBiztag({ budgetMs: 10_000, dryRun,
       get thresholds(): never { throw new Error("保存タグ再利用はAI較正を読まない"); }, model: CLEF_MODEL });
-    expect(summary.countsByKind.skip).toBe(1);
+    expect(summary.countsByKind.verify_text).toBe(1);
+    expect(summary.fieldCoverage).toMatchObject({ textChecked: 1, textUnchecked: 0, textMismatched: 0, textRepaired: 0, wholeSupplementComplete: false });
     expect(summary.coverage.judged).toBe(1);
     expect(notionMocks.loadSupplementRows).toHaveBeenCalledTimes(1);
     expect(notionMocks.loadSupplementRows.mock.calls[0]?.[2]).toBeUndefined();
@@ -611,7 +647,8 @@ describe("runBiztag input-change safety", () => {
       businessSha256: sha(text.get("business")!), sectionsSha256: sha(JSON.stringify(PREFILTER_SECTIONS.map(key => [key, text.has(key) ? text.get(key) : null]))),
       stateSha256: null, vocabVersion: page.properties["単語帳の版"].select.name, model: null });
     const row = minimalRow({ stockCode: latest.stockCode, companyName: latest.companyName, sector33: latest.sector33,
-      docId: latest.doc!.docId, tagDoc: rich("事業タグの根拠書類"), tagStatus: "判定済",
+      docId: latest.doc!.docId, docType: latest.doc!.docTypeCode === "120" ? "有報" : "訂正有報", periodEnd: latest.doc!.periodEnd,
+      submittedAt: latest.doc!.submittedAt, tagDoc: rich("事業タグの根拠書類"), tagStatus: "判定済",
       vocabVersion: page.properties["単語帳の版"].select.name, judgeInput });
     const before = structuredClone(row), localJournal = vi.fn(() => { throw new Error("no journal for mechanical comparison"); });
     vi.mocked(loadLatestDocs).mockResolvedValue([latest]); notionMocks.loadSupplementRows.mockResolvedValue([row]);

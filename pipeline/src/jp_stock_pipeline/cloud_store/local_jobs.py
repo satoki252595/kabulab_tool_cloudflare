@@ -15,6 +15,7 @@ from .r2 import R2Store
 logger = logging.getLogger(__name__)
 POLICY = json.loads((Path(__file__).resolve().parents[4] / "src/shared/local-job-receipt.json").read_text())
 FIELDS = {"version", "kind", "phase", "scheduledFor", "startedAt", "finishedAt", "revision", "acceptedRevision", "code", "signal", "retries"}
+DATA_COUNTS = {"totalStocks", "selectedForTextCheck", "textChecked", "textUnchecked", "textMismatched", "textRepaired", "metadataRepaired", "remaining", "failures", "qualificationHeld"}
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -42,8 +43,20 @@ def judge_local_receipt(kind: str, payload: Any, expected_sha: str, now: datetim
     if payload is None:
         logger.info("Mac %s: 開始receipt未取得（開始期限前なら完了未検証として待機）", kind)
         return None if now <= start_deadline else "開始receipt未取得"
-    if not isinstance(payload, dict) or set(payload) != FIELDS:
+    if not isinstance(payload, dict) or set(payload) not in (FIELDS, FIELDS | {"biztagData"}):
         return "receiptの必須項目/未知項目が不正"
+    data = payload.get("biztagData")
+    if "biztagData" in payload:
+        if kind != "biztag" or payload["phase"] != "finished" or not isinstance(data, dict):
+            return "補足の検査summaryのjob/phaseが不正"
+        if set(data) != DATA_COUNTS | {"scope", "status", "wholeSupplementComplete"} or any(type(data[k]) is not int or data[k] < 0 for k in DATA_COUNTS):
+            return "補足の検査summaryの項目/件数が不正"
+        if data["scope"] not in ("explicit_codes", "daily_window") or data["status"] not in ("checked_scope_complete", "partial", "attention") or data["wholeSupplementComplete"] is not False:
+            return "補足の検査summaryのscope/状態が不正"
+        if (data["textChecked"] + data["textUnchecked"] != data["selectedForTextCheck"]
+                or (data["scope"] == "daily_window" and data["selectedForTextCheck"] > data["totalStocks"])
+                or data["textMismatched"] > data["textChecked"] or data["textRepaired"] > data["textMismatched"] or data["metadataRepaired"] > data["totalStocks"]):
+            return "補足の検査summaryの件数が矛盾"
     if type(payload["version"]) is not int or payload["version"] != POLICY["version"] or payload["kind"] != kind or payload["phase"] not in ("running", "finished"):
         return "receipt版/job/phaseが不正"
     for key in ("revision", "acceptedRevision"):
@@ -80,7 +93,14 @@ def judge_local_receipt(kind: str, payload: Any, expected_sha: str, now: datetim
         return "30分の終了窓を逸脱"
     if code != 0 or signal is not None:
         return "処理が非0/シグナル/結果不明で終了"
-    logger.info("Mac %s: 終了code0（データpending/処理件数はこのreceiptでは判定しない）", kind)
+    if data is not None:
+        logger.info("Mac biztag: 終了code0、本文検査 %d/%d（全母集団 %d）、本文修復 %d、メタ修復 %d、全補足完了は未証明",
+                    data["textChecked"], data["selectedForTextCheck"], data["totalStocks"], data["textRepaired"], data["metadataRepaired"])
+        if data["status"] != "checked_scope_complete" or any(data[k] > 0 for k in ("remaining", "failures", "qualificationHeld", "textUnchecked")):
+            return (f"補足検査に残あり: 未処理{data['remaining']}・失敗{data['failures']}・保留{data['qualificationHeld']}・"
+                    f"当夜scope未検査{data['textUnchecked']}")
+    else:
+        logger.info("Mac %s: 終了code0（旧receiptにはデータpending/処理件数の実測なし）", kind)
     return None
 
 

@@ -145,6 +145,46 @@ function jevAnswering(answers: Record<string, number>): JevClient {
 }
 
 describe("processStock", () => {
+  it("本文なしでも基本metaだけ補完し、正規null/sourceguard・旧HOLD/タグ/receiptを保持", async () => {
+    const row = rowOf({ docId: null, sector33: null, masterLinked: false, textStatus: "本文なし", tagStatus: "本文なし", judgeInput: null });
+    const current = vi.fn(async () => {}), source = vi.fn(async () => { throw Error("no document must not read body"); });
+    const { deps, updated, evidenceCalls } = makeDeps({ assertLatestDocCurrent: current, readStockTextRow: source });
+    const outcome = await processStock(itemOf({ kind: "sync_metadata", basicMetadataOnly: true, qualificationHeld: true, doc: null, row }), deps);
+    expect(outcome).toMatchObject({ outcome: "updated", metadataRepaired: true, qualificationHeld: true }); expect(outcome).not.toHaveProperty("textChecked");
+    expect(updated[0].input).toEqual({ docId: null, sector33: "機械", masterPageId: "master-page-1" });
+    expect(evidenceCalls[0].block).toBeUndefined(); expect(current).toHaveBeenCalledWith("6103", null, { companyName: "オークマ", sector33: "機械" }); expect(source).not.toHaveBeenCalled();
+    expect(updated[0].input).not.toHaveProperty("textStatus"); expect(updated[0].input).not.toHaveProperty("judgeInput"); expect(updated[0].input).not.toHaveProperty("texts");
+  });
+  it("同じ現有報のメタ欠落だけをshared publisherで補完し、本文・旧判定・モデルを触らない", async () => {
+    const doc = docOf(), row = rowOf({ docId: doc.docId, companyName: "", sector33: null, masterLinked: false, tagStatus: "判定済", judgeInput: "保存済み判定入力" });
+    const guard = vi.fn(async () => {}), source = vi.fn(async () => { throw Error("metadata must not read source"); }), ask = vi.fn();
+    const { deps, updated, evidenceCalls } = makeDeps({ assertLatestDocCurrent: guard, readStockTextRow: source, jevClient: { askNoul: ask } });
+    const outcome = await processStock(itemOf({ kind: "sync_metadata", row }), deps);
+    expect(outcome).toMatchObject({ outcome: "updated", metadataRepaired: true, jevCalls: 0 });
+    expect(updated[0].input).toEqual({ docId: doc.docId, companyName: "オークマ", sector33: "機械", docType: "有報", periodEnd: doc.periodEnd, submittedAt: doc.submittedAt, textStatus: "取得済", masterPageId: "master-page-1" });
+    expect(evidenceCalls[0].block).toBeUndefined(); expect(guard).toHaveBeenCalledOnce(); expect(source).not.toHaveBeenCalled(); expect(ask).not.toHaveBeenCalled();
+    const repaired = { ...row, companyName: "オークマ", sector33: "機械", docType: "有報" as const, periodEnd: doc.periodEnd, submittedAt: doc.submittedAt, textStatus: "取得済" as const, masterLinked: true };
+    updated.length = 0; expect(await processStock(itemOf({ kind: "sync_metadata", row: repaired }), deps)).toMatchObject({ outcome: "skipped", metadataRepaired: false }); expect(updated).toHaveLength(0);
+  });
+
+  it("同期receipt同値でも現在39の欠落を原本SHA確認後に復旧し、次回はsource/PATCH0。異なる原本はHOLD", async () => {
+    const hash = (x: unknown) => createHash("sha256").update(JSON.stringify(x)).digest("hex"), doc = docOf();
+    const raw = TEXT_SECTIONS.map(({ key, title }) => [title, key === "business" ? OKUMA_BUSINESS_TEXT : null]);
+    const input = withTextSyncReceipt("保存済み判定は不変", { docId: doc.docId, textPageId: doc.notionDocPageId!, textsSha256: hash(raw), notionTextsSha256: hash(raw) });
+    const row = rowOf({ docId: doc.docId, docType: "有報", periodEnd: doc.periodEnd, submittedAt: doc.submittedAt, textStatus: "取得済", tagStatus: "判定済", judgeInput: input });
+    let target = { ...row, texts: Object.fromEntries(TEXT_SECTIONS.map(({ title }) => [title, ""])) };
+    const source = vi.fn(async () => [{ sectionKey: "business", itemName: "事業の内容", text: OKUMA_BUSINESS_TEXT }]), ask = vi.fn();
+    const { deps, updated, evidenceCalls } = makeDeps({ readSupplementRowFully: async () => target, readStockTextRow: source, jevClient: { askNoul: ask } });
+    const item = itemOf({ kind: "verify_text", row });
+    expect(await processStock(item, deps)).toMatchObject({ textChecked: true, textMismatch: true, textRepaired: true, outcome: "updated" });
+    expect(updated[0].input.texts?.["事業の内容"]).toBe(OKUMA_BUSINESS_TEXT); expect(evidenceCalls[0].block).toBeUndefined(); expect(updated[0].input.upstream).toBeUndefined(); expect(ask).not.toHaveBeenCalled();
+    target = { ...target, judgeInput: updated[0].input.judgeInput!, texts: Object.fromEntries(raw.map(([title, text]) => [title, text === null ? "" : text])) };
+    updated.length = 0;
+    expect(await processStock({ ...item, row: target }, deps)).toMatchObject({ textChecked: true, textMismatch: false, outcome: "skipped" }); expect(updated).toHaveLength(0); expect(source).toHaveBeenCalledOnce();
+    target = { ...target, texts: Object.fromEntries(TEXT_SECTIONS.map(({ title }) => [title, ""])) }; source.mockResolvedValue([{ sectionKey: "business", itemName: "事業の内容", text: KYOKUYO_BUSINESS_TEXT }]);
+    expect(await processStock({ ...item, row: target }, deps)).toMatchObject({ textChecked: true, textMismatch: true, textRepaired: false, qualificationHeld: true }); expect(updated).toHaveLength(0);
+  });
+
   it("9273実U+200B単一節の投影は原39 SHAを保持し、明示再資格で別送信SHAと実readbackを照合。再実行はNOOP", async () => {
     const actual = JSON.parse(readFileSync(new URL("../../../../src/shared/notion-archive/fixtures/9273-s100z2z6-notion-zero-width.json", import.meta.url), "utf8"));
     const sha = (x: string) => createHash("sha256").update(x).digest("hex");
@@ -153,7 +193,7 @@ describe("processStock", () => {
     const rawSha = sha(JSON.stringify(texts)); // 他38節は未供与のテスト投影。実有報全39の回復証明ではない。
     const doc = docOf({ docId: actual.provenance.docId, periodEnd: actual.provenance.periodEnd, notionDocPageId: actual.provenance.textPageId });
     const oldInput = withTextSyncReceipt(actual.oldJudgeInput, { docId: doc.docId, textPageId: doc.notionDocPageId!, textsSha256: rawSha });
-    const row = rowOf({ stockCode: actual.provenance.stockCode, docId: doc.docId, tagStatus: "判定済", judgeInput: oldInput });
+    const row = rowOf({ stockCode: actual.provenance.stockCode, docId: doc.docId, docType: "有報", periodEnd: doc.periodEnd, submittedAt: doc.submittedAt, textStatus: "取得済", tagStatus: "判定済", judgeInput: oldInput });
     const ask = vi.fn(), { deps, updated } = makeDeps({ jevClient: { askNoul: ask }, readStockTextRow: async () =>
       [{ sectionKey: actual.provenance.sectionKey, itemName: actual.provenance.property, text: actual.rawText }] });
     const item = itemOf({ stockCode: row.stockCode, doc, row, kind: "sync_text", refreshTextReceipt: true });
@@ -175,6 +215,12 @@ describe("processStock", () => {
       { docId: doc.docId, textPageId: doc.notionDocPageId!, textsSha256: actual.provenance.rawTextSha256 }) } }, deps))
       .toMatchObject({ qualificationHeld: true, outcome: "skipped" });
     expect(updated).toHaveLength(0);
+    deps.readSupplementRowFully = async () => ({ ...row, texts: Object.fromEntries(expected.map(([title, value]) => [title, value === null ? "" : String(value)])) });
+    const legacy = await processStock({ ...item, kind: "verify_text", refreshTextReceipt: false }, deps);
+    expect(legacy).toMatchObject({ textChecked: true, textMismatch: false, textRepaired: false, outcome: "updated" });
+    expect(updated[0].input.texts).toBeUndefined(); // 旧原SHA→wireSHAのreceipt再資格だけ。正常な本文を欠落修復と数えない。
+    expect(readTextSyncReceipt(updated[0].input.judgeInput)?.notionTextsSha256).toBe(sha(JSON.stringify(expected)));
+    expect(ask).not.toHaveBeenCalled();
   });
 
   it.each(["same", "business-diff", "four-diff"])("実オークマ原4と旧businessの%sでは証明できた対応付けだけ保存し旧判定JSONは保持", async fault => {
@@ -206,7 +252,7 @@ describe("processStock", () => {
   it("同docの39本文だけを同期し、旧model/4SHA/タグ/根拠/判定時刻を変更しない。二回目はNOOP", async () => {
     const legacy = withInputReceipt("SemIf入力変更の再判定：保存済み説明", { docId: "S100YFQC", textPageId: "old-pointer", businessSha256: null,
       sectionsSha256: "a".repeat(64), stateSha256: null, vocabVersion: "v1", model: "Qwen3.5-4B@851bf6e/semif-mlx" });
-    const row = rowOf({ docId: "S100YFQC", tagDoc: "S100YFQC 2026年3月期", tagStatus: "判定済", vocabVersion: "v1",
+    const row = rowOf({ docId: "S100YFQC", docType: "有報", periodEnd: "2026-03-31", submittedAt: "2026-06-25T00:00:00.000Z", textStatus: "取得済", tagDoc: "S100YFQC 2026年3月期", tagStatus: "判定済", vocabVersion: "v1",
       judgedAt: "2026-09-24", upstream: ["工作機械"], evidenceText: "保存済み根拠", judgeInput: legacy });
     const ask = vi.fn(), latest = vi.fn(async () => {});
     const { deps, updated, evidenceCalls } = makeDeps({ jevClient: { askNoul: ask }, assertLatestDocCurrent: latest,

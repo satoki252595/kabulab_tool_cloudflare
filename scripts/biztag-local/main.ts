@@ -3,12 +3,12 @@
  * Nix shell内から preflight / install / install-next / run を呼ぶ。自動更新・再試行はしない。
  */
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { preflight } from "./runtime.js";
-import { LOCAL_JOB_HOURS, localJobScheduledFor, parseLocalJobReceipt, startLocalJobReceipt, mirrorLocalJobReceipt } from "./receipt.js";
+import { LOCAL_JOB_HOURS, localJobScheduledFor, parseLocalJobReceipt, startLocalJobReceipt, mirrorLocalJobReceipt, readBiztagDataStatus, type BiztagDataStatus } from "./receipt.js";
 import { biztagLocalEnv } from "./env.js";
 import { acceptPrepareStage, planPrepareStage, startPrepareStage } from "./competitor-prepare-stage.js";
 
@@ -108,6 +108,7 @@ async function run(kind: string | undefined): Promise<void> {
     process.once("SIGTERM", stop);
     process.once("SIGINT", stop);
     let result: { code: number | null; signal: NodeJS.Signals | null } = { code: null, signal: null };
+    let biztagData: BiztagDataStatus | undefined;
     try {
       if (remainingMs <= 0) throw new Error("receipt開始照合中に全体30分を超えました。childを起動しません。");
       const first = spawn("pnpm", ["exec", "tsx", job.script, ...args], {
@@ -118,6 +119,10 @@ async function run(kind: string | undefined): Promise<void> {
         first.once("error", reject);
         first.once("exit", (code, signal) => resolve({ code, signal }));
       });
+      if (jobKind === "biztag" && result.code === 0 && !stopped) {
+        if (statSync(`${receipt}.log`).size > 2 * 1024 ** 2) throw new Error("補足summaryの私有ログが読取上限を超えています");
+        biztagData = readBiztagDataStatus(readFileSync(`${receipt}.log`, "utf8"));
+      }
       const scope = jobKind === "biztag" ? biztagLocalEnv.competitorPrepareCodes() : undefined;
       if (result.code === 0 && !stopped && scope !== undefined) {
         // 同じ30分timerをresetしない。stage7分＋receipt1分の余地がなければ開始しない。
@@ -156,7 +161,8 @@ async function run(kind: string | undefined): Promise<void> {
       clearTimeout(timer);
       process.removeListener("SIGTERM", stop);
       process.removeListener("SIGINT", stop);
-      const finished = parseLocalJobReceipt({ ...running, phase: "finished", finishedAt: new Date().toISOString(), ...result });
+      const finished = parseLocalJobReceipt({ ...running, phase: "finished", finishedAt: new Date().toISOString(), ...result,
+        ...(biztagData === undefined ? {} : { biztagData }) });
       writeFileSync(receipt, JSON.stringify(finished), { mode: 0o600, flag: "wx" });
       await mirrorLocalJobReceipt(finished, mirroredVersion);
     }

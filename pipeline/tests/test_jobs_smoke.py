@@ -760,7 +760,10 @@ class TestCommonStrictCustody:
         assert persisted == []  # ④③ ともに書かない
         assert pdf_calls == []  # PDF 試行より前に止まる
 
-    def test_edinet_financial_pdf_page_does_not_fill_record_pointer(self, monkeypatch, tmp_path):
+    @pytest.mark.parametrize("mapped", [False, True])
+    def test_edinet_financial_pdf_page_does_not_fill_record_pointer(
+        self, monkeypatch, tmp_path, mapped
+    ):
         """財務系: ④ 原本ポインタは tidy のみ。PDF 成功でも指し先にしない。"""
         from jp_stock_pipeline.jobs.runner import JobContext
 
@@ -773,7 +776,10 @@ class TestCommonStrictCustody:
         )
         tidy_artifact = self._artifact(tmp_path)
         pages = iter(["tidy-page", "pdf-page"])
-        monkeypatch.setattr(ctx, "upload_raw", lambda artifact, **kw: next(pages))
+        related = []
+        monkeypatch.setattr(ctx, "upload_raw", lambda artifact, **kw: (
+            related.append(artifact.qualified_master_page_id) or next(pages)
+        ))
         monkeypatch.setattr(
             edinet_daily,
             "_fetch_financial_tidy",
@@ -783,8 +789,12 @@ class TestCommonStrictCustody:
         monkeypatch.setattr(edinet_daily.json_to_parquet, "convert_artifact", lambda *a: None)
         doc = dict(TestEdinetLargeHolding.REAL_120)
         doc["pdfFlag"] = "1"
-        edinet_daily._process_document(ctx, doc, "list-page", **self._process_kwargs())
+        kwargs = self._process_kwargs()
+        master_id = "11111111-1111-4111-8111-111111111111" if mapped else None
+        kwargs.update(master_map={"7203": master_id} if mapped else {}, master_map_ok=True)
+        edinet_daily._process_document(ctx, doc, "list-page", **kwargs)
         assert [r.provenance.raw_page_id for r in persisted] == ["tidy-page"]
+        assert related == [master_id, master_id]
 
     @pytest.mark.parametrize("failure_type", [edinet_daily.FetchError, file_upload.RawUploadError])
     def test_edinet_fetch_or_archive_unknown_stops_before_next_document(
@@ -813,7 +823,10 @@ class TestCommonStrictCustody:
 
     def test_master_sync_notion_failure_aborts_before_upsert(self, monkeypatch, tmp_path):
         """master: 原本保管失敗 → parse/① upsert より前に中止する。"""
+        from argparse import Namespace
+
         ctx = self._ctx(tmp_path, local_ok=True)
+        ctx.args = Namespace(codes=None, limit=None)
         artifact = self._artifact(tmp_path)
         monkeypatch.setattr(edinet_codelist, "fetch_codelist", lambda settings: artifact)
         monkeypatch.setattr(edinet_codelist, "convert_codelist", lambda a: a)
