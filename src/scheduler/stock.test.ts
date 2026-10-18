@@ -1178,12 +1178,11 @@ describe("資金フロー独立取得元のCF起動", () => {
       steps: [{ name: "moneyflow ingest (non-yahoo)", status: "completed", conclusion,
         started_at: `${date}T09:15:30Z`, completed_at: `${date}T10:30:00Z` }] },
     { name: "ingest-yahoo", run_id: 101, status: "completed", conclusion,
-      steps: [
-        { name: "moneyflow ingest (yahoo)", status: "completed", conclusion,
-          started_at: `${date}T13:30:00Z`, completed_at: `${date}T13:31:00Z` },
-        { name: "moneyflow source join", status: "completed", conclusion,
-          started_at: `${date}T13:31:00Z`, completed_at: completed },
-      ] },
+      steps: [{ name: "moneyflow ingest (yahoo)", status: "completed", conclusion,
+        started_at: `${date}T09:16:00Z`, completed_at: `${date}T09:31:00Z` }] },
+    { name: "join", run_id: 101, status: "completed", conclusion,
+      steps: [{ name: "moneyflow source join", status: "completed", conclusion,
+        started_at: `${date}T13:31:00Z`, completed_at: completed }] },
   ];
   const receipt = () => ({ ...dispatchedBody(), scheduledDate: date, cron: MONEYFLOW_DISPATCH_CRON,
     claimedAt: `${date}T09:15:00Z`, dispatchedAt: `${date}T09:15:01Z` });
@@ -1232,14 +1231,25 @@ describe("資金フロー独立取得元のCF起動", () => {
       (j: RunJob[]) => j.splice(0, 1),
       (j: RunJob[]) => { j[1] = j[0]; },
       (j: RunJob[]) => { j[0].conclusion = "skipped"; },
-      (j: RunJob[]) => { j[1].steps?.pop(); },
+      (j: RunJob[]) => { j[2].steps?.pop(); },
       (j: RunJob[]) => { j[1].steps![0].started_at = `${date}T14:40:01Z`; },
       (j: RunJob[]) => { j[0].steps![0].started_at = `${date}T09:14:59Z`; },
+      (j: RunJob[]) => { j[2].steps![0].started_at = `${date}T10:29:59Z`; },
+      (j: RunJob[]) => { j[1].steps![0].completed_at = `${date}T13:31:01Z`; },
+      (j: RunJob[]) => { j[2].status = "in_progress"; j[2].conclusion = null; },
+      (j: RunJob[]) => { j[1].conclusion = "failure"; },
     ]) {
       const j = jobs(); mutate(j);
       expect(() => evaluateMoneyflowReadcheck(j, date)).toThrow();
     }
     expect(evaluateMoneyflowReadcheck(jobs("success", `${date}T14:40:00Z`), date))
       .toEqual({ moneyflowCompletedAt: `${date}T14:40:00Z` });
+  });
+  it("両producerの実時計が重なり、どちらが先に完了してもjoin以降だけを成功と扱う", () => {
+    const j = jobs();
+    for (const done of [`${date}T09:31:00Z`, `${date}T13:30:00Z`]) {
+      j[1].steps![0].completed_at = done;
+      expect(evaluateMoneyflowReadcheck([...j].reverse(), date)).toEqual({ moneyflowCompletedAt: `${date}T14:00:00Z` });
+    }
   });
 });

@@ -14,6 +14,7 @@ it("優待要約は21時の専用jobで起動し、既存事業タグの時刻�
   expect(localJob("biztag").hour).toBe(20);
   expect(localJob("yutai-summary")).toMatchObject({ hour: 21,
     label: "com.kabulab-cf.yutai-summary", script: "services/otakara-yutai/data-scripts/summary-local.ts" });
+  expect(localJob("yutai-summary").args).toEqual(["--limit", "60"]); // 標準jobはモデルを明示許可しない。
   expect(() => localJob("unknown")).toThrow("job");
 });
 

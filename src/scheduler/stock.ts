@@ -951,30 +951,31 @@ export async function runMoneyflowDeadlineReadcheck(deps: {
 
 /** 両laneの実producerと実summary joinだけを受け入れる。片側skip/unknownを成功にしない。 */
 export function evaluateMoneyflowReadcheck(jobs: RunJob[], scheduledDate: string): MoneyflowReadcheckVerdict {
-  if (jobs.length !== 2) throw new Error("独立moneyflowの両producer jobがありません");
+  if (jobs.length !== 3) throw new Error("独立moneyflowの両producerとjoin jobがありません");
   const floor = Date.parse(`${scheduledDate}T09:15:00.000Z`), cutoff = Date.parse(`${scheduledDate}T14:40:00.000Z`);
-  const completions: number[] = [];
+  let producersDone = -Infinity;
   let joinCompletedAt: string | undefined;
-  for (const lane of ["non-yahoo", "yahoo"]) {
-    const matches = jobs.filter(job => job.name === `ingest-${lane}`);
+  for (const [jobName, name] of [
+    ["ingest-non-yahoo", "moneyflow ingest (non-yahoo)"],
+    ["ingest-yahoo", "moneyflow ingest (yahoo)"],
+    ["join", "moneyflow source join"],
+  ]) {
+    const matches = jobs.filter(job => job.name === jobName);
     if (matches.length !== 1 || matches[0].status !== "completed" || matches[0].conclusion !== "success") {
       throw new Error("独立moneyflow producer jobが一意の成功完了ではありません");
     }
-    const required = [`moneyflow ingest (${lane})`, ...(lane === "yahoo" ? ["moneyflow source join"] : [])];
-    for (const name of required) {
-      const steps = matches[0].steps?.filter(step => step.name === name);
-      if (!steps || steps.length !== 1 || steps[0].status !== "completed" || steps[0].conclusion !== "success") {
-        throw new Error("独立moneyflow producer/join stepが一意の成功完了ではありません");
-      }
-      const started = typeof steps[0].started_at === "string" ? Date.parse(steps[0].started_at) : NaN;
-      const done = stepCompletedAtMs(steps[0], name);
-      if (!Number.isFinite(started) || started < floor || done < started || done > cutoff ||
-          (completions.length > 0 && started < completions[completions.length - 1])) {
-        throw new Error("独立moneyflowの開始/完了/順序が同日18:15〜23:40 JSTの範囲外です");
-      }
-      completions.push(done);
-      if (name === "moneyflow source join") joinCompletedAt = steps[0].completed_at as string;
+    const steps = matches[0].steps?.filter(step => step.name === name);
+    if (!steps || steps.length !== 1 || steps[0].status !== "completed" || steps[0].conclusion !== "success") {
+      throw new Error("独立moneyflow producer/join stepが一意の成功完了ではありません");
     }
+    const started = typeof steps[0].started_at === "string" ? Date.parse(steps[0].started_at) : NaN;
+    const done = stepCompletedAtMs(steps[0], name);
+    if (!Number.isFinite(started) || started < floor || done < started || done > cutoff ||
+        (jobName === "join" && started < producersDone)) {
+      throw new Error("独立moneyflowの開始/完了/順序が同日18:15〜23:40 JSTの範囲外です");
+    }
+    if (jobName !== "join") producersDone = Math.max(producersDone, done);
+    if (name === "moneyflow source join") joinCompletedAt = steps[0].completed_at as string;
   }
   if (joinCompletedAt === undefined) throw new Error("独立moneyflow全source joinがありません");
   return { moneyflowCompletedAt: joinCompletedAt };

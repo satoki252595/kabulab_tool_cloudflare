@@ -4,8 +4,9 @@
  * core/swing から otakara の派生テーブル (otakara_stock_financials / otakara_stock_scores)
  * を再構築する。Yahoo は叩かない。D1 へは `createD1HttpDb`。実装は src/cron/monthly.ts。
  *
- * 前提順序: `pnpm sync:universe`(母集団) → 日次 sync(swing 指標) → 優待スクレイプ/解釈
- * (data-scripts) → 本 rebuild。is_yutai は rebuild 内で yutai_benefits から再導出。
+ * 定期順序: `pnpm sync:universe`(母集団) → 優待原文取得 → 本 rebuild。
+ * 保存財務・swingを使い、MA乖離比較だけ財務日と指標日の一致を要求する。
+ * 当日18時の日次取得は待たない。is_yutai は yutai_benefits から再導出。
  *
  * 実行:
  *   pnpm sync:monthly:core    # この単体

@@ -81,10 +81,13 @@ services/otakara-yutai/
 pnpm dev                  # ローカル開発サーバー起動 (wrangler dev)
 pnpm sync:monthly:core    # is_yutai=true のみ otakara_stock_scores 再計算
 # 月次Actions: universe → pnpm yutai:fetch → sync:monthly:core
-# Mac毎日21時: yutai:summary:local（変更・未要約分、最大60件を公平に処理）
+# Mac毎日21時: yutai:summary:local（機械要約のみ、変更・未要約分を最大60件ずつ公平に処理）
 pnpm yutai:fetch           # 原本・更新前全行をNotion物理照合してから取込
 pnpm exec tsx --env-file=.env scripts/biztag-local/main.ts run yutai-summary
-# 既存固定MLXモデル。金額は共有厳密判定のみ。専用private stateは入口で選ぶ。
+# 未対応の群は理由付きHOLDで旧値・時計を保持し、未完を成功扱いしない。
+# ローカルモデルを使う場合だけ、運用者が通常CLIへ --allow-model を明示する。
+# pnpm yutai:summary:local --state-dir <専用private state> --allow-model
+# 明示許可時も既存固定MLXモデル・共有の厳密な金額判定を使う。
 # 外部エージェントでの個別再作成は引き続き export/import を使える。
 # tasks/resultsはprivateのみ。自動経路も同じ契約・原子適用を通す。
 pnpm test / pnpm typecheck / pnpm lint

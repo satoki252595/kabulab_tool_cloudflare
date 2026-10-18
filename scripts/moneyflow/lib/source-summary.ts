@@ -50,7 +50,6 @@ export function joinMoneyflowSummaries(options: {
     ({ floor, cutoff } = moneyflowScheduledWindow(options.plannedDate, options.nowMs));
   }
   const lanes = new Set<string>(), actual = new Set<string>();
-  const clocks = new Map<string, { started: number; done: number }>();
   let finished = -Infinity;
   let notionRequests = 0;
   for (const raw of options.summaries) {
@@ -72,7 +71,6 @@ export function joinMoneyflowSummaries(options: {
     }
     finished = Math.max(finished, done);
     notionRequests += s.notion.requests;
-    clocks.set(s.lane, { started, done });
     for (let i = 0; i < s.outcomes.length; i++) {
       const outcome = s.outcomes[i];
       if (outcome === null || typeof outcome !== "object" || outcome.source !== s.only[i] || outcome.ok !== true ||
@@ -82,7 +80,6 @@ export function joinMoneyflowSummaries(options: {
       actual.add(outcome.source);
     }
   }
-  if (clocks.get("yahoo")!.started < clocks.get("non-yahoo")!.done) throw new Error("moneyflow両producerの実行順が不正です");
   if (actual.size !== options.requested.length || options.requested.some(source => !actual.has(source))) {
     throw new Error("moneyflow joinの全source集合が一致しません");
   }
