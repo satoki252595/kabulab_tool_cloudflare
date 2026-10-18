@@ -117,6 +117,24 @@ R2の条件付き更新は[公式S3拡張](https://developers.cloudflare.com/r2/
 
 Macの優待要約はmain535のまま21:00:06.265に自然起動し、21:00:08.940にcode0・signalなし・再送0で終了した。通常receiptはR2の同一keyと327B全文一致、実行PID終了・plistの21時予定/RunAtLoad=false保持を確認した。監視の期待revisionは当日の20時/21時receiptと一致する535を維持し、SSH本文検査用538や後続mainへの切替で当日成功を無効化しない。受入`mac-yutai-summary-natural21-v1/final-acceptance.json` SHA256 `343e96f29dee368f403b783201cc8a23af9d5031d4aee12dba341190d5f3ad90`。これは自然起動の受入であり、優待の全列充足とは扱わない。
 
+## 指定ビューの事業内容と事業タグ
+
+ユーザー指定の[銘柄マスタ（補足）Default view](https://app.notion.com/p/kabu-labo2/3e6d74ff84cd8119a15ec61865c436a1?v=3e6d74ff84cd811c88f4000ced862391&source=copy_link)を直接確認した。sourceは`3e6d74ff-84cd-81c9-9e4f-000ba435581f`で、監査中の補足DBと同じである。全3,713行の薄いSQL集計では事業の内容・有報IDの空欄が各21行、事業タグ3分類が全て空の行が991行あった。うち970行はv5の「判定済」で、候補語数0が89行、候補語数あり881行。本文同期SHAの一致をタグの充足とは扱わない。
+
+空タグ991行のコード・状態・候補数・根拠文字数・入力prefixだけを、コード/pageのkeyset順で全10窓取得した。本文は取得せず、991コード/page一意・終端まで閉鎖した。21:17:40–21:18:37 JSTの範囲観測で、原子的snapshotではない。私有根拠`user-view-business-tags-v1/empty-tags-collected-v2.json` SHA256 `e9b2dc0bb53c6f14ed42bfbc3b607fbb351ee3311230e5351c11261f925671b7`。19:41保存の現役普通株3,687社とのFS結合では空タグ981社（本文なし21、判定済960）。判定済960のうち候補語数あり872、0が88。候補あり872の要確認文あり255・なし617で、後者を原判定「全いいえ」の証明とは扱わない。
+
+保存Clefの112batch/110コードと重なる19社は全て現役で、同doc・保存4SHA・語彙・model/較正・応答が一致したが、採用確率のタグは0、11社が要確認、8社が全いいえだった。従って保存yes結果の反映漏れを再利用して埋められる社数は、この集合では0。候補語数0の88社も、語彙の対象外と業態をカバーできていない問題を分けるための追加確認が必要で、正しい空欄と断定しない。根拠`saved-output-overlap-v1/saved-output-overlap.json` SHA256 `57d2dba9c7b317688df0dd7b63bc1e6414aa4eda5545c256204505f1b05d355d`。
+
+通常plannerは同docの「判定済」を再利用するため、この空タグを本文39列の検査だけでは補完しない。全社の無差別再判定や旧判定をキーワードだけで覆す方法は採らず、明示した有限コードの空タグだけを既存ローカルClef・原本資格・PRE/CAS/POSTへ通す入口を実装中。定期の新規初回/実入力変更の経路は維持する。全いいえ・要確認・語彙候補0は再確認と記録し、タグを埋めた件数には加えない。
+
+## 月次relation初回適用の既知拒否
+
+#540はCI3checks成功後21:18:38 JSTにmain `4e40ab90c1abe67639f68b1835c1ed753a2f3a25`へマージ。Cloudflare main build `f12f070a-1b69-4b47-8936-9d4920ed0b76`で21:19:13にversion `52c158cb-7892-43e6-acc6-b58aa0920fcc`・同一10triggerを確認した。SSHも同mainへ更新し、本文用538と別のclean runtime・所有者0600の専用envで実行した。
+
+21:21:23–21:21:42 JSTの通常`master_sync --require-cloud --codes=593A,634A,624A`は、公式コード表の通常保管と①の同値skip3社の後、624Aの物理PRE保管で停止した。取得URLなしを`""`で送ったため、Notionの⑤page createが明示400 validationを返した。共通URL生成で空文字だけを正規の欠測`null`へ直し、実保存原本→CALC PRE→通常raw propertyの回帰を含む180件をNixで確認した。偽のURLや他の出典を追加しない。
+
+financial PATCHは例外より後の経路にあり未到達。3行のfresh全property再読が旧値と完全一致し、R2pendingは624Aの1件だけ、他2社は未入場だった。旧pending・原log・PRE原本を保持し、結果不明の再送禁止を解除しない。実行19.420秒・exit1、finance補完0件。readback私有根拠`financial-master-relations-normal540-v1/after-known-pre-rejection.json` SHA256 `78c36e5a6dd704c5af2e2f1606160a4a79d3e6d75c9fcf6118eede21bf48457e`。本文検査は33窓の正常閉鎖後に区切り、財務停止と保全確認後21:25:03に同じdriver/runtime/envから再開した。
+
 ## 過去本文の再抽出失敗による旧索引消去を防ぐ
 
 `backfill-text-sections --force`は非空の再抽出なら、新Notion全文の往復照合→D1のstatus/索引/新pointerを同一batchで確定→旧Notion行を退役する既存経路が接続している。一方、CSV未提供・parse失敗で0節になった場合は、旧Notionpointerを残したまま正常な旧D1索引をDELETEする枝があった。
