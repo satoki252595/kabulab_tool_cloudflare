@@ -101,7 +101,21 @@ Sonnetによる固定Gitコード限定の先回りレビューもblocking0。�
 
 日次の適格な数値は同じ原本からNotion③の19数値列とD1へ接続している。汎用の過去再解析は既relationのCSVのみを使い、日次側の別保存type1 ROA表を自動で採らない。また主マスタIDを渡さず、主relationの空欄補完にはならない。保存済み3社のCSV NULL→直接ROA表の採用例は既に実適用済みで、追加の現Notion誤NULL件数は未測定。無条件のtype1全量取得や、ROAの算出・原本の付替えは行わない。FS根拠`tmp/feature-audit-20261018/financial-summary-remaining-fs-audit-v1/delegate-fs-audit-v1.json` SHA256 `cd7961cf8efb2345fb5415de1ec20379b1b19582acb8833050f843de61c1118d`。
 
-主relation空欄1,652行のうち、作成時刻昇順の先頭20行を列限定でfresh読取した。全20行に原本relationがあるが、17銘柄はいずれも保存済み主マスタ3,857行/現役core3,687行に不在で、即補完できる資格済み主ページ0。REITや歴史銘柄を含み、現在の主ページ不在だけで歴史的な対象外を断定しない。残1,632行へ外挿しない。shared clientでschema/queryの2要求・3.098秒・50,265B、再送・原本取得・モデル・業務書込0。根拠`tmp/feature-audit-20261018/financial-master-relation-sample-v1/delegate-sample-acceptance-v1.json` SHA256 `d8752927b9a1e1230be6b4dc6c9462c1c1deddc528726844af756018ff40859f`。
+主relation空欄1,652行の先頭20行に続き、同じ薄い列指定で全cursorを閉じた。fresh先頭20行と残1,632行の18要求・34.298秒・3,455,382B、全200・再送/429・原本取得・モデル・業務書込0。全1,652行/370コードに原本relationが1件ある。保存済み①と結べるのは593A/634A/624Aの3行で、残1,649行は保存済み主マスタ・現役coreに不在。REITや歴史銘柄を含み、現在のページ不在を歴史的な対象外の証明とは扱わない。先頭20行の実測は保存し、全件結果に置き換えた。全件受入は`financial-master-relation-sample-v1/sealed-tail-v1/delegate-tail-acceptance-v1.json` SHA256 `c4acff7bcbc1c1d7bd6bfe331379f2b98e69053048db513989a25d6dfa4f8c42`。
+
+上記3行のfresh財務・①・⑤計9要求と、既保存の物理ZIP3件227,553Bから全SHA/sizeとnative DEIのEDINET・証券コード・法定名・期末・開示区分・連結区分を機械照合した。624Aは現役coreの外にあるが、同じ法定主体の履歴relation候補であり、現役化や別主体への付替えはしない。根拠`candidate-qualification-v1/delegate-candidate-qualification-acceptance-v1.json` SHA256 `74f66a1ae777a9bec29b0ff31df74feebf4e021c07b3646491f4f2f0ae4cc6be`。通常helperの時計条件を確認するfresh財務/⑤計6要求は10.220秒・39,008B、全200・再送/原本再取得/業務書込0。593Aは通常の同SHA再利用により⑤が初回取得時計、③が再取得時計になるため、両時計を独立にtimezone付き・非未来と検査し、等値や順序を作らず保存値を保持する。
+
+## 月次の財務マスタrelation補完
+
+通常`master_sync`から、今回選択した適格コードの空relationだけを補完する。新規作成①だけに限定せず、前月に根拠不足だった既存①も次月の対象にする。コードORを50社ずつ、空relation filterと7メタ列を指定し、各chunkの全paginationを終えてから書く。3,858コードの場合の発見は最低79薄い要求（schema1＋query78、該当行の追加pagination/資格検査/保管は別）で、財務35,158行の全本文走査は行わない。
+
+該当行だけfresh全PRE・一意な①・既保存原本の全SHA/sizeとnative6項目を照合し、既存R2 raw bucketの財務page ID固定keyへ条件付きpendingを作る。既存共有窓口で物理PREを保管して全財務・①・⑤の書込直前比較を通し、空relation1列だけPATCH、全POSTと物理保管、同ETag条件付きcompletionと読戻しまで通す。19数値・原本relation・出典・ライセンス・源取得時計は全て保持する。claim後の不完全CAS/POSTや通信結果不明はrunを止め、pendingが別run/hostの再PATCHも止める。Notion PATCH自体のatomic CASを保証するものではない。
+
+R2の条件付き更新は[公式S3拡張](https://developers.cloudflare.com/r2/api/s3/extensions/)の`If-None-Match`/`If-Match`を使う（2026-10-18確認）。既存SDKの条件付きwire再送は残るため、PUTを単送とは扱わない。412や結果不明は再claimせず停止する。新bucket・秘密情報・モデル・代替ローカル状態は増やさない。コードの受入と上記3行の本番適用は別に記録する。
+
+## 21時の自然起動
+
+Macの優待要約はmain535のまま21:00:06.265に自然起動し、21:00:08.940にcode0・signalなし・再送0で終了した。通常receiptはR2の同一keyと327B全文一致、実行PID終了・plistの21時予定/RunAtLoad=false保持を確認した。監視の期待revisionは当日の20時/21時receiptと一致する535を維持し、SSH本文検査用538や後続mainへの切替で当日成功を無効化しない。受入`mac-yutai-summary-natural21-v1/final-acceptance.json` SHA256 `343e96f29dee368f403b783201cc8a23af9d5031d4aee12dba341190d5f3ad90`。これは自然起動の受入であり、優待の全列充足とは扱わない。
 
 ## 過去本文の再抽出失敗による旧索引消去を防ぐ
 

@@ -351,6 +351,7 @@ class NotionClient:
         page_size: int = 100,
         max_pages: int | None = None,
         strict: bool = False,
+        filter_properties: list[str] | None = None,
     ) -> list[dict]:
         """全ページをページネーションして返す。トークン無し dry-run では空。
 
@@ -369,6 +370,8 @@ class NotionClient:
         pages = 0
         while True:
             kwargs: dict[str, Any] = {"database_id": database_id, "page_size": page_size}
+            if filter_properties is not None:
+                kwargs["filter_properties"] = filter_properties
             if filter is not None:
                 kwargs["filter"] = filter
             if sorts is not None:

@@ -207,6 +207,15 @@ def execute(ctx: JobContext) -> None:
     if skipped:
         logger.info("① 同値 skip: %d 件の PATCH を省いた", skipped)
 
+    # 新規masterだけに限定しない。前月HOLD/未完の③も選択codeのemptyだけ再確認。
+    # UNKNOWNはhelperから例外伝播し、このrun/次runとも同pageへの再PATCHを禁止する。
+    upsert.sync_financial_master_relations(
+        ctx.client, ctx.settings, upsert_records,
+        raw_bucket=None if (ctx.settings.dry_run or ctx.cloud is None
+                            or not ctx.cloud.settings.r2_enabled()) else ctx.cloud.raw_bucket,
+        archive=ctx.upload_raw, on_hold=ctx.add_failure,
+    )
+
     if scope is not None:
         logger.info("--codes の部分実行: 選択銘柄のsector33のみ対象、全市場の欠損診断・写し更新なし")
         store = _sector33_store(ctx)
