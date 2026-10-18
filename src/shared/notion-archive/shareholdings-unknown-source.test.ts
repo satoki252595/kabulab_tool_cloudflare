@@ -4,7 +4,7 @@ const sourceDb = createReportedSourceTestDb().db;
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resumePendingShareholdings, publishVerifiedShareholdings } from "./shareholdings.js";
+import { HOLDINGS_DESCRIPTION, resumePendingShareholdings, publishVerifiedShareholdings } from "./shareholdings.js";
 import { notionRequest } from "./client.js";
 import { queryUniqueRow, recordPrimaryData } from "./archive.js";
 import { listPageFiles } from "./page-file.js";
@@ -19,6 +19,9 @@ const base = new URL("../../../services/yuho-quant/src/tests/fixtures/holdings-u
 const bytes = (name: string) => readFileSync(new URL(name, base));
 const read = (name: string) => JSON.parse(bytes(name).toString());
 const schema = JSON.parse(readFileSync(new URL("../../../services/yuho-quant/src/tests/fixtures/holdings-pending1911/schema.json", import.meta.url), "utf8"));
+// Current-server schema projection only; original unknown/source fixture bytes remain unchanged.
+schema.properties["価格状態"].formula.expression = 'if(prop("価格照合済"), "期末参考時価（期末株数×採用終値）", "未取得（価格・通貨・株数単位の照合未成立）")';
+for (const part of schema.description) { part.plain_text = HOLDINGS_DESCRIPTION; part.text.content = HOLDINGS_DESCRIPTION; }
 const info = (p: ReturnType<typeof read>) => JSON.parse(p.properties["保有明細再開情報"].rich_text.map((v: { plain_text: string }) => v.plain_text).join(""));
 const rt = (content: string) => [{ type: "text", text: { content }, plain_text: content }];
 const sameId = (a: string, b: string) => a.replaceAll("-", "") === b.replaceAll("-", "");
