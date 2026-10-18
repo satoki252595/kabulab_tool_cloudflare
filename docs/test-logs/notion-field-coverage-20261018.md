@@ -135,7 +135,21 @@ Macの優待要約はmain535のまま21:00:06.265に自然起動し、21:00:08.9
 
 summaryの`emptyTagRepair`はselected/eligible/rechecked/tagged/allNo/uncertain/noCandidates/held/remainingを分ける。タグ付与と要確認は同時にあり得るが、全noは候補ありで両方なしの場合だけ。候補語なし・要確認・全noを空欄補完成功とは数えない。完全同一の保存決定を再利用する場合は元の判定完了日を保持し、今回のpublication時計は通常journalへ残す。
 
-Nixの直接関連4suite214件PASS、全体TypeScript型検査・変更8source/testのESLint・diff checkを通過。readyは`biztag-empty-tags-requalification-v1/ready-v1.json` SHA256 `16b9046c0fbfbd75f3809c5d008ad74d0e9c414419d9f71005e5c9f41326b567`。この時点で新しいモデル推論・原本取得・本番書込は0で、981社の再確認やタグ付与を完了したものではない。
+Nixの直接関連4suite214件PASS、全体TypeScript型検査・変更8source/testのESLint・diff checkを通過。readyは`biztag-empty-tags-requalification-v1/ready-v1.json` SHA256 `16b9046c0fbfbd75f3809c5d008ad74d0e9c414419d9f71005e5c9f41326b567`。このコード検証時点で新しいモデル推論・原本取得・本番書込は0で、981社の再確認やタグ付与を完了したものではない。
+
+## 空タグ3社の実適用と本文なし21社の追加診断
+
+#542はCI3checks成功後21:38:56 JSTにmain `9ed177cc8b0d835d81ff58db57e0fd4f3e3bcf2d`へマージした。同mainのclean Mac専用runtime・所有者0600の専用envでpreflightを通し、SSH本文54窓の自然閉鎖中に固定1401/1414/6156だけを通常`--repair-empty-tags`で実行した。21:43:45–21:44:47、61.455秒、exit0・再実行0。適格3/再確認3/タグ付与2/全no1/要確認1（タグ付与との重複あり）、HOLD・残件・failure0。Clef実推論2・完全一致保存結果再利用1、外部判定API0。Notion56要求・429/再送0。料金はローカル未計測で、費用ゼロとは扱わない。
+
+1401は「総合建設（ゼネコン）」と住宅の要確認、1414は「土木・道路舗装」が保存された。6156は保存6問が全noで、空タグと元の判定日を保持した。3社とも同doc・原入力4SHA・現在39本文の送信SHA・raw答え・しきい値・物理PRE・publication completion/通常POSTを独立FS照合した。同じNotion sourceの3社だけを追加で薄く再読し、上記2タグ・全no1・専用prefix・本文長2,084/684/1,611字を確認。原本不在や全noを埋めた件数に加えない。
+
+私有受入`biztag-empty-tags-pilot-v1/delegate-independent-saved-pilot-acceptance-v1.json` SHA256 `019700060681a10fc735f9102f05d4c721339d0e47f94a4cdfcb1d050fd8c0dd`。見える3社の再読SHA256 `20402a38cc3cde6252c3c1b836b6d1519019d214b285fc67881487f6af20e787`。21:56の同sourceのfresh集計は全3,713行・事業内容空21・タグ3分類全空989で、実2社の補完を確認した。薄い集計の私有保存SHA256 `07c6132a83237d4f1c2d2b1d409355f9616eb7fbcf408024f27e3b1688417ee4`。過去の991行と異時点で、原子的な前後snapshotではない。残りの現役・候補語あり869社を25社ずつ35区分に固定したが、計画作成と実適用は別受入である。
+
+21:48:02–21:48:03の通常`loadLatestDocs`に21本文なしの固定コードを渡し、SSH Nixの対象D1 SELECT2回だけで確認した。21社すべて現役返却、120/130の年次文書選択0、reported HOLD0。応答2,571B・read7,437行・write0、本文・Notion・外部取得元・モデル・再送0。これはD1の年次未取込であり、公式の未提出/候補不在/取得漏れ/原本資格HOLDを区別した結果ではない。診断`supplement-no-text21-fresh-latest-v1/diagnosis.json` SHA256 `2c09f126ad9d4225854f0afb82223b181d51c7adb251d0aaab7f2079b9496da8`。
+
+22:01の追加1 SELECTでは対象21 EDINETコードだけの120/130 metadataを現役条件なしで既coreと結合し、別銘柄に結ばれた年次候補も0件だった。1.754秒・応答371B・read38,241行・write0、本文/Notion/外部取得元/モデル/付替え0。18社はFSAの現証券コードと①が一致、627Aは保存①のみ、641A/648Aは診断用途の未資格対応を維持した。これは既DB結合集合の不在で、公式historyの不在や孤立文書の不在を証明しない。診断SHA256 `9843a2e6b49e3dd22dc21fe675f0e02a17d6c385e2df80a329a35eae58e05435`。
+
+旧候補語0の現役88社も現在のprefilterでは未確認のため、有限再確認に含める。既869社と88社の一意unionから、pilot3社を除く現役957社を固定した。25社×38＋最後7社の39区分、通常`--repair-empty-tags`・同数limit・20分の新規入場予算で直列実行する。候補0ならモデルを呼ばずnoCandidates、候補があれば既Clefで判断する。語彙・しきい値・原本・非空タグを勝手に変更せず、候補なしを正しい空欄と断定しない。旧869社だけの計画は未実行で保管し、新plan SHA256 `895cd17153f877407114666b9d25355a66ba34f4e895cb43840f72ddbb3e2466`に置き換える。実適用の結果は別受入である。
 
 ## 月次relation初回適用の既知拒否
 
@@ -160,7 +174,19 @@ python -m jp_stock_pipeline.jobs.master_sync --require-cloud --codes=624A \
 
 既存SDKの条件付きPUT再送は維持する。markerが適用された結果不明、PATCHの結果不明、POST未完はmarker/pendingを保持して停止し、同じ証跡の再PATCHを許さない。markerの通信結果不明でサーバー未適用なら旧SHAが残り得るため、この場合まで永続的な再入場禁止を保証するものではない。運用は停止・自動再実行なしとする。通常月次経路は引き続き既存pendingで停止し、この例外を自動適用しない。
 
-Nixの6suite356件PASS・既存原本未配置2件SKIP、URL修正541の統合後3suite158件PASS・実証跡loader PASS、変更7PythonのRuffと独立FSレビューを通過。ready-v2 SHA256 `89072f2b16f371ac8839d625b4fb77ccdcaa815f35073a67621661ce1f1836e7`、統合peer SHA256 `d94ad61949fd2811497d6d2206058366939bbe1f4a9d038e53291b09a4201245`。542のmergeでは当該7Python bytesは変わっていない。この時点では新入口の本番実行・3relation補完は未実施で、コード受入と実データ受入を区別する。
+Nixの6suite356件PASS・既存原本未配置2件SKIP、URL修正541の統合後3suite158件PASS・実証跡loader PASS、変更7PythonのRuffと独立FSレビューを通過。ready-v2 SHA256 `89072f2b16f371ac8839d625b4fb77ccdcaa815f35073a67621661ce1f1836e7`、統合peer SHA256 `d94ad61949fd2811497d6d2206058366939bbe1f4a9d038e53291b09a4201245`。542のmergeでは当該7Python bytesは変わっていない。このコード受入時点では新入口の本番実行・3relation補完は未実施だった。
+
+## 財務リンク3行のSSH実適用
+
+#543をCI3checks成功後main `af78db37a8912685e504d4eb762f4f44f4f4ef2e`へマージした。21:49:56 JSTにCloudflare version `22506eda-64fe-4c65-b1c1-b9e63ecaaf04`と同一10triggerを確認。SSHも同mainへfast-forwardし、別のclean専用runtime・0600 envで原証跡9ファイルと付替えproofをoffline検査した。旧env・原証跡bytesは不変。本文60窓の自然閉鎖後に同時書込みを避けて実行した。
+
+通常CLIの明示624A再開は21:51:03–21:51:15、11.915秒、processed1/failed0・exit0。旧pendingを削除せず、同keyの条件付き再開後に旧PREの物理保管・通常PATCH/全文POST・物理POSTとcontrol completionまで閉じた。通常`master_sync --codes=593A,634A`は21:51:43–21:52:23、40.522秒、③のexamined2/repaired2/held0・exit0。①は同値skip2、選択2社のD1業種更新0行、全市場診断・写し更新なし。追加モデル0・operator再実行0。
+
+21:52:56–21:53:00のfresh財務3GET＋R2 control3GETは4.246秒で成功。旧全propertyと比較し、正しい①relationだけが差分で、19数値・原本relation・出典・ライセンス・源取得時計を保持した。3controlは全てcompletedでPRE/POST全文SHA・通常物理保管receiptのSHA/sizeが一致。624Aは旧native/raw/開始時計と旧PREが完全一致し、固定proofのmarkerだけを追加。物理fileや①をさらに独立再取得した検査ではなく、既通常writerの物理読戻しと固定資格に基づく。SDKのnative読取再送は未計測、論理読取3＋3、業務書込/原本download/モデル0。
+
+私有fresh読戻し`financial-pre-rejection-reconcile-v1/ssh-actual-main543-v1/final-financial3-completed-read-v1.json` SHA256 `0baf295963287d602494baf15bcaa07a2216cab695bc3ef3090c1c882cb074e7`。3実行の子/親6PID不在を確認後、21:53:24に元の本文driverだけを再開した。空relation1,652行の既観測から候補3行を補完したが、残1,649行の歴史主体資格・全履歴数値の空欄理由分類を完了したものではない。
+
+独立FS受入は16実証跡とmain543の固定sourceを検証してPASS。proof SHA256 `ca2c383afb2066b9925a35c07e95a093779cadef842ee8dd6c87c1db6a33f031`。通常2社runにある指定外E38412のFSA identity HOLD警告2eventは保持し、今回の③relation repaired2/held0と区別した。追加API・モデル・原本再取得なし。
 
 ## 過去本文の再抽出失敗による旧索引消去を防ぐ
 
@@ -169,3 +195,53 @@ Nixの6suite356件PASS・既存原本未配置2件SKIP、URL修正541の統合�
 全3callerが使う共有builderで`parse_error`をSQL作成前に拒否した。0節の確定も旧status/pointerのsnapshotが不明、旧status正常、旧pointerありなら停止して保持する。CLIは既SELECTでpointer1列を追加するだけで、追加native要求はない。既error集計で非0終了し、失敗を成功や未開示へ変換しない。正常な新規0節は旧status/pointerが明示的に無い時だけ従来どおり記録する。他2callerは非空の全文照合後だけbuilderへ入るため、正常な確定契約は変更しない。
 
 保存実6963の37索引を含む全6表で、失敗投影4条件のSQL送信0・旧値不変と新規0節の正常系を検証。関連6suite96件PASS、全体TypeScript型検査・変更source/testのESLint成功。修正のための原本取得・モデル・実データ修復・本番書込0。根拠`tmp/feature-audit-20261018/text-backfill-empty-preserve-v1/ready-v1.json` SHA256 `812115bf1e82d551db506af0e86a5cece4e5a4b9a074f6934aa2ae9113b3ca3f`。これで過去の損失件数や全原本の再抽出を受け入れたとは扱わない。
+
+## 現役全社の現在39本文の読取完了
+
+SSHの固定3,666社・74バッチは20:39:42–22:07:03 JSTに全てexit0で閉鎖した。通常処理で3,664社を現在39列まで検査し、2683/3840の2社は資格HOLDで未検査として保持した。通常検査済みの634Aと別の24社診断の重複1社を除き、診断追加23社とのunionで固定現役3,687社の現在39本文値を観測した。対象外26行はこの全社読取に含めない。
+
+同期差分・本文修復・metadata修復・主マスタ読取・failure・モデル0。Notionは通常5,058＋診断27＝5,085要求、429/再送0。通常elapsed合計3,598.624秒、実wallには定期/タグpilot/財務の排他pauseを含む。全296 log/summary/receiptの最終SHAとsize、全74code CSV/limit/終端/一意、所有driver＋子75PID不在を独立FS照合した。受入SHA256 `2db365780e8ba0649cf1a74c1b033153d694d6e0f6d74aaab5b34f7119c0d52f`。
+
+現在値の空欄は7,074 / 143,793セル。下表の分母は各3,687社で、本文なし21社は全列に含む。異時点観測であり、診断23社のsource資格を新たに成立させた検査ではない。空欄理由（非公表/対象外/抽出漏れ）の全件分類・原CSV抽出の網羅性・全補足の充足・実請求額は未確認で、同期差分0を全項目補完完了とは扱わない。
+
+| 本文項目 | 空欄社数 |
+| --- | ---: |
+| 事業の内容 | 21 |
+| 事業等のリスク | 22 |
+| 経営方針、経営環境及び対処すべき課題等 | 22 |
+| 配当政策 | 21 |
+| 経営者による財政状態、経営成績及びキャッシュ・フローの状況の分析 | 21 |
+| 研究開発活動 | 22 |
+| 大株主の状況 | 23 |
+| 発行済株式、株式の総数等 | 21 |
+| 所有者別状況 | 21 |
+| 発行済株式、議決権の状況 | 21 |
+| 自己株式等 | 22 |
+| 株主総会決議による取得の状況 | 23 |
+| 取締役会決議による取得の状況 | 23 |
+| 取得自己株式の処理状況及び保有状況 | 23 |
+| 関係会社の状況 | 21 |
+| 従業員の状況 | 21 |
+| 沿革 | 21 |
+| 重要な契約等 | 21 |
+| 役員の状況 | 24 |
+| 株式の保有状況 | 23 |
+| 社外取締役（及び社外監査役） | 59 |
+| コーポレート・ガバナンスの概要 | 27 |
+| 監査の状況 | 21 |
+| サステナビリティに関する考え方及び取組 | 26 |
+| 主要な設備の状況 | 29 |
+| 設備の新設、除却等の計画 | 30 |
+| 設備投資等の概要 | 30 |
+| 有価証券明細表 | 3,383 |
+| 有価証券関係、財務諸表 | 150 |
+| 有形固定資産等明細表 | 45 |
+| 賃貸等不動産関係、財務諸表 | 2,154 |
+| セグメント情報等、財務諸表 | 27 |
+| 重要な後発事象、財務諸表 | 352 |
+| 関連当事者情報、財務諸表 | 71 |
+| 提出会社の親会社等の情報 | 21 |
+| ライツプランの内容 | 24 |
+| 行使価額修正条項付新株予約権付社債券等の行使状況等 | 21 |
+| 発行済株式総数、資本金等の推移 | 21 |
+| 主要な顧客ごとの情報 | 146 |
