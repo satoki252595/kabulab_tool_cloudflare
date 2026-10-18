@@ -209,6 +209,41 @@ def _store(fake: _FakeS3, bucket: str = "jp-stock-raw", writer: str = "stockStoc
 
 
 class TestR2Store:
+    def test_conditional_claim_completion_and_locked_sdk_model(self):
+        import json
+        from botocore.session import Session
+
+        assert {"IfNoneMatch", "IfMatch"} <= set(
+            Session().get_service_model("s3").operation_model("PutObject").input_shape.members
+        )
+        calls = []
+        fake = _FakeS3()
+        def conditional(**kwargs):
+            calls.append(kwargs)
+            return {"ETag": '"opaque-claim-etag"'}
+        fake.put_object = conditional
+        store = _store(fake)
+        etag = store.put_json_conditional("financial-page-operation", {"status": "pending"})
+        store.put_json_conditional("financial-page-operation", {"status": "completed"}, etag=etag)
+        assert calls[0]["IfNoneMatch"] == "*" and "IfMatch" not in calls[0]
+        assert calls[1]["IfMatch"] == etag and "IfNoneMatch" not in calls[1]
+        assert json.loads(calls[0]["Body"]) == {"status": "pending"}
+
+    @pytest.mark.parametrize("fault", ["412", "unknown", "no-etag"])
+    def test_conditional_failure_never_reclaims(self, fault):
+        from jp_stock_pipeline.cloud_store.r2 import R2Error
+
+        fake, calls = _FakeS3(), []
+        def conditional(**kwargs):
+            calls.append(kwargs)
+            if fault != "no-etag":
+                raise _make_client_error(fault, 412 if fault == "412" else 500)
+            return {}
+        fake.put_object = conditional
+        with pytest.raises(R2Error, match="do not retry"):
+            _store(fake).put_json_conditional("financial-page-operation", {"status": "pending"})
+        assert len(calls) == 1
+
     def test_put_json_guarded_creates_new_object(self):
         import json
 

@@ -30,12 +30,17 @@ def test_bad_scope_stops_before_source(monkeypatch, codes):
         mod.execute(SimpleNamespace(args=SimpleNamespace(codes=codes, limit=None)))
 
 
-def _execute(monkeypatch, tmp_path, *, scope, limit=None, store=None):
+def _execute(monkeypatch, tmp_path, *, scope, limit=None, store=None, cloud=None):
     artifact = _source(tmp_path)
     records = edinet_codelist.parse_codelist(artifact.local_path.read_bytes())
     candidates = edinet_codelist.inspect_codelist_candidates(records).candidates
     codes = [r.code for r in candidates]
-    state = {"persisted": [], "failures": [], "filters": [], "custody": 0, "global": []}
+    state = {"persisted": [], "failures": [], "filters": [], "custody": 0, "global": [], "financial_scope": [], "raw_buckets": []}
+    def financial_sync(_client, _settings, records, **kwargs):
+        state["financial_scope"].extend(r.code for r in records)
+        state["raw_buckets"].append(kwargs["raw_bucket"])
+    monkeypatch.setattr(mod.upsert, "sync_financial_master_relations",
+                        financial_sync)
     monkeypatch.setattr(mod.edinet_codelist, "fetch_codelist", lambda _: artifact)
     monkeypatch.setattr(mod.edinet_codelist, "convert_codelist", lambda a: a)
     monkeypatch.setattr(mod, "_sector33_store", lambda _: store)
@@ -60,7 +65,7 @@ def _execute(monkeypatch, tmp_path, *, scope, limit=None, store=None):
     ctx = SimpleNamespace(
         args=SimpleNamespace(codes=scope(codes) if callable(scope) else scope, limit=limit),
         settings=SimpleNamespace(db_id=lambda _: "declared-master-db", dry_run=False),
-        client=SimpleNamespace(query_database=query), upload_raw=custody,
+        client=SimpleNamespace(query_database=query), upload_raw=custody, cloud=cloud,
         persist=persist, add_success=lambda: None,
         add_failure=lambda code, reason: state["failures"].append((code, reason)),
     )
@@ -71,6 +76,7 @@ def _execute(monkeypatch, tmp_path, *, scope, limit=None, store=None):
 def test_scope_filters_before_limit_and_uses_only_scoped_map(monkeypatch, tmp_path):
     state, codes = _execute(monkeypatch, tmp_path, scope=lambda c: f"{c[2]},{c[1]}", limit=1)
     assert state["persisted"] == [codes[1]]
+    assert state["financial_scope"] == [codes[1]]
     assert state["filters"] == [{"or": [mod.upsert.stock_master_filter(codes[1])]}]
     assert state["global"] == []
     assert state["failures"] == []
@@ -86,8 +92,19 @@ def test_missing_scope_has_custody_but_no_map_or_write(monkeypatch, tmp_path):
 def test_omitted_scope_retains_normal_global_path(monkeypatch, tmp_path):
     state, codes = _execute(monkeypatch, tmp_path, scope=None)
     assert state["persisted"] == codes
+    assert state["financial_scope"] == codes
     assert state["filters"] == []
     assert state["global"] == ["PRE", "_hold_absent_codes", "_sync_sector33", "_sync_notion_pages"]
+
+
+def test_d1_only_cloud_does_not_construct_an_unqualified_r2_client(monkeypatch, tmp_path):
+    class D1OnlyCloud:
+        settings = SimpleNamespace(r2_enabled=lambda: False)
+        @property
+        def raw_bucket(self):
+            pytest.fail("R2 without explicit credentials")
+    state, _ = _execute(monkeypatch, tmp_path, scope=lambda codes: codes[0], cloud=D1OnlyCloud())
+    assert state["raw_buckets"] == [None]
 
 
 @pytest.mark.parametrize("limit", [None, 1])

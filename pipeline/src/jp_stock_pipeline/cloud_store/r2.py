@@ -96,6 +96,22 @@ class R2Store:
             raise R2Error(f"R2 PUT 失敗 {self.bucket}/{key}: {exc}") from exc
         logger.info("R2 PUT %s/%s (%d bytes)", self.bucket, key, len(body))
 
+    def put_json_conditional(self, key: str, payload: dict, *, etag: str | None = None) -> str:
+        """Absent claim / same-ETag completion only. 412 and transport unknown both STOP."""
+        condition = {"IfNoneMatch": "*"} if etag is None else {"IfMatch": etag}
+        body = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        try:
+            response = self.s3.put_object(
+                Bucket=self.bucket, Key=key, Body=body,
+                ContentType="application/json", **condition,
+            )
+        except Exception as exc:  # noqa: BLE001 - ambiguous success/412 must never re-claim
+            raise R2Error("R2 conditional mutation rejected or unknown; retain claim, do not retry") from exc
+        result = response.get("ETag")
+        if not isinstance(result, str) or not result:
+            raise R2Error("R2 conditional mutation has no ETag; retain claim, do not retry")
+        return result
+
     def put_json_guarded(
         self,
         key: str,

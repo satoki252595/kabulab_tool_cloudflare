@@ -419,6 +419,18 @@ def test_list_page_property_items_follows_cursor(client):
     assert "start_cursor=c2" in str(calls[1].url)
 
 
+@pytest.mark.parametrize("projection", [None, ["code", "master%3A1"]])
+def test_database_projection_is_optional_and_carried_over_pagination(client, projection):
+    calls = sdk_responses(client, [
+        (200, {"results": [{"id": "a"}], "has_more": True, "next_cursor": "next"}, {}),
+        (200, {"results": [{"id": "b"}], "has_more": False, "next_cursor": None}, {}),
+    ])
+    assert len(client.query_database("db", filter_properties=projection, strict=True)) == 2
+    for call in calls:
+        assert call.url.params.get_list("filter_properties") == (projection or [])
+        assert "filter_properties" not in json.loads(call.content)
+
+
 LIST_OPS = [
     lambda c: c.query_database("db"),
     lambda c: c.list_page_property_items("page", "prop"),

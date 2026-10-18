@@ -20,23 +20,39 @@
 from __future__ import annotations
 
 import logging
+import hashlib
+import io
+import json
+import math
+import re
+import unicodedata
+import zipfile
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
+from uuid import UUID
 
 from ..config import Settings
+from ..contracts.stock_code import parse_stock_code
 from ..models import (
     JST,
     DisclosureRecord,
     FinancialSummaryRecord,
     Provenance,
     StockMasterRecord,
+    Source,
+    now_jst,
 )
 
 from . import schema as S
 from .client import NotionClient
+from .saved_edinet import _active, _text
 
 logger = logging.getLogger(__name__)
+
+
+class FinancialRelationHold(ValueError):
+    """原本で主体・期間を証明できない。数値や別主体で補わず空欄を保持する。"""
 
 # dry-run 合成IDの接頭辞 (client.py の _record() が生成する)
 DRY_RUN_ID_PREFIX = "dry-run-"
@@ -1380,6 +1396,293 @@ def upsert_disclosure(
         existing_page_id=existing_page_id,
         page_resolved=page_resolved,
     )
+
+
+def _relation_require(condition: bool, reason: str) -> None:
+    if not condition:
+        raise FinancialRelationHold(reason)
+
+
+def _financial_relation_image(page: dict, database_id: str) -> dict:
+    """全プロパティと不変page属性。CASでは別途 last_edited_time も比較する。"""
+    props = _active(page, database_id)
+    UUID(page["id"])
+    _relation_require(page.get("in_trash") is False, "全PREのtrash状態が不明")
+    for prop in props.values():
+        _relation_require(isinstance(prop, dict) and prop.get("has_more") is not True
+                          and isinstance(prop.get("type"), str) and prop["type"] in prop,
+                          "全PREのpropertyが不完全/未知")
+        kind = prop["type"]
+        if kind in ("title", "rich_text"):
+            parts = prop[kind]
+            _relation_require(isinstance(parts, list) and all(
+                isinstance(part, dict) and part.get("type") == "text"
+                and isinstance(part.get("plain_text"), str)
+                and isinstance(part.get("text"), dict)
+                and part["plain_text"] == part["text"].get("content") for part in parts
+            ), "全PREのtext fragmentが不完全")
+        elif kind == "relation":
+            ids = _read_relation_ids_checked({"value": prop}, "value")
+            _relation_require(ids is not None, "全PREのrelation形状が不完全")
+            for page_id in ids:
+                UUID(page_id)
+    return {key: page[key] for key in ("id", "parent", "created_time", "archived")} | {
+        "in_trash": page["in_trash"], "properties": props,
+    }
+
+
+def _financial_relation_json(value: dict) -> bytes:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+                      allow_nan=False).encode("utf-8")
+
+
+def _financial_relation_native(client, settings, pre: dict, master: dict,
+                               record: StockMasterRecord) -> tuple[dict, dict]:
+    """既保存原本の全SHA/sizeと既converterのnative DEIだけ。財務値の再計算0。"""
+    from ..convert.xbrl_to_csv import edinet_csv_zip_to_tidy, xbrl_zip_to_tidy  # noqa: PLC0415
+    from ..licensing import LicenseTag  # noqa: PLC0415
+    from ..transform.direct_roa import _dei  # noqa: PLC0415
+    from ..transform.normalize import PERIOD_TYPE_TO_DISCLOSURE, interim_disclosure_type  # noqa: PLC0415
+
+    fp, mp = pre["properties"], master["properties"]
+    def legal(value):
+        return re.sub(r"\s+", "", unicodedata.normalize("NFKC", value))
+    _relation_require(
+        parse_stock_code(record.code) == record.code and record.code != "0000"
+        and isinstance(record.edinet_code, str) and bool(re.fullmatch(r"E[0-9]{5}", record.edinet_code))
+        and _text(mp[S.MASTER_PROP_CODE], "rich_text") == record.code
+        and _text(mp[S.MASTER_PROP_EDINET_CODE], "rich_text") == record.edinet_code
+        and legal(_text(mp[S.MASTER_PROP_NAME], "title")) == legal(record.name),
+        "fresh一意masterと正常コードリストの法定主体が不一致",
+    )
+    raw_ids = _read_relation_ids_checked(fp, S.PROP_RAW_RELATION)
+    _relation_require(_relation_complete(fp, S.PROP_RAW_RELATION)
+                      and raw_ids is not None and len(raw_ids) == 1, "原本relationが非一意/未完")
+    raw = client.get_page(raw_ids[0])
+    _relation_require(UUID(raw["id"]) == UUID(raw_ids[0]), "原本GETのpage IDが不一致")
+    rp = _active(raw, settings.db_id("raw_files"))
+    source = _read_select_name(fp, S.PROP_SOURCE)
+    license_tag = LicenseTag(_read_select_name(fp, S.PROP_LICENSE_TAG))
+    datatype = _text(rp[S.RAW_PROP_DATATYPE], "rich_text")
+    # SHA冪等reuseでは原本は初回時計、財務は再取得時計。等値/順序を捏造しない。
+    for properties in (fp, rp):
+        value = _read_date_start(properties, S.PROP_FETCHED_AT)
+        _relation_require(value is not None, "源取得時計が未提供")
+        try:
+            clock = datetime.fromisoformat(value)
+        except ValueError as exc:
+            raise FinancialRelationHold("源取得時計の形式が不正") from exc
+        _relation_require(clock.tzinfo is not None and clock <= now_jst(), "源取得時計が無timezone/未来")
+    _relation_require(
+        source in (Source.EDINET.value, Source.TDNET.value)
+        and _read_select_name(rp, S.PROP_SOURCE) == source
+        and _read_select_name(rp, S.PROP_LICENSE_TAG) == license_tag.value
+        and _text(rp[S.RAW_PROP_SCOPE], "rich_text") == record.code
+        and _read_date_start(fp, S.PROP_DATA_DATE) is not None
+        and _read_date_start(rp, S.PROP_DATA_DATE) == _read_date_start(fp, S.PROP_DATA_DATE)
+        and ((source == Source.EDINET.value and datatype in ("csv", "xbrl"))
+             or (source == Source.TDNET.value and datatype == "tdnet_xbrl")),
+        "原本と財務の主体/source/型/ライセンス/源時計が不一致",
+    )
+    digest, size = _text(rp[S.RAW_PROP_SHA256], "rich_text"), rp[S.RAW_PROP_SIZE]["number"]
+    filename = _text(rp[S.RAW_PROP_FILENAME], "title")
+    _relation_require(bool(re.fullmatch(r"[a-f0-9]{64}", digest)) and type(size) is int
+                      and 0 < size <= 64 * 1024 * 1024 and filename.endswith(".zip"),
+                      "原本SHA/size/ZIP名が不正")
+    files = [f for f in rp[S.RAW_PROP_FILES]["files"] if f.get("name") == filename]
+    _relation_require(len(files) == 1 and files[0].get("type") == "file", "原本物理添付が非一意")
+    content = client.download_file(files[0]["file"]["url"], max_bytes=size)
+    _relation_require(len(content) == size and hashlib.sha256(content).hexdigest() == digest,
+                      "原本全SHA/sizeが不一致")
+    with zipfile.ZipFile(io.BytesIO(content)) as archive:
+        _relation_require(sum(f.file_size for f in archive.infolist()) <= 128 * 1024 * 1024,
+                          "原本ZIP展開上限超過")
+    converter = edinet_csv_zip_to_tidy if datatype == "csv" else xbrl_zip_to_tidy
+    tidy = converter(content, record.code, raw["id"])
+    native = {name: _dei(tidy, name) for name in (
+        "EDINETCodeDEI", "SecurityCodeDEI", "FilerNameInJapaneseDEI", "CurrentPeriodEndDateDEI",
+        "TypeOfCurrentPeriodDEI", "WhetherConsolidatedFinancialStatementsArePreparedDEI",
+    )}
+    period = _read_date_start(fp, S.FIN_PROP_PERIOD_END)
+    _relation_require(
+        native["EDINETCodeDEI"] == record.edinet_code
+        and native["SecurityCodeDEI"] == record.code + "0"
+        and native["FilerNameInJapaneseDEI"] is not None
+        and legal(native["FilerNameInJapaneseDEI"]) == legal(record.name)
+        and period is not None and native["CurrentPeriodEndDateDEI"] == period
+        and native["TypeOfCurrentPeriodDEI"] in PERIOD_TYPE_TO_DISCLOSURE,
+        "原本native EDINET/証券コード/法定名/期末が不一致または未提供",
+    )
+    disclosure = interim_disclosure_type(PERIOD_TYPE_TO_DISCLOSURE[native["TypeOfCurrentPeriodDEI"]],
+                                        date.fromisoformat(period))
+    _relation_require(disclosure == _read_select_name(fp, S.FIN_PROP_DISCLOSURE_TYPE)
+                      and _read_select_name(fp, S.FIN_PROP_CONSOLIDATED) in ("連結", "単体")
+                      and native["WhetherConsolidatedFinancialStatementsArePreparedDEI"] == (
+                          "true" if _read_select_name(fp, S.FIN_PROP_CONSOLIDATED) == "連結" else "false"
+                      ), "原本native開示種別/連結単体が不一致")
+    # 期限付きURLを保存しない。CAS用の原本identityは添付名/型と全SHAへ固定。
+    identity = {key: value for key, value in rp.items() if key != S.RAW_PROP_FILES}
+    identity[S.RAW_PROP_FILES] = [{"name": f["name"], "type": f["type"]}
+                                 for f in rp[S.RAW_PROP_FILES]["files"]]
+    return {"page_id": raw["id"], "properties": identity}, native
+
+
+def repair_financial_master_relation(client, settings, record: StockMasterRecord, page: dict,
+                                     *, raw_bucket, archive: Callable) -> str:
+    """空の③主relationだけ。stable R2 pendingは別run/hostからも再PATCHを禁止する。"""
+    from ..licensing import LicenseTag  # noqa: PLC0415
+    from ..rawstore import save_raw  # noqa: PLC0415
+
+    _relation_require(parse_stock_code(record.code) == record.code and record.code != "0000"
+                      and isinstance(record.edinet_code, str)
+                      and bool(re.fullmatch(r"E[0-9]{5}", record.edinet_code)),
+                      "relation対象の銘柄/EDINETコードが未資格")
+    db = settings.db_id("financials")
+    page_id = str(UUID(page["id"]))
+    pre = client.get_page(page_id)
+    _relation_require(UUID(pre["id"]) == UUID(page_id), "財務GETのpage IDが不一致")
+    image = _financial_relation_image(pre, db)
+    fp = image["properties"]
+    for name in _FIN_FIELD_TO_PROP.values():
+        _relation_require(_prop_shape_ok(fp, name, "number") and (
+            fp[name]["number"] is None or math.isfinite(fp[name]["number"])
+        ), "財務全数値の既存形状が不明")
+    _relation_require(_text(fp[S.FIN_PROP_CODE], "rich_text") == record.code
+                      and _relation_complete(fp, S.PROP_MASTER_RELATION), "財務scope/relation形状が不明")
+    links = _read_relation_ids_checked(fp, S.PROP_MASTER_RELATION)
+    key = f"financial-master-relations/{page_id}.json"
+    _relation_require(raw_bucket is not None or settings.dry_run, "CloudStore無し: durable UNKNOWN保護不可")
+    previous, found = (None, False) if raw_bucket is None else raw_bucket.get_json(key)
+    if found:
+        if (isinstance(previous, dict) and previous.get("status") == "completed"
+                and previous.get("financial_page_id") == page_id
+                and previous.get("code") == record.code
+                and links == [previous.get("master_page_id")]):
+            return "already_linked"
+        raise RuntimeError(f"{record.code}: 既存relation操作が未完/現値不一致。再PATCH禁止")
+    _relation_require(links == [], "主relationが既に非空。上書きしない")
+    masters = client.query_database(settings.db_id("stock_master"),
+                                    filter=stock_master_filter(record.code), strict=True)
+    _relation_require(len(masters) == 1, "fresh銘柄マスタが非一意/不在")
+    master = masters[0]
+    master_image = _financial_relation_image(master, settings.db_id("stock_master"))
+    master_id = str(UUID(master["id"]))
+    raw_identity, native = _financial_relation_native(client, settings, pre, master, record)
+    if settings.dry_run:
+        return "planned"
+    pending = {"version": 1, "status": "pending", "financial_page_id": page_id,
+               "master_page_id": master_id, "code": record.code, "pre": image,
+               "pre_sha256": hashlib.sha256(_financial_relation_json(image)).hexdigest(),
+               "raw": raw_identity, "native": native, "started_at": now_jst().isoformat()}
+    etag = raw_bucket.put_json_conditional(key, pending)
+
+    def claimed_image(page, database_id):
+        try:
+            return _financial_relation_image(page, database_id)
+        except FinancialRelationHold as exc:
+            raise RuntimeError("claim後のCAS/POSTが不完全。pending保持・run停止") from exc
+
+    def physical(value, phase):
+        artifact = save_raw(
+            _financial_relation_json(value), source=Source.CALC,
+            datatype=f"financial-master-{phase}", scope=record.code, data_date=now_jst().date(),
+            url="", ext="json", license_tag=LicenseTag(_read_select_name(fp, S.PROP_LICENSE_TAG)),
+            base_dir=settings.raw_data_dir,
+        )
+        archived_id = archive(artifact)
+        if real_page_id(archived_id) is None:
+            raise RuntimeError("relation PRE/POSTの物理⑤保管が未完。pending保持")
+        return {"page_id": archived_id, "sha256": artifact.sha256, "bytes": artifact.size_bytes}
+
+    pre_archive = physical(pending, "pre")
+    current = client.get_page(page_id)
+    current_master = client.query_database(settings.db_id("stock_master"),
+                                          filter=stock_master_filter(record.code), strict=True)
+    if (claimed_image(current, db) != image
+            or current["last_edited_time"] != pre["last_edited_time"]
+            or len(current_master) != 1
+            or claimed_image(current_master[0], settings.db_id("stock_master")) != master_image
+            or current_master[0]["last_edited_time"] != master["last_edited_time"]):
+        raise RuntimeError("relation PRE後に財務/主体が変更。pending保持・再PATCH禁止")
+    current_raw = client.get_page(raw_identity["page_id"])
+    current_raw_props = _active(current_raw, settings.db_id("raw_files"))
+    current_raw_image = {k: v for k, v in current_raw_props.items() if k != S.RAW_PROP_FILES}
+    current_raw_image[S.RAW_PROP_FILES] = [{"name": f["name"], "type": f["type"]}
+                                        for f in current_raw_props[S.RAW_PROP_FILES]["files"]]
+    if (UUID(current_raw["id"]) != UUID(raw_identity["page_id"])
+            or current_raw_image != raw_identity["properties"]):
+        raise RuntimeError("relation PRE後に原本identityが変更。pending保持・再PATCH禁止")
+    # raw_api PATCHは既存の non-retry-safe mutation。transport unknownはpendingのまま伝播。
+    client.raw_api("PATCH", f"pages/{page_id}", json_body={
+        "properties": {S.PROP_MASTER_RELATION: relation_prop([master_id])},
+    })
+    post = client.get_page(page_id)
+    post_image = claimed_image(post, db)
+    post_props = post_image["properties"]
+    if (_read_relation_ids_checked(post_props, S.PROP_MASTER_RELATION) != [master_id]
+            or not _relation_complete(post_props, S.PROP_MASTER_RELATION)
+            or {k: v for k, v in post_props.items() if k != S.PROP_MASTER_RELATION}
+            != {k: v for k, v in fp.items() if k != S.PROP_MASTER_RELATION}
+            or {k: v for k, v in post_image.items() if k != "properties"}
+            != {k: v for k, v in image.items() if k != "properties"}):
+        raise RuntimeError("relation fullPOST不一致。pending保持・再PATCH禁止")
+    completed = {**pending, "status": "completed", "pre_archive": pre_archive,
+                 "post": post_image, "post_sha256": hashlib.sha256(_financial_relation_json(post_image)).hexdigest(),
+                 "finished_at": now_jst().isoformat()}
+    completed["post_archive"] = physical(completed, "post")
+    raw_bucket.put_json_conditional(key, completed, etag=etag)
+    if raw_bucket.get_json(key) != (completed, True):
+        raise RuntimeError("relation completed永続readback不一致。再PATCH禁止")
+    return "repaired"
+
+
+def sync_financial_master_relations(client, settings, records: list[StockMasterRecord],
+                                    *, raw_bucket, archive: Callable, on_hold: Callable) -> dict:
+    """月次の選択コードだけ×empty filter。新master以外も次月に再確認する。"""
+    if not records:
+        return {"examined": 0, "repaired": 0, "held": 0, "planned": 0, "already_linked": 0}
+    by_code = {record.code: record for record in records}
+    if len(by_code) != len(records) or any(
+        parse_stock_code(code) != code or code == "0000" for code in by_code
+    ):
+        raise ValueError("relation同期の選択コードが非正準/重複")
+    if settings.dry_run:
+        logger.info("dry-run: ③主relationの実資格/保管/PATCHは未実施")
+        return {"examined": 0, "repaired": 0, "held": 0, "planned": 0, "already_linked": 0}
+    names = (S.FIN_PROP_CODE, S.FIN_PROP_PERIOD_END, S.FIN_PROP_DISCLOSURE_TYPE,
+             S.FIN_PROP_CONSOLIDATED, S.PROP_RAW_RELATION, S.PROP_MASTER_RELATION, S.PROP_SOURCE)
+    schema = client.retrieve_database(settings.db_id("financials"))["properties"]
+    projection = [schema[name]["id"] for name in names]
+    counts = {"examined": 0, "repaired": 0, "held": 0, "planned": 0, "already_linked": 0}
+    codes, seen = list(by_code), set()
+    for offset in range(0, len(codes), 50):
+        chunk = codes[offset:offset + 50]
+        # 一chunkを全paginationしてからPATCH。empty集合を変更しつつcursorを進めない。
+        pages = client.query_database(settings.db_id("financials"), filter={"and": [
+            {"or": [{"property": S.FIN_PROP_CODE, "rich_text": {"equals": code}} for code in chunk]},
+            {"property": S.PROP_MASTER_RELATION, "relation": {"is_empty": True}},
+        ]}, filter_properties=projection, strict=True)
+        for page in pages:
+            props = _active(page, settings.db_id("financials"))
+            code = _text(props[S.FIN_PROP_CODE], "rich_text")
+            if (page["id"] in seen or code not in chunk
+                    or _read_relation_ids_checked(props, S.PROP_MASTER_RELATION) != []
+                    or not _relation_complete(props, S.PROP_MASTER_RELATION)):
+                raise ValueError("財務empty queryの重複/範囲/形状が不正")
+            seen.add(page["id"])
+        for page in pages:
+            code = _text(page["properties"][S.FIN_PROP_CODE], "rich_text")
+            counts["examined"] += 1
+            try:
+                outcome = repair_financial_master_relation(client, settings, by_code[code], page,
+                                                           raw_bucket=raw_bucket, archive=archive)
+            except FinancialRelationHold as exc:
+                counts["held"] += 1
+                on_hold(code, f"③主relation HOLD: {exc}")
+            else:
+                counts[outcome] += 1
+    logger.info("③主relation: %s", counts)
+    return counts
 
 
 # ⑥時系列エクスポート・⑦収集ジョブログは廃止した。
