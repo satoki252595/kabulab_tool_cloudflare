@@ -51,6 +51,12 @@ nix develop --command pnpm sync:daily:core --stocks-only
 Pythonの過去提出日補完はリポジトリのNix環境内で`pipeline`へ移り、
 `uv run python -m jp_stock_pipeline.jobs.edinet_daily --date YYYY-MM-DD --require-cloud`を使う。
 
+保有価格だけの補完は、既存CLIの`resume-prices`から定期EDINETと同じ価格queue/loaderを1回呼ぶ。
+上限は100明細・5文書・116価格chunk・256MiB・新規開始300秒。有報一覧/Yahoo取得・L2再構築は行わない。
+出力先の親directoryを用意し、`nix develop --command pnpm exec tsx scripts/notion/shareholdings.ts resume-prices tmp/holdings-prices/price-001.json`で実行する。
+保留/続きありは非0終了でも、正常結果と`completed-write.json`がある場合だけ既知の未完として扱う。
+`pending-write.json`や通信結果不明がある場合は、出力名を変えて自動再送せず原記録を保持する。
+
 ## 日足停止報告との照合
 
 「#411未配備/CF起動ゼロ」は確定原因ではない。

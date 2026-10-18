@@ -34,4 +34,6 @@
 
 保存証跡は`tmp/feature-audit-20261018/holdings-rights-needed-current-v1/`の`jpx-yearend-source-v1/SUCCESS.json`、`price-queue-readonly-v1.private.json`、`price-first-source-preflight-v1/`、`price-first-source-paired-v1.private.json`。これらはprivateで、原文全体や署名URLをGitへ含めない。実2502全文回帰はローカルprivate原本がある場合のみ実行し、CIではskipする。CIは営業日欠測/必要session欠測/未収録年/不正日付・旧schema停止のprotocol回帰を実行する。5suite160件PASS、型・lintを別確認する。
 
-現時点で業務schema変更・価格列publishは0。コードが出荷されても別途通常スキーマ移行と通常price queue実行・全POSTの受入が必要。Yahoo Chartの全OHLCV basis、法的効力日/市場権利落日/株式class、増資・消却・行使、旧保存の再資格を完了とはしない。
+初回純検証時点では業務schema変更・価格列publishは0。Yahoo Chartの全OHLCV basis、法的効力日/市場権利落日/株式class、増資・消却・行使、旧保存の再資格を完了とはしない。
+
+10/18の通常スキーマ移行は完了した。同main c747の通常`apply-schema`を使い、物理PRE・全定義CAS・1PATCH・全定義読戻し・物理POSTを113.04秒で閉じた。34プロパティの全ID/typeと、価格状態formula/description以外の全定義が不変。Notion19要求・hosted全文読戻し2・429/retry0、保有行の変更0。PREは`3fdd74ff-84cd-8123-b44a-dfb23f66e13a`、POSTは`3fdd74ff-84cd-815f-ad91-e1bba30fab31`。private closed receipt SHAは`254ba4e34ca343fa3a02a7b646243dceb6c47e0d7fbb8e655ce9deeb2d9730fa`。価格queueの実反映と全POSTは引き続き別受入。

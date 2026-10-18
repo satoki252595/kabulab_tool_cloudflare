@@ -6,8 +6,9 @@ import { constants, existsSync, readFileSync, unlinkSync, writeFileSync, openSyn
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseShareholdingsData } from "../../services/yuho-quant/src/services/edinet/shareholdings.js";
-import { applyHoldingsSchema, buildHoldingsSchemaPatch, inspectHoldingPatch, publishSavedShareholdings, replaceUnknownHoldingPatch, qualifyHoldingPatchJournal, quarantineSavedHoldingSource } from "../../src/shared/notion-archive/shareholdings.js";
-import { NotionConfigError } from "../../src/shared/notion-archive/env.js";
+import { applyHoldingsSchema, buildHoldingsSchemaPatch, inspectHoldingPatch, publishSavedShareholdings, replaceUnknownHoldingPatch, qualifyHoldingPatchJournal, quarantineSavedHoldingSource, resumePendingShareholdingsPrices } from "../../src/shared/notion-archive/shareholdings.js";
+import { NotionConfigError, notionEnv } from "../../src/shared/notion-archive/env.js";
+import { sharedEnv } from "../../src/shared/env.js";
 
 const [mode, ...args] = process.argv.slice(2);
 const read = (path: string) => JSON.parse(readFileSync(path, "utf8"));
@@ -89,6 +90,26 @@ export async function guardedHoldingsMutation<T>(out: string, label: string, act
     console.info(JSON.stringify({ outcome: "RESULT_JOURNALED", writes: writes.length }));
     return result;
   } finally { globalThis.fetch = native; mutationGuardActive = false; }
+}
+
+/** 価格windowだけを一度処理する。300秒は新規着手予算であり、HTTP hard wallは実行側で制限する。 */
+export async function resumeHoldingPrices(out: string): Promise<0 | 1> {
+  // 不足した設定を原本GETやpending作成の後に発見しない。
+  notionEnv.NOTION_TOKEN(); notionEnv.NOTION_ARCHIVE_PAGE_ID(); notionEnv.NOTION_STOCK_HOLDINGS_DB_ID();
+  sharedEnv.CLOUDFLARE_API_TOKEN(); sharedEnv.CLOUDFLARE_ACCOUNT_ID(); sharedEnv.D1_DATABASE_ID();
+  sharedEnv.R2_ACCOUNT_ID(); sharedEnv.R2_ACCESS_KEY_ID(); sharedEnv.R2_SECRET_ACCESS_KEY(); sharedEnv.R2_BUCKET();
+  assert.equal(sharedEnv.LOCAL_OUT(), undefined, "価格公開はローカル代替snapshotを使いません");
+  const { createD1HttpDb } = await import("../../src/shared/db/d1-http-client.js");
+  const schema = await import("../../services/yuho-quant/src/db/schema.js");
+  const { createHoldingPriceSourceLoader } = await import("../sync/holdings-price-sources.js");
+  const result = await guardedHoldingsMutation(out, "resume-prices", async () => {
+    const startedAt = Date.now();
+    return resumePendingShareholdingsPrices({ sourceDb: createD1HttpDb(schema), maxRows: 100,
+      shouldStop: () => Date.now() - startedAt > 300_000,
+      budget: { remainingChunks: 116, remainingBytes: 256 * 1024 * 1024 }, loadSources: createHoldingPriceSourceLoader() });
+  });
+  // 既知HOLD/pendingは正常journalを閉じる。unknownはthrowし完成receiptを作らない。
+  return result.held > 0 || result.pending ? 1 : 0;
 }
 
 /** 通常journalの最後の結果不明PATCHを1 GETだけ観測する。元pending/全journalは解除も編集もしない。 */
@@ -289,11 +310,14 @@ async function main() {
   } else if (mode === "quarantine-saved-source") {
     assert.equal(args.length, 2);
     await quarantineSavedHoldings(resolve(args[0]), resolve(args[1]));
+  } else if (mode === "resume-prices") {
+    assert.equal(args.length, 1);
+    process.exitCode = await resumeHoldingPrices(resolve(args[0]));
   } else if (mode === "apply-schema" || mode === "publish-saved") {
     assert.equal(args.length, mode === "apply-schema" ? 2 : 3);
     await guardedHoldingsMutation<unknown>(args[args.length - 1], mode, () => mode === "apply-schema" ? applyHoldingsSchema(read(args[0]))
       : publishSavedShareholdings(publishInput(args[0], args[1])));
-  } else throw new Error("diagnose / schema-plan / parse-saved / inspect-pending-patch / resolve-pending-patch / quarantine-saved-source / apply-schema / publish-saved を指定してください");
+  } else throw new Error("diagnose / schema-plan / parse-saved / inspect-pending-patch / resolve-pending-patch / quarantine-saved-source / resume-prices / apply-schema / publish-saved を指定してください");
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
