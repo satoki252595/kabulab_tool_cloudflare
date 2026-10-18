@@ -147,6 +147,35 @@ describe("fixed41 normal-snapshot publisher protocol", () => {
       }
     } finally { rmSync(pending); }
   });
+  it("actual generated read SQL obeys workerd compound5/function32 limits and preserves appended NULL/REAL fields", () => {
+    const s = setup(); seedAnnual(s);
+    const precise = 48.297719512737984;
+    const appendedReal = Object.values(getTableColumns(swing.stockIndicators)).filter(column => column.getSQLType() === "real").at(-1)!;
+    s.db.prepare(`UPDATE swing_stock_indicators SET "${appendedReal.name}"=? WHERE stock_id=1`).run(precise);
+    const schema = s.db.prepare("SELECT name,sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as { name: string; sql: string }[];
+    const q = stock41FinancialReadStatement("1897");
+    const oldFlat = q.sql.replace(", group_a AS (", " ").replace("), group_b AS (", " UNION ALL ").replace(") SELECT * FROM group_a UNION ALL SELECT * FROM group_b", "");
+    const program = `import json,sqlite3,sys
+p=json.load(sys.stdin); c=sqlite3.connect(':memory:'); c.row_factory=sqlite3.Row
+c.setlimit(sqlite3.SQLITE_LIMIT_COMPOUND_SELECT,5); c.setlimit(sqlite3.SQLITE_LIMIT_FUNCTION_ARG,32)
+assert c.getlimit(sqlite3.SQLITE_LIMIT_COMPOUND_SELECT)==5 and c.getlimit(sqlite3.SQLITE_LIMIT_FUNCTION_ARG)==32
+for t in p['tables']:
+ c.execute(t['sql'])
+ for row in t['rows']:
+  keys=list(row); c.execute('INSERT INTO "'+t['name']+'" ('+','.join('"'+k+'"' for k in keys)+') VALUES ('+','.join('?' for k in keys)+')',[row[k] for k in keys])
+try: c.execute(p['oldFlat'],p['params']); raise AssertionError('old flat query must exceed limit5')
+except sqlite3.OperationalError as e: assert 'too many terms' in str(e)
+try: c.execute('SELECT json_object('+','.join("'k%d',NULL"%i for i in range(17))+')'); raise AssertionError('old wide json_object must exceed limit32')
+except sqlite3.OperationalError as e: assert 'too many arguments' in str(e)
+print(json.dumps([dict(r) for r in c.execute(p['sql'],p['params'])]))
+`;
+    const child = spawnSync("python3.12", ["-c", program], { input: JSON.stringify({ sql: q.sql, params: q.params, oldFlat, tables: schema.map(table => ({ ...table, rows: s.db.prepare(`SELECT * FROM "${table.name}"`).all() })) }), encoding: "utf8", timeout: 30_000 });
+    expect(child.status, child.stderr).toBe(0);
+    const pre = parseStock41FinancialPre(JSON.parse(child.stdout));
+    expect(pre.tables.swing_stock_indicators[0][appendedReal.name]).toBe(precise);
+    expect(pre.tables.core_stock_financials[0].price).toBeNull(); expect(pre.ohlcv[0].volume).toBe(0);
+    expect(pre.annual).toContainEqual({ fiscalPeriodEnd: "2025-03-31", consolidated: "単体", revenue: null });
+  });
 });
 
 const savedDir = resolve(import.meta.dirname, "../../../../feature-audit-20261018/stock41-fresh5y-capture-v2");

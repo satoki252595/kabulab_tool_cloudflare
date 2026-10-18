@@ -237,7 +237,12 @@ export async function runStock41FinancialRepair(sources: readonly FinancialSourc
 
 // SQLite json_object emits REAL with only 15 digits. Preserve the binary value before JSON transport.
 function losslessValue(sql: string) { return `CASE WHEN typeof(${sql})='real' THEN json_object('$real',printf('%!.26g',${sql})) ELSE ${sql} END`; }
-function jsonProjection(names: readonly string[], prefix: string) { return `json_object(${names.flatMap(name => [`'${name}'`, losslessValue(`${prefix}.${ident(name)}`)]).join(",")})`; }
+function jsonProjection(names: readonly string[], prefix: string) {
+  // D1/workerd: max32 function args. json_object15pairs=30; json_set15pairs+document=31.
+  let json = `json_object(${names.slice(0, 15).flatMap(name => [`'${name}'`, losslessValue(`${prefix}.${ident(name)}`)]).join(",")})`;
+  for (let i = 15; i < names.length; i += 15) json = `json_set(${json},${names.slice(i, i + 15).flatMap(name => [`'$.${name}'`, losslessValue(`${prefix}.${ident(name)}`)]).join(",")})`;
+  return json;
+}
 /** One fixed-code read of the full five target tables + target OHLCV + annual calculation inputs. */
 export function stock41FinancialReadStatement(code: string): D1BatchStatement {
   assert.ok((STOCK41_CODES as readonly string[]).includes(code));
@@ -246,7 +251,8 @@ export function stock41FinancialReadStatement(code: string): D1BatchStatement {
   queries.push(`SELECT 'ohlcv',${jsonProjection(ohlcvColumns, "t")} FROM swing_daily_ohlcv t JOIN target s ON s.id=t.stock_id WHERE t.date='${STOCK41_DATE}'`);
   queries.push("SELECT 'ohlcvMax',json_object('date',MAX(t.date)) FROM swing_daily_ohlcv t JOIN target s ON s.id=t.stock_id");
   queries.push(`SELECT 'annual',json_object('fiscalPeriodEnd',t.fiscal_period_end,'consolidated',t.consolidated,'revenue',${losslessValue("t.net_sales")}) FROM jss_financials t JOIN target s ON s.code=t.code WHERE t.disclosure_type='本決算' AND t.license_tag='commercial-ok' AND t.fiscal_period_end<='${STOCK41_DATE}'`);
-  return { sql: `WITH target AS (SELECT id,code,sector,is_active,instrument_type FROM core_stocks WHERE code=?) ${queries.join(" UNION ALL ")}`, params: [code] };
+  // D1/workerd caps each compound SELECT at5 terms, including read-only requests.
+  return { sql: `WITH target AS (SELECT id,code,sector,is_active,instrument_type FROM core_stocks WHERE code=?), group_a AS (${queries.slice(0, 5).join(" UNION ALL ")}), group_b AS (${queries.slice(5).join(" UNION ALL ")}) SELECT * FROM group_a UNION ALL SELECT * FROM group_b`, params: [code] };
 }
 export function parseStock41FinancialPre(rows: Record<string, unknown>[]): FinancialPre {
   const found = (part: string, names: readonly string[]) => rows.filter(row => row.part === part).map(row => {

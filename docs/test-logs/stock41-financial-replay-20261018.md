@@ -36,6 +36,12 @@ Nix Node22.22.2で関連5suite/59件、実保存82原本→通常計算→in-mem
 
 開発時のSonnetコード限定レビューは1回・138.397秒・約0.40米ドルで、重大指摘0。出力先の事前確認、不正形状STOP、反映先stock_idの送信前確認、非空JSS入力の回帰検証を追加し、最終候補の対象10件・型検査・lintを再確認した。データ補完にLLMは使わない。通常writerの7表SQL定義・行計算・await/順序/失敗処理が変更前と同じこともRootが独立比較した。
 
+SSHから本番D1へ読取だけの事前確認を行い、9項のUNIONが本番上限で拒否されることを検出した。5項と4項のCTEを外側2項で結合し、同じ1request・対象範囲・parserを維持する。JSON関数も[公式の引数上限32](https://developers.cloudflare.com/d1/platform/limits/)に合わせ、15組ずつ`json_object`/`json_set`で構築してNULLを保持する。compound制約の根拠は[workerdの実装変更](https://github.com/cloudflare/workerd/pull/796)も参照した。
+
+Python標準SQLiteへcompound5・関数引数32の実上限を設定し、旧SQL2種類の拒否と新しい実生成SQLの全列/REAL/NULL/volume0の回帰を追加した。最終対象11件・型検査・lintはPASS。続いて17:07 JSTにSSH Nixから本番D1へ5つの読取を行い、REALの全精度roundtrip、JSSのcode先頭主キー、年次scope/銘柄限定queryの索引利用、実9行・51REALタグ・NULLの読取を0.698秒で確認した。D1/Notion書込・取得元API・モデル0。診断用`sqlite_version()`の禁止と旧UNIONの400は旧記録に残し、金融値の更新や結果不明の書込再送は行っていない。
+
+本番読取proof: `tmp/feature-audit-20261018/stock41-financial-d1-preflight-v1/ssh-v3-result.json`、SHA256 `f9eba60900a061763a94b4128d7154e31421f3290dda6de3591016d5663a542b`。これは一銘柄の事前読取であり、41銘柄の実反映は別受入。
+
 実行は、現在の固定原本pack・必要なprivate `.env`・排他・既存停止記録を確認してから、プロジェクトNix内で次の通常Node入口を使う。通常の日次を過去日へ偽装する引数は加えない。
 
 ```sh

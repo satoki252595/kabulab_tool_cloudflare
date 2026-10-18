@@ -53,3 +53,27 @@ PRE送信前に通常価格markerを「実行中（結果未確定）」へ単�
 - 通常閉鎖 `final-metadata-read-known-closure-v1.json`: SHA256 `7707e9dd9c80934d93d6261326ca413fb6e76f5750ed2cdca89e1f72109352d0`
 - Root保存物集計 `root-fixed-scope-acceptance-v1.json`: SHA256 `75c6fbb4a045523f18e848c3a45151556fa0b61581e9943a0eafe93aceaf8032`
 - 独立保存物照合 `delegate-final-metadata-saved-peer-v1.json`: SHA256 `aed0981bfd8d8c8f8f91a8cde6d4e29c3e1018309f41e57091cea56964048c62`
+
+
+### 現在の資格未成立1,758行の理由
+
+17:01 JSTに、保存済みの現在の理由だけを通常共有clientで読んだ。固定217文書・同じ台帳marker・未資格checkboxをserver側で絞り、原本・価格数値・Filesを取得しなかった。19query・5,036,421B・8.177秒で全cursorを閉じ、文書別件数が上の保存counterと一致した。原300秒/25query/20MiB内、取得元API・D1・モデル・業務書込0。旧forecastを流用せず、未知分類0だった。
+
+| 保存されていた資格未成立の理由 | 行数 |
+|---|---:|
+| 分割に関する法的株数・価格basisの根拠不足 | 894 |
+| 株数/価格の単位または必要履歴範囲の根拠不足 | 204 |
+| 公式日本名による同定が未成立 | 402 |
+| 公式英字名による同定が未成立 | 15 |
+| 商号変更を含む同定が未成立 | 1 |
+| 有効化した台帳内に必要な保存価格原本がない | 82 |
+| 期末株数が非開示 | 160 |
+| 合計 | 1,758 |
+
+名前の同定不足を非上場へ読み替えず、台帳内の原本不足を取得元の永久欠測・無取引へ変換しない。権利根拠や非開示株数を推定して価格を埋めない。この読取は理由の集計であり、当該行の価格再資格や新たな値の採用ではない。
+
+私有保存先: `tmp/feature-audit-20261018/holdings-rights-needed-current-v1/current-unavailable-reason-read-v1/`。
+
+- 集計 `actual-closed-read/result.json`: SHA256 `8c99d552fbe44dc2b842675c21fef7d34bf4ec51a90f23834a0c5b41ed92aeff`
+- 通常閉鎖 `saved-known-closure-v1.json`: SHA256 `1749a1d7c1300c3c4c0e3daeefa949e3ac2bf9b624e2c9ec96617fc9342af289`
+- Root保存物照合 `root-reason-acceptance-v1.json`: SHA256 `89082d5f49e703a164ade02661dada643aba60e5eb9f584352c0e0e5fc083c5c`
