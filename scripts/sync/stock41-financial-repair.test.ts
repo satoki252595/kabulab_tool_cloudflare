@@ -14,6 +14,7 @@ import * as projection from "../../src/shared/db/projection-schema.js";
 import { STOCK41_CODES, STOCK41_DATE } from "./stock41-price-repair.js";
 import { STOCK41_FINANCIAL_STATE_DIR, loadStock41FinancialSources, parseStock41FinancialPre, runStock41FinancialRepair, stock41FinancialReadStatement, type FinancialIo, type FinancialSource } from "./stock41-financial-repair.js";
 import type * as Daily from "../../src/cron/daily.js";
+import type { JssAnnualRow } from "../../src/shared/db/jss-financials.js";
 
 // Protocol doubles only: no invented market data is accepted by the real CLI source loader.
 // Shared normal SQL equivalence is tested separately; actual 82 source bytes are checked below when present.
@@ -61,6 +62,17 @@ function setup() {
   const io: FinancialIo = { read, compile, send, annual: async () => new Map(), probeReceiptAbsent: vi.fn(async () => {}), recordReceipt: vi.fn(async () => {}) };
   return { db, dir, out: join(dir, "out.json"), io, read, send };
 }
+// Declared protocol annual input, including an unselected scope/null and a future row.
+function seedAnnual(s: ReturnType<typeof setup>) {
+  const rows: JssAnnualRow[] = [
+    { fiscalPeriodEnd: "2024-03-31", consolidated: "連結", revenue: 80 },
+    { fiscalPeriodEnd: "2025-03-31", consolidated: "連結", revenue: 100 },
+    { fiscalPeriodEnd: "2025-03-31", consolidated: "単体", revenue: null },
+    { fiscalPeriodEnd: "2027-03-31", consolidated: "連結", revenue: 999 },
+  ];
+  for (const row of rows) s.db.prepare("INSERT INTO jss_financials VALUES('1897',?,?,?,'本決算','commercial-ok')").run(row.fiscalPeriodEnd, row.consolidated, row.revenue);
+  s.io.annual = async () => new Map([["1897", rows]]);
+}
 describe("fixed41 normal-snapshot publisher protocol", () => {
   it("atomically updates 4 snapshots, clears zero-result signals only for each stock, and preserves all OHLCV/annual/other stocks", async () => {
     const s = setup(), before = s.db.prepare("SELECT * FROM swing_daily_ohlcv").all(), other = s.db.prepare("SELECT * FROM core_stock_financials WHERE stock_id=42").all();
@@ -82,9 +94,18 @@ describe("fixed41 normal-snapshot publisher protocol", () => {
     expect(s.db.prepare("SELECT close FROM swing_daily_ohlcv WHERE stock_id=1").get()).toEqual({ close: null }); expect(s.db.prepare("SELECT price FROM core_stock_financials WHERE stock_id=1").get()).toEqual({ price: null });
   });
   it("full old-row or annual drift rolls back the whole per-stock batch before signals or any snapshot change", async () => {
-    const s = setup(), send = s.io.send; s.io.send = vi.fn(async batch => { s.db.prepare("INSERT INTO jss_financials VALUES('1897','2025-03-31','連結',1,'本決算','commercial-ok')").run(); await send(batch); });
+    const s = setup(), send = s.io.send; seedAnnual(s);
+    s.io.send = vi.fn(async batch => { s.db.prepare("UPDATE jss_financials SET net_sales=1 WHERE code='1897' AND consolidated='単体'").run(); await send(batch); });
     await expect(runStock41FinancialRepair(source, s.dir, s.out, s.io)).rejects.toThrow(/STOP/); expect(s.io.send).toHaveBeenCalledTimes(1);
     expect(s.db.prepare("SELECT price FROM core_stock_financials WHERE stock_id=1").get()).toEqual({ price: null }); expect(s.db.prepare("SELECT COUNT(*) AS n FROM swing_entry_signals").get()).toEqual({ n: 42 }); expect(s.io.recordReceipt).not.toHaveBeenCalled();
+  });
+  it("nonempty annual input preserves every eligible scope/null and ignores only future periods", async () => {
+    const s = setup(); seedAnnual(s); const annual = s.db.prepare("SELECT * FROM jss_financials").all();
+    const report = await runStock41FinancialRepair(source, s.dir, s.out, s.io); expect(report.applied).toHaveLength(41);
+    expect(s.db.prepare("SELECT * FROM jss_financials").all()).toEqual(annual);
+    const firstGuard = s.send.mock.calls[0][0].find(q => q.sql.includes("FROM jss_financials"))!;
+    expect(JSON.parse(String(firstGuard.params[0]))).toHaveLength(3);
+    expect(JSON.parse(String(firstGuard.params[0]))).toContainEqual({ fiscalPeriodEnd: "2025-03-31", consolidated: "単体", revenue: null });
   });
   it("an absent momentum row is qualified before writing and fully verified after insertion", async () => {
     const s = setup(); s.db.prepare("DELETE FROM p_momentum WHERE stock_id=1").run(); const report = await runStock41FinancialRepair(source, s.dir, s.out, s.io); expect(report.applied).toHaveLength(41);
@@ -105,6 +126,16 @@ describe("fixed41 normal-snapshot publisher protocol", () => {
     rows.push(rows.find(row => row.part === "core_stock_financials")!); expect(() => parseStock41FinancialPre(rows)).toThrow(/cardinality/);
     rows.pop(); const financial = rows.find(row => row.part === "core_stock_financials")!;
     financial.data = JSON.stringify({ ...JSON.parse(String(financial.data)), price: { $real: "Infinity" } }); expect(() => parseStock41FinancialPre(rows)).toThrow();
+    const u = setup(), read = u.io.read; u.io.read = async code => { const pre = await read(code); pre.ohlcv[0].close = "malformed numeric"; return pre; };
+    await expect(runStock41FinancialRepair(source, u.dir, u.out, u.io)).rejects.toThrow(/STOP/); expect(u.send).not.toHaveBeenCalled();
+    expect(readFileSync(`${u.out}.events.jsonl`, "utf8")).not.toContain("held_existing_ohlcv");
+  });
+  it("foreign replay stock_id is rejected before intent and missing out parent leaves no pending or requests", async () => {
+    const s = setup(), compile = s.io.compile; s.io.compile = (snapshot, time) => { const plan = compile(snapshot, time); plan.expectedRows[0].rows[0].stock_id = 42; return plan; };
+    await expect(runStock41FinancialRepair(source, s.dir, s.out, s.io)).rejects.toThrow(/STOP/); expect(s.send).not.toHaveBeenCalled();
+    expect(readFileSync(`${s.out}.events.jsonl`, "utf8")).not.toContain("d1_send_intent");
+    const t = setup(); await expect(runStock41FinancialRepair(source, t.dir, join(t.dir, "missing", "out.json"), t.io)).rejects.toThrow(/output parent/);
+    expect(existsSync(join(t.dir, ".stock41-financial-repair-20261016.pending.json"))).toBe(false); expect(t.io.probeReceiptAbsent).not.toHaveBeenCalled(); expect(t.read).not.toHaveBeenCalled();
   });
   it("real CLI rejects fixed pending before env/source/API, even after sourceDir and out both change", () => {
     const pending = join(STOCK41_FINANCIAL_STATE_DIR, ".stock41-financial-repair-20261016.pending.json"); expect(existsSync(pending)).toBe(false);
@@ -128,8 +159,8 @@ it.skipIf(!existsSync(join(savedDir, "result.json")))("actual accepted 82 source
     const replay = actual.buildStockSnapshotStatements(db as unknown as Parameters<typeof actual.buildStockSnapshotStatements>[0], snapshot, STOCK41_DATE, { writeAnnual: false, runStartedSec: Math.floor(Date.now() / 1000) });
     expect(replay.statements.every(q => q.params.length <= 100 && !/core_stock_annual_financials|swing_daily_ohlcv|delete /i.test(q.sql))).toBe(true);
   }
-  // SQLite protocol DB intentionally has zero JSS annual rows; no claim about live annual qualification.
-  const s = setup();
+  // Explicit protocol JSS rows exercise the normal calculation; no claim about live annual qualification.
+  const s = setup(); seedAnnual(s);
   for (const [i, value] of sources.entries()) {
     const bar = value.raw.ohlcv.at(-1)!;
     expect(bar.adj).not.toBeUndefined(); if (bar.adj === undefined) throw Error("actual source missing adjusted close");

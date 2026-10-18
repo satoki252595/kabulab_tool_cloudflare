@@ -136,12 +136,19 @@ export function stock41FinancialPreflight(pre: FinancialPre): D1BatchStatement[]
 }
 function sortedRows(rows: readonly object[]) { return rows.map(row => JSON.stringify(Object.entries(row).sort(([a], [b]) => a.localeCompare(b)))).sort(); }
 function sameRows(actual: readonly object[], expected: readonly object[]) { assert.deepEqual(sortedRows(actual), sortedRows(expected), "full row-set mismatch"); }
-function checkOhlcv(pre: FinancialPre, source: FinancialSource): void {
-  assert.equal(pre.ohlcvMax, STOCK41_DATE); assert.equal(pre.ohlcv.length, 1);
+function checkOhlcv(pre: FinancialPre, source: FinancialSource): boolean {
+  assert.ok(pre.ohlcvMax === null || typeof pre.ohlcvMax === "string" && /^\d{4}-\d{2}-\d{2}$/.test(pre.ohlcvMax), "malformed OHLCV max date");
+  assert.ok(Array.isArray(pre.ohlcv) && pre.ohlcv.length <= 1, "malformed OHLCV cardinality");
+  for (const row of pre.ohlcv) {
+    assert.ok(Number.isSafeInteger(row.id) && Number(row.id) > 0 && row.stock_id === pre.identity.id, "malformed OHLCV identity");
+    assert.ok(typeof row.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(row.date), "malformed OHLCV date");
+    for (const key of ["open", "high", "low", "close", "volume", "adj"]) assert.ok(row[key] === null || typeof row[key] === "number" && Number.isFinite(row[key]), "malformed OHLCV numeric value");
+  }
   const bar = source.raw.ohlcv.at(-1); assert.ok(bar); assert.equal(bar.date, STOCK41_DATE);
-  for (const key of ["date", "open", "high", "low", "close", "volume", "adj"] as const) assert.equal(pre.ohlcv[0][key], bar[key], "existing OHLCV differs; no overwrite");
+  return pre.identity.is_active === 1 && pre.identity.instrument_type === "equity" && pre.ohlcvMax === STOCK41_DATE && pre.ohlcv.length === 1 &&
+    (["date", "open", "high", "low", "close", "volume", "adj"] as const).every(key => pre.ohlcv[0][key] === bar[key]);
 }
-function assertReplay(replay: Replay): void {
+function assertReplay(replay: Replay, stockId: number): void {
   assert.ok(replay.statements.length >= 4);
   for (const statement of replay.statements) {
     assert.ok(statement.params.length <= 100);
@@ -154,7 +161,7 @@ function assertReplay(replay: Replay): void {
     const names = columns.get(table); assert.ok(names);
     if (table !== "swing_entry_signals") assert.equal(rows.length, 1, "snapshot must be exactly one row before writing");
     const server = table === "core_stock_financials" ? "fetched_at" : table === "rsi_percentile" || table === "swing_stock_indicators" ? "computed_at" : table === "swing_entry_signals" ? "id" : undefined;
-    for (const row of rows) assert.deepEqual(Object.keys(row).sort(), names.filter(name => name !== server).sort(), "new row defaults must be explicitly qualified before writing");
+    for (const row of rows) { assert.equal(row.stock_id, stockId, "replay foreign stock_id"); assert.deepEqual(Object.keys(row).sort(), names.filter(name => name !== server).sort(), "new row defaults must be explicitly qualified before writing"); }
   }
 }
 function checkPost(pre: FinancialPre, post: FinancialPre, replay: Replay, began: number, ended: number): void {
@@ -186,6 +193,7 @@ export async function runStock41FinancialRepair(sources: readonly FinancialSourc
   assert.deepEqual(sources.map(source => source.code), [...STOCK41_CODES]);
   const pending = join(stateDir, `${LATCH}.pending.json`), completed = join(stateDir, `${LATCH}.completed.json`), journal = `${out}.events.jsonl`;
   assert.ok(![pending, completed, out, journal, `${out}.receipt.json`].some(existsSync), "existing fixed-scope evidence; no automatic reentry");
+  assert.ok(existsSync(dirname(resolve(out))) && statSync(dirname(resolve(out))).isDirectory(), "output parent must exist before pending");
   const startedAt = new Date().toISOString(), runStartedSec = Math.floor(Date.now() / 1000);
   saveNew(pending, { scope: "stock41_normal5y_snapshot", sourceResultSha256: STOCK41_CAPTURE_RESULT_SHA, startedAt, out: resolve(out), noReplay: true });
   saveNew(journal, { phase: "start", startedAt });
@@ -196,18 +204,18 @@ export async function runStock41FinancialRepair(sources: readonly FinancialSourc
     for (const source of sources) {
       const pre = await io.read(source.code);
       assert.ok(Number.isSafeInteger(pre.identity.id) && Number(pre.identity.id) > 0);
-      assert.equal(pre.identity.code, source.code); assert.equal(pre.identity.is_active, 1); assert.equal(pre.identity.instrument_type, "equity");
+      assert.equal(pre.identity.code, source.code); assert.ok(pre.identity.is_active === 0 || pre.identity.is_active === 1); assert.ok(pre.identity.instrument_type === null || typeof pre.identity.instrument_type === "string");
       for (const [table, dateColumn] of [["core_stock_financials", "data_date"], ["swing_stock_indicators", "latest_date"], ["p_momentum", "as_of"]]) {
         assert.ok(pre.tables[table].length <= 1);
         for (const row of pre.tables[table]) assert.ok(row[dateColumn] === null || typeof row[dateColumn] === "string" && row[dateColumn] <= STOCK41_DATE, "newer market snapshot must not be rewound");
       }
-      try { checkOhlcv(pre, source); } catch { held.push(source.code); append({ phase: "held_existing_ohlcv", code: source.code, pre }); continue; }
+      if (!checkOhlcv(pre, source)) { held.push(source.code); append({ phase: "held_existing_ohlcv", code: source.code, pre }); continue; }
       const rows = annual.get(source.code); const eligible = rows === undefined ? [] : rows.filter(row => row.fiscalPeriodEnd <= STOCK41_DATE);
       sameRows(pre.annual, eligible);
       const snapshot = buildStockSnapshot(Number(pre.identity.id), source.code, pre.identity.sector as string | null, STOCK41_DATE, source.raw, rows === undefined ? [] : rows, source.chart.capture);
       assert.equal(snapshot.rsiHistoryHold, undefined); assert.equal(snapshot.dataDate, STOCK41_DATE);
       assert.ok(pre.tables.swing_entry_signals.every(row => Number(row.computed_at) < runStartedSec), "newer signals must not be deleted");
-      const replay = io.compile(snapshot, runStartedSec); assertReplay(replay);
+      const replay = io.compile(snapshot, runStartedSec); assertReplay(replay, Number(pre.identity.id));
       const statements = [...stock41FinancialPreflight(pre), { sql: "DELETE FROM swing_entry_signals WHERE stock_id=? AND computed_at<?", params: [Number(pre.identity.id), runStartedSec] }, ...replay.statements];
       assert.ok(statements.every(statement => statement.params.length <= 100 && Buffer.byteLength(statement.sql) <= 100_000));
       const began = Math.floor(Date.now() / 1000);
