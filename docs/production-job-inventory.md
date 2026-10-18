@@ -1,6 +1,6 @@
 # 本番定期処理とSSHでの補完
 
-確認日: 2026-10-18。定期予定の確認対象: main `f3aac29352ccc4e5d326c2bbc1e20119f2b02440` とMac095設定。SSH補完入口も同mainまで確認。
+確認日: 2026-10-18。定期予定の確認対象: main `1c0931ba9d86f6c3f3fa09f5a6d50cb80562d8e8` とMac095設定。SSH補完入口も同mainまで確認。
 時刻はJST、Cloudflareは起動・結果監視、重い取込本体はActionsまたはMacで実行する。
 設定上の予定と、実行成功・全銘柄のデータ充足は別に確認する。
 
@@ -42,19 +42,23 @@ CFの結果確認は株価/VWAP23:35、独立資金フロー23:45、開示20:05�
 
 同日13:18にはSSHをmain `f3aac29352ccc4e5d326c2bbc1e20119f2b02440`へfast-forwardし、同じ10設定・lock・CLI importをHTTP0で確認した。価格単独実行用の`NOTION_MAX_RPS`だけを2.63へ変更し、他の設定と旧envを保持した。価格実行は新しい公式銘柄表と台帳の受入後に行う。
 
+同日13:41にSSH main526の同じNix・lock・設定を確認し、13:45にはlocalの通常FSA再捕捉と価格台帳activationを[通常readerと保存物照合で受入](test-logs/fsa-custody-clock-20261018.md)した。13:47のSSH価格window01は`NODE_PATH`の入口assertで停止し、metadata記録・通常main・pending作成・業務native通信へ未到達、正常価格結果は0である。旧STOPと全保存物は保持し、Nix内で`env -u NODE_PATH`を実行する位置へ訂正した別windowを新releaseで入場させる。設定・入口準備を、価格queueの完了とは呼ばない。
+
 Macの20時・21時の2labelは13:15に095版へ切り替え、既存予定・`RunAtLoad=false`・停止状態と全plistを実確認した。[自然起動の受入は別途](test-logs/body-mac-production-20261018.md)である。
 
 日足の通常全量更新は3,687銘柄中3,685銘柄を更新し、保存原本の通常parserで10/15・10/16それぞれ3,685銘柄に有効バーがあることを確認した。
-523A/641Aは過去バーの欠測でrepair HOLDとなり、旧データを保持した。新価格台帳の有効化は正規の公式銘柄表保管後に別途行う。同じ日足writerをSSHで重複起動せず、必要な保有価格queueの補完をSSHへ移す。
+523A/641Aは過去バーの欠測でrepair HOLDとなり、旧データを保持した。正規の公式銘柄表保管と時計契約修正後、新価格台帳の有効化・通常完全読戻しまで完了した。同じ日足writerをSSHで重複起動せず、必要な保有価格queueの補完をSSHへ移す。
 全履歴RAWのミラー、全市場の再取得、月次処理の一括再実行は、この不足2日を直すための必須作業ではない。
 
 通常Node入口の例（必要設定・排他を確認してから実行する）:
 
 ```sh
-nix develop --command pnpm ingest:vwap-daily
-nix develop --command pnpm ingest:vwap-intra --codes=7531,9311 --range=60d
-nix develop --command pnpm sync:daily:core --stocks-only
+nix develop --command env -u NODE_PATH pnpm ingest:vwap-daily
+nix develop --command env -u NODE_PATH pnpm ingest:vwap-intra --codes=7531,9311 --range=60d
+nix develop --command env -u NODE_PATH pnpm sync:daily:core --stocks-only
 ```
+
+`env -u NODE_PATH`は`nix develop --command`の後に置く。NixのshellHookで再設定された値を子プロセスへ渡す直前に除去するため、Nixの外側で除去するだけでは足りない。
 
 月次のLinux実行は`sync:universe`、`yutai:fetch`、`sync:monthly:core`の順。
 `sync:monthly`はMacのモデル要約も束ねるためLinuxへの一括移管コマンドにしない。
@@ -63,9 +67,11 @@ Pythonの過去提出日補完はリポジトリのNix環境内で`pipeline`へ�
 
 保有価格だけの補完は、既存CLIの`resume-prices`から定期EDINETと同じ価格queue/loaderを1回呼ぶ。
 上限は100明細・5文書・116価格chunk・共有価格読取予算256MiB・新規開始300秒。所有者ZIPの初期読取は別枠で1文書20MiB以下×最大5文書（100MiB以下）であり、256MiBを全HTTP量の上限とはしない。有報一覧/Yahoo取得・L2再構築は行わない。
-出力先の親directoryを用意し、`nix develop --command pnpm exec tsx scripts/notion/shareholdings.ts resume-prices tmp/holdings-prices/price-001.json`で実行する。
+出力先の親directoryを用意し、`nix develop --command env -u NODE_PATH node --import tsx scripts/notion/shareholdings.ts resume-prices tmp/holdings-prices/price-001.json`で実行する。
 保留/続きありは非0終了でも、正常結果と`completed-write.json`がある場合だけ既知の未完として扱う。
 `pending-write.json`や通信結果不明がある場合は、出力名を変えて自動再送せず原記録を保持する。
+
+当日株価だけの限定補完は`stock41-price-repair.ts`を使い、固定41社・10/16のOHLCVだけを対象とする。入力は10/18に通常保管した10年窓の33gzipと受入refs（SHA256 `8adc58c052b734d454430a6e024fb66f7f825fb550ff9cf197a15de1cc2f7311`）で、全gzip/member SHAと通常parser/guardを確認し、原文精度の値を使う。D1では同じ41社を絞り、銘柄同一性・行不存在CAS付きの最大4batch（1batch最大12行）のplain INSERTだけを許す。既存全値同値はwrite0、NULLを含む不同はHOLDで上書きしない。財務断面・RSI・既存の取得時計は更新せず、新receiptの実行時計だけを記録する。本番実行は未実施である。
 
 ## 日足停止報告との照合
 
