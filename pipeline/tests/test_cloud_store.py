@@ -209,6 +209,26 @@ def _store(fake: _FakeS3, bucket: str = "jp-stock-raw", writer: str = "stockStoc
 
 
 class TestR2Store:
+    def test_control_get_keeps_exact_bytes_and_etag_in_one_response(self):
+        import io
+        body = b'{ "status" : "pending" }\n'
+        calls = []
+        fake = _FakeS3()
+        fake.get_object = lambda **kwargs: calls.append(kwargs) or {"Body": io.BytesIO(body), "ETag": '"old"'}
+        value, raw, etag = _store(fake).get_json_with_etag("control", max_bytes=len(body))
+        assert value == {"status": "pending"} and raw == body and etag == '"old"'
+        assert len(calls) == 1
+
+    @pytest.mark.parametrize("body,etag,limit", [(b"{}", None, 2), (b"[]", '"old"', 2),
+                                               (b"not-json", '"old"', 8), (b"{} ", '"old"', 2)])
+    def test_control_get_incomplete_is_not_absent(self, body, etag, limit):
+        import io
+        from jp_stock_pipeline.cloud_store.r2 import R2Error
+        fake = _FakeS3()
+        fake.get_object = lambda **kwargs: {"Body": io.BytesIO(body), "ETag": etag}
+        with pytest.raises(R2Error, match="reconcile禁止"):
+            _store(fake).get_json_with_etag("control", max_bytes=limit)
+
     def test_conditional_claim_completion_and_locked_sdk_model(self):
         import json
         from botocore.session import Session

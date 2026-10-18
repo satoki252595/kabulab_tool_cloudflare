@@ -36,6 +36,7 @@ from ..config import Settings
 from ..contracts.stock_code import parse_stock_code
 from ..models import (
     JST,
+    DataQuality,
     DisclosureRecord,
     FinancialSummaryRecord,
     Provenance,
@@ -1530,9 +1531,6 @@ def _financial_relation_native(client, settings, pre: dict, master: dict,
 def repair_financial_master_relation(client, settings, record: StockMasterRecord, page: dict,
                                      *, raw_bucket, archive: Callable) -> str:
     """空の③主relationだけ。stable R2 pendingは別run/hostからも再PATCHを禁止する。"""
-    from ..licensing import LicenseTag  # noqa: PLC0415
-    from ..rawstore import save_raw  # noqa: PLC0415
-
     _relation_require(parse_stock_code(record.code) == record.code and record.code != "0000"
                       and isinstance(record.edinet_code, str)
                       and bool(re.fullmatch(r"E[0-9]{5}", record.edinet_code)),
@@ -1576,6 +1574,20 @@ def repair_financial_master_relation(client, settings, record: StockMasterRecord
                "raw": raw_identity, "native": native, "started_at": now_jst().isoformat()}
     etag = raw_bucket.put_json_conditional(key, pending)
 
+    return _finish_financial_master_relation(
+        client, settings, pre, image, master, master_image, raw_identity, pending,
+        key, etag, raw_bucket=raw_bucket, archive=archive, pre_payload=pending,
+    )
+
+
+def _finish_financial_master_relation(client, settings, pre, image, master, master_image,
+                                      raw_identity, pending, key, etag, *, raw_bucket, archive, pre_payload):
+    """正常claimと既知PRE拒否reconcileで同じCAS/PATCH/fullPOSTを使う。"""
+    from ..licensing import LicenseTag  # noqa: PLC0415
+    from ..rawstore import save_raw  # noqa: PLC0415
+
+    db, page_id, master_id = settings.db_id("financials"), pending["financial_page_id"], pending["master_page_id"]
+    fp = image["properties"]
     def claimed_image(page, database_id):
         try:
             return _financial_relation_image(page, database_id)
@@ -1585,7 +1597,7 @@ def repair_financial_master_relation(client, settings, record: StockMasterRecord
     def physical(value, phase):
         artifact = save_raw(
             _financial_relation_json(value), source=Source.CALC,
-            datatype=f"financial-master-{phase}", scope=record.code, data_date=now_jst().date(),
+            datatype=f"financial-master-{phase}", scope=pending["code"], data_date=now_jst().date(),
             url="", ext="json", license_tag=LicenseTag(_read_select_name(fp, S.PROP_LICENSE_TAG)),
             base_dir=settings.raw_data_dir,
         )
@@ -1594,10 +1606,10 @@ def repair_financial_master_relation(client, settings, record: StockMasterRecord
             raise RuntimeError("relation PRE/POSTの物理⑤保管が未完。pending保持")
         return {"page_id": archived_id, "sha256": artifact.sha256, "bytes": artifact.size_bytes}
 
-    pre_archive = physical(pending, "pre")
+    pre_archive = physical(pre_payload, "pre")
     current = client.get_page(page_id)
     current_master = client.query_database(settings.db_id("stock_master"),
-                                          filter=stock_master_filter(record.code), strict=True)
+                                          filter=stock_master_filter(pending["code"]), strict=True)
     if (claimed_image(current, db) != image
             or current["last_edited_time"] != pre["last_edited_time"]
             or len(current_master) != 1
@@ -1634,6 +1646,69 @@ def repair_financial_master_relation(client, settings, record: StockMasterRecord
     if raw_bucket.get_json(key) != (completed, True):
         raise RuntimeError("relation completed永続readback不一致。再PATCH禁止")
     return "repaired"
+
+
+
+def reconcile_financial_master_pre_rejection(client, settings, proof: dict, *, raw_bucket,
+                                             archive: Callable) -> str:
+    """明示した既知URL400の旧controlだけを一回CAS消費し、正常tailへ進む。"""
+    from ..licensing import LicenseTag  # noqa: PLC0415
+
+    if settings.dry_run or raw_bucket is None:
+        raise ValueError("reconcileは実CloudStore/明示証跡が必要")
+    code, page_id, key = proof["code"], proof["financialPageId"], proof["controlKey"]
+    pending, body, etag = raw_bucket.get_json_with_etag(key, max_bytes=1024 * 1024)
+    if (hashlib.sha256(body).hexdigest() != proof["oldPendingSha256"]
+            or pending != proof["oldPending"]
+            or _financial_relation_json(pending) != body):
+        raise RuntimeError("旧control原bytesが不一致/消費済み。reconcile再入禁止")
+    pre = client.get_page(page_id)
+    image = _financial_relation_image(pre, settings.db_id("financials"))
+    if image != pending["pre"] or UUID(pre["id"]) != UUID(page_id):
+        raise RuntimeError("旧金融fullPREが変化。reconcile禁止")
+    masters = client.query_database(settings.db_id("stock_master"),
+                                    filter=stock_master_filter(code), strict=True)
+    if len(masters) != 1:
+        raise RuntimeError("reconcile fresh masterが不在/非一意")
+    master = masters[0]
+    master_image = _financial_relation_image(master, settings.db_id("stock_master"))
+    mp = master_image["properties"]
+    master_raw_ids = _read_relation_ids_checked(mp, S.PROP_RAW_RELATION)
+    _relation_require(master_raw_ids is not None and len(master_raw_ids) == 1,
+                      "fresh masterの元Provenanceが不完全")
+    fetched_at = datetime.fromisoformat(_read_date_start(mp, S.PROP_FETCHED_AT))
+    _relation_require(fetched_at.tzinfo is not None and fetched_at <= now_jst(),
+                      "fresh masterの源時計が未資格")
+    data_date = _read_date_start(mp, S.PROP_DATA_DATE)
+    _relation_require(type(mp[S.MASTER_PROP_LISTED]["checkbox"]) is bool,
+                      "fresh masterの上場状態が不明")
+    record = StockMasterRecord(
+        code=_text(mp[S.MASTER_PROP_CODE], "rich_text"),
+        name=_text(mp[S.MASTER_PROP_NAME], "title"),
+        edinet_code=_text(mp[S.MASTER_PROP_EDINET_CODE], "rich_text"),
+        listed=mp[S.MASTER_PROP_LISTED]["checkbox"],
+        provenance=Provenance(
+            source=Source(_read_select_name(mp, S.PROP_SOURCE)),
+            license_tag=LicenseTag(_read_select_name(mp, S.PROP_LICENSE_TAG)),
+            data_date=None if data_date is None else date.fromisoformat(data_date),
+            fetched_at=fetched_at, raw_page_id=master_raw_ids[0],
+            quality=DataQuality(_read_select_name(mp, S.PROP_QUALITY)),
+        ),
+    )
+    raw_identity, native = _financial_relation_native(client, settings, pre, master, record)
+    if (record.code != code or UUID(master["id"]) != UUID(pending["master_page_id"])
+            or raw_identity != pending["raw"] or native != pending["native"]):
+        raise RuntimeError("旧主体/native/原本が不一致。reconcile禁止")
+    consumed = {**pending, "reconcile": {
+        "proof_sha256": proof["proofSha256"], "old_pending_sha256": proof["oldPendingSha256"],
+        "started_at": now_jst().isoformat(),
+    }}
+    # ACK後だけtailへ進む。R2 CAS unknownはoperator STOP（不適用なら旧SHAが残り得る）。
+    new_etag = raw_bucket.put_json_conditional(key, consumed, etag=etag)
+    return _finish_financial_master_relation(
+        client, settings, pre, image, master, master_image, raw_identity, consumed,
+        key, new_etag, raw_bucket=raw_bucket, archive=archive, pre_payload=pending,
+    )
 
 
 def sync_financial_master_relations(client, settings, records: list[StockMasterRecord],

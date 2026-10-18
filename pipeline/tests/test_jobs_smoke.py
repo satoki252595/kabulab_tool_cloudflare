@@ -826,7 +826,8 @@ class TestCommonStrictCustody:
         from argparse import Namespace
 
         ctx = self._ctx(tmp_path, local_ok=True)
-        ctx.args = Namespace(codes=None, limit=None)
+        ctx.args = Namespace(codes=None, limit=None, reconcile_financial_pre=None,
+                             reconcile_financial_pre_sha256=None)
         artifact = self._artifact(tmp_path)
         monkeypatch.setattr(edinet_codelist, "fetch_codelist", lambda settings: artifact)
         monkeypatch.setattr(edinet_codelist, "convert_codelist", lambda a: a)
