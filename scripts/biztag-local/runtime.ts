@@ -10,8 +10,10 @@ export function assertRevision(expected: string, actual: string, dirty: string):
   if (dirty.length > 0) throw new Error("runtimeに追跡対象の変更があります。承認済みmainを使ってください。");
 }
 
-export function preflight(root: string): { revision: string; state: string } {
-  if (process.platform !== "darwin" || process.arch !== "arm64") throw new Error("biztag実行はApple Silicon Mac専用です。");
+export function preflight(root: string, mechanicalOnly = false): { revision: string; state: string } {
+  if (!(process.platform === "darwin" && process.arch === "arm64") && !(process.platform === "linux" && mechanicalOnly === true)) {
+    throw new Error("biztag実行はApple Silicon Mac、明示的な機械処理だけLinux Nixを使用できます。");
+  }
   // 他worktreeの手動実行も、同じprivate .envの実体を通じて同じlockを使う。
   const envFile = realpathSync(join(root, ".env"));
   const envStat = statSync(envFile);
@@ -32,9 +34,9 @@ export function preflight(root: string): { revision: string; state: string } {
 }
 
 /** kernel flockが正。ファイル残存をrunningとせず、プロセス終端で自動解放する。 */
-export async function withBiztagWriter<T>(execute: () => Promise<T>): Promise<T> {
+export async function withBiztagWriter<T>(execute: () => Promise<T>, mechanicalOnly = false): Promise<T> {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-  const { revision, state } = preflight(root);
+  const { revision, state } = preflight(root, mechanicalOnly);
   const python = execFileSync("which", ["python3.12"], { encoding: "utf8" }).trim();
   if (!python.startsWith("/nix/store/")) throw new Error("writer排他にはNixのPython3.12が必要です。");
   // Node自身がFDを保持。Python子のfd3は同じopen file descriptionを共有する。

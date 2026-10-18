@@ -123,6 +123,8 @@ export interface RunSummary {
    */
   billingBlocked: string[];
   qualificationHeld?: string[];
+  /** このrunで実際に39本文を完全検査した銘柄。旧summaryは省略可能、現在runは常に返す。 */
+  textCheckedCodes?: string[];
   /** このrunの有限検査scope。exit0や旧タグ判定率を全補足充足へ転用しない。 */
   fieldCoverage?: { scope: "explicit_codes" | "daily_window"; selectedForTextCheck: number; textChecked: number; textUnchecked: number;
     textMismatched: number; textRepaired: number; metadataRepaired: number; status: "checked_scope_complete" | "partial" | "attention";
@@ -529,6 +531,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     retryExhausted,
     billingBlocked: [...billingBlocked].sort(),
     qualificationHeld: [...new Set(qualificationHeld)].sort(),
+    textCheckedCodes: [...checked].sort(),
     fieldCoverage: { scope: codes === undefined ? "daily_window" : "explicit_codes", selectedForTextCheck: verification.size,
       textChecked: checked.size, textUnchecked: verification.size - checked.size, textMismatched, textRepaired, metadataRepaired,
       status: failures.length > 0 || qualificationHeld.length > 0 ? "attention" : verification.size > checked.size || items.length > processed ? "partial" : "checked_scope_complete",

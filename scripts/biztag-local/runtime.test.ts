@@ -4,10 +4,33 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { assertRevision } from "./runtime.js";
+import { assertRevision, preflight } from "./runtime.js";
 import { localJob } from "./main.js";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
+
+it("Linuxは明示mechanicalOnlyだけ環境資格へ進み、通常/モデル処理と他platformは拒否する", () => {
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const arch = Object.getOwnPropertyDescriptor(process, "arch")!;
+  const state = mkdtempSync(join(tmpdir(), "biztag-platform-boundary-"));
+  try {
+    Object.defineProperty(process, "platform", { value: "linux" });
+    Object.defineProperty(process, "arch", { value: "x64" });
+    expect(() => preflight(state)).toThrow("Apple Silicon Mac");
+    expect(() => preflight(state, false)).toThrow("Apple Silicon Mac");
+    // platformを通過しても既存.env資格は省略しない。秘密ファイルを読まない。
+    expect(() => preflight(state, true)).toThrow("ENOENT");
+    Object.defineProperty(process, "platform", { value: "win32" });
+    expect(() => preflight(state, true)).toThrow("Apple Silicon Mac");
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    expect(() => preflight(state, true)).toThrow("Apple Silicon Mac");
+    Object.defineProperty(process, "arch", { value: "arm64" });
+    expect(() => preflight(state)).toThrow("ENOENT");
+  } finally {
+    Object.defineProperty(process, "platform", platform); Object.defineProperty(process, "arch", arch);
+    rmSync(state, { recursive: true });
+  }
+});
 
 it("優待要約は21時の専用jobで起動し、既存事業タグの時刻と未知job拒否を維持する", () => {
   expect(localJob(undefined)).toEqual(localJob("biztag"));

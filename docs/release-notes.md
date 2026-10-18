@@ -9,6 +9,8 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ## 2026-10-18
 
+- 補足の初回検査を明示`run --mechanical-only`に限りLinux Nixでも実行可能にし、実検査済み銘柄を出力。環境・承認main・排他・journalを維持する。財務再解析のcacheがROA helper改修を見逃す不具合も既存fingerprintへ2sourceを加えて修正。[本番535反映と残りの受入](test-logs/notion-field-coverage-20261018.md#本番反映と初回検査の入口)を記録。
+
 - 補足の基本情報を本文取得と独立して補完し、同期済み39本文も有限窓で機械検査・修復する。実測の未検査・保留を既存Mac/R2 receiptで監視し、終了codeと全列充足を区別。主体確定済みの新しい原本に主マスタrelationを渡し、過去分と根拠不足は[未完了として記録](test-logs/notion-field-coverage-20261018.md)。
 
 - 本番作業（SSH）: 固定41銘柄の財務・RSI・指標・モメンタムと銘柄限定signalを通常CLIで反映し、全PRE/CAS/POST・物理receipt・独立保存物照合を21.427秒で完了。通常coverageは価格・指標・モメンタム各3,687/3,687。新取得元通信・モデル・年次/OHLCV/他銘柄更新0、8303等のHOLDと自然定期の未受入は保持。[実負荷と受入範囲](test-logs/stock41-financial-replay-20261018.md)を記録。

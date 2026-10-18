@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const pipeline = vi.hoisted(() => ({ run: vi.fn(async (_input: unknown) => { throw new Error("NORMAL_PIPELINE_INPUT_CAPTURED"); }) }));
+const writer = vi.hoisted(() => vi.fn((run: () => Promise<void>, _mechanicalOnly: boolean) => run()));
 vi.mock("../src/biztag/pipeline.js", async importOriginal => ({
   ...await importOriginal<object>(), runBiztag: pipeline.run,
 }));
-vi.mock("../../../scripts/biztag-local/runtime.js", () => ({ withBiztagWriter: (run: () => Promise<void>) => run() }));
+vi.mock("../../../scripts/biztag-local/runtime.js", () => ({ withBiztagWriter: writer }));
 const argv = process.argv;
 beforeEach(() => {
   vi.resetModules(); vi.clearAllMocks();
@@ -24,4 +25,17 @@ it.each([{ args: [], expected: undefined }, { args: ["--codes=7247, 7254"], expe
   expect(pipeline.run).toHaveBeenCalledOnce();
   expect(pipeline.run.mock.calls[0][0]).toMatchObject({ codes: expected, limit: 50, mechanicalOnly: true, budgetMs: 720_000 });
   expect(fetch).not.toHaveBeenCalled();
+  expect(writer.mock.calls[0][1]).toBe(true);
+});
+
+it("通常runはLinuxの機械専用資格へ渡さない", async () => {
+  process.argv = [argv[0], "biztag.ts", "run", "--budget-min=12", "--limit=50"];
+  await expect(import("./biztag.js")).rejects.toThrow("NORMAL_PIPELINE_INPUT_CAPTURED");
+  expect(writer.mock.calls[0][1]).toBe(false); expect(fetch).not.toHaveBeenCalled();
+});
+
+it.each(["--allow-model", "--unknown", "--mechanical-only=true"])("未知flag/モデル許可はwriter入場前に拒否する (%s)", async flag => {
+  process.argv = [argv[0], "biztag.ts", "run", "--mechanical-only", flag, "--budget-min=12", "--limit=50"];
+  await expect(import("./biztag.js")).rejects.toThrow("未知の引数/モデル許可");
+  expect(writer).not.toHaveBeenCalled(); expect(pipeline.run).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
 });

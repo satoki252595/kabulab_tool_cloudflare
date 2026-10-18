@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import runpy
 import sqlite3
 import sys
 from dataclasses import replace
@@ -25,6 +26,42 @@ from jp_stock_pipeline.cloud_store.financials import COLUMNS, record_to_row  # n
 from jp_stock_pipeline.cloud_store.schema import _FINANCIALS  # noqa: E402
 from test_financial_context_units import EDINET_CASES, fixture_provenance, fixture_tidy  # noqa: E402
 from jp_stock_pipeline.transform.normalize import tidy_to_financial_record  # noqa: E402
+
+
+@pytest.mark.parametrize("helper_name", ["direct_roa.py", "direct_roa_table.py"])
+def test_roa_helper_change_reparses_cached_success(tmp_path, monkeypatch, helper_name):
+    """実原本の値は不変。補助parserだけの変更でも旧成功を再検証する。"""
+    case = EDINET_CASES[0]
+    record = tidy_to_financial_record(fixture_tidy(case), case["code"], fixture_provenance(case))
+    item = {
+        "page_id": case["page_id"], "old": reparse._record_dict(record),
+        "new": reparse._record_dict(record), "raw_sha256": case["raw_sha256"],
+        "parser_sha256": reparse.PARSER_SHA256,
+    }
+    source, journal = tmp_path / "source.jsonl", tmp_path / "audit.jsonl"
+    source.write_text(json.dumps(item) + "\n")
+    journal.write_text(source.read_text())
+    checked = []
+
+    def cached_item(saved, cache_dir):
+        checked.append(saved["page_id"])
+        return {**saved, "parser_sha256": reparse.PARSER_SHA256, "changes": {}}
+
+    monkeypatch.setattr(reparse, "_cached_item", cached_item)
+    reparse.reparse_cached(source, journal, tmp_path)
+    assert checked == []
+
+    helper = Path(reparse.normalize_module.__file__).with_name(helper_name)
+    read_bytes = Path.read_bytes
+    monkeypatch.setattr(Path, "read_bytes", lambda path: read_bytes(path) + (
+        b"\n# parser source changed\n" if path == helper else b""
+    ))
+    changed = runpy.run_path(reparse.__file__)["PARSER_SHA256"]
+    assert changed != reparse.PARSER_SHA256
+    monkeypatch.setattr(reparse, "PARSER_SHA256", changed)
+    reparse.reparse_cached(source, journal, tmp_path)
+    assert checked == [case["page_id"]]
+    assert reparse._journal_items(journal)[case["page_id"]]["parser_sha256"] == changed
 
 
 def test_parallel_repair_drains_inflight_failure_and_reproves_without_repatch(tmp_path, monkeypatch):

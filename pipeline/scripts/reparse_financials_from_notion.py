@@ -38,13 +38,17 @@ from jp_stock_pipeline.notion.upsert import (
     financial_summary_matches_page,
     financial_summary_properties,
 )
+from jp_stock_pipeline.transform import direct_roa as direct_roa_module
+from jp_stock_pipeline.transform import direct_roa_table as direct_roa_table_module
 from jp_stock_pipeline.transform import normalize as normalize_module
 from jp_stock_pipeline.transform.normalize import derive_disclosure_type, tidy_to_financial_record
 
 MAX_RAW_BYTES = 64 * 1024 * 1024
 MAX_EXPANDED_BYTES = 128 * 1024 * 1024
 PARSER_SHA256 = hashlib.sha256(
-    Path(convert_module.__file__).read_bytes() + b"\0" + Path(normalize_module.__file__).read_bytes()
+    b"\0".join(Path(module.__file__).read_bytes() for module in (
+        convert_module, normalize_module, direct_roa_module, direct_roa_table_module,
+    ))
 ).hexdigest()
 
 
