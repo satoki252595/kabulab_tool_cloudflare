@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import type { SupplementRow, SupplementRowInput } from "../../../../src/shared/notion-archive/index.js";
 import { type JevAskResult, type JevClient } from "../../../../src/shared/jev/index.js";
-import { INPUT_RECEIPT_PREFIX, readInputReceipt, readTextSyncReceipt, withInputReceipt, withTextSyncReceipt, type WorkItem } from "./plan.js";
+import { INPUT_RECEIPT_PREFIX, planWork, readInputReceipt, readTextSyncReceipt, withInputReceipt, withTextSyncReceipt, type WorkItem } from "./plan.js";
 import { TEXT_SECTIONS } from "../services/edinet/text-sections.js";
 import { PREFILTER_SECTIONS } from "./prefilter.js";
 import { buildSupplementProperties } from "../../../../src/shared/notion-archive/stock-supplement.js";
@@ -145,6 +145,17 @@ function jevAnswering(answers: Record<string, number>): JevClient {
 }
 
 describe("processStock", () => {
+  it("法人格/幅の表示差では旧非空titleを送信せず、coreの厳密な書込前資格を維持", async () => {
+    const latest: LatestDoc = { stockCode: "618A", companyName: "ＫＯＭＰＥＩＴＯ", sector33: null, doc: null };
+    const row = rowOf({ stockCode: latest.stockCode, companyName: "（株）KOMPEITO", sector33: null, masterLinked: false, textStatus: "本文なし", tagStatus: "本文なし" });
+    const [item] = planWork([latest], [row], TODAY);
+    const current = vi.fn(async () => {}), source = vi.fn(async () => { throw Error("no document must not read body"); });
+    const { deps, updated } = makeDeps({ assertLatestDocCurrent: current, readStockTextRow: source });
+    expect(await processStock(item, deps)).toMatchObject({ metadataRepaired: true, qualificationHeld: true });
+    expect(updated[0].input).toEqual({ docId: null, masterPageId: "master-page-1" });
+    expect(current).toHaveBeenCalledWith("618A", null, { companyName: "ＫＯＭＰＥＩＴＯ", sector33: null });
+    expect(source).not.toHaveBeenCalled(); expect(row.companyName).toBe("（株）KOMPEITO");
+  });
   it("本文なしでも基本metaだけ補完し、正規null/sourceguard・旧HOLD/タグ/receiptを保持", async () => {
     const row = rowOf({ docId: null, sector33: null, masterLinked: false, textStatus: "本文なし", tagStatus: "本文なし", judgeInput: null });
     const current = vi.fn(async () => {}), source = vi.fn(async () => { throw Error("no document must not read body"); });
@@ -176,13 +187,23 @@ describe("processStock", () => {
     const source = vi.fn(async () => [{ sectionKey: "business", itemName: "事業の内容", text: OKUMA_BUSINESS_TEXT }]), ask = vi.fn();
     const { deps, updated, evidenceCalls } = makeDeps({ readSupplementRowFully: async () => target, readStockTextRow: source, jevClient: { askNoul: ask } });
     const item = itemOf({ kind: "verify_text", row });
-    expect(await processStock(item, deps)).toMatchObject({ textChecked: true, textMismatch: true, textRepaired: true, outcome: "updated" });
+    const repaired = await processStock(item, deps);
+    expect(repaired).toMatchObject({ textChecked: true, textMismatch: true, textRepaired: true, outcome: "updated" });
+    expect(repaired.textEmptySections).toEqual(TEXT_SECTIONS.filter(({ key }) => key !== "business").map(({ title }) => title));
     expect(updated[0].input.texts?.["事業の内容"]).toBe(OKUMA_BUSINESS_TEXT); expect(evidenceCalls[0].block).toBeUndefined(); expect(updated[0].input.upstream).toBeUndefined(); expect(ask).not.toHaveBeenCalled();
     target = { ...target, judgeInput: updated[0].input.judgeInput!, texts: Object.fromEntries(raw.map(([title, text]) => [title, text === null ? "" : text])) };
     updated.length = 0;
     expect(await processStock({ ...item, row: target }, deps)).toMatchObject({ textChecked: true, textMismatch: false, outcome: "skipped" }); expect(updated).toHaveLength(0); expect(source).toHaveBeenCalledOnce();
     target = { ...target, texts: Object.fromEntries(TEXT_SECTIONS.map(({ title }) => [title, ""])) }; source.mockResolvedValue([{ sectionKey: "business", itemName: "事業の内容", text: KYOKUYO_BUSINESS_TEXT }]);
-    expect(await processStock({ ...item, row: target }, deps)).toMatchObject({ textChecked: true, textMismatch: true, textRepaired: false, qualificationHeld: true }); expect(updated).toHaveLength(0);
+    const held = await processStock({ ...item, row: target }, deps);
+    expect(held).toMatchObject({ textChecked: true, textMismatch: true, textRepaired: false, qualificationHeld: true }); expect(updated).toHaveLength(0);
+    expect(held.textEmptySections).toEqual(TEXT_SECTIONS.map(({ title }) => title)); // HOLDでは実GETした現在値だけ。
+    target = { ...target, masterLinked: false };
+    const sourceCalls = source.mock.calls.length;
+    expect(await processStock({ ...item, row: { ...target, masterLinked: true } }, deps)).toMatchObject({
+      textChecked: true, qualificationHeld: true, textEmptySections: TEXT_SECTIONS.map(({ title }) => title),
+    });
+    expect(source).toHaveBeenCalledTimes(sourceCalls); expect(updated).toHaveLength(0);
   });
 
   it("9273実U+200B単一節の投影は原39 SHAを保持し、明示再資格で別送信SHAと実readbackを照合。再実行はNOOP", async () => {

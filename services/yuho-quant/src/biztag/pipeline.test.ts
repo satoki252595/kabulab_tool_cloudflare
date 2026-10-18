@@ -185,6 +185,7 @@ describe("runBiztag dry-run スコープ", () => {
       thresholds: { yesMin: 0.8, noMax: 0.2 }, model: CLEF_MODEL });
     expect(summary.qualificationHeld).toEqual([latest.stockCode]);
     expect(summary.textCheckedCodes).toEqual([]);
+    expect(summary.textEmptyCounts).toEqual(Object.fromEntries(TEXT_SECTIONS.map(({ title }) => [title, 0])));
     expect(summary.fieldCoverage).toMatchObject({ selectedForTextCheck: 1, textChecked: 0, textUnchecked: 1,
       metadataRepaired: 1, status: "attention", wholeSupplementComplete: false });
     expect(notionMocks.replaceEvidenceBlock.mock.calls[0][2]).toEqual({ docId: null, sector33: latest.sector33, masterPageId: "declared-master-api-id" });
@@ -463,6 +464,7 @@ describe("runBiztag — 保存済みマスタの参照", () => {
     expect(summary.countsByKind.verify_text).toBe(1);
     expect(summary.fieldCoverage).toMatchObject({ textChecked: 1, textUnchecked: 0, textMismatched: 0, textRepaired: 0, wholeSupplementComplete: false });
     expect(summary.textCheckedCodes).toEqual(["6103"]);
+    expect(summary.textEmptyCounts).toEqual(Object.fromEntries(TEXT_SECTIONS.map(({ title }) => [title, 1])));
     expect(summary.coverage.judged).toBe(1);
     expect(notionMocks.loadSupplementRows).toHaveBeenCalledTimes(1);
     expect(notionMocks.loadSupplementRows.mock.calls[0]?.[2]).toBeUndefined();

@@ -75,6 +75,28 @@ function planSingle(
 }
 
 describe("planWork (保存タグを再利用し、不足だけ補完)", () => {
+  it.each([
+    ["625A", "（株）Skyfall", "Ｓｋｙｆａｌｌ"],
+    ["621A", "（株）オーディオストック", "オーディオストック"],
+    ["618A", "（株）KOMPEITO", "ＫＯＭＰＥＩＴＯ"],
+    ["623A", "（株）ベルテックス", "ベルテックス"],
+    ["627A", "akippa（株）", "ａｋｉｐｐａ"],
+    ["619A", "（株）オリバー", "オリバー"],
+  ])("実保存%sの表示差はmeta補完を妨げず、保存titleを保持", (stockCode, savedName, coreName) => {
+    // 2026-10-18受入済thin metadataの表示名だけを投影。sectorの分類値は作らない。
+    const row = rowOf({ stockCode, companyName: savedName, sector33: null, masterLinked: false });
+    expect(planSingle(latestOf({ stockCode, companyName: coreName, sector33: null, doc: null }), row)).toMatchObject({
+      kind: "sync_metadata", basicMetadataOnly: true, qualificationHeld: true, row: { companyName: savedName },
+    });
+    const doc = latestDocOf();
+    const tagged = { ...row, docId: doc.docId, tagDoc: `${doc.docId} ${doc.periodEnd}`, tagStatus: "判定済" as const, vocabVersion: "v1",
+      judgeInput: withTextSyncReceipt(null, { docId: doc.docId, textPageId: doc.notionDocPageId!, textsSha256: "e".repeat(64) }) };
+    expect(planSingle(latestOf({ stockCode, companyName: coreName, sector33: null }), tagged).kind).toBe("sync_metadata");
+  });
+  it.each(["株式会社別会社", "Sky株式会社fall", "株式会社（株）Skyfall"])("別名/内部法人格/複数法人格を表示同値にしない (%s)", companyName => {
+    const row = rowOf({ stockCode: "625A", companyName, sector33: null, masterLinked: false });
+    expect(planSingle(latestOf({ stockCode: "625A", companyName: "Ｓｋｙｆａｌｌ", sector33: null, doc: null }), row)).toMatchObject({ kind: "skip", qualificationHeld: true });
+  });
   it("通常は50以下の巡回窓、明示scopeは全件を選び、欠落メタだけでも再選定する", () => {
     const latest = Array.from({ length: 120 }, (_, i) => latestOf({ stockCode: String(1000 + i) }));
     expect(textVerificationCodes(latest, TODAY, false).size).toBe(50);
