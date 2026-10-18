@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { quarantineSavedHoldingSource, publishVerifiedShareholdings } from "./shareholdings.js";
+import { HOLDINGS_DESCRIPTION, quarantineSavedHoldingSource, publishVerifiedShareholdings } from "./shareholdings.js";
 import { quarantineSavedHoldings } from "../../../scripts/notion/shareholdings.js";
 import { notionRequest } from "./client.js";
 import { recordPrimaryData, queryUniqueRow } from "./archive.js";
@@ -27,6 +27,9 @@ vi.mock("./env.js", async original => ({ ...await original<typeof import("./env.
 const base = new URL("../../../services/yuho-quant/src/tests/fixtures/holdings-owner-quarantine/", import.meta.url);
 const bytes = (name: string) => readFileSync(new URL(name === "208A-S100Z0JO.zip" ? "../holdings-largest-holder/208A-S100Z0JO.zip" : name, base));
 const fixture = JSON.parse(bytes("snapshot.json").toString());
+// Declared current-server schema projection; original snapshot bytes/SHA and business values are unchanged.
+fixture.schema.properties["価格状態"].formula.expression = 'if(prop("価格照合済"), "期末参考時価（期末株数×採用終値）", "未取得（価格・通貨・株数単位の照合未成立）")';
+for (const part of fixture.schema.description) { part.plain_text = HOLDINGS_DESCRIPTION; part.text.content = HOLDINGS_DESCRIPTION; }
 const sha = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 type Page = typeof fixture.expectedSource;
 let page: Page, rows: Page[], fault: string | undefined, archives: Array<{ pageId: string; filename: string; bytes: Uint8Array }>;
@@ -130,6 +133,10 @@ describe("実208Aの明示主体保留", () => {
     fault = kind; await expect(quarantineSavedHoldingSource(args())).rejects.toThrow();
     expect(writes.length).toBe(kind === "physical-PRE" || kind === "drift-after-PRE" ? 0 : kind === "source-PATCH" || kind === "physical-POST" ? 5 : 1);
   });
+  it("old original schema cannot bypass the current migrated schema", async () => {
+    const input = args(); input.schema = JSON.parse(bytes("snapshot.json").toString()).schema;
+    await expect(quarantineSavedHoldingSource(input)).rejects.toThrow(); expect(writes).toHaveLength(0); expect(archives).toHaveLength(0);
+  });
   it("自動publisherは完了sourceを保留へ降格しない", async () => {
     await expect(publishVerifiedShareholdings({ sourceDb, source: fixture.source, ownerName: fixture.ownerName, archivePageId: page.id, zip: bytes("208A-S100Z0JO.zip"), maxRows: 4 }))
       .rejects.toThrow("確定sourceを解析保留で戻しません");
@@ -138,7 +145,8 @@ describe("実208Aの明示主体保留", () => {
   it.each(["first-PATCH", "first-PATCH-before-commit"])("通常CLIは%sのcanonical onceを残し、別out/PREコピーでも再送を拒否", async failure => {
     temp = mkdtempSync(join(tmpdir(), "holdings-quarantine-")); process.chdir(temp);
     writeFileSync(".env", "", { mode: 0o600 }); writeFileSync("source.zip", bytes("208A-S100Z0JO.zip"));
-    for (const name of ["snapshot.json", "original-intent.json", "original-acceptance.json"]) writeFileSync(name, bytes(name));
+    for (const name of ["original-intent.json", "original-acceptance.json"]) writeFileSync(name, bytes(name));
+    writeFileSync("snapshot.json", JSON.stringify(fixture)); // declared migrated schema; not a native snapshot claim.
     const order = { kind: "holding-owner-quarantine-writer-order", source: fixture.source, archivePageId: page.id,
       allConflictingActorsTerminal: true, exclusiveSourceWriterReserved: true, notAfter: new Date(Date.now() + 60_000).toISOString() };
     writeFileSync("order.json", JSON.stringify(order));

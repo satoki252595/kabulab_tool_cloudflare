@@ -28,4 +28,16 @@ describe("private価格参照の原本束縛", () => {
     expect(priceSnapshotSchema.safeParse({ ...base, members: { "7203.T": { ...ref, url: "https://private.invalid/" } } }).success).toBe(false);
     expect(priceSnapshotSchema.safeParse({ ...base, members: { "1301.T": ref } }).success).toBe(false);
   });
+  it("旧snapshot互換を保ち、新coverageはaccepted member集合と厳密一致させる", () => {
+    const ref = referenceFromArchivedParts([part], proof);
+    const base = { version: 1, snapshotId: "123.1", sessionDate: "2026-10-14", createdAt: proof.observedAt, codeList: ref.file, members: { "7203.T": ref } };
+    const coverage = { outcomes: { "7203": "accepted", "6758": "error", "1301": "empty" } };
+    expect(priceSnapshotSchema.parse({ ...base, coverage })).toMatchObject({ coverage });
+    for (const invalid of [{ outcomes: { "7203": "error" } }, { outcomes: { "7203": "accepted", "6758": "accepted" } },
+      { outcomes: { "7203": "accepted", "6758": "unknown" } }, { outcomes: { "7203": "accepted" }, ignored: true }]) {
+      expect(priceSnapshotSchema.safeParse({ ...base, coverage: invalid }).success).toBe(false);
+    }
+    expect(priceSnapshotSchema.parse(base)).toEqual(base);
+  });
+
 });

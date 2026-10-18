@@ -874,6 +874,13 @@ export function renderBenefitFacts(facts: PublicBenefitFacts | null, amount: num
   const combination = { allowed: "併用可の記載あり（対象未確認）", not_allowed: "併用不可の記載あり（対象未確認）", unverified: "併用可否は未確認" }[facts.combination];
   const reasons = facts.valueStatus === "source_amount_qualified" && amount === null
     ? "掲載額の反映は未確認" : facts.valueReasons.map(reason => VALUE_REASON_LABELS[reason]).join("・");
+  const registry = facts.version === 5 ? facts.conditionStructure.ast.registry : undefined;
+  const registryText = registry === undefined ? "" : registry.ast.clauses.map(clause => {
+    if (clause.kind === "holding_definition") return `掲載の${clause.holdingPeriod}継続保有の定義は連続${clause.minimumConsecutiveRecords}回以上（何の記録かはこの行では未確認）`;
+    const dates = clause.recordDates.map(date => `${date.month}月${date.day === "month_end" ? "末日" : `${date.day}日`}`).join("・");
+    if (clause.kind === "same_name_holding") return `毎年${dates}の基準日時点で、同一名義で${clause.holdingPeriod}継続保有`;
+    return `${clause.recurrence === "annual" ? "毎年" : "年間の頻度は未記載、基準日"}${dates}の株主名簿に、同一株主番号で${clause.minimumShares === null ? "" : `${clause.minimumShares.toLocaleString("ja-JP")}株以上の保有を`}連続${clause.minimumConsecutiveRecords}回以上${clause.entryMeaning === "listed" ? "記載" : "記録"}`;
+  }).join("。");
   const structure = facts.version === 5
     ? `${[facts.conditionStructure.ast.tiers.length > 0 ? `掲載行の対応: ${facts.conditionStructure.ast.tiers.map(tier => `${tier.holdingPeriod}は${tier.listedYen.toLocaleString("ja-JP")}円${tier.notation}`).join("、")}` : "", facts.conditionStructure.ast.combinationClauses.map(clause => `券の利用時に${clause.counterpart === "other_coupon" ? "他の券" : "他の割引"}との併用${clause.allowed ? "可" : "不可"}の記載`).join("、")].filter(text => text.length > 0).join("。")}。追加条件は${facts.conditionStructure.ast.remainingConditionLines}行が未解析です。期間の重なり・株数・名義・名簿・本人への適用は未確認です。掲載額は合算せず、年間額や評価額には換算しません`
     : facts.version === 4
@@ -884,7 +891,8 @@ export function renderBenefitFacts(facts: PublicBenefitFacts | null, amount: num
     ? `掲載一覧の${facts.conditionStructure.ast.options.length}選択肢から${facts.conditionStructure.ast.take}点を選択（選択肢の掲載額は評価額・合計額ではありません）`
     : "構造は未解析です（記載がないと確認したものではありません）";
   return `<details><summary>適用条件・金額の根拠・出典</summary>
-    <p>${termTip("掲載条件の対応", "掲載文で全文対応した期間と特典、名簿の記載回数や選択点数だけを表示し、本人への適用・会社の公式確認・掲載額の合算を認めるものではありません。株主名簿は会社が株主の氏名や保有株数等を登録する名簿で、名義は登録された名前、連続記録は記録が途切れないことです。対応済み以外の複数の保有期間・株数段階・併用の構造は未解析です。")}: ${h(structure)}</p>
+    <p>${termTip("掲載条件の対応", "掲載文から確実に対応づけた期間と特典、名簿の記載回数や選択点数を表示します。本人への適用・会社の公式確認・掲載額の合算を認めるものではありません。株主名簿は会社が株主の氏名や保有株数等を登録する名簿で、名義は登録された名前、連続記録は記録が途切れないことです。対応済み以外の複数の保有期間・株数段階・併用の構造は未解析です。")}: ${h(structure)}</p>
+    ${registry === undefined ? "" : `<p>${termTip("名簿・名義の条件", "株主番号は会社が名簿管理に使う番号です。同じ名前でも番号が変わる場合があり、同一名義と同一株主番号は別の条件です。期間との対応や株数条件も掲載元で確認してください。")}: ${h(registryText)}。この定義欄の残り${registry.ast.remainingSectionLines}行は未解析です。本人への適用は未確認です。</p>`}
     <p>${termTip("期間・保有の記載", "掲載中の期間や保有条件の表記です。預金などの利用期間と、株を持ち続ける期間は異なります。対象は掲載元で確認してください。")}: ${h(holding)}</p>
     <p>選択: ${facts.choice ? "選択に関する記載あり（選択肢を合算しないでください）" : "掲載に記載なし"} / 抽選: ${facts.lottery ? "記載あり（対象は掲載元で確認）" : "掲載に記載なし"} / 申込・応募: ${facts.application ? "記載あり（必要性・対象は掲載元で確認）" : "掲載に記載なし"}</p>
     <p>${termTip("併用", "何を組み合わせられるかに関する条件です。券の利用時の併用と、複数の優待を同時に受け取ることは異なります。対象は掲載元で確認してください。")}: ${h(combination)}。銘柄全体の合計額は未確認です。</p>

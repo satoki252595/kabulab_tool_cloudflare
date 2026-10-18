@@ -1,10 +1,11 @@
 /** 実コードリストと構造検証用chartで、時点・通貨・銘柄・分割の境界を検証。 */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
 import { exactLegalName, HoldingPriceIssuerMismatch, HoldingsPriceIndex, parseHoldingsCodeList, qualifyHoldingValuation, type ArchivedSource } from "../services/edinet/shareholdings-valuation.js";
 import type { OfficialIssuerEnglishName } from "../services/edinet/shareholdings-issuer-names.js";
+import { parseShareholdingsData } from "../services/edinet/shareholdings.js";
 import type { Shareholding } from "../services/edinet/shareholdings.js";
 
 const hash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
@@ -119,6 +120,16 @@ describe("保有明細の期末参考時価", () => {
     expect((await qualify(source({ priceDate: "2026-06-29" }))).status).toBe("unavailable");
     expect((await qualify(source({ duplicate: true }))).status).toBe("unavailable");
   });
+  it("公式休業日は市場sessionと期末株数の時点を分離し、営業日の欠測や必要session欠測では遡及しない", async () => {
+    // Declared protocol projection; not a new actual 7203 market observation.
+    const input = { holding, fiscalYearEnd: "2026-05-31", catalog };
+    const result = await qualifyHoldingValuation({ ...input, prices: [source({ priceDate: "2026-05-29" })] });
+    expect(result).toMatchObject({ status: "qualified", date: "2026-05-29", price: 100, value: 1200,
+      priceSource: { evaluationDate: "2026-05-31", sharesAsOf: "2026-05-31", priceAsOf: "2026-05-29", marketCalendar: { closedDates: ["2026-05-31", "2026-05-30"], calendarSources: [expect.objectContaining({ readback: true })] } } });
+    expect(await qualifyHoldingValuation({ ...input, prices: [source({ priceDate: "2026-05-28" })] })).toMatchObject({ status: "unavailable" });
+    expect(await qualify(source({ priceDate: "2026-06-29" }))).toMatchObject({ status: "unavailable", reason: expect.stringContaining("市場営業日") });
+    expect(await qualifyHoldingValuation({ ...input, fiscalYearEnd: "2025-11-30", prices: [source({ priceDate: "2025-11-28" })] })).toMatchObject({ status: "unavailable", reason: expect.stringContaining("公式カレンダー") });
+  });
   it("期末後のsplitも、法的日付/株数単位が未確認の期末前splitも補正せず保留する", async () => {
     expect((await qualify(source({ splitDate: "2026-07-01" }))).status).toBe("unavailable");
     expect(await qualify(source({ splitDate: "2026-06-29" }))).toMatchObject({ status: "unavailable", reason: expect.stringContaining("法的分割日") });
@@ -178,4 +189,27 @@ describe("保有明細の期末参考時価", () => {
     try { index.candidates("7203.T"); } catch (error) { expect(error).toBe(firstError); }
     await expect(qualifyHoldingValuation({ holding, fiscalYearEnd: "2026-06-30", catalog, prices: index })).rejects.toThrow("SHA");
   });
+});
+
+// Actual private full bodies stay outside Git. This case is skipped in CI when the operator corpus is absent.
+const HOLIDAY_SAVED = new URL("../../../../tmp/feature-audit-20261018/holdings-rights-needed-current-v1/price-first-source-preflight-v1/", import.meta.url);
+it.skipIf(!existsSync(new URL("result.private.json", HOLIDAY_SAVED)))("actual2502 same immutable 10-row source recovers only three no-split holiday prices", async () => {
+  const before = JSON.parse(readFileSync(new URL("result.private.json", HOLIDAY_SAVED), "utf8"));
+  const active = JSON.parse(readFileSync(new URL("../price-active-readonly-v1.private.json", HOLIDAY_SAVED), "utf8")).snapshot;
+  const zip = readFileSync(new URL("source.zip", HOLIDAY_SAVED)); expect(hash(zip)).toBe(before.zipSha256);
+  const parsed = parseShareholdingsData(zip, before.source); expect(parsed.status).toBe("ok"); if (parsed.status !== "ok") throw new Error("actual source no longer qualified");
+  const codes = readFileSync(new URL("codes.private.bin", HOLIDAY_SAVED)); expect(hash(codes)).toBe(active.codeList.sha256);
+  const actualCatalog = parseHoldingsCodeList({ ...active.codeList, bytes: codes });
+  const prices: ArchivedSource[] = before.prices.map((p: ArchivedSource, i: number) => {
+    const bytes = readFileSync(new URL(`price-${i}.private.gz`, HOLIDAY_SAVED)); expect(hash(bytes)).toBe(p.sha256);
+    const members = active.members as Record<string, {file: {filename: string; sha256: string}; bodySha256:string; bodyBytes:number; receivedAt:string}>;
+    return { ...p, bytes, priceMembers: Object.fromEntries(Object.entries(members).filter(([,ref]) => ref.file.filename === p.filename && ref.file.sha256 === p.sha256).map(([symbol,ref]) => [symbol,{bodySha256:ref.bodySha256,bodyBytes:ref.bodyBytes,receivedAt:ref.receivedAt}])) };
+  });
+  const index = new HoldingsPriceIndex(prices), after = [];
+  for (const holding of parsed.holdings) after.push(await qualifyHoldingValuation({ holding, fiscalYearEnd:before.source.fiscalYearEnd, catalog:actualCatalog, prices:index }));
+  expect(after.filter(v=>v.status==="qualified").map(v=>({code:v.identity.code,price:v.price,value:v.value,date:v.date})))
+    .toEqual([{code:"4502",price:4835,value:483500,date:"2025-12-30"},{code:"4523",price:4660,value:466000,date:"2025-12-30"},{code:"2809",price:4326,value:432600,date:"2025-12-30"}]);
+  for (const result of after) if (result.status === "qualified") expect(result.priceSource).toMatchObject({ evaluationDate:"2025-12-31",sharesAsOf:"2025-12-31",priceAsOf:"2025-12-30",marketCalendar:{calendarSources:[expect.objectContaining({readback:true}),expect.objectContaining({readback:true}),expect.objectContaining({readback:true})]} });
+  expect(before.valuations.every((v:{result:{status:string}})=>v.result.status==="unavailable")).toBe(true);
+  expect(parsed.holdings).toHaveLength(10);
 });

@@ -63,8 +63,24 @@ export type BenefitTierLiterals = {
   ast: {
     tiers: { ordinal: number; holdingPeriod: string; listedYen: number; notation: "相当" | "分" }[];
     combinationClauses: { scope: "coupon_use"; counterpart: "other_discount" | "other_coupon"; allowed: boolean }[];
+    registry?: BenefitRegistryStructure;
     remainingConditionLines: number;
   };
+};
+
+export type BenefitRegistryDate = { month: number; day: number | "month_end" };
+export type BenefitRegistryClause =
+  | { kind: "holding_definition"; holdingPeriod: string; minimumConsecutiveRecords: number; recordObject: "unspecified" }
+  | { kind: "registry_requirement"; identity: "shareholder_number"; recordDates: BenefitRegistryDate[];
+    recurrence: "annual" | "unprovided"; minimumConsecutiveRecords: number; minimumShares: number | null; entryMeaning: "recorded" | "listed" }
+  | { kind: "same_name_holding"; identity: "registered_name"; recordDates: BenefitRegistryDate[]; holdingPeriod: string; recurrence: "annual" };
+
+export type BenefitRegistryStructure = {
+  status: "literal_extracted";
+  rule: "holding-registry-clauses-v1";
+  sourceSha256: string;
+  applicability: "unverified";
+  ast: { clauses: BenefitRegistryClause[]; remainingSectionLines: number; remainingDescriptionLines: number };
 };
 
 export type PublicBenefitFacts = ({ version: 1 } | { version: 2; conditionStructure: BenefitConditionStructure }
@@ -101,6 +117,43 @@ function record(value: unknown, keys: string[]): Record<string, unknown> {
     throw new Error("公開条件DTOのキーが不正です");
   }
   return value as Record<string, unknown>;
+}
+const positiveInteger = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+
+function assertBenefitRegistryStructure(value: unknown, sourceSha256: string): asserts value is BenefitRegistryStructure {
+  const structure = record(value, ["status", "rule", "sourceSha256", "applicability", "ast"]);
+  const ast = record(structure.ast, ["clauses", "remainingSectionLines", "remainingDescriptionLines"]);
+  if (structure.status !== "literal_extracted" || structure.rule !== "holding-registry-clauses-v1" || structure.sourceSha256 !== sourceSha256 ||
+      structure.applicability !== "unverified" || !Array.isArray(ast.clauses) || ast.clauses.length === 0 || ast.clauses.length > 32 ||
+      ![ast.remainingSectionLines, ast.remainingDescriptionLines].every(v => typeof v === "number" && Number.isSafeInteger(v) && v >= 0) ||
+      (ast.remainingSectionLines as number) > (ast.remainingDescriptionLines as number)) throw new Error("掲載名簿条件の構造が不正です");
+  for (const value of ast.clauses) {
+    const kind = typeof value === "object" && value !== null && "kind" in value ? value.kind : undefined;
+    if (kind === "holding_definition") {
+      const clause = record(value, ["kind", "holdingPeriod", "minimumConsecutiveRecords", "recordObject"]);
+      if (typeof clause.holdingPeriod !== "string" || !/^(?:[1-9][0-9]*年|半年|[1-9][0-9]*か月)以上$/.test(clause.holdingPeriod) ||
+          !positiveInteger(clause.minimumConsecutiveRecords) || clause.recordObject !== "unspecified") throw new Error("継続回数の掲載定義が不正です");
+      continue;
+    }
+    const named = kind === "same_name_holding";
+    const clause = record(value, named ? ["kind", "identity", "recordDates", "holdingPeriod", "recurrence"] :
+      ["kind", "identity", "recordDates", "recurrence", "minimumConsecutiveRecords", "minimumShares", "entryMeaning"]);
+    if (!Array.isArray(clause.recordDates) || clause.recordDates.length !== (named ? 1 : 2)) throw new Error("掲載基準日の件数が不正です");
+    for (const value of clause.recordDates) {
+      const date = record(value, ["month", "day"]);
+      if (!positiveInteger(date.month) || date.month > 12 ||
+          (date.day !== "month_end" && (!positiveInteger(date.day) || date.day > [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][date.month - 1]!))) throw new Error("掲載基準日が不正です");
+      if (named && date.day !== "month_end") throw new Error("掲載同名義の基準日が不正です");
+    }
+    if (new Set(clause.recordDates.map(value => { const date = record(value, ["month", "day"]); return JSON.stringify([date.month, date.day]); })).size !== clause.recordDates.length) throw new Error("掲載基準日が重複しています");
+    if (named) {
+      if (clause.identity !== "registered_name" || clause.recurrence !== "annual" || typeof clause.holdingPeriod !== "string" ||
+          !/^(?:[1-9][0-9]*年|半年|[1-9][0-9]*か月)以上$/.test(clause.holdingPeriod)) throw new Error("掲載同名義条件が不正です");
+    } else if (kind !== "registry_requirement" || clause.identity !== "shareholder_number" || !positiveInteger(clause.minimumConsecutiveRecords) ||
+        (clause.minimumShares === null ? clause.recurrence !== "annual" || clause.entryMeaning !== "recorded"
+          : !positiveInteger(clause.minimumShares) || clause.recurrence !== "unprovided" || clause.entryMeaning !== "listed") ||
+        clause.recordDates.some(value => { const date = record(value, ["month", "day"]); return (date.day === "month_end") !== (clause.minimumShares !== null); })) throw new Error("掲載株主番号・名簿条件が不正です");
+  }
 }
 const iso = (v: unknown): boolean => v === null || (typeof v === "string" &&
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(v) &&
@@ -201,17 +254,23 @@ export function parsePublicBenefitFacts(value: unknown, code?: string): PublicBe
   }
   if (facts.version === 5) {
     const structure = record(facts.conditionStructure, ["status", "rule", "sourceSha256", "applicability", "ast"]);
-    const ast = record(structure.ast, ["tiers", "combinationClauses", "remainingConditionLines"]);
+    const astValue = structure.ast;
+    const hasRegistry = typeof astValue === "object" && astValue !== null && Object.hasOwn(astValue, "registry");
+    const ast = record(astValue, ["tiers", "combinationClauses", "remainingConditionLines", ...(hasRegistry ? ["registry"] : [])]);
     if (structure.status !== "literal_extracted" || structure.rule !== "holding-tier-lines-v1" ||
         typeof structure.sourceSha256 !== "string" || !/^[0-9a-f]{64}$/.test(structure.sourceSha256) || structure.applicability !== "unverified" ||
         !Array.isArray(ast.tiers) || ast.tiers.length > 32 || (ast.tiers.length > 0 && facts.holding !== true) ||
-        !Array.isArray(ast.combinationClauses) || ast.combinationClauses.length > 32 || ast.tiers.length + ast.combinationClauses.length === 0 ||
+        !Array.isArray(ast.combinationClauses) || ast.combinationClauses.length > 32 || (ast.tiers.length + ast.combinationClauses.length === 0 && !hasRegistry) ||
         typeof ast.remainingConditionLines !== "number" || !Number.isSafeInteger(ast.remainingConditionLines) || ast.remainingConditionLines < 0) throw new Error("掲載期間行の構造が不正です");
     for (const [index, value] of ast.tiers.entries()) {
       const tier = record(value, ["ordinal", "holdingPeriod", "listedYen", "notation"]);
       if (tier.ordinal !== index + 1 || typeof tier.holdingPeriod !== "string" || !facts.holdingPeriods.includes(tier.holdingPeriod) ||
           typeof tier.listedYen !== "number" || !Number.isSafeInteger(tier.listedYen) || tier.listedYen <= 0 ||
           !["相当", "分"].includes(tier.notation as string)) throw new Error("掲載期間行と円額の対応が不正です");
+    }
+    if (hasRegistry) {
+      assertBenefitRegistryStructure(ast.registry, structure.sourceSha256 as string);
+      if (facts.holding !== true) throw new Error("名簿条件と保有記載が一致しません");
     }
     for (const value of ast.combinationClauses) {
       const clause = record(value, ["scope", "counterpart", "allowed"]);

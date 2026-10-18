@@ -144,7 +144,7 @@ export async function main() {
             const standingReference = readPriceReference(objectMetadata, saved.proof);
             if (standingReference.status === "ready") priceReferences.set(code, standingReference.reference);
             // ponytail: 同じ確定sessionのvendor訂正は自動追跡しない。訂正取得は明示別scope。
-            if (hasCompletedDailyFetch(saved, SOURCE_RANGE)) {
+            if (standingReference.status === "ready" && hasCompletedDailyFetch(saved, SOURCE_RANGE)) {
               skipped++;
               outcomes[code] = { status: "skipped", latestSourceBar: SOURCE_RANGE.to,
                 bodySha: bodyPin(existing), sourceFetched: false };
@@ -241,7 +241,7 @@ export async function main() {
         const discarded = rp.discardedOutOfRange.count > 0 ? rp.discardedOutOfRange : undefined;
         // same-cached-input 2回目は内容同一で PUT skip (updated 不変・初回 clock 保持)。
         // 比較対象は保存 object そのもの (Sol HOLD1: code/bars/splits 抜粋禁止)。
-        if (shouldSkipPut(existing, JSON.parse(postJson) as Record<string, unknown>)) {
+        if (priceReferences.has(code) && shouldSkipPut(existing, JSON.parse(postJson) as Record<string, unknown>)) {
           skipped++;
           // skip の pin は standing の既存 bytes (新規 timestamp 付き payload ではない)。
           outcomes[code] = { status: "skipped", latestSourceBar: latest, bodySha: existing === null ? null : bodyPin(existing) };
@@ -339,14 +339,14 @@ export async function main() {
     return;
   }
   console.info(JSON.stringify({ archive: "recorded", key: summary.key }));
-  // 原文・公開JSONは変えず、全母集団が受入済みの通常runだけ価格snapshotを進める。
-  // subset/既存参照欠測は旧activeを維持。activation unknownは後続利用も止める。
+  // 全母集団のknown終端を会計した通常runだけ進める。source HOLDは明示除外し旧memberを継承しない。
+  // 未着手/unknown/aborted/subset/custody不成立は旧activeを維持。activation自体のunknownも利用を止める。
   try {
     schedule.assertActive();
     const priceSnapshot = await publishDailyPriceSnapshot({ runId, sessionDate: reference.date, finishedAt,
       universe, codes, references: priceReferences,
       ...(schedule.admission === null ? {} : { beforeMutation: schedule.assertActive }),
-      complete: !aborted && !fatal && errors === 0 && invalid === 0 && rateLimited === 0 && empty === 0 && written + skipped === codes.length });
+      outcomes: sortedOutcomes, complete: !aborted && !fatal && rateLimited === 0 });
     schedule.assertActive();
     console.info(JSON.stringify({ holdingPriceSnapshot: priceSnapshot }));
   } catch (e) {

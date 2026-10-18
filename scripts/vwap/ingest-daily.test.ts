@@ -208,6 +208,17 @@ describe("daily source前の同日確定済み再開", () => {
       expect(vi.mocked(publishDailyPriceSnapshot).mock.calls[0][0]).toMatchObject({ codes: ["7203"], universe: ["7203", "6758"], complete: true });
     } finally { vi.useRealTimers(); }
   });
+  it("完了barでも物理原本参照の無い旧保存はsource前skipせず通常metadata CASへ進む", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date(COMPLETED_AT));
+    const saved = await completedSaved("A");
+    mockLoadCodes.mockResolvedValue(["A"]); mockR2Get.mockResolvedValue({ body: JSON.stringify(saved), etag: "legacy-etag" });
+    rawHook.body = completionRaw("A.T");
+    mockFetchDaily.mockResolvedValue(await parseDailyChart("A.T", "10y", rawHook.body, COMPLETED_AT));
+    await main();
+    expect(mockFetchDaily).toHaveBeenCalledTimes(1); expect(mockR2Put).toHaveBeenCalledTimes(1);
+    expect(mockR2Put.mock.calls[0][2]).toBe("legacy-etag"); expect(referenceFromArchivedParts).toHaveBeenCalledTimes(1);
+    expect(priceMetadata).toHaveBeenCalledTimes(1); expect(process.exitCode).toBe(0);
+  });
   it("activation unknownは日足本文を再送せずexit2にする", async () => {
     mockLoadCodes.mockResolvedValue(["7203"]); mockR2Get.mockResolvedValue(null);
     mockFetchDaily.mockResolvedValue({ bars: [BAR_A], splits: [], proof: FAKE_PROOF });
@@ -297,6 +308,8 @@ describe("daily source前の同日確定済み再開", () => {
     });
 
   it("normal main uses one independent closed-session reference without trimming a Sunday 10y response", async () => {
+    // Declared qualified transport reference; raw integrity is covered by price-registry tests.
+    vi.mocked(readPriceReference).mockReturnValue({ status: "ready", reference: {} as never });
     const observedAt = "2026-10-04T12:28:34.484Z";
     vi.stubEnv("GITHUB_RUN_ID", "100");
     vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
@@ -371,6 +384,8 @@ describe("daily source前の同日確定済み再開", () => {
     } finally { vi.useRealTimers(); vi.unstubAllEnvs(); }
   });
   it("成功済みprefixはYahoo/PUT0、legacy未完だけ取得・保管し、再開後は全件source0", async () => {
+    // Declared qualified transport reference; raw integrity is covered by price-registry tests.
+    vi.mocked(readPriceReference).mockReturnValue({ status: "ready", reference: {} as never });
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date(COMPLETED_AT));
     vi.stubEnv("GITHUB_RUN_ID", "1");
@@ -517,6 +532,8 @@ describe("ingest-daily main flow", () => {
     expect(process.exitCode).toBe(2);
   });
   it("normal positive + skip control (exit 0, all codes accounted)", async () => {
+    // Declared qualified transport reference; raw integrity is covered by price-registry tests.
+    vi.mocked(readPriceReference).mockReturnValue({ status: "ready", reference: {} as never });
     mockLoadCodes.mockResolvedValue(["A", "B"]);
     mockR2Get.mockImplementation(async (key: string) => (key === "daily/A.json" ? { body: existingA, etag: "observed-version" } : null));
     mockFetchDaily.mockImplementation(async (symbol: string) =>

@@ -6,6 +6,7 @@ import { unzip } from "./zip.js";
 import { tokenizeDelimited } from "./csv.js";
 import { parseStockCode } from "../../../../../src/shared/jpx/stock-code.js";
 import { parseDailyChart } from "../../../../../src/shared/yahoo/client.js";
+import { lastJpxSessionOnOrBefore, type JpxReferenceSession } from "../../../../../src/shared/market-calendar.js";
 import { jstDateSec } from "../../../../../src/shared/vwap/proof.js";
 import type { Shareholding } from "./shareholdings.js";
 import type { OfficialIssuerEnglishName, OfficialIssuerNames } from "./shareholdings-issuer-names.js";
@@ -23,7 +24,8 @@ export type HoldingValuation =
   | { status: "unavailable"; reason: string; identity: ListedIdentity | null }
   | { status: "qualified"; identity: ListedIdentity; price: number; value: number; currency: "JPY"; date: string;
       priceSource: { archivePageId: string; gzipSha256: string; bodySha256: string; filename: string; symbol: string;
-        capturedAt: string; sourceTimestamp: number; range: string; priceBasis: string; splitObservation: string; officialIssuerName?: OfficialIssuerEnglishName } };
+        capturedAt: string; sourceTimestamp: number; range: string; priceBasis: string; splitObservation: string; officialIssuerName?: OfficialIssuerEnglishName;
+        evaluationDate?: string; sharesAsOf?: string; priceAsOf?: string; marketCalendar?: JpxReferenceSession } };
 
 /** 原本/SHA/chart検証後に確定した主体不一致だけ。通信・破損・ACK不明とは区別する。 */
 export class HoldingPriceIssuerMismatch extends Error {
@@ -203,8 +205,16 @@ export async function qualifyHoldingValuation(args: {
   const canonicalMatch = exactEnglishName(raw.meta.longName) === exactEnglishName(identity.englishName);
   if (!canonicalMatch) assert.ok(officialName, "公式英字名の一致証拠が欠けています");
   const dates: string[] = raw.timestamp.map(jstDateSec);
-  const indexes = dates.map((date: string, index: number) => date === args.fiscalYearEnd ? index : -1).filter((index: number) => index >= 0);
-  if (indexes.length !== 1) return { status: "unavailable", identity, reason: "当期末当日の価格バーを一意に観測していません" };
+  let priceDate = args.fiscalYearEnd, calendar: JpxReferenceSession | undefined;
+  let indexes = dates.map((date: string, index: number) => date === priceDate ? index : -1).filter((index: number) => index >= 0);
+  if (indexes.length === 0) {
+    const session = lastJpxSessionOnOrBefore(args.fiscalYearEnd);
+    if (session === undefined) return { status: "unavailable", identity, reason: "期末以前の最終市場営業日を公式カレンダーで確認できません" };
+    if (session.date === args.fiscalYearEnd) return { status: "unavailable", identity, reason: "当期末の市場営業日の価格バーを一意に観測していません" };
+    calendar = session; priceDate = session.date;
+    indexes = dates.map((date: string, index: number) => date === priceDate ? index : -1).filter((index: number) => index >= 0);
+  }
+  if (indexes.length !== 1) return { status: "unavailable", identity, reason: "公式に確認した採用市場sessionの価格バーを一意に観測していません" };
   // 期末後のsplitがあれば原本quoteと当時株数の単位一致を主張しない。係数補完はしない。
   if (parsed.proof.firstTs === null || parsed.proof.lastTs === null ||
       jstDateSec(parsed.proof.firstTs) > args.fiscalYearEnd ||
@@ -235,10 +245,12 @@ export async function qualifyHoldingValuation(args: {
   assert.ok(typeof price === "number" && Number.isFinite(price) && price > 0);
   const value = price * args.holding.shares;
   assert.ok(Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER);
-  return { status: "qualified", identity, price, value, currency: "JPY", date: args.fiscalYearEnd,
+  return { status: "qualified", identity, price, value, currency: "JPY", date: priceDate,
     priceSource: { archivePageId: source.archivePageId, gzipSha256: source.sha256, bodySha256: member.sha256, filename: source.filename,
       symbol, capturedAt: member.receivedAt, sourceTimestamp: raw.timestamp[indexes[0]], range,
-      priceBasis: "当期末raw quote.close × 当期末株数。adjclose/丸め/局所分割調整なし",
+      priceBasis: calendar === undefined ? "当期末raw quote.close × 当期末株数。adjclose/丸め/局所分割調整なし" :
+        "期末以前の公式最終市場営業日のraw quote.close × 期末株数。価格時点と株数時点を分離した参考値。adjclose/丸め/局所分割調整なし",
+      ...(calendar === undefined ? {} : { evaluationDate: args.fiscalYearEnd, sharesAsOf: args.fiscalYearEnd, priceAsOf: priceDate, marketCalendar: calendar }),
       splitObservation: "events=split,divを指定した同一応答で当期末後のsplit0。capture後の状態は未観測",
       ...(canonicalMatch ? {} : { officialIssuerName: officialName }) } };
 }

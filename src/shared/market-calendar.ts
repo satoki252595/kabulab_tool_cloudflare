@@ -22,3 +22,32 @@ export function marketClosure(market: Market, date: string): MarketClosure | nul
   if (day === 0 || day === 6) return { market, reason: "土日休場", sourceUrl: source.sourceUrl };
   return null;
 }
+
+export interface JpxReferenceSession {
+  date: string;
+  closedDates: string[];
+  calendarSources: Array<{ sourceUrl: string; fetchedAt: string; sha256: string; bytes: number; pageId: string; readback: boolean }>;
+}
+
+/** 公式休場だけを遡る。未収録年・14日内に確定sessionなしは未資格であり、価格欠測を飛ばさない。 */
+export function lastJpxSessionOnOrBefore(date: string): JpxReferenceSession | undefined {
+  const stamp = Date.parse(`${date}T00:00:00Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(stamp) || new Date(stamp).toISOString().slice(0, 10) !== date) {
+    throw new Error(`市場カレンダーの日付が不正です: ${date}`);
+  }
+  const closedDates: string[] = [], calendarSources: JpxReferenceSession["calendarSources"] = [];
+  let candidate = date;
+  for (let i = 0; i < 14; i++) {
+    const yearEnd = calendar.markets.JPX.yearEndSessions.find(record => record.lastSession <= candidate && candidate <= record.closedThrough);
+    if (yearEnd !== undefined) {
+      for (let d = candidate; d > yearEnd.lastSession; d = new Date(Date.parse(`${d}T00:00:00Z`) - 86400000).toISOString().slice(0, 10)) closedDates.push(d);
+      return { date: yearEnd.lastSession, closedDates, calendarSources: [...calendarSources, ...yearEnd.sources] };
+    }
+    if (!Object.hasOwn(calendar.markets.JPX.years, candidate.slice(0, 4))) return;
+    const closed = marketClosure("JPX", candidate);
+    if (!closed) return { date: candidate, closedDates, calendarSources };
+    if (calendarSources.length === 0) calendarSources.push({ sourceUrl: calendar.markets.JPX.sourceUrl, ...calendar.markets.JPX.sourcePin });
+    closedDates.push(candidate);
+    candidate = new Date(Date.parse(`${candidate}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
+  }
+}

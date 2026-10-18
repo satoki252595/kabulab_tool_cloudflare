@@ -56,7 +56,42 @@
         "bytes": 30897,
         "pageId": "3f8d74ff-84cd-8109-aa1b-d29a59796fc9",
         "readback": true
-      }
+      },
+      "yearEndSessions": [
+        {
+          "lastSession": "2025-12-30",
+          "closedThrough": "2025-12-31",
+          "sources": [
+            {
+              "sourceUrl": "https://www.jpx.co.jp/corporate/news/news-releases/0061/20251120-01.html",
+              "filename": "jpx-2025-yearend.html",
+              "fetchedAt": "2026-10-18T01:54:49.191Z",
+              "sha256": "f881404b121077fc3a880cece0c99edda82dae66dabfc08ef7e8d80dc3f20588",
+              "bytes": 34303,
+              "pageId": "3fdd74ff-84cd-81b8-8cf3-c4c0fc1ebb53",
+              "readback": true
+            },
+            {
+              "sourceUrl": "https://www.jpx.co.jp/glossary/ta/274.html",
+              "filename": "jpx-dainoukai-definition.html",
+              "fetchedAt": "2026-10-18T01:54:49.358Z",
+              "sha256": "7e4828b9f354ddc3b12efe6a129dd1e5f4dd3c0262cbe69e38cbc6f41cef3225",
+              "bytes": 25191,
+              "pageId": "3fdd74ff-84cd-81b8-8cf3-c4c0fc1ebb53",
+              "readback": true
+            },
+            {
+              "sourceUrl": "https://www.jpx.co.jp/faq/others_general.html",
+              "filename": "jpx-stock-market-closures.html",
+              "fetchedAt": "2026-10-18T01:54:49.571Z",
+              "sha256": "a6e86784db19e931d8a63e1647e884b39f0fecc7278c18c62c01502dfda2cf51",
+              "bytes": 43377,
+              "pageId": "3fdd74ff-84cd-81b8-8cf3-c4c0fc1ebb53",
+              "readback": true
+            }
+          ]
+        }
+      ]
     },
     "NYSE": {
       "sourceUrl": "https://www.nyse.com/trade/hours-calendars",
