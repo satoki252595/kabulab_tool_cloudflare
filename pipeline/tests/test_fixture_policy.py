@@ -34,6 +34,8 @@ ALLOWED: frozenset[str] = frozenset(
         # EDINET は commercial-ok（公共データ利用規約準拠 §2.1）
         "pipeline/tests/fixtures/edinet/Edinetcode.zip",
         "pipeline/tests/fixtures/edinet/documents_error_401.json",
+        # 実EDINET一覧の提出者メタデータ射影と原本SHA（commercial-ok）。
+        "pipeline/tests/fixtures/edinet/nonlisted-issuer.json",
         # 公式API v2仕様書の空応答例。提出者/書類データを含まない公開契約の原文抜粋。
         "pipeline/tests/fixtures/edinet/documents_empty_api_v2_example.json",
         # EDINET原本の数値・context・unit抜粋（commercial-ok）。TDnetは
