@@ -74,7 +74,7 @@ export async function prepareLatestHoldings(args: { limit: number; afterCode: st
       writeHoldingsArtifact(zipPath, saved.bytes);
       const records = [];
       for (const holding of parsed.holdings) records.push({ source, ownerName: row.ownerName, holding,
-        valuation: prices && catalog ? await qualifyHoldingValuation({ holding, fiscalYearEnd: source.fiscalYearEnd, catalog, prices })
+        valuation: prices && catalog ? await qualifyHoldingValuation({ holding, fiscalYearEnd: source.fiscalYearEnd, catalog, prices, nameChanges: parsed.nameChanges })
           : { status: "unavailable", identity: null, reason: "価格/同定の保存原本が未指定です" } });
       const projectionPath = join(args.dir, `${row.stockCode}-${row.docId}.current.jsonl`);
       writeHoldingsArtifact(projectionPath, records.map(record => JSON.stringify(record)).join("\n") + (records.length ? "\n" : ""));

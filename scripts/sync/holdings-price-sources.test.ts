@@ -8,9 +8,11 @@ import { downloadArchivedFile } from "../moneyflow/lib/archived-files.js";
 import { notionRequest } from "../../src/shared/notion-archive/client.js";
 import { parseHoldingsCodeList } from "../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js";
 import type { Shareholding } from "../../services/yuho-quant/src/services/edinet/shareholdings.js";
+import type { HoldingNameChange } from "../../services/yuho-quant/src/services/edinet/shareholdings-name-change.js";
 import type { PriceFile, PriceSnapshot } from "../../src/shared/holdings/price-registry.js";
 import * as codeLists from "./holdings-code-list.js";
 import * as issuerNames from "./holdings-issuer-names.js";
+import * as valuation from "../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js";
 vi.mock("../vwap/lib/holdings-price-registry.js", () => ({ readActivatedPriceSnapshot: vi.fn() }));
 vi.mock("../moneyflow/lib/archived-files.js", () => ({ downloadArchivedFile: vi.fn() }));
 vi.mock("../../src/shared/notion-archive/client.js", async original => ({ ...await original<typeof import("../../src/shared/notion-archive/client.js")>(), notionRequest: vi.fn() }));
@@ -65,6 +67,17 @@ describe("通常Nodeの保存価格loader", () => {
     expect(downloadArchivedFile).toHaveBeenCalledTimes(2); expect(limit.remainingChunks).toBe(115);
     expect(limit.remainingBytes).toBe(budget().remainingBytes - zip.length - gzip.length);
     expect(downloadArchivedFile).toHaveBeenLastCalledWith(expect.objectContaining({ name: priceFile.filename }), "保有価格保存原本", { maxBytes: gzip.length });
+  });
+  it("原表の商号変更診断をchunk選定と公式英字名選定の同じ主体照合へ渡す", async () => {
+    const resolve = vi.spyOn(valuation, "resolveHoldingPriceIdentity"), nameChanges: HoldingNameChange[] = [];
+    try {
+      expect((await createHoldingPriceSourceLoader()([holding], budget(), () => false, "2026-10-02", nameChanges)).status).toBe("ready");
+      expect(resolve).toHaveBeenCalledTimes(2);
+      for (const call of resolve.mock.calls) {
+        expect(call[0]).toBe(holding); expect(call[2]).toBe("2026-10-02"); expect(call[3]).toBe(nameChanges);
+      }
+      expect(downloadArchivedFile).toHaveBeenCalledTimes(2);
+    } finally { resolve.mockRestore(); }
   });
   it("商号集合の構築は原本/chart資格後・writer前だけ行い、同じindexとfresh gateを渡す", async () => {
     const changed = JSON.parse(raw.toString()); changed.chart.result[0].meta.longName = "OFFICIAL ALIAS STRUCTURE";

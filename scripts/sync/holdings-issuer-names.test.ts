@@ -39,20 +39,37 @@ describe("通常priceの保存issuer英字名loader", () => {
     await expect(loader([target],limit)).rejects.toThrow("SOURCE_UNKNOWN"); await expect(loader([target],limit)).rejects.toThrow("SOURCE_UNKNOWN");
     expect(readSavedHoldingsZip).toHaveBeenCalledTimes(1);expect(selectLatestHoldingsDocuments).toHaveBeenCalledTimes(1);expect(limit.remainingBytes).toBe(budget().remainingBytes-zip.length);
   });
-  it("既知budgetだけ再資格可能とし、issuer不在/主体変更は原本読取前HOLDする", async () => {
+  it("既知budgetだけ再資格可能とし、issuer不在/主体変更は名前証拠へ追加せずその行だけ未資格に残す", async () => {
     vi.mocked(readSavedHoldingsZip).mockResolvedValueOnce({ status: "held", reasonCode: "budget_exhausted", reason: "全文予算不足" });
     const loader = createHoldingOfficialNamesLoader(),limit = budget();
     expect(await loader([target],limit)).toMatchObject({ status: "held", reasonCode: "budget_exhausted" });
     expect((await loader([target],limit)).status).toBe("ready"); expect(readSavedHoldingsZip).toHaveBeenCalledTimes(2);
     vi.mocked(selectLatestHoldingsDocuments).mockResolvedValueOnce({ rows: [], more: false });
-    expect(await createHoldingOfficialNamesLoader()([target],limit)).toMatchObject({ status: "held", reasonCode: "issuer_source_unavailable" });
+    expect(await createHoldingOfficialNamesLoader()([target],limit)).toMatchObject({ status: "ready", names: new Map() });
     vi.mocked(selectLatestHoldingsDocuments).mockResolvedValueOnce({ rows: [{ ...latest, ownerName: "別主体" }], more: false });
-    expect(await createHoldingOfficialNamesLoader()([target],limit)).toMatchObject({ status: "held", reasonCode: "issuer_source_unavailable" }); expect(readSavedHoldingsZip).toHaveBeenCalledTimes(2);
+    expect(await createHoldingOfficialNamesLoader()([target],limit)).toMatchObject({ status: "ready", names: new Map() }); expect(readSavedHoldingsZip).toHaveBeenCalledTimes(2);
   });
   it("純qualifier後の最新doc変更も明示HOLDし、保存ZIPを別名へ交換しない", async () => {
     const result = await createHoldingOfficialNamesLoader()([target],budget());expect(result.status).toBe("ready");if (result.status !== "ready") throw new Error(result.reason);
     vi.mocked(selectLatestHoldingsDocuments).mockResolvedValueOnce({ rows: [{ ...latest, docId: "S100Z123" }], more: false });
     expect(await result.checkCurrent()).toMatchObject({ status: "held", reasonCode: "issuer_source_unavailable" });expect(readSavedHoldingsZip).toHaveBeenCalledTimes(1);
+  });
+  it("一名の既知issuer不在は他の保存英字名を巻き込まず、未資格cacheを再読しない", async () => {
+    const otherEvidence = JSON.parse(readFileSync(new URL("../../services/yuho-quant/src/tests/fixtures/holdings-split-1798/qualified-evidence.json", import.meta.url), "utf8")) as OfficialIssuerEnglishName;
+    const otherIdentity = [...parseHoldingsCodeList({ archivePageId: "a".repeat(32), filename: "Edinetcode.zip", bytes: zip, sha256: sha(zip) }).byLegalName.values()].flat().find(value => value.code === otherEvidence.code)!;
+    if (otherEvidence.source.edinetCode === null) throw new Error("保存fixtureの提出者が未資格です");
+    const otherLatest = { ...latest, ...otherEvidence.source, edinetCode: otherEvidence.source.edinetCode, ownerName: otherIdentity.legalName, submittedAt: new Date(otherEvidence.submittedAt) };
+    const otherTarget = { identity: otherIdentity, priceCapturedAt: otherEvidence.priceCapturedAt };
+    vi.mocked(selectLatestHoldingsDocuments).mockImplementation(async (_db, opts) => ({ rows: opts.onlyCode === identity.code ? [] : [otherLatest], more: false }));
+    vi.mocked(qualifyOfficialIssuerEnglishName).mockReturnValue({ status: "verified", evidence: otherEvidence });
+    const loader = createHoldingOfficialNamesLoader(), limit = budget();
+    for (let repeat = 0; repeat < 2; repeat++) {
+      const result = await loader([target, otherTarget], limit);expect(result.status).toBe("ready");if (result.status !== "ready") throw new Error(result.reason);
+      expect([...result.names.keys()]).toEqual([otherEvidence.code]);expect(result.names.get(otherEvidence.code)).toEqual(otherEvidence);
+      if (repeat === 1) expect(await result.checkCurrent()).toEqual({ status: "verified" });
+    }
+    expect(readSavedHoldingsZip).toHaveBeenCalledTimes(1);expect(selectLatestHoldingsDocuments).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(selectLatestHoldingsDocuments).mock.calls.at(-1)?.[1].onlyCode).toBe(otherEvidence.code);
   });
   it("実時間超過は各新latest/保存読取/書込前latestの開始前で止め、unknownを既知HOLDへ置換しない", async () => {
     let stopped = true;

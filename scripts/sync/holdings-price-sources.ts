@@ -5,7 +5,8 @@ import { readActivatedPriceSnapshot } from "../vwap/lib/holdings-price-registry.
 import { downloadArchivedFile } from "../moneyflow/lib/archived-files.js";
 import { notionRequest } from "../../src/shared/notion-archive/client.js";
 import { priceFileSchema, type PriceFile, type PriceSnapshot } from "../../src/shared/holdings/price-registry.js";
-import { exactLegalName, exactEnglishName, HoldingsPriceIndex, parseHoldingsCodeList, type ArchivedSource } from "../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js";
+import { resolveHoldingPriceIdentity, exactEnglishName, HoldingsPriceIndex, parseHoldingsCodeList, type ArchivedSource } from "../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js";
+import type { HoldingNameChange } from "../../services/yuho-quant/src/services/edinet/shareholdings-name-change.js";
 import { createHoldingOfficialNamesLoader, type OfficialNameTarget } from "./holdings-issuer-names.js";
 import type { OfficialIssuerNames } from "../../services/yuho-quant/src/services/edinet/shareholdings-issuer-names.js";
 import type { Shareholding } from "../../services/yuho-quant/src/services/edinet/shareholdings.js";
@@ -50,14 +51,14 @@ export type HoldingPriceSources = { status: "ready"; snapshotId: string; evidenc
   { status: "held"; reasonCode: "snapshot_unavailable" | "budget_exhausted" | "issuer_source_unavailable"; reason: string };
 
 /** A single scheduled run owns this cache and its mutable download budget. Failed reads are not resent. */
-export function createHoldingPriceSourceLoader(): ((holdings: readonly Shareholding[], budget: HoldingPriceBudget, shouldStop?: () => boolean, fiscalYearEnd?: string) => Promise<HoldingPriceSources>) & { currentSnapshotId: () => Promise<string | null> } {
+export function createHoldingPriceSourceLoader(): ((holdings: readonly Shareholding[], budget: HoldingPriceBudget, shouldStop?: () => boolean, fiscalYearEnd?: string, nameChanges?: readonly HoldingNameChange[]) => Promise<HoldingPriceSources>) & { currentSnapshotId: () => Promise<string | null> } {
   let snapshot: Promise<PriceSnapshot | null> | undefined;
   let codeList: Promise<ArchivedSource> | undefined;
   let catalog: ReturnType<typeof parseHoldingsCodeList> | undefined;
   const chunks = new Map<string, Promise<ArchivedSource>>();
   const officialNames = createHoldingOfficialNamesLoader();
   const currentSnapshot = () => { snapshot ??= readActivatedPriceSnapshot(); return snapshot; };
-  return Object.assign(async (holdings: readonly Shareholding[], budget: HoldingPriceBudget, shouldStop?: () => boolean, fiscalYearEnd?: string): Promise<HoldingPriceSources> => {
+  return Object.assign(async (holdings: readonly Shareholding[], budget: HoldingPriceBudget, shouldStop?: () => boolean, fiscalYearEnd?: string, nameChanges?: readonly HoldingNameChange[]): Promise<HoldingPriceSources> => {
     assert.ok(Number.isSafeInteger(budget.remainingChunks) && budget.remainingChunks >= 0 && Number.isSafeInteger(budget.remainingBytes) && budget.remainingBytes >= 0, "価格取得予算が不正です");
     const active = await currentSnapshot();
     if (active === null) return { status: "held", reasonCode: "snapshot_unavailable", reason: "保存価格snapshotのfresh物理受入・有効化が未実施です" };
@@ -78,7 +79,7 @@ export function createHoldingPriceSourceLoader(): ((holdings: readonly Sharehold
     catalog ??= parseHoldingsCodeList(codes);
     const required = new Map<string, PriceFile>();
     for (const holding of holdings) {
-      const names = catalog.byLegalName.get(exactLegalName(holding.name));
+      const { candidates: names } = resolveHoldingPriceIdentity(holding, catalog, fiscalYearEnd, nameChanges);
       if (names === undefined || names.length !== 1 || holding.shares === null) continue;
       const member = active.members[`${names[0].code}.T`];
       if (member !== undefined) required.set(fileKey(member.file), member.file);
@@ -102,7 +103,7 @@ export function createHoldingPriceSourceLoader(): ((holdings: readonly Sharehold
     for (const key of required.keys()) prices.push(await chunks.get(key)!);
     const priceIndex = new HoldingsPriceIndex(prices), targets = new Map<string, OfficialNameTarget>();
     for (const holding of holdings) {
-      const identities = catalog.byLegalName.get(exactLegalName(holding.name));
+      const { candidates: identities } = resolveHoldingPriceIdentity(holding, catalog, fiscalYearEnd, nameChanges);
       if (identities === undefined || identities.length !== 1 || holding.shares === null) continue;
       const identity = identities[0], symbol = `${identity.code}.T`, candidates = priceIndex.candidates(symbol);
       if (candidates.length !== 1) continue;

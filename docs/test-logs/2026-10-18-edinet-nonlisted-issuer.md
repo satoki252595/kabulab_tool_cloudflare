@@ -23,5 +23,7 @@ nix develop --offline -c bash -c 'cd pipeline && uv run --frozen pytest tests/te
 - 同一key（SHA `7c13b979e65c0fe67920e1c27f38939fee45be99edbf4eca1e85a494862a24f1`）を既Node R2 readerでも単発GETし、`AccessDenied` / 403を確認。canonicalのaccount・credentials・bucketはPython設定と同値、Python signerもs3v4/autoであり、Python署名経路固有の問題とはしていない。この診断でもPUTは0。
 
 - その後、既存SSH環境のRAW限定principalをプロセス内だけで再利用し、保存済みの同じFSA 1 ZIPを通常 `CloudSink` と既存の固定対象guardでmirror。条件付きPUT 1回、索引前の全bytes照合、D1 INSERT 1回、全17列readbackを完了。原本の再取得は0で、旧403の記録、canonical `.env`、本番の共通secretは変更していない。全RAW履歴の転送は再開していない。
+- 本番設定は、実RAW78 run `39077502277`（500件照合・484 PUT成功）と同じ既存Secretから、account・R2 principal・RAW bucketを明示取得するよう `edinet_daily.yml` に `R2_BUCKET_RAW` の1行を追加。Secret値の読出し・変更は0。今回の保存証跡を根拠とし、この設定変更後の定期run自体の成功とは区別する。
+- 同じ `JobContext.upload_raw` → `CloudSink.upsert_raw_artifact` を使う `master_sync`・`supply_daily`・`tdnet_hourly` も、各workflowへ同じ1行を追加。`ops_check` はD1読取、`sector33_sync` は共通Notion archive経由でR2原本SDKを呼ばないため変更しない。時系列・需給バケット設定は変更していない。
 
 private実行証跡は `tmp/feature-audit-20261018/edinet-nonlisted-classification-v1/`。上記はコード・一次原本・機械的主体判定の確認であり、旧失敗run全体の再実行成功や20機能全体の完了を意味しない。
