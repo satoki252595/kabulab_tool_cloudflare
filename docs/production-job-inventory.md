@@ -1,6 +1,6 @@
 # 本番定期処理とSSHでの補完
 
-確認日: 2026-10-18。定期予定の確認対象: main `1cbc9901` と本変更、Mac095設定。SSHの稼働中価格補完はmain527 `b2c2474e`に固定し、ローカルの変更を途中反映しない。
+確認日: 2026-10-18。定期予定の確認対象: main529 `7f26a9dd` と本変更、Mac定期設定。SSHの稼働中価格補完はmain527 `b2c2474e`に固定し、ローカルの変更を途中反映しない。
 時刻はJST、Cloudflareは起動・結果監視、重い取込本体はActionsまたはMacで実行する。
 設定上の予定と、実行成功・全銘柄のデータ充足は別に確認する。
 
@@ -12,7 +12,7 @@
 | 株価・財務断面・RSI・スイング・モメンタム・業種騰落 | 平日18:00、CF起動 | 母集団と通常取得原本。指標は価格・分割単位の資格確認後、Yahoo共通排他 | なし | `stock-sync.yml` / `sync:daily:core --stocks-only` → D1、原本Notion/R2 | 通常CLIに任意過去日指定はない。保存原本の限定補完と最新日の通常更新を分ける |
 | 東証33業種の対応 | 株式同期の成功後 | 現workflowは株式成功後。入力はcore銘柄集合＋公式提出者表 | なし | 同workflow / Python `sector33_sync` → D1、原本Notion | 最新の公式提出者表と現在の銘柄を照合。過去時点の業種再現ではない |
 | 価格依存の業種別資金フロー | 株式同期の成功後、許容失敗もない場合だけ | 当日の必要価格・`core_stocks.sector`。現ハーネスはstock-sync job全体の成功も要求 | なし | `moneyflow.yml` / `only=sector-turnover` → Notion | `--as-of`対応、対象日の必要価格が保存済みであることが前提 |
-| 価格非依存の資金フロー28取得元 | 平日18:15、CF起動 | 当日の株式同期を待たず、Yahoo/非Yahooを並列取得→両lane成功後にjoin。Yahoo共通排他は維持 | なし | `moneyflow.yml` / `only=independent` → Notion | 月次・週次等の公表資料もここで更新検知。`--as-of`だけで全取得元の過去資料を指定できるわけではない |
+| 価格非依存の資金フロー28取得元 | 平日18:15、CF起動 | 当日の株式同期は待たず、非Yahoo→Yahoo→両lane成功後join。共有Notion枠未成立のため取得直列を維持 | なし | `moneyflow.yml` / `only=independent` → Notion | 月次・週次等の公表資料もここで更新検知。`--as-of`だけで全取得元の過去資料を指定できるわけではない |
 | TDnet・有報の補完 | 平日19:00、CF起動 | 主体・原本を確認→抽出→保存・価格資格。共有保存予算内でTDnet→Node有報、前段失敗で停止 | なし | `catchup.yml` / `ingest:ir-tdnet`、`ingest:yuho-edinet` → D1・Notion | 有報の受注・海外・発行株数診断、保有明細/価格の保存待ちも通常入口で再開。TDnet保存物の再開期間指定、有報の専用backfillあり |
 | 事業タグ・39本文・競合の機械準備 | 毎日20:00、Mac LaunchAgent | 有報原本→39本文・根拠→タグ。同一入力の保存判定は再利用。競合準備はタグjobの正常終了後 | **例外あり**：適格新規・実入力変更のタグだけローカルClef-Flash。本文・競合準備は不使用 | `biztag-local/main.ts run biztag` → Notion・D1、receipt R2 | 機械処理を含む現在の通常入口はMac専用。現Linux SSHへモデル処理を移さない。競合の意味判定は自動再開しない |
 | EDINET財務サマリ・原本 | 平日21:00 | 指定提出日の公式一覧・主体確認→原本保管→財務抽出。19時Nodeの完了待ちは不要 | なし | `edinet_daily.yml` / Python → Notion・D1・R2 | `--date YYYY-MM-DD --require-cloud`対応。19時のNode有報処理とは別系統 |
@@ -24,7 +24,7 @@
 | TDnet速報・上場状態 | 平日09:00〜19:00毎時 | 公表済み対象日の資料→主体確認・原本保管→構造化 | なし | `tdnet_hourly.yml` / Python → Notion・D1・R2 | `--date YYYY-MM-DD`対応、公表元の保存期間が前提。19時Node補完とは別系統 |
 
 「LLM利用」はデータ取得・更新の本番経路を示し、開発時のコードレビュー用LLMを含めない。
-優待要約の機械のみ既定は本変更で追加。旧Mac095 runtimeは残りを自動MLXへ渡すため、main受入後のruntime切替が必要であり、コード修正だけで配備済みとは扱わない。
+優待要約の機械のみ既定をmain529へ反映し、15:12にMacの2labelを同revisionの専用runtimeへ実切替した。通常installer・全plist・11ACK・停止/PID0・kernel閉鎖を照合し、20/21時と`RunAtLoad=false`を維持した。監視の期待revisionも配備529へ更新済みで、次の自然calendar成功は未受入。[実績と共有枠の境界](test-logs/production-dependencies-mechanical-20261018.md)を参照。
 
 ## 先行関係と並列実行
 
@@ -46,7 +46,8 @@ flowchart LR
 
 矢印はデータ上の必要条件。価格依存資金フローは現workflowでは33業種stepを含むstock-sync job成功後に起動するが、集計元は`core_stocks.sector`であり、別のsector33対応表との直接依存とは分ける。
 独立した取得はデータ上は並行可能でも、Yahooの共通`yahoo-source`排他、同じ保存先のwriter排他、NotionのAPI予算を優先する。全jobを無制限に並列起動しない。
-資金フロー2laneは既存のYahoo 1.6rps・非Yahoo 1.0rpsを維持し、結合だけ両方を待つ。初回DB/schema構築は既存単一CLIで先に済ませる。
+資金フローは既存のYahoo 1.6rps・非Yahoo 1.0rpsと非Yahoo→Yahooの取得順を維持し、joinだけ独立jobに分ける。初回DB/schema構築は既存単一CLIで先に済ませる。
+NotionのpacingはNode process内・Python client内であり、ジョブをまたぐ共通上限ではない。catchup/Mac未設定時は約2.63rps、Python TDnet/EDINETは既定2.5rpsで、既存job間の重複による429待ちは残る。「背景0.3予約」で全体2.9rpsを保証することはできないため、追加の取得並列化は見送る。一斉の低rate化による所要増加も行わず、実共通予算と所要を確認してから判断する。
 TDnet/Node有報とVWAP/信用残高は現在の共通job/排他を維持し、結果不明・未解決の保存を追い越さない。
 
 SSHでの不足補完は、必要原本・主体・権利資格の準備→限定補完→保存後照合の順。

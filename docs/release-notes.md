@@ -9,6 +9,10 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ## 2026-10-18
 
+- 本番作業（Mac）: 定期実行2labelをmain529の専用Nix runtimeへ切り替え、優待要約のモデルなし既定を反映。通常installer・全plist・11ACK・停止/PID0とkernel閉鎖を確認し、20/21時予定と旧保存物を維持した。監視の期待revisionも実配備529へ合わせ、自然起動のcode/時計判定は維持。[自然起動は別受入](test-logs/production-dependencies-mechanical-20261018.md#macの機械要約を定期環境へ反映)。
+
+- 資金フローの共有Notion枠を追加監査し、ジョブ間の全体上限が未成立のため取得の並列化を見送り、既存rate・非Yahoo→Yahooの取得順を維持。別join・厳格な3job監視と優待の機械処理標準は維持し、[全体枠と未測定性能の境界](test-logs/production-dependencies-mechanical-20261018.md#共有notion枠の追加監査)を記録した。
+
 - 本番処理の[先行条件・LLM利用](production-job-inventory.md)を整理し、資金フローの独立2取得laneを並列化、結合と監視は両方の成功を確認する形へ修正。優待要約は機械処理を標準にし、未対応は旧値を保って保留、モデルは手動の明示指定だけに限定する。
 
 - 本番作業（SSH）: 10/16の不足41銘柄のOHLCVだけを通常CLIで挿入し、4原子バッチ・全値読戻し・Notion物理receiptを9.192秒で完了。財務断面・RSI・旧取得時計は維持し、[入力・権利診断の範囲・停止条件](test-logs/stock41-price-repair-20261018.md)を記録した。
