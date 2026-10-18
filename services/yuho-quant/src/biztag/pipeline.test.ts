@@ -348,8 +348,8 @@ describe("runBiztag 新規と既存の外部判定境界", () => {
     expect(notionMocks.readStockTextRow).toHaveBeenCalledOnce(); expect(notionMocks.replaceEvidenceBlock).toHaveBeenCalledOnce();
     expect(notionMocks.replaceEvidenceBlock.mock.calls[0][2].judgeInput).toContain("notionTextsSha256");
     expect(notionMocks.loadSupplementRows).toHaveBeenLastCalledWith("supplement-db-id", {}, { codes: finite.codes });
-    expect(notionMocks.loadStockMasterIndex).toHaveBeenCalled();
-    expect(summary.masterIndexRead).toBe(true);
+    expect(notionMocks.loadStockMasterIndex).not.toHaveBeenCalled();
+    expect(summary.masterIndexRead).toBe(false);
     expect(notionMocks.listLedgerEntries.mock.calls.some(([, filter]) => filter?.kind === "見直し材料")).toBe(false);
     expect(notionMocks.createLedgerEntry.mock.calls.some(([, input]) => input.kind === "見直し材料")).toBe(false);
     expect(createClefClient).not.toHaveBeenCalled(); expect(createJevClient).not.toHaveBeenCalled();
@@ -407,6 +407,7 @@ describe("明示コードscopeは全市場の副処理へ広げない", () => {
     notionMocks.loadStockMasterIndex.mockResolvedValueOnce({ index: new Map([[codes[0], "known-master"]]), duplicates: new Map([[codes[1], ["duplicate-1", "duplicate-2"]]]) });
     const summary = await runBiztag(options(codes));
     expect(notionMocks.loadStockMasterIndex).toHaveBeenCalledOnce();
+    expect(notionMocks.loadStockMasterIndex).toHaveBeenCalledWith(codes);
     expect(notionMocks.createSupplementRow.mock.calls.map(([, input]) => input.masterPageId)).toEqual(["known-master", null]);
     expect(summary).toMatchObject({ masterIndexRead: true, masterDuplicates: [codes[1]] });
   });
