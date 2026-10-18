@@ -11,6 +11,7 @@ import { jstDateSec } from "../../../../../src/shared/vwap/proof.js";
 import type { Shareholding } from "./shareholdings.js";
 import type { OfficialIssuerEnglishName, OfficialIssuerNames } from "./shareholdings-issuer-names.js";
 import type { PreSplitFiscalYearBasis } from "./shareholdings-split-basis.js";
+import type { HoldingNameChange } from "./shareholdings-name-change.js";
 
 export interface ArchivedSource { archivePageId: string; filename: string; bytes: Buffer; sha256: string;
   /** Explicit activated members only; full gzip bytes/SHA remain unchanged. Omitted for legacy callers. */
@@ -25,7 +26,7 @@ export type HoldingValuation =
   | { status: "qualified"; identity: ListedIdentity; price: number; value: number; currency: "JPY"; date: string;
       priceSource: { archivePageId: string; gzipSha256: string; bodySha256: string; filename: string; symbol: string;
         capturedAt: string; sourceTimestamp: number; range: string; priceBasis: string; splitObservation: string; officialIssuerName?: OfficialIssuerEnglishName;
-        evaluationDate?: string; sharesAsOf?: string; priceAsOf?: string; marketCalendar?: JpxReferenceSession } };
+        evaluationDate?: string; sharesAsOf?: string; priceAsOf?: string; marketCalendar?: JpxReferenceSession; nameChange?: HoldingNameChange } };
 
 /** 原本/SHA/chart検証後に確定した主体不一致だけ。通信・破損・ACK不明とは区別する。 */
 export class HoldingPriceIssuerMismatch extends Error {
@@ -173,13 +174,29 @@ export class HoldingsPriceIndex {
   }
 }
 
+/** loaderと評価は同じ原表診断を使う。直接一致がある場合は注で別主体へ置き換えない。 */
+export function resolveHoldingPriceIdentity(holding: Pick<Shareholding, "name">, catalog: ShareholdingsCatalog,
+  fiscalYearEnd?: string, nameChanges?: readonly HoldingNameChange[]): { candidates: ListedIdentity[] | undefined; nameChange: HoldingNameChange | undefined } {
+  let candidates = catalog.byLegalName.get(exactLegalName(holding.name));
+  let nameChange: HoldingNameChange | undefined;
+  if (candidates === undefined && fiscalYearEnd !== undefined) {
+    const changes = nameChanges?.filter(value => value.holdingName === holding.name && value.source.fiscalYearEnd === fiscalYearEnd && value.effectiveDate <= catalog.asOf);
+    if (changes?.length === 1) {
+      nameChange = changes[0]; candidates = catalog.byLegalName.get(exactLegalName(nameChange.newName));
+    }
+  }
+  return { candidates, nameChange };
+}
+
 export async function qualifyHoldingValuation(args: {
   holding: Shareholding; fiscalYearEnd: string; catalog: ShareholdingsCatalog; prices: readonly ArchivedSource[] | HoldingsPriceIndex; officialIssuerNames?: OfficialIssuerNames;
+  nameChanges?: readonly HoldingNameChange[];
 }): Promise<HoldingValuation> {
   // 本関数は原表で確定した特定投資/みなし保有の上場scope限定（FSA開示定義）。
-  const candidates = args.catalog.byLegalName.get(exactLegalName(args.holding.name));
+  const { candidates, nameChange } = resolveHoldingPriceIdentity(args.holding, args.catalog, args.fiscalYearEnd, args.nameChanges);
   if (candidates === undefined || candidates.length !== 1) return { status: "unavailable", identity: null,
-    reason: candidates === undefined ? "公式上場提出者名へ完全一致しません" : "公式上場提出者名が一意ではありません" };
+    reason: nameChange !== undefined ? "原表に商号変更の注はありますが、新商号の上場主体・英字名を公式銘柄表で一意に確認できません" :
+      candidates === undefined ? "公式上場提出者名へ完全一致しません" : "公式上場提出者名が一意ではありません" };
   const identity = candidates[0], symbol = `${identity.code}.T`;
   if (args.holding.shares === null) return { status: "unavailable", identity, reason: "期末株数が非開示です" };
   const index = args.prices instanceof HoldingsPriceIndex ? args.prices : new HoldingsPriceIndex(args.prices);
@@ -188,6 +205,7 @@ export async function qualifyHoldingValuation(args: {
     reason: matches.length === 0 ? "該当symbolの保存日足原本がありません" : "該当symbolの保存日足原本が一意ではありません" };
   const { source, member } = matches[0];
   const { range, parsed, raw } = await index.verifiedChart(matches[0], symbol);
+  if (nameChange !== undefined && nameChange.effectiveDate > member.receivedAt.slice(0, 10)) return { status: "unavailable", identity, reason: "価格原本のcapture前に商号変更が実施済みと確認できません" };
   assert.equal(raw.meta.currency, "JPY"); assert.equal(raw.meta.exchangeTimezoneName, "Asia/Tokyo");
   const officialName = args.officialIssuerNames?.get(identity.code);
   const acceptedNames = [identity.englishName];
@@ -252,5 +270,5 @@ export async function qualifyHoldingValuation(args: {
         "期末以前の公式最終市場営業日のraw quote.close × 期末株数。価格時点と株数時点を分離した参考値。adjclose/丸め/局所分割調整なし",
       ...(calendar === undefined ? {} : { evaluationDate: args.fiscalYearEnd, sharesAsOf: args.fiscalYearEnd, priceAsOf: priceDate, marketCalendar: calendar }),
       splitObservation: "events=split,divを指定した同一応答で当期末後のsplit0。capture後の状態は未観測",
-      ...(canonicalMatch ? {} : { officialIssuerName: officialName }) } };
+      ...(canonicalMatch ? {} : { officialIssuerName: officialName }), ...(nameChange === undefined ? {} : { nameChange }) } };
 }

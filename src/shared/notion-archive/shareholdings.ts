@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { parseShareholdingsData, verifySavedHoldingsSource, verifyHoldingsSourceEntries, type Shareholding, type ShareholdingsSource, type ShareholdingsExtraction, type ShareholdingsNotApplicable } from "../../../services/yuho-quant/src/services/edinet/shareholdings.js";
 import { observeIssuedShares, unobservedIssuedShares, type IssuedShareObservation } from "../../../services/yuho-quant/src/services/edinet/issued-shares.js";
 import type { OfficialIssuerNames } from "../../../services/yuho-quant/src/services/edinet/shareholdings-issuer-names.js";
+import type { HoldingNameChange } from "../../../services/yuho-quant/src/services/edinet/shareholdings-name-change.js";
 import { HoldingPriceIssuerMismatch, HoldingPriceShareBasisMismatch, HoldingsPriceIndex, parseHoldingsCodeList, qualifyHoldingValuation, type ArchivedSource, type HoldingValuation } from "../../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js";
 import { edinetArchiveFilename } from "../../../services/yuho-quant/src/services/edinet/archive.js";
 import { findUniqueBackupChildByTitle, queryUniqueRow, recordPrimaryData } from "./archive.js";
@@ -697,7 +698,7 @@ interface PublishHoldingsArgs {
 }
 
 export interface HoldingPriceBudget { remainingChunks: number; remainingBytes: number }
-export type HoldingPriceSourceLoader = (holdings: readonly Shareholding[], budget: HoldingPriceBudget, shouldStop?: () => boolean, fiscalYearEnd?: string) => Promise<
+export type HoldingPriceSourceLoader = (holdings: readonly Shareholding[], budget: HoldingPriceBudget, shouldStop?: () => boolean, fiscalYearEnd?: string, nameChanges?: readonly HoldingNameChange[]) => Promise<
   { status: "ready"; snapshotId: string; evidenceScope: string; codeList: ArchivedSource; prices: ArchivedSource[]; officialIssuerNames?: OfficialIssuerNames; priceIndex?: HoldingsPriceIndex; checkOfficialIssuerNames?: () => Promise<{ status: "verified" } | { status: "held"; reason: string; reasonCode?: "budget_exhausted" | "issuer_source_unavailable" }> } |
   { status: "held"; reason: string; reasonCode: "snapshot_unavailable" | "budget_exhausted" | "issuer_source_unavailable" }
 >;
@@ -889,9 +890,16 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
     if (args.valuationSources?.priceIndex) args.valuationSources.priceIndex.assertSources(args.valuationSources.prices);
     for (const [index, holding] of selected.entries()) {
       const alreadyQualified = retainedChoices?.status === "ready" && retainedChoices.selected[index].existing?.properties["価格照合済"]?.checkbox === true;
-      const valuation: HoldingValuation = alreadyQualified ? { status: "unavailable", identity: null, reason: "既照合済みの価格・根拠を保持します" } : catalog && prices
-        ? await qualifyHoldingValuation({ holding, fiscalYearEnd: args.source.fiscalYearEnd, catalog, prices, officialIssuerNames: args.valuationSources?.officialIssuerNames })
-        : { status: "unavailable", identity: null, reason: "銘柄同定・個別価格・分割観測の保存原本が未指定です" };
+      let valuation: HoldingValuation;
+      try {
+        valuation = alreadyQualified ? { status: "unavailable", identity: null, reason: "既照合済みの価格・根拠を保持します" } : catalog && prices
+          ? await qualifyHoldingValuation({ holding, fiscalYearEnd: args.source.fiscalYearEnd, catalog, prices, officialIssuerNames: args.valuationSources?.officialIssuerNames, nameChanges: parsed.nameChanges })
+          : { status: "unavailable", identity: null, reason: "銘柄同定・個別価格・分割観測の保存原本が未指定です" };
+      } catch (error) {
+        if (!(error instanceof HoldingPriceIssuerMismatch)) throw error;
+        // 全原本を検証後の単独price商号不一致だけ。独立した他行の価格資格を取り消さない。
+        valuation = { status: "unavailable", identity: null, reason: error.message };
+      }
       ready.push({ holding, valuation, properties: { ...holdingProperties(args.source, args.ownerName, holding),
         ...sourceProperties(parsed, holding, zipSha256), ...valuationProperties(holding, valuation, args.valuationSources?.evidenceScope) } });
     }
@@ -1548,7 +1556,7 @@ export async function resumePendingShareholdingsPrices(args: {
         if (choices.status === "held") throw new Error(choices.reason);
         needed = selected.filter((_, index) => choices.selected[index].existing?.properties["価格照合済"]?.checkbox !== true);
       }
-      sources = await args.loadSources(needed, args.budget, args.shouldStop, info.source.fiscalYearEnd);
+      sources = await args.loadSources(needed, args.budget, args.shouldStop, info.source.fiscalYearEnd, parsed.nameChanges);
       if (sources.status === "held" || args.shouldStop()) {
         if (sources.status === "held") assert.ok(sources.reasonCode === "budget_exhausted" || sources.reasonCode === "snapshot_unavailable" || sources.reasonCode === "issuer_source_unavailable");
         const retry = sources.status !== "held" || sources.reasonCode === "budget_exhausted";

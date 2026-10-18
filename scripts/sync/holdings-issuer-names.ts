@@ -48,7 +48,11 @@ export function createHoldingOfficialNamesLoader() {
       }
       const value = await saved;
       if (target.cacheOnly && value.status === "held") continue; // No verified evidence; retain unknown basis without a new read.
-      if (value.status === "held") { if (value.reasonCode === "budget_exhausted") cache.delete(key); return value; }
+      if (value.status === "held") {
+        if (value.reasonCode === "budget_exhausted") { cache.delete(key); return value; }
+        // このissuerの名前証拠は未資格。通常valuationがその行だけ未資格にし、他の主体は保持する。
+        continue;
+      }
       records.push({ ...value, identity: target.identity });
     }
     return { status: "ready", names: new Map(records.map(record => [record.identity.code, record.evidence])), checkCurrent: async () => {

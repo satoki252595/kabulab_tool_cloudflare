@@ -883,7 +883,7 @@ describe("原本完了とは独立した保存価格queue", () => {
     const shouldStop = () => false;
     const result = await resumePendingShareholdingsPrices({ sourceDb, maxRows: 100, shouldStop, budget: budget(), loadSources: loader });
     expect(result).toEqual({ usedRows: 1, resumed: 1, held: 0, pending: false });
-    expect(loader).toHaveBeenCalledWith(extraction.holdings, budget(), shouldStop, source.fiscalYearEnd);
+    expect(loader).toHaveBeenCalledWith(extraction.holdings, budget(), shouldStop, source.fiscalYearEnd, undefined);
     const patch = vi.mocked(notionRequest).mock.calls.find(([method, path]) => method === "PATCH" && path === rowPath)![2] as { properties: Record<string, unknown> };
     expect(patch.properties).toMatchObject({ "株価": { number: 100 }, "保有時価": { number: 1200 }, "価格照合済": { checkbox: true } });
     for (const name of ["保有株数", "帳簿価額（円）", "出典原本SHA256", "原本照合済", "Name"]) expect(patch.properties).not.toHaveProperty(name);
@@ -893,12 +893,23 @@ describe("原本完了とは独立した保存価格queue", () => {
     for (const [name, value] of Object.entries(rowBefore)) if (!Object.hasOwn(patch.properties, name)) expect((saved[rowPath] as Record<string, unknown>)[name]).toEqual(value);
   });
 
+  it("同じ保存ZIP parserの商号変更診断をloaderと価格qualifierの双方へ渡す", async () => {
+    const nameChanges: NonNullable<ShareholdingsExtraction["nameChanges"]> = [];
+    vi.mocked(parseShareholdingsData).mockReturnValue({ ...extraction, nameChanges });
+    await seedPublishedSource(); vi.mocked(qualifyHoldingValuation).mockResolvedValue(qualified());
+    const loader = vi.fn<HoldingPriceSourceLoader>(async () => ready);
+    expect(await resumePendingShareholdingsPrices({ sourceDb, maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: loader }))
+      .toMatchObject({ usedRows: 1, resumed: 1, held: 0 });
+    expect(loader.mock.calls[0][4]).toBe(nameChanges);
+    expect(vi.mocked(qualifyHoldingValuation).mock.calls.at(-1)![0].nameChanges).toBe(nameChanges);
+  });
+
   it.each([
     { ownerCode: "1333", symbol: "8418.T", expectedEnglishName: "Yamaguchi Finacial Group,Inc.", observedEnglishName: "Yamaguchi Financial Group, Inc.",
       gzipSha256: "c663f9b644752012e86747eb3526f6f09790de1d140e3627b052445edb8acafd", bodySha256: "1aca595d4d08cd9cb45e264ca2a45bfeee31562cc6470c9891eae120720a31b3" },
     { ownerCode: "1377", symbol: "2874.T", expectedEnglishName: "Yokohama Reito Co.,Ltd.", observedEnglishName: "Yokorei Co.,Ltd.",
       gzipSha256: "c5702632f04bc1eddb6be1541c55b110bd408ea9ba8ff5b7b3fef6b3d155af18", bodySha256: "be0bea4b6040077c1873624b77fee3d91984ad9fae3d19a800c45dd1886afb45" },
-  ])("保存原本で確認した主体不一致は全window価格書込前に既知HOLDする: $ownerCode", async ({ ownerCode: _, ...proof }) => {
+  ])("保存原本で確認した単独商号不一致だけを未資格行へ分離し、独立した価格行を採用する: $ownerCode", async ({ ownerCode: _, ...proof }) => {
     const holdings = [holding, { ...holding, kind: "みなし保有株式" as const, rowIndex: 4 }];
     vi.mocked(parseShareholdingsData).mockReturnValue({ ...extraction, holdings });
     const sourceBefore = await seedPublishedSource(), rowsBefore = structuredClone(saved);
@@ -906,16 +917,19 @@ describe("原本完了とは独立した保存価格queue", () => {
     vi.mocked(qualifyHoldingValuation).mockResolvedValueOnce(qualified()).mockRejectedValueOnce(mismatch);
     vi.mocked(notionRequest).mockClear();
     expect(await resumePendingShareholdingsPrices({ sourceDb, maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: async () => ready }))
-      .toEqual({ usedRows: 0, resumed: 0, held: 1, pending: false });
-    const mutations = vi.mocked(notionRequest).mock.calls.filter(([method, path]) => method === "PATCH" || method === "POST" && path === "/pages");
-    expect(mutations.filter(([method]) => method === "PATCH")).toHaveLength(1);
-    expect(mutations.some(([method, path]) => method === "PATCH" && path !== `/pages/${args.archivePageId}` || method === "POST" && path === "/pages")).toBe(false);
-    expect(JSON.stringify(mutations)).not.toContain("実行中（結果未確定）");
+      .toEqual({ usedRows: 2, resumed: 1, held: 1, pending: false });
+    expect(saved[rowPath]).toMatchObject({ "株価": { number: 100 }, "保有時価": { number: 1200 }, "価格照合済": { checkbox: true } });
+    const unavailablePath = `/pages/${"f".repeat(32)}`;
+    expect(saved[unavailablePath]).toMatchObject({ "株価": { number: null }, "保有時価": { number: null }, "価格照合済": { checkbox: false } });
+    expect(JSON.stringify((saved[unavailablePath] as Record<string, unknown>)["欠測理由"])).toContain(proof.bodySha256);
+    const pricePatches = vi.mocked(notionRequest).mock.calls.filter(([method, path]) => method === "PATCH" && [rowPath, unavailablePath].includes(path));
+    expect(pricePatches).toHaveLength(2);expect(vi.mocked(notionRequest).mock.calls.some(([method, path]) => method === "POST" && path === "/pages")).toBe(false);
+    const priceColumns = new Set(["株価", "保有時価", "通貨", "基準日", "区分", "確定銘柄コード", "銘柄照合根拠", "価格照合根拠", "価格照合済", "欠測理由"]);
+    for (const [, , body] of pricePatches) for (const name of Object.keys((body as { properties: Record<string, unknown> }).properties)) expect(priceColumns.has(name)).toBe(true);
+    for (const path of [rowPath, unavailablePath]) for (const [name, value] of Object.entries(rowsBefore[path] as Record<string, unknown>)) if (!priceColumns.has(name)) expect((saved[path] as Record<string, unknown>)[name]).toEqual(value);
     expect(saved[`/pages/${args.archivePageId}`]).toMatchObject({ "保有価格状態": { select: { name: "要確認" } } });
-    expect(JSON.stringify((saved[`/pages/${args.archivePageId}`] as Record<string, unknown>)["保有価格理由"])).toContain(proof.bodySha256);
-    expect(restartInfo(saved[`/pages/${args.archivePageId}`], "保有価格")).toEqual(restartInfo(sourceBefore, "保有価格"));
+    expect(restartInfo(saved[`/pages/${args.archivePageId}`], "保有価格")).toMatchObject({ nextHoldingOffset: 2, unavailableRows: 1 });
     for (const name of ["保有明細状態", "保有明細理由", "保有明細再開情報"]) expect((saved[`/pages/${args.archivePageId}`] as Record<string, unknown>)[name]).toEqual(sourceBefore[name]);
-    for (const [path, row] of Object.entries(rowsBefore)) if (path !== `/pages/${args.archivePageId}`) expect(saved[path]).toEqual(row);
   });
 
   it("実1798の市場3/30・法的4/1・FY3/31分割前株数はunknownより前にHOLDし全価格/旧cursorを保持する", async () => {
@@ -968,13 +982,14 @@ describe("原本完了とは独立した保存価格queue", () => {
     expect(vi.mocked(notionRequest).mock.calls.filter(([method, path]) => method === "PATCH" && path === rowPath)).toHaveLength(0);
   });
 
-  it("価格指定CLIも同じ事前HOLDを通り、既存unknownは型付き不一致でも上書きしない", async () => {
+  it("価格指定CLIも同じ行未資格を通り、既存unknownは型付き不一致でも上書きしない", async () => {
     await seedPublishedSource();
     const error = new HoldingPriceIssuerMismatch({ symbol: "8418.T", expectedEnglishName: "Yamaguchi Finacial Group,Inc.", observedEnglishName: "Yamaguchi Financial Group, Inc.",
       archivePageId: evidence.archivePageId, filename: evidence.filename, gzipSha256: evidence.sha256, bodySha256: evidence.sha256 });
     vi.mocked(qualifyHoldingValuation).mockRejectedValue(error); vi.mocked(notionRequest).mockClear();
-    expect(await publishVerifiedShareholdings({ ...args, valuationSources: ready })).toMatchObject({ status: "held", reason: error.message });
-    expect(JSON.stringify(vi.mocked(notionRequest).mock.calls.filter(([method, path]) => method !== "GET" && !path.endsWith("/query")))).not.toContain("実行中（結果未確定）");
+    expect(await publishVerifiedShareholdings({ ...args, valuationSources: ready })).toMatchObject({ status: "published", unavailable: 1 });
+    expect(saved[rowPath]).toMatchObject({ "価格照合済": { checkbox: false } });
+    expect(JSON.stringify((saved[rowPath] as Record<string, unknown>)["欠測理由"])).toContain(error.proof.bodySha256);
     await requestRouter("PATCH", `/pages/${args.archivePageId}`, { properties: { "保有価格状態": { select: { name: "実行中（結果未確定）" } } } });
     const before = structuredClone(saved); vi.mocked(notionRequest).mockClear(); vi.mocked(qualifyHoldingValuation).mockClear();
     await expect(publishVerifiedShareholdings({ ...args, valuationSources: ready })).rejects.toThrow("前回結果が未確定");

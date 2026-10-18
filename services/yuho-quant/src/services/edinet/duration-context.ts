@@ -15,6 +15,12 @@ export interface FilingDateInstant {
   instantDate: string;
 }
 
+/** 訂正原本にも残るcontextの報告日。新しい提出日時の証明には使わない。 */
+export interface ReportedFilingInstant extends FilingDateInstant {
+  clockKind: "reported_context";
+  sourceFilenameDate: string;
+}
+
 type FilingContext = DurationContext | FilingDateInstant;
 
 /** null は当該 ID の欠損・非対応・矛盾。未使用 ID の失敗は波及させない。 */
@@ -190,4 +196,12 @@ export function readFilingDateInstant(
   const context = readFilingContexts(entries, honbunFile, reportPeriodEnd).get("FilingDateInstant");
   const filingDate = /_\d{2}_(\d{4}-\d{2}-\d{2})_ixbrl\.html?$/.exec(honbunFile)?.[1];
   return context && "instantDate" in context && context.instantDate === filingDate ? context : null;
+}
+
+/** 旧提出日時資格は緩めず、同issuer/stem・両原本一致の実contextを別観測で保持する。 */
+export function readReportedFilingInstant(entries: ZipEntries, honbunFile: string, reportPeriodEnd: string): ReportedFilingInstant | null {
+  const context = readFilingContexts(entries, honbunFile, reportPeriodEnd).get("FilingDateInstant");
+  const filenameDate = /_\d{2}_(\d{4}-\d{2}-\d{2})_ixbrl\.html?$/.exec(honbunFile)?.[1];
+  return context && "instantDate" in context && filenameDate !== undefined && isIsoDate(filenameDate) && context.instantDate <= filenameDate
+    ? { ...context, clockKind: "reported_context", sourceFilenameDate: filenameDate } : null;
 }

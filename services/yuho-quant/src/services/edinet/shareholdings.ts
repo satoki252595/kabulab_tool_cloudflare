@@ -5,7 +5,8 @@ import { isUnassignedEdinetSecCode } from "./types.js";
 import { unzip, type ZipEntries } from "./zip.js";
 import { extractTables, tableToGridExpanded, unitToYenFactor } from "./html-table.js";
 import { stripHtml } from "./text-sections.js";
-import { readFilingDateInstant, type FilingDateInstant } from "./duration-context.js";
+import { readFilingDateInstant, readReportedFilingInstant, type FilingDateInstant } from "./duration-context.js";
+import { observeHoldingNameChanges, type HoldingNameChange } from "./shareholdings-name-change.js";
 
 export interface ShareholdingsSource {
   docId: string;
@@ -51,6 +52,8 @@ export interface ShareholdingsExtraction {
   holdings: Shareholding[];
   holderScope: "filer_only" | "unqualified";
   notApplicable?: ShareholdingsNotApplicable;
+  /** 原表の診断。holding値/原表factsSHAには加えず、価格主体資格へ明示注を渡す。 */
+  nameChanges?: HoldingNameChange[];
 }
 
 /** 保存type1のDEIを公式namespace・単一PublicDoc・提出者/証券コード/期末で照合する。 */
@@ -309,7 +312,13 @@ export function parseShareholdingsData(zip: Buffer, source: ShareholdingsSource,
   if (new Set(result.holdings.map(holding => `${holding.kind}:${normalize(holding.name)}`)).size !== result.holdings.length) {
     return { ...result, status: "unsupported", reason: "同名銘柄の複数明細があり、既存行との対応を一意に確定できません", holdings: [] };
   }
-  if (result.holdings.length > 0) return { ...result, status: "ok", reason: null, holderScope: "filer_only" };
+  if (result.holdings.length > 0) {
+    const nameChanges = result.holdings.some(holding => /\(注\)[1-9]\d{0,2}$/.test(normalize(holding.name)))
+      ? observeHoldingNameChanges({ source, filename: block.filename, zip, member: entries.get(block.filename)!, blockHtml: block.html,
+        context: readReportedFilingInstant(entries, block.filename, source.fiscalYearEnd), holdings: result.holdings }) : [];
+    return { ...result, status: "ok", reason: null, holderScope: "filer_only",
+      ...(nameChanges.length > 0 && verifyHoldingsSourceEntries(entries, source).status === "verified" ? { nameChanges } : {}) };
+  }
   if (excludedTables > 0) return { ...result, reason: "当社/提出会社と明示された保有区画に適格明細がありません（名義別区画は対象外）" };
   const notApplicable = explicitNotApplicable(block, block.filename, entries, source, zip);
   if (notApplicable !== undefined) return { ...result, status: "explicit_not_applicable", holderScope: "filer_only", notApplicable,

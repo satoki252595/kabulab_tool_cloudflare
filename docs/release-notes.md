@@ -9,6 +9,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ## 2026-10-18
 
+- 保有明細の価格確認で、原本検証済みの銘柄名不一致だけを該当行の保留へ限定し、別行の資格確認を継続する。商号変更の完全な原表注を通常parser/価格資格へ渡し、推測の別名・分割補正を加えない。Python定期取得は実証済みRAW bucketのsecretを明示し、[全定期処理とSSH補完の範囲](production-job-inventory.md)を記録した。
 - EDINETの証券コード未解決書類は最新の公式提出者表で同一法人の非上場を確認し、対象外と記録する。保有明細は新しい価格原本が来た場合に未資格行だけ通常処理で再確認し、旧確定価格と原本を保持する。[主体判定](test-logs/2026-10-18-edinet-nonlisted-issuer.md)・[再資格と予算](test-logs/holdings-price-requalification-20261018.md)。
 - 優待の掲載名簿・同一名義条件を共通の機械抽出と公開v5へ追加。保有明細は公式休場の直前営業日を価格日として株数日と分離し、日足台帳は源欠測を明示しながら資格済銘柄を更新する。[価格台帳](test-logs/holdings-price-registry-partial-20261018.md)・[期末営業日](test-logs/holdings-market-session-20261018.md)。
 - 事業タグの同一根拠を通常PRE/CAS/POSTで再利用できるようにし、優待の一般期間行・券利用時の併用を機械抽出する共通v5へ追加。VWAPは源欠測と保存済み最終有効日をAPI/画面へ伝え、同値時の余計なPUTを省く。[全20機能の残件と適用境界](test-logs/functional-recovery-20261018.md)。
