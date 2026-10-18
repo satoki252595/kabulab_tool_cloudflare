@@ -101,7 +101,7 @@ def _ctx(*, dry_run: bool = False):
 
     ctx = SimpleNamespace(
         settings=SimpleNamespace(cloud_store=cloud, dry_run=dry_run),
-        args=SimpleNamespace(limit=None, codes=None, date=None),
+        args=SimpleNamespace(limit=None, codes=None, date=None, archive_only=False),
         add_failure=add_failure,
         add_success=add_success,
     )
@@ -351,6 +351,49 @@ class TestConfigStop:
         assert mod.main([], env=dict(_D1_ENV)) == 0
         assert seen["job"] == mod.JOB_NAME
         assert seen["fn"] is mod.execute
+
+
+@pytest.mark.parametrize("archive_only,archive_ok", [(False, True), (True, True), (True, False)])
+def test_archive_only_main_keeps_normal_custody_without_sector_dml(
+    monkeypatch, tmp_path, archive_only, archive_ok
+):
+    ticker, sector = _real_tickers(1)[0]
+    store = _SectorD1([(ticker, None, 1, "equity")])
+    before = store.values()
+    archive = _wire_strict(monkeypatch, tmp_path, store)
+    if not archive_ok:
+        _cli_fail(monkeypatch, {})
+    ctx, state = _ctx()
+    reports = []
+
+    def run_job(name, execute, argv, *, parser, env):
+        assert name == ("sector33_archive" if archive_only else mod.JOB_NAME)
+        ctx.args = parser.parse_args(argv)
+        reports.append(execute(ctx))
+        return 0 if state["failed"] == 0 else 1
+
+    monkeypatch.setattr(mod, "run_job", run_job)
+    assert mod.main(["--archive-only"] if archive_only else [], env=_D1_ENV) == (
+        0 if archive_ok else 1
+    )
+    report = reports[0]
+    if not archive_ok:
+        assert report.stopped == "archive-failure" and report.archive_page_id is None
+    else:
+        assert report.stopped is None and report.archive_page_id is not None
+        assert archive.record_calls == 1
+        key, page = next(iter(archive.pages.items()))
+        manifest_name = next(name for name in page["files"] if name.endswith("-sector33-manifest.json"))
+        manifest = json.loads(page["files"][manifest_name])
+        assert key == mod._generation_key(manifest["asOf"], manifest)
+        assert manifest["zipSha256"] == hashlib.sha256(_zip_bytes()).hexdigest()
+        assert manifest["response"]["status"] == 200
+    if archive_only:
+        assert store.write_sql == [] and store.values() == before
+        assert report.written == report.planned == state["processed"] == 0
+    else:
+        assert store.write_sql and store.values()[ticker][0] == sector
+        assert report.written == state["processed"] == 1
 
 
 class TestArchiveGate:
