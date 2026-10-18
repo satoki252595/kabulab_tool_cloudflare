@@ -86,3 +86,27 @@ main535の定期jobは20:00:06.214に自然起動し、20:05:05.247にcode0・si
 Nixの関連2suite91件PASS、変更source/testのESLintと全体TypeScript型検査を通過。scopeによる50/1分割、全pagination、HTTP前入力拒否、対象外応答、重複不採用と、関連済み検査の読取0を回帰検証した。初回全件の実行・列別空欄理由の分類は別受入である。
 
 独立FSレビューは4source/testの固定bytesと呼出経路を確認してblocking0。根拠`tmp/feature-audit-20261018/biztag-scoped-master-lookup-v1/delegate-independent-fs-peer-v1.json`、SHA256 `2607ee9469da07ce05c0eb78a84ae15eb318aeb3879a3e820498687122299c97`。このレビュー自体の追加API・モデル・業務書込0。
+
+## 初回50社と検査範囲の追加確認
+
+#538はCI3checks成功後20:39:11 JSTにmain `fa4d5f4de26bdbe2c9c29c59bcf6acab700bd278`へマージした。Cloudflare build `cd602740-ade3-434e-a102-1b64d72a984a`は20:39:36にversion `f3119705-d490-439a-9595-eca8538d14b6`・同一10triggerで配備完了。SSHも同mainのclean専用runtimeへ更新し、既envの承認revisionだけを変えた0600ファイルで通常preflightに成功。元envは未変更。Macは当日535の自然起動receiptと監視期待値を保持し、このSSH限定実行に合わせて変更しない。
+
+SSHで20:39:42–20:40:32 JSTの最初の50社を通常`run --mechanical-only`で検査。実行49.576秒、全50社の39本文を確認し、未検査・同期差分・修復・メタ修復・保留0、主マスタ読取なし、モデルforward/外部判定API0。実空欄は6項目に計75セルあり、同期差分0を空欄0とは扱わない。この1バッチだけから全3,666社の完了を宣言しない。有限74バッチを直列で進め、21時定期と同時書込しないよう一旦区切る。
+
+Sonnetによる固定Gitコード限定の先回りレビューもblocking0。実モデル`claude-sonnet-5-5`、99.7秒、CLI参考費用USD0.4402149（実請求額ではない）、tools/MCP/本番API/書込0。私有根拠`tmp/feature-audit-20261018/sonnet-scoped-master-review-v1/accepted-review.json` SHA256 `6f2e6e89fe4b3ba3b76328f27964d47353fcfba63b8f0ba0a4281cb611ee7c87`。これはコードレビューであり、列充足や本番性能の実証ではない。
+
+39列の通常検査は現在Notionと保存済み同期SHAの一致を調べ、原CSVを毎回再抽出しない。保存CSV4通の全ZIP SHAを照合して現parserを実行し、38/36/38/38節を確認したが、非空の正規TextBlockの取りこぼしや文字数切捨てはこの4通で未確認。元要素不在へ別注記を代入しない。旧parser由来の全件漏れを証明/否定する検査ではなく、必要な再抽出は既存`backfill-text-sections --doc=... --force`で行う。私有根拠`tmp/feature-audit-20261018/supplement-metadata-post537-v1/saved-csv-four-extraction-audit.json` SHA256 `47df0558cf624e61667c56e38ea2e568179c426621d740e3e705d57f5e21cee9`。
+
+## 財務の過去分と主リンクの追加確認
+
+日次の適格な数値は同じ原本からNotion③の19数値列とD1へ接続している。汎用の過去再解析は既relationのCSVのみを使い、日次側の別保存type1 ROA表を自動で採らない。また主マスタIDを渡さず、主relationの空欄補完にはならない。保存済み3社のCSV NULL→直接ROA表の採用例は既に実適用済みで、追加の現Notion誤NULL件数は未測定。無条件のtype1全量取得や、ROAの算出・原本の付替えは行わない。FS根拠`tmp/feature-audit-20261018/financial-summary-remaining-fs-audit-v1/delegate-fs-audit-v1.json` SHA256 `cd7961cf8efb2345fb5415de1ec20379b1b19582acb8833050f843de61c1118d`。
+
+主relation空欄1,652行のうち、作成時刻昇順の先頭20行を列限定でfresh読取した。全20行に原本relationがあるが、17銘柄はいずれも保存済み主マスタ3,857行/現役core3,687行に不在で、即補完できる資格済み主ページ0。REITや歴史銘柄を含み、現在の主ページ不在だけで歴史的な対象外を断定しない。残1,632行へ外挿しない。shared clientでschema/queryの2要求・3.098秒・50,265B、再送・原本取得・モデル・業務書込0。根拠`tmp/feature-audit-20261018/financial-master-relation-sample-v1/delegate-sample-acceptance-v1.json` SHA256 `d8752927b9a1e1230be6b4dc6c9462c1c1deddc528726844af756018ff40859f`。
+
+## 過去本文の再抽出失敗による旧索引消去を防ぐ
+
+`backfill-text-sections --force`は非空の再抽出なら、新Notion全文の往復照合→D1のstatus/索引/新pointerを同一batchで確定→旧Notion行を退役する既存経路が接続している。一方、CSV未提供・parse失敗で0節になった場合は、旧Notionpointerを残したまま正常な旧D1索引をDELETEする枝があった。
+
+全3callerが使う共有builderで`parse_error`をSQL作成前に拒否した。0節の確定も旧status/pointerのsnapshotが不明、旧status正常、旧pointerありなら停止して保持する。CLIは既SELECTでpointer1列を追加するだけで、追加native要求はない。既error集計で非0終了し、失敗を成功や未開示へ変換しない。正常な新規0節は旧status/pointerが明示的に無い時だけ従来どおり記録する。他2callerは非空の全文照合後だけbuilderへ入るため、正常な確定契約は変更しない。
+
+保存実6963の37索引を含む全6表で、失敗投影4条件のSQL送信0・旧値不変と新規0節の正常系を検証。関連6suite96件PASS、全体TypeScript型検査・変更source/testのESLint成功。修正のための原本取得・モデル・実データ修復・本番書込0。根拠`tmp/feature-audit-20261018/text-backfill-empty-preserve-v1/ready-v1.json` SHA256 `812115bf1e82d551db506af0e86a5cece4e5a4b9a074f6934aa2ae9113b3ca3f`。これで過去の損失件数や全原本の再抽出を受け入れたとは扱わない。
