@@ -1,6 +1,6 @@
 # 本番定期処理とSSHでの補完
 
-確認日: 2026-10-18。定期予定の確認対象: main `1c0931ba9d86f6c3f3fa09f5a6d50cb80562d8e8` とMac095設定。SSH補完入口も同mainまで確認。
+確認日: 2026-10-18。定期予定の確認対象: main `b2c2474ef1f2c88974c243173245defa0ee6bce8` とMac095設定。SSH補完入口も同mainまで確認。
 時刻はJST、Cloudflareは起動・結果監視、重い取込本体はActionsまたはMacで実行する。
 設定上の予定と、実行成功・全銘柄のデータ充足は別に確認する。
 
@@ -71,7 +71,9 @@ Pythonの過去提出日補完はリポジトリのNix環境内で`pipeline`へ�
 保留/続きありは非0終了でも、正常結果と`completed-write.json`がある場合だけ既知の未完として扱う。
 `pending-write.json`や通信結果不明がある場合は、出力名を変えて自動再送せず原記録を保持する。
 
-当日株価だけの限定補完は`stock41-price-repair.ts`を使い、固定41社・10/16のOHLCVだけを対象とする。入力は10/18に通常保管した10年窓の33gzipと受入refs（SHA256 `8adc58c052b734d454430a6e024fb66f7f825fb550ff9cf197a15de1cc2f7311`）で、全gzip/member SHAと通常parser/guardを確認し、原文精度の値を使う。D1では同じ41社を絞り、銘柄同一性・行不存在CAS付きの最大4batch（1batch最大12行）のplain INSERTだけを許す。既存全値同値はwrite0、NULLを含む不同はHOLDで上書きしない。財務断面・RSI・既存の取得時計は更新せず、新receiptの実行時計だけを記録する。本番実行は未実施である。
+当日株価だけの限定補完は`stock41-price-repair.ts`を使い、固定41社・10/16のOHLCVだけを対象とする。入力は10/18に通常保管した10年窓の33gzipと受入refs（SHA256 `8adc58c052b734d454430a6e024fb66f7f825fb550ff9cf197a15de1cc2f7311`）で、全gzip/member SHAと通常parser/guardを確認し、原文精度の値を使う。D1では同じ41社を絞り、銘柄同一性・行不存在CAS付きの最大4batch（1batch最大12行）のplain INSERTだけを許す。既存全値同値はwrite0、NULLを含む不同はHOLDで上書きしない。財務断面・RSI・既存の取得時計は更新せず、新receiptの実行時計だけを記録する。
+
+14:12にはSSHをmain527へ更新済みのNix環境でこの限定CLIを1回実行し、[41件挿入・4原子バッチ・全値読戻しと物理receipt](test-logs/stock41-price-repair-20261018.md)を9.192秒で完了した。main CI・Cloudflare配備も成功。保有価格は先行2窓で10文書・67明細を確認し、通常のpending/全journal/終了を閉じてから次の窓へ進む。これを通常株式同期の財務・RSI全充足や、全価格資格成立とは扱わない。
 
 ## 日足停止報告との照合
 
