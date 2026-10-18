@@ -1,6 +1,6 @@
 # 株価欠測41銘柄の通常5年原本確認と財務・指標の補完
 
-確認日: 2026-10-18。最新の市場日は10/16。OHLCVだけの[14:12の補完](stock41-price-repair-20261018.md)と、財務・RSI等の更新を分ける。
+確認日: 2026-10-18。最新の市場日は10/16。OHLCVだけの[14:12の補完](stock41-price-repair-20261018.md)に続き、17:18に固定41銘柄の財務・RSI等をSSHの通常限定CLIで反映し、全値・物理保管・所有プロセスの閉鎖を受け入れた。
 
 ## 保存原本から分かったこと
 
@@ -52,9 +52,13 @@ nix develop --command env -u NODE_PATH node --env-file=<private.env> --import ts
 
 ## 受入範囲
 
-この時点で回復したのは、正規の5年価格・同run財務原本の取得資格である。財務断面・RSI・指標・モメンタムの監視値3,646/3,687は、この取得だけでは更新されない。保存原本からの限定反映は別に受け入れる。
+17:18 JST、main532のSSH Nix環境から通常限定CLIを1回実行し、41銘柄を反映、HOLD0・終了コード0で閉鎖した。財務断面・RSI・指標・モメンタムと銘柄限定signalを更新し、新signalは2件。全41銘柄のPRE・入力CAS・全列POST、原本からの通常再計算と実送信SQL、receiptの正常物理保管を保存物から独立照合した。これは通常helperの全値読戻しの受入であり、独立HTTP再GETではない。
 
-8303の過去245件の非正調整値、日足523A/641AのHOLD、5分足7531/9311の取得元欠測を、この41銘柄の成功へ含めない。将来の5年原本供給や10/19の自然定期成功も未確認。新しい依存・DDL・モデル利用はない。D1の実請求額と上流総通信数は未測定。
+元の実行窓は08:18:04.961〜08:38:04.961 UTC、所有親の実経過は21.427秒。通常reportは08:18:06.466〜08:18:20.238 UTCの13.772秒、物理receiptは08:18:25.528 UTCに完了した。市場日10/16、原本の実取得日10/18、今回の実書込時計を分けて保持する。D1 124要求・Notion API 9要求・hosted読取1回は全134応答200、結果不明0。新取得元通信・モデル・年次・OHLCV・他銘柄の更新は0、pendingなし・観測した所有プロセスは全閉鎖。
+
+17:19 JSTには通常opsのcoverage SQLを1回だけ読み、対象3,687、価格・指標・モメンタム各3,687、マクロ日10/16を確認した。`rows_read=14,749`、書込0、attempts1、DB duration 65.0812ms。このcoverageは財務表やRSIの全項目充足を直接数える検査ではなく、全市場の再計算でもない。
+
+8303の過去245件の非正調整値、日足523A/641AのHOLD、5分足7531/9311の取得元欠測を、この41銘柄の成功へ含めない。将来の5年原本供給、本日20/21時と10/19の17/18時の自然定期成功も未確認。全20機能の完了とはしない。新しい依存・DDL・モデル利用はない。D1の実請求額と上流総通信数は未測定。
 
 ## 保存証跡
 
@@ -64,5 +68,10 @@ nix develop --command env -u NODE_PATH node --env-file=<private.env> --import ts
 - 所有プロセス閉鎖 `owner-terminal.json`: SHA256 `deaef0b295e82c60287aab29596cbb0f30740b7781bf015b3a9e230570570f56`
 - 独立保存物照合 `delegate-saved-acceptance-v1.json`: SHA256 `7b5b105b6356b2e4aaf2562ee9b5d5cf3da5a98c868c5e6647d7b92122238108`
 - 既受入OHLCVとの全値比較 `root-5y-ohlcv-saved-equality.json`: SHA256 `f3ff83bec237fa9ced6f8b41402ceec660ef28a316d357584e52d405c4c496cc`
+
+本番反映の22保存物・通常結果・coverageは、私有保存先 `tmp/feature-audit-20261018/stock41-financial-ssh-preparation-v1/actual-ssh-v1/`。以下の受入証跡はその親directoryに保存。
+
+- 独立保存物照合 `delegate-actual-financial-acceptance-v1.json`: SHA256 `4836399dab8a75f259c9715a8beccad96e0e27cddcce9ebe6a59046c6e796c98`
+- Root最終受入 `root-final-acceptance-v1.json`: SHA256 `5a9a463f4be4407e195163f856efac2808ae656f3aba99c95695127d9aa80b6a`
 
 原本全文・秘密値・署名URLをGitへ保存しない。追加の全市場再取得・全履歴ミラー・独立HTTP再GETは完了条件に加えない。
