@@ -13,15 +13,15 @@
 | `/financial-math/` | 004 金融数学 — DCF Gordon / CAPM β自動推定 / EMH アノマリースクリーニング / Black-Scholes Greeks |
 | `/yuho-quant/` | 005 有報定量検索 — EDINET 有報の受注高/受注残高をセグメント別に構造化し最大5年推移を可視化 |
 | `/ir-catalog/` | 006 IR Catalog — TDnet 適時開示を全量取得し表題からタグ分類、対象タグは PDF 本文のポジ/ネガを軽量 OSS 判定 |
-| `/vwap-analysis/` | 007 VWAP / 価格別出来高 — 5分足VWAP・価格別出来高 (POC/バリューエリア)・日足10年 (分割調整)・週次信用残高を多時間軸で表示 |
+| `/vwap-analysis/` | 007 VWAP / 価格別出来高 — 5分足VWAP・価格別出来高 (POC/バリューエリア)・日足10年 (分割調整)・信用残高を多時間軸で表示 |
 
 ## プラットフォーム
 
 旧構成 (Vercel Serverless Functions + Neon) から **Cloudflare Workers + Hono** へ移行済み
-(2026-06 確定。経緯は git 履歴)。Worker は **配信専用**
-(`worker/entry.ts` が `src/index.ts` の Hono root app を fetch ハンドラとして公開) で、読取は
-**D1 バインディング** (`c.env.DB`) 経由。データ取得・加工・本番書き込みは Worker に載せず
-**Node (GitHub Actions)** で実行し、`createD1HttpDb` (D1 REST) で書き込む (後述)。
+(2026-06 確定。経緯は git 履歴)。Worker はサイト配信・取得プロキシと
+**CronによるActionsの起動・結果監視**を担い、読取は **D1 バインディング** (`c.env.DB`) 経由。
+重いデータ取得・加工は **Node/Python (GitHub Actions)**、事業タグ・優待要約は
+**Macの定期実行環境**で行う。NodeのD1書込は `createD1HttpDb` (D1 REST) 経由。
 
 データストア:
 
@@ -47,7 +47,7 @@ pnpm install              # 依存インストール
 
 ```
 .
-├── worker/entry.ts                  # Cloudflare Worker エントリ — src/index.ts(Hono) を fetch で公開
+├── worker/entry.ts                  # Cloudflare Worker エントリ — fetch + scheduled 起動・監視
 ├── wrangler.toml                    # Worker 設定 — ASSETS(public) / R2(BUCKET=vwap-data) / D1(DB=kabulab-cf)
 ├── src/
 │   ├── index.ts                     # ルート Hono アプリ + ポータル + サブアプリ mount
@@ -111,21 +111,21 @@ pnpm db:generate:d1       # D1(SQLite) スキーマ生成 → drizzle/d1/*.sql (
 pnpm sync:daily:core      # core/rsi/swing 日次 (Node → D1 REST。GitHub Actions と同じ本体)
 pnpm sync:daily           # 手動フル日次 (上記 core + VWAP 日足/5分足/信用残高)
 pnpm sync:monthly:core    # otakara 派生テーブル rebuild (Node → D1 REST、Yahoo なし)
-pnpm sync:monthly         # 手動フル月次 (上記 rebuild + 優待取得/抽出/要約タスク書き出し。要約は外部のクラウド LLM)
+pnpm sync:monthly         # Mac用フル月次 (優待取得 → rebuild → ローカル機械要約。Linuxは下表の3段階)
 pnpm sync:universe        # 東証内国株の母集団 seed (xlsx=Node 専用・月次/復旧時に実行)
 
-# データ取得 (007 VWAP → R2。cron 対象外=手動/CI)
+# データ取得 (007 VWAP → R2。定期workflowと同じ本体)
 pnpm ingest:vwap-daily    # 全銘柄の日足10年 (未取得はバックフィル, 既存は差分) → R2 daily/{code}.json
 pnpm ingest:vwap-intra    # 全銘柄の5分足 (直近) を蓄積 → R2 intra/{code}.json
-pnpm ingest:vwap-margin   # JPX 週次PDF (信用残高) → R2 margin/{week}.json
+pnpm ingest:vwap-margin   # JPX公表PDF (信用残高) → R2
 
-# データ取得 (006 TDnet → D1。Worker 取込ルートを叩く)
-pnpm ingest:ir-tdnet      # /ir-catalog/admin/catchup を CRON_SECRET 認証で POST
+# データ取得 (006 TDnet → D1。Nodeが共通処理を直接実行)
+pnpm ingest:ir-tdnet      # 原本Notion保管・本文抽出 → D1
 
 # データ取得 (005 EDINET → D1。Node が共通処理を直接実行)
 pnpm ingest:yuho-edinet   # Node 共通取込 + D1 HTTP atomic sender (EDINET/D1/Notion 設定必須)
 
-# 事業タグ (005 EDINET 取込の次に実行。D1 は読むだけ・書込は Notion のみ)
+# 事業タグ (本番の唯一writerはMac定期環境。原本・本文の準備後に実行)
 pnpm biztag run           # 事業タグ判定 (差分処理。詳細は docs/005-yuho-quant-business-tags.md §11)
 ```
 
@@ -135,61 +135,56 @@ pnpm biztag run           # 事業タグ判定 (差分処理。詳細は docs/00
 > `is_yutai=true` の優待銘柄のみを対象とする。
 > Yahoo Finance はレート制限 (429) が厳しいため、VWAP の大量取得は低負荷 (逐次 + ディレイ) で行う。
 
-## 運用ステータス（自動化・手作業・残タスク）
+## 本番の定期処理・先行条件・LLM利用
 
-**Neon を全廃し Cloudflare D1 + R2 + Notion へ移行済み**。データ・読取・取込の現況
-(規模の数値は 09-13 受入時点。変動する):
+確認日: **2026-10-18**。時刻は **JST**。Cloudflareが起動・結果監視を担い、取得本体はActionsまたはMacで実行する。
+原本はNotionに物理保管し、構造化データはD1、時系列・実行receiptはR2へ保存する。
 
-### データ格納状況（直近営業日まで投入済み）
+| 処理 | 予定時刻・頻度 | 必要な先行条件・順序 | LLM利用（定期実行） |
+| --- | --- | --- | --- |
+| 日証金の貸借・需給 | 平日12:17 | 公表済みの当日CSV。株式同期の完了待ちは不要 | なし |
+| VWAP日足・5分足 | 月水金17:00、CF起動 | 公式銘柄表・対象日の原本資格。Yahoo共通排他内で日足→5分足、結果不明では後続停止 | なし |
+| 市場の信用残高 | 平日17:00 | 公表元の対象日資料。株価とのデータ依存はないが、現在はVWAPと共通workflow排他 | なし |
+| 株価・財務断面・RSI・スイング・モメンタム・業種騰落 | 平日18:00、CF起動 | 母集団と通常取得原本。指標は価格・分割単位の資格確認後、Yahoo共通排他 | なし |
+| 東証33業種の対応 | 株式同期の成功後 | 現workflowは株式成功後。入力はcore銘柄集合＋公式提出者表 | なし |
+| 価格依存の業種別資金フロー | 株式同期の成功後、許容失敗もない場合だけ | 当日の必要価格・`core_stocks.sector`。現ハーネスはstock-sync job全体の成功も要求 | なし |
+| 価格非依存の資金フロー28取得元 | 平日18:15、CF起動 | 当日の株式同期は待たず、非Yahoo→Yahoo→両lane成功後join。共有Notion枠未成立のため取得直列を維持 | なし |
+| TDnet・有報の補完 | 平日19:00、CF起動 | 主体・原本を確認→抽出→保存・価格資格。共有保存予算内でTDnet→Node有報、前段失敗で停止 | なし |
+| 事業タグ・39本文・競合の機械準備 | 毎日20:00、Mac LaunchAgent | 有報原本→39本文・根拠→タグ。同一入力の保存判定は再利用。競合準備はタグjobの正常終了後 | **例外あり**：適格新規・実入力変更のタグだけローカルClef-Flash。本文・競合準備は不使用 |
+| EDINET財務サマリ・原本 | 平日21:00 | 指定提出日の公式一覧・主体確認→原本保管→財務抽出。19時Nodeの完了待ちは不要 | なし |
+| 優待要約 | 毎日21:00、Mac LaunchAgent | 保存済み優待原文→機械抽出・契約検証→PRE/CAS/POST。月次スコアの完了待ちは不要 | **標準はなし**。機械未対応は保留。手動の明示`--allow-model`だけ既存MLX |
+| 鮮度・ジョブ・schema・ライセンス監視 | 毎日23:30 | 現在の保存状態とjob実績。取込失敗でも検査を実施 | なし |
+| 日米マクロ結合 | 火〜土06:00、CFの月〜金21:00 UTC起動 | 対応する予定日の保存済み日本市場原本＋米国側観測→結合。最新値で過去を代用しない | なし |
+| EDINET銘柄マスタ | 毎月1日06:00 | 現在の公式コード表。月次優待処理とは独立して取得可能 | なし |
+| 母集団・優待原文・優待スコア | 毎月10日10:30 | **母集団更新→優待原文取得→スコア再計算**。保存財務が必要。MA乖離比較は財務日と指標日の一致を確認 | なし |
+| TDnet速報・上場状態 | 平日09:00〜19:00毎時 | 公表済み対象日の資料→主体確認・原本保管→構造化 | なし |
 
-| データ | 保存先 | 規模 | 鮮度 |
-|---|---|---|---|
-| 日次 OHLCV + 財務 + RSI + swing 指標 | D1 | ~3,700 銘柄 | 直近営業日 |
-| お宝優待 財務/スコア (`otakara_*`) | D1 | ~1,605 銘柄 | 月次 |
-| 有報受注 (`yuho_*`) / 適時開示 (`ir_disclosures`) | D1 | 移行済み | 取込次第 |
-| 日足10年 (007 VWAP) | R2 `daily/{code}.json` | 4,444 銘柄 | 直近 |
-| **5分足** (007 VWAP) | R2 `intra/{code}.json` | 4,243 銘柄 | 直近 |
-| 信用残高 (週次) | R2 `margin/{week}.json` | 週次 | 直近週 |
-| 一次データ (raw) | Notion | サービス別 | 取込次第 |
+「LLM利用」は本番の取得・更新経路を示す。標準は機械処理で、事業タグの適格な新規・変更入力だけローカルClef-Flashを使う。
+優待要約のモデルは手動の明示指定だけで、定期実行の機械未対応分は保留する。
+詳細なworkflow・保存先・SSHの実行コマンド・過去分の制約は[本番定期処理一覧](docs/production-job-inventory.md)を参照。
 
-### 自動化（GitHub Actions・**Workers Paid 不要**）
+先行条件は、月次では **母集団→優待原文→スコア再計算**、有報では **原本・主体確認→本文→タグ→競合の機械準備**。
+価格依存の資金フローは株式同期の成功後、価格非依存の28取得元は株式同期を待たず **非Yahoo→Yahoo→両方の成功確認・結合** の順で動く。
+独立した準備・検査は並行できるが、Yahoo共通排他・同じ保存先のwriter・NotionのAPI予算を優先する。
+Notionのレート制御はプロセス内であり、ジョブをまたぐ全体上限は未成立。追加の取得並列化は見送り、既存の取得順とrateを維持している。
 
-取込はすべて GitHub Actions(Node)で定期実行する。Yahoo は共有クライアントが
-`YAHOO_PROXY_BASE`(Cloudflare エッジの `/api/ingest/yahoo` に一本化)経由で
-叩くため、ランナー IP の 429 を回避する。
-D1 へは `createD1HttpDb`(D1 REST)で書き込む。
+### 現在の復旧状況
 
-| ワークフロー | 内容 | スケジュール (UTC) |
-|---|---|---|
-| `.github/workflows/stock-sync.yml` | 日次=core/rsi/swing 取得+指標+**増分 OHLCV** / 月次=東証母集団同期 + otakara rebuild | 平日 21:00 / 10 日 01:30 |
-| `.github/workflows/vwap-ingest.yml` | 日足10年 + **5分足** → R2 / 信用残高(週次) | 月水金 08:00 / 土 09:00 |
-| `.github/workflows/catchup.yml` | 005 有報(EDINET) + 006 適時開示(TDnet) キャッチアップ(TDnet=Node, EDINET=Worker ルート) + 005 事業タグ(biztag。Node → Notion) | 平日 11:00 |
-| `.github/workflows/ci.yml` | 型・lint・単体テスト + 地図突合 + D1 generate 差分 | push/PR 毎 (cron なし) |
+以下は10/18の受入済み実績。**本日は日曜で、株価の最新対象日は10/16**。
+定期設定が有効であること、自然時刻で成功すること、全データが充足することは別に確認する。
 
-Worker は **無料プラン**で、サイト配信(D1 読取)+ 取込プロキシ + 005/006 の
-`/admin/catchup` のみを担う(Workers Cron は使わない)。schedule は **main にマージ後**に
-有効化される(GitHub Actions の schedule は default ブランチのみ)。
+| 対象 | 確認済み | 残り・保留 |
+| --- | --- | --- |
+| 本番定期環境 | GitHubの14 workflow有効、CF配備成功・10 trigger登録。Macの20時/21時jobは機械要約既定を反映し登録済み | 修正後の自然起動は本日20時/21時と10/19の17時/18時に確認。全履歴RAWミラーと競合の自動意味判定は意図的に停止 |
+| 本日10/18の開示確認 | 16:13までに通常TDnet・EDINETが正常終了。両一覧は確認時点0件、原本・派生6ファイルをNotion・R2へ保管 | 本日の最終確定や、Node有報の主体未解決の解消とは扱わない |
+| 株価・VWAP | VWAP日足は10/15・10/16各3,685/3,687銘柄。別途D1の不足41銘柄の10/16 OHLCVも補完済み | 日足523A/641Aは原本資格HOLD。41銘柄の財務断面・RSI等はOHLCV補完とは別。8303のRSIは過去価格の異常でHOLD |
+| 5分足 | 固定回復対象1,856銘柄中1,854銘柄を補完 | 7531/9311は取得元に必要期間がなく旧データ維持 |
+| 有報・IR・優待 | 39本文2,417件、優待v5の969群1,074行を機械処理で反映 | Node有報の主体未解決16件、旧TDnet原本1279652のPDF1件が残る。非公表・原本欠測を生成値で埋めない |
+| 保有明細の参考時価 | 保存原本を使いSSHで限定補完中 | 完了後に保存状態を機械集計。確認した明細数を価格資格成立数とは扱わない |
 
-> 💡 実行時間の目安 (public repo のため Actions 分課金は無し): 日次 stock(~40-50分)×平日 +
-> VWAP(月水金。差分時は数十分、バックフィル時は 2-3h 域。timeout 300 分) ≈ 月
-> 1,300-1,600 分(バックフィル除く)。
-
-### 手作業のまま（任意・低頻度）
-
-| 処理 | コマンド | 備考 |
-|---|---|---|
-| 優待スクレイプ+LLM要約 (002) | data-scripts（後述） | 要約はリポジトリ外のクラウド LLM (Cursor Automations 等) が行い、結果を検証して取り込む |
-
-> `pnpm sync:daily`(= `all-daily.ts`)はローカル手動フル実行用(stock + VWAP を束ねる)。
-> 通常は GitHub Actions に任せてよい。
-
-### 残タスク
-
-1. **Neon 解約** (あなたの手作業。Neon コンソールで実施) — 解約後は `.env`/GH Secret の
-   `DATABASE_URL` を削除してよい。
-2. **GH Secret `EDINET_API_KEY`** — catchup.yml の Node EDINET 取込用（backfill と同じ設定）。
-3. **文書リフレッシュ** — 各サービス CLAUDE.md/README の Neon/Vercel 期記述を現行に合わせる
-   (K5c で順次実施中)。
+機能別の受入・未完了・原本欠測は[復旧台帳](docs/test-logs/functional-recovery-20261018.md)、
+定期環境と共有予算の確認範囲は[本番処理の検証記録](docs/test-logs/production-dependencies-mechanical-20261018.md)を参照。
+全履歴RAWミラー、全市場の再取得、月次処理の一括再実行は不足補完の先行条件に加えない。
 
 ## デプロイ
 
@@ -208,15 +203,14 @@ npx wrangler tail                # 本番ログをストリーム
    - `ASSETS` … `public/` の静的アセット
    - `BUCKET` … R2 バケット `vwap-data` (VWAP 時系列)
    - `DB` … D1 データベース `kabulab-cf` (全サービス共有の単一 DB)
-3. **シークレットは Cloudflare が正のソース** — `wrangler secret put DATABASE_URL` 等で設定する
+3. **シークレットは Cloudflare が正のソース** — `wrangler secret put CRON_SECRET` 等で設定する
    (`.env` はローカル開発/取込専用で、本番 Worker には読まれない)。Worker は `nodejs_compat` 有効で
    secret を `process.env` 経由でも参照する。
-4. **Workers Cron は不使用（Workers Paid 不要）** — 取込(日次/月次 stock + VWAP)は
-   GitHub Actions(Node)で実行する。`wrangler.toml` に `[triggers]`/`[limits]` は無い。Worker は
-   サイト配信 + 取込プロキシ(`/api/ingest/yahoo`)+ 005/006 の
-   `/admin/catchup` のみ。
-5. **push→自動デプロイ** — Cloudflare Workers Builds (Git 連携) を接続済み。`main` への push で
-   **無料プランのまま**自動 build & deploy。手順は [docs/deploy-cloudflare.md](./docs/deploy-cloudflare.md)。
+4. **Workers Cron** — `wrangler.toml` の `[triggers]` でActionsの定時起動と結果監視を行う。
+   重い取得本体はActionsで実行し、Macの2処理はLaunchAgentで定期実行する。利用中のWorkers/D1はPaid枠。
+5. **push→自動デプロイ** — Cloudflare Workers Builds (Git 連携) を接続済み。PRをマージして
+   `main` を更新すると自動 build & deploy。main CIと実配備の成功を確認する。
+   手順は [docs/deploy-cloudflare.md](./docs/deploy-cloudflare.md)。
 
 ## 環境変数
 
@@ -259,8 +253,8 @@ WORKER_BASE_URL=https://kabulab-cf.<subdomain>.workers.dev             # moneyfl
 
 ## 運用 / 定点ジョブ
 
-日次 stock sync + 月次 otakara rebuild は **GitHub Actions が自動実行**する（Workers Paid 不要・
-Workers Cron は使わない。詳細は上記「運用ステータス」）。以下は **定期取込の対象外で手動 (or CI) 実行**する取込:
+定期予定は上表を参照。
+以下は同じ通常CLIを手動で使う例。定期jobとの重複・原本の保存結果・pendingを確認し、必要な不足だけを対象にする。
 
 ```bash
 # 母集団 (JPX) — 上場/廃止があった時
@@ -269,7 +263,7 @@ pnpm sync:universe
 # 007 VWAP → R2 (Yahoo 429 を避け低負荷で。YAHOO_PROXY_BASE 経由推奨)
 pnpm ingest:vwap-daily  # 日足10年
 pnpm ingest:vwap-intra  # 5分足
-pnpm ingest:vwap-margin # 信用残高 (週次・JPX PDF・Yahoo 非依存)
+pnpm ingest:vwap-margin # 信用残高 (平日更新・JPX PDF・Yahoo 非依存)
 
 # 006 TDnet / 005 EDINET — Node から D1 HTTP で共通取込
 pnpm ingest:ir-tdnet
@@ -279,26 +273,26 @@ pnpm ingest:yuho-edinet
 pnpm sync:daily
 ```
 
-### 優待データ取込パイプライン (002 otakara, data-scripts・cron 非対象)
+### 優待データ取込パイプライン (002 otakara)
 
-優待情報 (`is_yutai` フラグ + `yutai_benefits` + `short_summary`/`estimated_value`) は統一 sync とは
-別系統。要約 (`short_summary`) と推定金額はこのリポジトリでは作らず、**リポジトリ外のクラウド LLM
-(Cursor Automations 等)** が [作業仕様書](./services/otakara-yutai/docs/llm-summary-task.md) に従って作る。
-このリポジトリはタスクの書き出しと、結果の検証・取り込みだけを持つ (LLM の出力は信用しない)。
+月次のActionsで母集団・優待原文を更新し、保存済み財務からスコアを再計算する。
+要約はMacの毎日21時jobが同じ機械抽出・要約契約・金額検証を使い、変更・未要約分だけ処理する。
+書込前の比較、条件付き更新、保存後の全値照合を行い、機械未対応の条件は旧値を保って保留する。
+手動の明示`--allow-model`だけ既存のローカルMLXを利用できる。定期実行では指定しない。
 
 ```bash
-pnpm exec tsx services/otakara-yutai/data-scripts/fetch-yutai-full.ts          # 1. minkabu スクレイプ → 本番 DB
-pnpm exec tsx services/otakara-yutai/data-scripts/export-benefit-descriptions.ts # 2. ユニーク description 抽出 (Notion 一次データ記録)
-pnpm yutai:summary:export                                                       # 3. 要約タスク書き出し (--violations-only で契約違反だけ)
-#    → タスクファイルと作業仕様書をクラウド LLM に渡し、結果 JSONL を受け取る (どちらもコミットしない)
-pnpm yutai:summary:import --tasks <タスク> --results <結果>                      # 4. dry-run: 書く件数・はじいた行と理由
-pnpm yutai:summary:import --tasks <タスク> --results <結果> --apply              # 5. 通った行だけ D1 に書く
+# Actions・Linuxでの月次処理 (Nix内。前段失敗時は後続を起動しない)
+pnpm sync:universe
+pnpm yutai:fetch
+pnpm sync:monthly:core
+
+# Mac専用runtimeの通常入口。定期jobと排他・設定を共有する
+pnpm exec tsx --env-file-if-exists=.env scripts/biztag-local/main.ts run yutai-summary
 ```
 
-- タスク / 結果ファイルは出典サイトの掲載文を含むので、`services/otakara-yutai/data-scripts/data/` (gitignore 済み) かリポジトリ外にだけ置く。コマンドはそれ以外を指定すると止まる。
-- 取り込みは要約契約 (`summary-contract.ts`)・金額ガード (`estimated-value-guard.ts`)・`taskId` と今の D1 の一致を検査し、違反した行だけをはじく。
-- `pnpm sync:monthly` は 1〜3 までを実行し、要約が未反映でも失敗にしない (取り込み手順をログに出す)。
-- クラウド LLM の費用は Cursor 等の契約側で発生し、このリポジトリの原価には乗らない。
+`pnpm sync:monthly`は優待取得→再計算→Macの要約入口を束ねる。Linuxでは上記3段階を使う。
+旧タスクexport/importは手動用に残るが、定期処理の先行条件にはしない。
+原文・タスク・結果・実行記録はGit対象外へ保存する。
 
 ### 一次データの Notion アーカイブ (CLAUDE.md ルール6)
 
@@ -318,7 +312,7 @@ pnpm yutai:summary:import --tasks <タスク> --results <結果> --apply        
 
 | 症状 | 原因 | 対処 |
 |---|---|---|
-| VWAP の日足/5分足が「未取得」 | Yahoo Finance の 429 (IP レート制限) で未投入 | 別回線/時間を空けて低負荷 (逐次 + ディレイ) で `ingest:vwap-*` を再実行 |
+| VWAP の日足/5分足が「未取得」 | 取得失敗・原本欠測・予定起動失敗など | 取得状況・Cron/Actionsの実績・pendingを確認。結果不明は再送せず、既知の不足だけを通常CLIで補完 |
 | マクロ判定が `HOLD` のまま | 日経電子版の HTML 構造変更 or 到達不能 | `src/shared/yahoo/nikkei-vi.ts` を確認 (silent に B/C 判定しない・ルール2) |
 | セクター一覧が "未分類" 1 件 | `core.stocks.sector` が NULL (初回 or JPX URL 変更) | `pnpm sync:universe` を手動実行。必要なら続けて `pnpm sync:monthly:core` |
 | Yahoo rate limit で失敗多発 | crumb 期限切れ or 上限超過 | 並列度を下げる (`CONC` / `DELAY_MS`)、翌日再試行 |
@@ -360,5 +354,5 @@ pnpm yutai:summary:import --tasks <タスク> --results <結果> --apply        
 ## 開発ルール
 
 実装時の絶対ルール (ダミーデータ禁止 / フォールバック禁止 / env は `.env` + 型付きアクセサ /
-コミット前の多角エージェント精査 / 一次データの Notion アーカイブ / 専門用語のバルーンヘルプ 等) は
+PR・CIによるレビュー / 一次データの Notion アーカイブ / 専門用語のバルーンヘルプ 等) は
 [CLAUDE.md](./CLAUDE.md) と各 `services/<slug>/CLAUDE.md` に定義。
