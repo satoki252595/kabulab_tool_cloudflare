@@ -88,6 +88,9 @@ def _process_financial_xbrl(
         base_dir=ctx.settings.raw_data_dir,
         doc_id=record.doc_id,
     )
+    # executeで通常resolverが既に同定した個社だけ。rawのための追加検索はしない。
+    if record.code:
+        artifact.qualified_master_page_id = master_id
     tidy = xbrl_to_csv.xbrl_zip_to_tidy(
         artifact.local_path.read_bytes(), record.code or "", record.doc_id
     )

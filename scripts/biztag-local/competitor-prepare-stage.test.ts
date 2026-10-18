@@ -7,6 +7,7 @@ import type { EventEmitter } from "node:events";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { acceptPrepareStage, planPrepareStage, startPrepareStage } from "./competitor-prepare-stage.js";
 import { localJobRemainingMs, main } from "./main.js";
+import { BIZTAG_DATA_PREFIX } from "./receipt.js";
 
 type Child = EventEmitter & { pid: number; exitCode: number | null; signalCode: string | null; stdout: EventEmitter; args: string[] };
 const harness = vi.hoisted(() => ({ state: "", receiptDelay: 0, autoFirstSuccess: false, children: [] as Child[] }));
@@ -16,11 +17,16 @@ vi.mock("./receipt.js", async importActual => ({ ...await importActual<object>()
   mirrorLocalJobReceipt: vi.fn() }));
 vi.mock("node:child_process", async () => {
   const { EventEmitter } = await import("node:events");
-  return { execFileSync: vi.fn(() => { throw new Error("external command forbidden"); }), spawn: vi.fn((_program, args: string[]) => {
+  return { execFileSync: vi.fn(() => { throw new Error("external command forbidden"); }), spawn: vi.fn((_program, args: string[], options: { stdio: unknown[] }) => {
     const child = Object.assign(new EventEmitter(), { pid: process.pid, exitCode: null as number | null,
       signalCode: null as string | null, stdout: new EventEmitter(), args });
     harness.children.push(child);
-    if (harness.autoFirstSuccess && args.includes("run")) queueMicrotask(() => { child.exitCode = 0; child.emit("exit", 0, null); child.emit("close", 0, null); });
+    if (harness.autoFirstSuccess && args.includes("run")) {
+      writeFileSync(options.stdio[1] as number, BIZTAG_DATA_PREFIX + JSON.stringify({ scope: "daily_window", status: "checked_scope_complete",
+        totalStocks: 0, selectedForTextCheck: 0, textChecked: 0, textUnchecked: 0, textMismatched: 0, textRepaired: 0,
+        metadataRepaired: 0, remaining: 0, failures: 0, qualificationHeld: 0, wholeSupplementComplete: false }) + "\n");
+      queueMicrotask(() => { child.exitCode = 0; child.emit("exit", 0, null); child.emit("close", 0, null); });
+    }
     return child;
   }) };
 });

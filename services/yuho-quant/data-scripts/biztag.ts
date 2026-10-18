@@ -39,6 +39,7 @@ import { assertLatestDocCurrent, type BiztagSourceDb } from "../src/biztag/sourc
 import { makeBudgetedVerifySources } from "../src/biztag/sources-verify.js";
 import { loadCalibration } from "../src/biztag/thresholds.js";
 import { withBiztagWriter } from "../../../scripts/biztag-local/runtime.js";
+import { BIZTAG_DATA_PREFIX, readBiztagDataStatus } from "../../../scripts/biztag-local/receipt.js";
 import { parseVocabulary } from "../src/biztag/vocabulary/load.js";
 import { TEXT_SECTIONS } from "../src/services/edinet/text-sections.js";
 import * as yuhoSchema from "../src/db/schema.js";
@@ -172,6 +173,11 @@ async function runCommand(): Promise<void> {
   }
 
   console.info(JSON.stringify(summary, null, 2));
+  if (summary.fieldCoverage === undefined || !Array.isArray(summary.qualificationHeld)) throw new Error("補足の項目別検査summaryがありません");
+  const dataStatus = readBiztagDataStatus(BIZTAG_DATA_PREFIX + JSON.stringify({ ...summary.fieldCoverage,
+    totalStocks: summary.totalStocks, remaining: summary.remaining, failures: summary.failures.length,
+    qualificationHeld: new Set(summary.qualificationHeld).size }));
+  console.info(BIZTAG_DATA_PREFIX + JSON.stringify(dataStatus));
   writeGithubStepSummary(
     [
       `## biztag run`,
@@ -182,6 +188,7 @@ async function runCommand(): Promise<void> {
       `- Notion: ${summary.notion.requests}リクエスト (429 ${summary.notion.rateLimited}回)`,
       `- 単語帳: ${summary.vocabVersion}${summary.vocabSeeded ? " (初回投入)" : ""}`,
       `- 失敗: ${summary.failures.length}件`,
+      `- 補足検査: ${dataStatus.status} / 現本文 ${dataStatus.textChecked}/${dataStatus.selectedForTextCheck}件（当夜scopeのみ、全補足の完了保証なし） / 本文修復 ${dataStatus.textRepaired} / メタ修復 ${dataStatus.metadataRepaired}`,
       `- 再試行上限到達 (5回): ${summary.retryExhausted.length}件${summary.retryExhausted.length > 0 ? ` (${summary.retryExhausted.slice(0, 10).join(", ")}${summary.retryExhausted.length > 10 ? " 他" : ""})` : ""}`,
       `- ① 銘柄マスタ重複 (relation 未設定): ${summary.masterDuplicates.length}件${summary.masterDuplicates.length > 0 ? ` (${summary.masterDuplicates.slice(0, 10).join(", ")}${summary.masterDuplicates.length > 10 ? " 他" : ""})` : ""}`,
     ].join("\n")

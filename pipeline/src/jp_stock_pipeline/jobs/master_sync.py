@@ -42,9 +42,10 @@ from functools import partial
 from ..cloud_store import core_stocks, notion_pages
 from ..cloud_store.d1 import D1Error, D1Store
 from ..collectors import codelist_identity, edinet_codelist
+from ..contracts.stock_code import parse_stock_code
 from ..notion import schema as S, upsert
 from ..rawstore import save_raw
-from .runner import JobContext, apply_limit, build_parser, main_exit, run_job
+from .runner import JobContext, apply_limit, build_parser, main_exit, parse_codes_arg, run_job
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,21 @@ JOB_NAME = "master_sync"
 MIN_CODELIST_COVERAGE = 0.5
 
 
+def _code_scope(args) -> set[str] | None:
+    if args.codes is None:
+        return None
+    tokens = parse_codes_arg(args)
+    if not tokens or any(not part.strip() for part in args.codes.split(",")):
+        raise ValueError("--codes は空の対象を含められません")
+    codes = [parse_stock_code(token) for token in tokens]
+    if any(code is None for code in codes) or len(set(codes)) != len(codes):
+        raise ValueError("--codes は有効で一意な銘柄コードを指定してください")
+    return set(codes)
+
+
 def execute(ctx: JobContext) -> None:
+    # 不正な部分scopeは原本取得より前に止める。省略時は従来の全件同期。
+    scope = _code_scope(ctx.args)
     # 1-3. Fetch / Save raw / Convert
     artifact = edinet_codelist.fetch_codelist(ctx.settings)
     artifact = edinet_codelist.convert_codelist(artifact)
@@ -65,7 +80,7 @@ def execute(ctx: JobContext) -> None:
 
     # D1 optionalは維持。既存sector READを前倒ししidentity資格と差分計画で共用。
     current = None
-    store = None if ctx.args.limit else _sector33_store(ctx)
+    store = None if ctx.args.limit or scope is not None else _sector33_store(ctx)
     if store is not None:
         try:
             current = store.query(codelist_identity.SNAPSHOT_SQL)
@@ -73,6 +88,8 @@ def execute(ctx: JobContext) -> None:
             ctx.add_failure("core_stocks.sector33", f"現在値を読めない: {exc}")
     # current未取得では認定blankだけHOLD、literal経路は従来どおり。
     resolved = codelist_identity.resolve_blank_tickers(artifact.local_path.read_bytes(), current)
+    if scope is not None:
+        resolved = {line: code for line, code in resolved.items() if code in scope}
     identity_page_id = None
     if resolved:
         if raw_page_id is None:
@@ -112,7 +129,14 @@ def execute(ctx: JobContext) -> None:
     for hold in inspected.holds:
         logger.warning("候補 HOLD (%s): %s", hold.kind, hold.detail)
     fetched_codes = {r.code for r in inspected.candidates}
-    upsert_records = apply_limit(inspected.candidates, ctx.args.limit)
+    if scope is not None and not scope <= fetched_codes:
+        for code in sorted(scope - fetched_codes):
+            ctx.add_failure(code, "指定銘柄が資格あるコードリスト候補にありません。書込前HOLD")
+        return
+    selected = inspected.candidates if scope is None else [
+        r for r in inspected.candidates if r.code in scope
+    ]
+    upsert_records = apply_limit(selected, ctx.args.limit)
     logger.info("コードリスト: %d 銘柄を ① へ upsert", len(upsert_records))
 
     # ① 既存行マップ {code: page_id} を一括取得（per-record 検索を排除 §8.3。
@@ -120,7 +144,18 @@ def execute(ctx: JobContext) -> None:
     # 部分マップを信用して create すると重複行になるため §8.1-6）。このマップは
     # 欠損診断でも再利用し ① 全件スキャンを 2回→1回 にする。
     try:
-        master_entries = upsert.load_stock_master_entries(ctx.client, ctx.settings)
+        if scope is None:
+            master_entries = upsert.load_stock_master_entries(ctx.client, ctx.settings)
+        else:
+            # 既存のコードfilter/全paginationと同じ行解釈を再用する。
+            codes = [record.code for record in upsert_records]
+            pages = []
+            for offset in range(0, len(codes), 50):
+                pages.extend(ctx.client.query_database(
+                    ctx.settings.db_id("stock_master"),
+                    filter={"or": [upsert.stock_master_filter(code) for code in codes[offset:offset + 50]]},
+                ))
+            master_entries = upsert._master_entries_from_pages(pages)
         map_ok = True
     except Exception as exc:  # noqa: BLE001 - 全件取得失敗は書込前STOP
         ctx.add_failure("stock-master-map", f"① 全件マップ取得失敗: {exc}")
@@ -176,9 +211,8 @@ def execute(ctx: JobContext) -> None:
     # 8. D1 core_stocks.sector33 の充填も --limit では行わない。差分は「コードリストに
     #    居る銘柄」だけを対象にするので部分取得でも既存値は潰れないが、部分取得で
     #    本番へ書くと「一部だけ最新」の状態を作るため、欠損診断と同じ扱いにする。
-    if ctx.args.limit:
-        logger.info("--limit 指定のため欠損診断はスキップ (部分取得 § Phase3)")
-        logger.info("--limit 指定のため D1 core_stocks.sector33 の充填はスキップ (部分取得)")
+    if ctx.args.limit or scope is not None:
+        logger.info("--limit/--codes の部分実行: 全市場の欠損診断・sector33・写し更新を行わない")
         return
     _hold_absent_codes(ctx, fetched_codes, master_map, map_ok)
     # sector には資格側だけ渡す (blank issuer を sector tuple へ渡さない)。

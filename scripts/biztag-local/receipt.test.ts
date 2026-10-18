@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { S3Client, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { sharedEnv } from "../../src/shared/env.js";
-import { localJobScheduledFor, parseLocalJobReceipt, startLocalJobReceipt, mirrorLocalJobReceipt, type LocalJobReceipt } from "./receipt.js";
+import { BIZTAG_DATA_PREFIX, readBiztagDataStatus, localJobScheduledFor, parseLocalJobReceipt, startLocalJobReceipt, mirrorLocalJobReceipt, type LocalJobReceipt } from "./receipt.js";
 
 const running = (): LocalJobReceipt => parseLocalJobReceipt({ version: 1, kind: "biztag", phase: "running",
   scheduledFor: "2026-10-14T11:00:00.000Z", startedAt: "2026-10-14T11:00:01.000Z", finishedAt: null,
@@ -14,6 +14,23 @@ const running = (): LocalJobReceipt => parseLocalJobReceipt({ version: 1, kind: 
 afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); vi.useRealTimers(); });
 
 describe("Macの実行receipt", () => {
+  it("exit0でも補足の未検査・保留を実測のまま保存し、不正な完了や件数は拒否する", async () => {
+    const data = { scope: "explicit_codes", status: "attention", totalStocks: 2, selectedForTextCheck: 2,
+      textChecked: 1, textUnchecked: 1, textMismatched: 1, textRepaired: 0, metadataRepaired: 1,
+      remaining: 1, failures: 0, qualificationHeld: 1, wholeSupplementComplete: false };
+    const line = BIZTAG_DATA_PREFIX + JSON.stringify(data);
+    expect(readBiztagDataStatus("private progress\n" + line + "\n")).toEqual(data);
+    const finished = parseLocalJobReceipt({ ...running(), phase: "finished", finishedAt: "2026-10-14T11:20:00.000Z", code: 0, biztagData: data });
+    let body = "";
+    await mirrorLocalJobReceipt(finished, null, { put: async (_key, value) => { body = value; }, get: async () => ({ body, etag: "checked" }) });
+    expect(JSON.parse(body).biztagData).toEqual(data);
+    for (const log of ["", line + "\n" + line, BIZTAG_DATA_PREFIX + JSON.stringify({ ...data, wholeSupplementComplete: true }),
+      BIZTAG_DATA_PREFIX + JSON.stringify({ ...data, textUnchecked: 0 })]) expect(() => readBiztagDataStatus(log)).toThrow();
+    expect(() => parseLocalJobReceipt({ ...finished, kind: "yutai-summary" })).toThrow();
+    const outsideActive = { ...data, totalStocks: 1 };
+    expect(readBiztagDataStatus(BIZTAG_DATA_PREFIX + JSON.stringify(outsideActive))).toEqual(outsideActive);
+    expect(() => readBiztagDataStatus(BIZTAG_DATA_PREFIX + JSON.stringify({ ...outsideActive, scope: "daily_window" }))).toThrow();
+  });
   it("通常入口のDNS失敗はGETだけ再読し、bounded本文照合と単発PUTを通す", async () => {
     vi.spyOn(sharedEnv, "R2_ACCOUNT_ID").mockReturnValue("test-account");
     vi.spyOn(sharedEnv, "R2_ACCESS_KEY_ID").mockReturnValue("test-access");

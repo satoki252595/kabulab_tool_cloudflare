@@ -13,7 +13,7 @@
  */
 import { inArray } from "drizzle-orm";
 import { createSupplementPublicationJournal } from "../../../../scripts/biztag-local/publication-journal.js";
-import type { SupplementPublicationJournal } from "../../../../src/shared/notion-archive/stock-supplement.js";
+import { readSupplementRowFully, type SupplementPublicationJournal } from "../../../../src/shared/notion-archive/stock-supplement.js";
 import { parseStockCode } from "../../../../src/shared/jpx/stock-code.js";
 import type { ClefJournalInput } from "../../../../scripts/biztag-local/clef-journal.js";
 import type { LocalDecisionExchange } from "../../../../src/shared/semif/client.js";
@@ -51,7 +51,7 @@ import { todayJst } from "./date-jst.js";
 import { checkDeadline, type DeadlineCheckResult, type GateRunResult } from "./gate.js";
 import { evaluateGolden, goldenItemKey, loadGoldenSet, type GoldenMetrics } from "./golden.js";
 import type { BtThresholds } from "./judge.js";
-import { MAX_RETRY_ATTEMPTS, planWork, type WorkItem, type InputReceipt } from "./plan.js";
+import { MAX_RETRY_ATTEMPTS, planWork, textVerificationCodes, type WorkItem, type InputReceipt } from "./plan.js";
 import { vocabularyHash } from "./vocabulary/hash.js";
 import { processStock, type ProcessDeps } from "./process.js";
 import { isPrefilterSection, type PrefilterSectionKey } from "./prefilter.js";
@@ -123,6 +123,10 @@ export interface RunSummary {
    */
   billingBlocked: string[];
   qualificationHeld?: string[];
+  /** このrunの有限検査scope。exit0や旧タグ判定率を全補足充足へ転用しない。 */
+  fieldCoverage?: { scope: "explicit_codes" | "daily_window"; selectedForTextCheck: number; textChecked: number; textUnchecked: number;
+    textMismatched: number; textRepaired: number; metadataRepaired: number; status: "checked_scope_complete" | "partial" | "attention";
+    wholeSupplementComplete: false };
 }
 
 /**
@@ -359,11 +363,16 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     if (scoped.some(row => !selected.includes(row.stockCode))) throw new Error("補足のコード指定queryが対象外の銘柄を返しました");
     rows.push(...scoped);
   }
+  const verification = codes === undefined ? textVerificationCodes(latest, today, false) : new Set(codes);
   const items = planWork(latest, rows, today, newStockEligibility).map(item =>
     opts.refreshTextReceipt && item.kind === "skip" && !item.qualificationHeld && item.row?.tagStatus === "判定済"
       ? { ...item, kind: "sync_text" as const, refreshTextReceipt: true,
         reason: "明示finite scopeで旧原39同値を照合し、送信表現receiptを機械的に再資格化" }
-      : item);
+      : verification.has(item.stockCode) && !item.qualificationHeld && item.kind === "sync_metadata"
+        ? { ...item, verifyCurrentTexts: true }
+        : verification.has(item.stockCode) && !item.qualificationHeld && item.kind === "skip"
+          ? { ...item, kind: "verify_text" as const, reason: "有限scopeの現在39 SHA検査とメタ欠落の機械補完" } : item)
+    .sort((a, b) => Number(b.kind === "sync_metadata") - Number(a.kind === "sync_metadata"));
   const retryExhausted = items.filter((i) => i.retryExhausted === true).map((i) => i.stockCode).sort();
   // 課金切れの未解決ブロッカーを台帳エラーから集計する。再試行期日の
   // 未来・到来・上限到達を問わない (skip も残件であり、完了ではない)。
@@ -372,6 +381,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     .map((r) => r.stockCode)
   );
   const qualificationHeld = items.filter((item) => item.qualificationHeld).map((item) => item.stockCode).sort();
+  if (codes !== undefined) for (const code of codes) if (!latest.some(row => row.stockCode === code)) qualificationHeld.push(code);
 
   // 6. 銘柄マスタ (relation 先) の索引。
   // ① 側で同じ銘柄コードが複数行ある銘柄は relation を空のままにする (どれかを選ばない)。
@@ -391,6 +401,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     vocab,
     model: opts.model,
     mechanicalOnly: opts.mechanicalOnly === true || opts.dryRun === true,
+    dryRun: opts.dryRun === true,
     localJudgeInput: (receipt, textsSha256) => { currentInput = { receipt, textsSha256 }; },
     localJudgeDate: opts.localJournal ? () => {
       const at = currentDecisionAt;
@@ -405,7 +416,10 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
       return masterIndex.index.get(code) ?? null;
     },
     readStockTextRow,
-    assertLatestDocCurrent: (code, doc) => assertLatestDocCurrent(db, code, doc),
+    readSupplementRowFully: pageId => readSupplementRowFully(pageId, supplementDbId, TEXT_SECTIONS.map(s => s.title), () => {
+      if (Date.now() - start >= opts.budgetMs) throw new Error("現在39検査の新規読取期限を超過。未検査を残して停止");
+    }),
+    assertLatestDocCurrent: (code, doc, metadata) => metadata === undefined ? assertLatestDocCurrent(db, code, doc) : assertLatestDocCurrent(db, code, doc, metadata),
     createSupplementRow: opts.dryRun ? async () => "dry-run"
       : (input, evidence) => createSupplementRow(supplementDbId, input, evidence, publicationJournal),
     updateSupplementRow: opts.dryRun ? async () => {} : updateSupplementRow,
@@ -422,6 +436,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
   let jevInputTokens = 0;
   let jevOutputTokens = 0;
   let workBudgetLeft = opts.limit ?? Infinity;
+  const checked = new Set<string>(); let textMismatched = 0, textRepaired = 0, metadataRepaired = 0;
 
   for (let i = 0; i < items.length; i++) {
     publicationJournal.assertReady();
@@ -444,9 +459,13 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
       processed++;
       continue;
     }
-    if (codes !== undefined && ["create_row", "sync_and_tag", "retag", "retry"].includes(item.kind)) await loadMaster();
+    if (codes !== undefined && ["create_row", "sync_and_tag", "retag", "retry", "sync_metadata", "verify_text", "sync_text"].includes(item.kind)) await loadMaster();
     try {
       const outcome = await processStock(item, deps);
+      if (outcome.textChecked && verification.has(item.stockCode)) checked.add(item.stockCode);
+      if (outcome.textMismatch) textMismatched++;
+      if (outcome.textRepaired && !opts.dryRun) textRepaired++;
+      if (outcome.metadataRepaired && !opts.dryRun) metadataRepaired++;
       if (localJudgeStop !== undefined) throw localJudgeStop.error;
       if (outcome.qualificationHeld) qualificationHeld.push(item.stockCode);
       if (outcome.error) {
@@ -509,7 +528,11 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     masterIndexRead: masterIndex !== undefined,
     retryExhausted,
     billingBlocked: [...billingBlocked].sort(),
-    qualificationHeld,
+    qualificationHeld: [...new Set(qualificationHeld)].sort(),
+    fieldCoverage: { scope: codes === undefined ? "daily_window" : "explicit_codes", selectedForTextCheck: verification.size,
+      textChecked: checked.size, textUnchecked: verification.size - checked.size, textMismatched, textRepaired, metadataRepaired,
+      status: failures.length > 0 || qualificationHeld.length > 0 ? "attention" : verification.size > checked.size || items.length > processed ? "partial" : "checked_scope_complete",
+      wholeSupplementComplete: false },
     gate,
     gateSkippedReason: "語彙審査・精度測定のTypeSafeは停止中",
     deadline,

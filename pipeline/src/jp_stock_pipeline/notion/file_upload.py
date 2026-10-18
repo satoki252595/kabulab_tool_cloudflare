@@ -32,8 +32,10 @@ import mimetypes
 import tempfile
 import zipfile
 from pathlib import Path
+from uuid import UUID
 
 from ..config import Settings
+from ..contracts.stock_code import parse_stock_code
 from ..models import RawArtifact
 from . import schema as S
 from .client import NotionClient
@@ -45,6 +47,8 @@ from .upsert import (
     files_prop,
     number_prop,
     oldest_page,
+    real_page_id,
+    relation_prop,
     select_prop,
     text_prop,
     title_prop,
@@ -236,6 +240,12 @@ def _raw_row_properties(artifact: RawArtifact, uploads: list[tuple[str, str]]) -
     if artifact.data_date is not None:
         props[S.PROP_DATA_DATE] = date_prop(artifact.data_date)
         props[S.RAW_PROP_PERIOD] = text_prop(artifact.data_date.isoformat())
+    if artifact.qualified_master_page_id is not None:
+        if parse_stock_code(artifact.scope) != artifact.scope:
+            raise RawUploadError("⑤ 関連銘柄は正準の単一銘柄scopeだけに設定できます")
+        master_id = real_page_id(artifact.qualified_master_page_id)
+        if master_id is not None:
+            props[S.RAW_PROP_RELATED_MASTER] = relation_prop([str(UUID(master_id))])
     return props
 
 
@@ -284,7 +294,9 @@ def load_raw_page_map(
     return _oldest_page_ids(pages, sha_of)
 
 
-def _verify_raw_files(client: NotionClient, page_id: str, artifact: RawArtifact) -> None:
+def _verify_raw_files(
+    client: NotionClient, page_id: str, artifact: RawArtifact, *, expected_master_id=None
+) -> None:
     """作成 ACK や SHA 索引だけでは保管済みとせず、原本・変換版の全実体を照合する。"""
     if client.dry_run:
         return
@@ -294,6 +306,11 @@ def _verify_raw_files(client: NotionClient, page_id: str, artifact: RawArtifact)
     if page.get("in_trash") is True:
         raise RawUploadError("⑤ 読戻しページがごみにある")
     props = page["properties"]
+    if expected_master_id is not None:
+        relation = props[S.RAW_PROP_RELATED_MASTER]
+        if (relation.get("type") != "relation" or relation.get("has_more") is not False
+                or relation.get("relation") != [{"id": expected_master_id}]):
+            raise RawUploadError("⑤ 関連銘柄の読戻し不一致")
     title = props[S.RAW_PROP_FILENAME]
     if title.get("type") != "title" or not isinstance(title["title"], list):
         raise RawUploadError("⑤ 読戻し原本ファイル名の形式が不正")
@@ -364,6 +381,8 @@ def upload_raw_artifact(
     per-record 検索する。作った行は map へ足す（同一 run 内の再送に効く）。
     """
     try:
+        # 関連銘柄の不正入力は添付送信前に拒否する。SHA既存行は関係を遡及更新しない。
+        properties = _raw_row_properties(artifact, [])
         trusted = (
             sha_map is not None
             and sha_map_date is not None
@@ -391,12 +410,16 @@ def upload_raw_artifact(
             uploads.append((upload_id, uploaded_name))
         page = client.create_page(
             parent={"database_id": settings.db_id("raw_files")},
-            properties=_raw_row_properties(artifact, uploads),
+            properties={**properties, S.RAW_PROP_FILES: files_prop(uploads)},
         )
         page_id = page.get("id")
         if not page_id:
             raise RawUploadError(f"⑤ 行作成応答に id が無い: {artifact.filename}: {page}")
-        _verify_raw_files(client, page_id, artifact)
+        related = properties.get(S.RAW_PROP_RELATED_MASTER)
+        _verify_raw_files(
+            client, page_id, artifact,
+            expected_master_id=related["relation"][0]["id"] if related is not None else None,
+        )
     except RawUploadError:
         raise
     except Exception as exc:  # 重複クエリ/アップロード/行作成のあらゆる失敗を契約例外に揃える

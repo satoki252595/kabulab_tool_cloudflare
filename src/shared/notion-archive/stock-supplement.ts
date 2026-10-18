@@ -1058,8 +1058,8 @@ interface EvidencePage {
   properties: Record<string, Record<string, unknown>>;
 }
 
-async function evidencePage(pageId: string): Promise<EvidencePage> {
-  const page = await notionRequest<EvidencePage>("GET", `/pages/${pageId}`);
+async function evidencePage(pageId: string, beforeRequest?: () => void): Promise<EvidencePage> {
+  const page = await notionRequest<EvidencePage>("GET", `/pages/${pageId}`, undefined, { beforeRequest });
   // Notionの読取ごとに変わる通信ID。業務値・実編集メタデータは保持する。
   delete page.request_id;
   if (typeof page.id !== "string" || page.id.replaceAll("-", "").toLowerCase() !== pageId.replaceAll("-", "").toLowerCase() ||
@@ -1075,7 +1075,7 @@ async function evidencePage(pageId: string): Promise<EvidencePage> {
     for (;;) {
       const qs = cursor ? `?page_size=100&start_cursor=${encodeURIComponent(cursor)}` : "?page_size=100";
       const r = await notionRequest<{ results: Record<string, unknown>[]; has_more: boolean; next_cursor: string | null }>(
-        "GET", `/pages/${pageId}/properties/${encodeURIComponent(property.id)}${qs}`);
+        "GET", `/pages/${pageId}/properties/${encodeURIComponent(property.id)}${qs}`, undefined, { beforeRequest });
       if (!Array.isArray(r.results) || r.results.some((v) => !(kind in v))) throw new Error("補足の全プロパティ読取が不正");
       values.push(...r.results.map((v) => v[kind]));
       if (!r.has_more) break;
@@ -1085,6 +1085,15 @@ async function evidencePage(pageId: string): Promise<EvidencePage> {
     property[kind] = values;
   }
   return page;
+}
+
+/** 既存publisherと同じ長文paginationで現在39列を読む。時計だけで未変更とは判定しない。 */
+export async function readSupplementRowFully(pageId: string, dbId: string, textColumns: string[], beforeRequest: () => void): Promise<SupplementRow> {
+  const page = await evidencePage(pageId, beforeRequest);
+  // evidencePageはhas_moreを含む全長propertyを最終cursorまで展開済み。旧publisherのPRE形は変えない。
+  for (const property of Object.values(page.properties)) if (property.has_more === true) property.has_more = false;
+  assertCompleteSupplementPage(page as unknown as NotionPage, dbId, textColumns);
+  return parseSupplementRow(page as unknown as NotionPage, textColumns);
 }
 
 /** writeより前に資格/旧値の変更を検出。unknown mutationとは区別する。 */
@@ -1101,7 +1110,7 @@ export interface SupplementPublicationJournal {
   reserveCreate?(input: { dbId: string; stockCode: string; nextDocId: string | null; snapshot: string }): {
     complete(output: { pageId: string; postPageSha256: string }): void;
   };
-  reserve(input: { pageId: string; nextDocId: string; archiveKey: string; snapshot: string }): {
+  reserve(input: { pageId: string; nextDocId: string | null; archiveKey: string; snapshot: string }): {
     /** Explicit, once-only reconciliation of a PRE archive POST; never an unknown business write. */
     preArchive?: { pageId: string; createRequest: SupplementPreArchiveRequest; beforeWrite(): Promise<void> };
     complete(output: { archivePageId: string; postPageSha256: string }): void;
@@ -1179,7 +1188,13 @@ export async function replaceEvidenceBlock(
   const preSha = await sha256Hex(snapshot);
   // 推論確率・新根拠の揺れでunknownの再送ラッチを迂回させない。
   const executionKey = await sha256Hex(JSON.stringify(canonicalizeForHash({ previous: before, nextDocId: input.docId, judgeInput: input.judgeInput })));
-  if (typeof input.docId !== "string" || input.docId.length === 0) throw new NotionConfigError("補足publisherの原書類IDがありません");
+  if (!(input.docId === null || typeof input.docId === "string" && input.docId.length > 0)) throw new NotionConfigError("補足publisherの原書類IDがありません");
+  if (input.docId === null) {
+    const allowed = new Set<string>([SUPPLEMENT_PROPS.name, SUPPLEMENT_PROPS.code, SUPPLEMENT_PROPS.master, SUPPLEMENT_PROPS.sector33, SUPPLEMENT_PROPS.docId]);
+    if (block !== undefined || propertyValue(before.properties[SUPPLEMENT_PROPS.docId]) !== "" || Object.keys(props).some(name => !allowed.has(name))) {
+      throw new NotionConfigError("原本文書なしのpublicationは基本メタだけ。旧本文/タグ/状態を保持します");
+    }
+  }
   const archiveKey = `biztag-pre/${pageId}/${executionKey}`;
   // Reserve before physical PRE archive calls: upload/page-create unknown is also sticky across runs.
   const publication = journal.reserve({ pageId, nextDocId: input.docId, archiveKey, snapshot });

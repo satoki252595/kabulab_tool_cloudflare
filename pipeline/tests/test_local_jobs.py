@@ -32,6 +32,23 @@ def test_両jobの定時終了code0はpending件数の成功に置き換えな�
     assert "processed" not in receipt(kind)
 
 
+def test_補足の実測残件はexit0でも検知し当夜検査完了を全補足完了にしない(caplog):
+    data = {"scope": "daily_window", "status": "attention", "totalStocks": 100, "selectedForTextCheck": 2,
+            "textChecked": 1, "textUnchecked": 1, "textMismatched": 1, "textRepaired": 0, "metadataRepaired": 1,
+            "remaining": 1, "failures": 0, "qualificationHeld": 1, "wholeSupplementComplete": False}
+    assert "補足検査に残あり" in judge_local_receipt("biztag", {**receipt(), "biztagData": data}, SHA, NOW)
+    checked = {**data, "status": "checked_scope_complete", "textChecked": 2, "textUnchecked": 0,
+               "textRepaired": 1, "remaining": 0, "qualificationHeld": 0}
+    with caplog.at_level("INFO"):
+        assert judge_local_receipt("biztag", {**receipt(), "biztagData": checked}, SHA, NOW) is None
+    assert "全補足完了は未証明" in caplog.text
+    outside_active = {**data, "scope": "explicit_codes", "totalStocks": 1}
+    assert "補足検査に残あり" in judge_local_receipt("biztag", {**receipt(), "biztagData": outside_active}, SHA, NOW)
+    assert "件数が矛盾" in judge_local_receipt("biztag", {**receipt(), "biztagData": {**outside_active, "scope": "daily_window"}}, SHA, NOW)
+    for bad in ({**checked, "wholeSupplementComplete": True}, {**checked, "textChecked": True}, {**checked, "textUnchecked": 1}):
+        assert "不正" in judge_local_receipt("biztag", {**receipt(), "biztagData": bad}, SHA, NOW) or "矛盾" in judge_local_receipt("biztag", {**receipt(), "biztagData": bad}, SHA, NOW)
+
+
 @pytest.mark.parametrize("changes,reason", [
     ({"acceptedRevision": "b" * 40}, "SHA"),
     ({"revision": "b" * 40}, "SHA"),

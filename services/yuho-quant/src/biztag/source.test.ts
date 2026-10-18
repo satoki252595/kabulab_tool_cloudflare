@@ -76,6 +76,18 @@ describe("固定コードの最新有報をSQLから限定する", () => {
     expect(responses[2].columns.at(-1)).toBe("reported_hold");
     expect(fetch).not.toHaveBeenCalled();
   });
+  it("本文なし基本メタは現active1社/最新nullを2scopedSELECTで資格し、メタ変更・有報到着を拒否", async () => {
+    installSavedRows(); const doc = saved.documents[0], stock = saved.core.find(row => row.id === doc.stock_id)!;
+    sqlite.prepare("DELETE FROM yuho_documents WHERE stock_id=?").run(stock.id); queries = []; responses = [];
+    await assertLatestDocCurrent(db(), stock.code, null, { companyName: stock.name, sector33: stock.sector33 });
+    expect(queries).toHaveLength(2); expect(responses.every(row => row.params.includes(JSON.stringify([stock.code])))).toBe(true);
+    sqlite.prepare("UPDATE core_stocks SET name=? WHERE id=?").run(stock.name + "（declared drift）", stock.id);
+    await expect(assertLatestDocCurrent(db(), stock.code, null, { companyName: stock.name, sector33: stock.sector33 })).rejects.toThrow("現active");
+    sqlite.prepare("UPDATE core_stocks SET name=? WHERE id=?").run(stock.name, stock.id);
+    sqlite.prepare("insert into yuho_documents values(?,?,?,?,?,?,?,?)").run(doc.id, doc.stock_id, doc.doc_id, doc.doc_type_code, doc.period_end, doc.submitted_at, doc.notion_doc_page_id, doc.text_parse_status);
+    await expect(assertLatestDocCurrent(db(), stock.code, null, { companyName: stock.name, sector33: stock.sector33 })).rejects.toThrow("最新有報");
+    expect(fetch).not.toHaveBeenCalled();
+  });
 
   it("実保存50銘柄は旧全量＋Set filterと全値同値、2 SELECTともD1返却scopeを限定する", async () => {
     installSavedRows();

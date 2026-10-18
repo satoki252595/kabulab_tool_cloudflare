@@ -101,6 +101,8 @@ export type WorkItemKind =
   | "create_row"
   | "no_text"
   | "sync_text"
+  | "sync_metadata"
+  | "verify_text"
   | "sync_and_tag"
   | "retag"
   | "version_bump"
@@ -134,6 +136,30 @@ export interface WorkItem {
   qualificationHeld?: boolean;
   /** 明示finite CLIだけが指定。既存raw39同値を確かめ、表現receiptだけ再資格化する。 */
   refreshTextReceipt?: boolean;
+  /** 現在target39を完全読取し、旧同期SHAと異なる場合だけ復旧する。 */
+  repairTextDrift?: boolean;
+  /** 安価なメタ補完を閉じた後、同じ予算内で現在39を検査する。 */
+  verifyCurrentTexts?: boolean;
+  /** 現active基本metaだけ。原本文書/本文/タグ/状態は欠測HOLDのまま保持する。 */
+  basicMetadataOnly?: boolean;
+}
+
+/** 同じ現docの欠落だけ。非空不同や旧docを最新の根拠へ付け替えない。 */
+export function hasMissingMetadata(latest: LatestDoc, row: SupplementRow): boolean {
+  return latest.doc !== null && row.docId === latest.doc.docId && (
+    row.companyName.trim() === "" && latest.companyName.trim() !== "" ||
+    row.sector33 === null && latest.sector33 !== null || !row.masterLinked ||
+    row.docType === null || row.periodEnd === null || row.submittedAt === null || row.textStatus === null
+  );
+}
+
+/** ponytail: stateなしの小窓。未検査を充足済みとはせず、有限codesは全件を検査する。 */
+export function textVerificationCodes(latest: LatestDoc[], today: string, explicit: boolean): Set<string> {
+  assertBiztagDate(today, "text verification date");
+  const codes = [...new Set(latest.map(row => row.stockCode))].sort();
+  if (explicit || codes.length <= 50) return new Set(codes);
+  const start = Math.floor(Date.parse(`${today}T00:00:00Z`) / 86_400_000) * 50 % codes.length;
+  return new Set(Array.from({ length: 50 }, (_, i) => codes[(start + i) % codes.length]));
 }
 
 
@@ -183,6 +209,20 @@ function planOne(
     return { ...base, kind: "skip", qualificationHeld: true, reason: "母集団の上場資格が HOLD。保存済み結果を保持し、新規・既存とも機械判定に置き換えない" };
   }
 
+  if (row !== null && !hasUsableText(latest.doc) && (
+    row.companyName.trim() !== "" && row.companyName !== latest.companyName ||
+    row.sector33 !== null && latest.sector33 !== null && row.sector33 !== latest.sector33
+  )) {
+    return { ...base, kind: "skip", qualificationHeld: true, reason: "本文欠測かつ非空の基本メタが不同。別の欠落も上書きせずHOLD" };
+  }
+  if (row !== null && !hasUsableText(latest.doc) && (
+    row.companyName.trim() === "" && latest.companyName.trim() !== "" ||
+    row.sector33 === null && latest.sector33 !== null || !row.masterLinked
+  )) {
+    return { ...base, kind: "sync_metadata", basicMetadataOnly: true, qualificationHeld: true,
+      reason: "有報/本文の欠測HOLDは保持し、現activeの基本メタ欠落だけを独立して機械補完" };
+  }
+
   if (row === null) {
     if (!hasUsableText(latest.doc)) {
       return { ...base, kind: "create_row", qualificationHeld: true, reason: "補足行を本文なしで作成。初回判定は最新有報の本文取得まで HOLD" };
@@ -218,6 +258,13 @@ function planOne(
       return { ...base, kind: "retag", sourceChangedLocalJudge: true,
         reason: `判定根拠の書類が最新と異なる (${savedTagDocId} → ${doc.docId})。最新39本文とローカル再判定を同期` };
     }
+    if (row.companyName.trim() !== "" && row.companyName !== latest.companyName ||
+        row.docType !== null && row.docType !== (doc.docTypeCode === "120" ? "有報" : "訂正有報") ||
+        row.periodEnd !== null && row.periodEnd !== doc.periodEnd ||
+        row.submittedAt !== null && Date.parse(row.submittedAt) !== Date.parse(doc.submittedAt) ||
+        row.sector33 !== null && latest.sector33 !== null && row.sector33 !== latest.sector33) {
+      return { ...base, kind: "skip", qualificationHeld: true, reason: "同docの非空メタが原典と不同。欠落補完で上書きせずHOLD" };
+    }
     const syncedCurrent = textSync !== null && textSync.docId === doc.docId && textSync.textPageId === doc.notionDocPageId;
     if (receipt !== null && receipt.textPageId !== doc.notionDocPageId &&
         !(syncedCurrent && textSync?.equivalentJudgmentInputSha256 === receipt.sectionsSha256)) {
@@ -226,6 +273,9 @@ function planOne(
     }
     if (!syncedCurrent) {
       return { ...base, kind: "sync_text", reason: "同じ書類の39本文だけを機械同期。旧タグ・モデル・根拠・判定時刻を保持し、旧4SHA不明を再判定理由にしない" };
+    }
+    if (hasMissingMetadata(latest, row)) {
+      return { ...base, kind: "sync_metadata", reason: "同じ現有報のメタ情報の欠落だけを機械補完。タグ・根拠・旧判定入力を保持" };
     }
     return { ...base, kind: "skip", reason: receipt === null
       ? "同じ書類の保存済み判定を保持。旧判定の入力SHAは未検証であり、同一入力の証明には使用しない"

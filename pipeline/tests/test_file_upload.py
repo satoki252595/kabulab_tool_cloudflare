@@ -435,6 +435,69 @@ class TestMultipart:
 
 
 class TestRawUploadError:
+    @pytest.mark.parametrize("existing,wrong_relation", [(False, False), (False, True), (True, False)])
+    def test_qualified_master_new_row_readback_and_existing_sha_no_backfill(
+        self, tmp_path, monkeypatch, existing, wrong_relation
+    ):
+        """実7911 ZIPを保持し、新規relationだけ全読戻し。旧同SHA空欄へPATCHしない。"""
+        from types import SimpleNamespace
+
+        fixture = Path(__file__).parent / "fixtures/direct-roa/7911-S100YIAY-type5.zip"
+        artifact = save_raw(
+            fixture.read_bytes(), source=Source.EDINET, datatype="csv", scope="7911",
+            data_date=None, url="https://api.edinet-fsa.go.jp/api/v2/documents/S100YIAY?type=5",
+            ext="zip", license_tag=LicenseTag.COMMERCIAL_OK, base_dir=tmp_path,
+            doc_id="S100YIAY",
+        )
+        # UUIDはdeclared API doubleの構造値。原本のissuer/date/valueには使用しない。
+        master_id = "11111111-1111-4111-8111-111111111111"
+        artifact.qualified_master_page_id = master_id
+        props = file_upload._raw_row_properties(artifact, [])
+        props[S.RAW_PROP_FILENAME] = {"type": "title", "title": [
+            {"plain_text": artifact.filename}]}
+        props[S.RAW_PROP_SHA256] = {"type": "rich_text", "rich_text": [
+            {"plain_text": artifact.sha256}]}
+        props[S.RAW_PROP_SIZE] = {"type": "number", "number": artifact.size_bytes}
+        props[S.RAW_PROP_FILES] = {"type": "files", "files": [{
+            "name": artifact.filename, "type": "file", "file": {"url": "declared-raw"}}]}
+        props[S.RAW_PROP_RELATED_MASTER] = {"type": "relation", "has_more": False,
+            "relation": [] if existing or wrong_relation else [{"id": master_id}]}
+        page = {"object": "page", "id": "declared-page", "archived": False,
+                "properties": props}
+        created = []
+        client = SimpleNamespace(
+            dry_run=False,
+            query_database=lambda *a, **kw: [{"id": page["id"]}] if existing else [],
+            create_page=lambda **kw: created.append(kw) or {"id": page["id"]},
+            get_page=lambda page_id: page,
+            download_file=lambda url: fixture.read_bytes(),
+        )
+        monkeypatch.setattr(file_upload, "upload_file", lambda c, p: ("upload", p.name))
+        if wrong_relation:
+            with pytest.raises(file_upload.RawUploadError, match="関連銘柄の読戻し不一致"):
+                file_upload.upload_raw_artifact(client, make_settings(), artifact)
+            assert artifact.notion_page_id is None
+        else:
+            assert file_upload.upload_raw_artifact(client, make_settings(), artifact) == page["id"]
+        assert len(created) == (0 if existing else 1)
+        if created:
+            assert created[0]["properties"][S.RAW_PROP_RELATED_MASTER] == {
+                "relation": [{"id": master_id}]}
+        assert artifact.local_path.read_bytes() == fixture.read_bytes()
+
+    def test_related_master_requires_explicit_single_stock_before_upload(
+        self, tmp_path, dry_client
+    ):
+        artifact = make_artifact(tmp_path)
+        artifact.scope = "ALL"
+        file_upload.upload_raw_artifact(dry_client, make_settings(), artifact)
+        assert S.RAW_PROP_RELATED_MASTER not in dry_client.ops[-1].payload["properties"]
+        dry_client.ops.clear()
+        artifact.qualified_master_page_id = "11111111-1111-4111-8111-111111111111"
+        with pytest.raises(file_upload.RawUploadError, match="単一銘柄scope"):
+            file_upload.upload_raw_artifact(dry_client, make_settings(), artifact)
+        assert dry_client.ops == []
+
     @pytest.mark.parametrize("existing", [False, True])
     @pytest.mark.parametrize("tampered", [False, True])
     def test_all_physical_bytes_verified_before_publishing_page_id(

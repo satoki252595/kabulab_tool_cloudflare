@@ -1,4 +1,4 @@
-/** Mac処理の実行事実だけをR2へ写す。本文・処理件数・pending件数は作らない。 */
+/** Mac処理の実行事実と、実CLIが測定した補足検査の件数をR2へ写す。 */
 import { z } from "../../src/shared/zod-mini.js";
 import policy from "../../src/shared/local-job-receipt.json";
 import type { r2GetVersion, r2Put } from "../vwap/lib/r2.js";
@@ -7,12 +7,38 @@ import { readFileSync, writeFileSync } from "node:fs";
 
 export type LocalJobKind = keyof typeof policy.jobs;
 export const LOCAL_JOB_HOURS = policy.jobs;
+export const BIZTAG_DATA_PREFIX = "[biztag-field-coverage] ";
+const Count = z.number().check(z.int(), z.nonnegative());
+const BiztagData = z.strictObject({
+  scope: z.enum(["explicit_codes", "daily_window"]),
+  status: z.enum(["checked_scope_complete", "partial", "attention"]),
+  totalStocks: Count, selectedForTextCheck: Count, textChecked: Count, textUnchecked: Count,
+  textMismatched: Count, textRepaired: Count, metadataRepaired: Count,
+  remaining: Count, failures: Count, qualificationHeld: Count, wholeSupplementComplete: z.literal(false),
+});
+export type BiztagDataStatus = z.infer<typeof BiztagData>;
+/** stdoutの専用行だけを受理する。本文・エラー原文や終了codeから件数を推測しない。 */
+export function readBiztagDataStatus(log: string): BiztagDataStatus {
+  const lines = log.split("\n").filter(line => line.startsWith(BIZTAG_DATA_PREFIX));
+  if (lines.length !== 1) throw new Error("補足の実測summaryが欠落・重複しています");
+  let value: unknown;
+  try { value = JSON.parse(lines[0].slice(BIZTAG_DATA_PREFIX.length)); }
+  catch { throw new Error("補足の実測summaryのJSONが不正です"); }
+  const data = BiztagData.parse(value);
+  if (data.textChecked + data.textUnchecked !== data.selectedForTextCheck ||
+      (data.scope === "daily_window" && data.selectedForTextCheck > data.totalStocks) || data.textMismatched > data.textChecked ||
+      data.textRepaired > data.textMismatched || data.metadataRepaired > data.totalStocks) {
+    throw new Error("補足の実測summaryの件数が矛盾しています");
+  }
+  return data;
+}
 const Receipt = z.strictObject({
   version: z.literal(1), kind: z.enum(["biztag", "yutai-summary"]), phase: z.enum(["running", "finished"]),
   scheduledFor: z.iso.datetime(), startedAt: z.iso.datetime(), finishedAt: z.nullable(z.iso.datetime()),
   revision: z.string().check(z.regex(/^[0-9a-f]{40}$/)), acceptedRevision: z.string().check(z.regex(/^[0-9a-f]{40}$/)),
   code: z.nullable(z.number().check(z.int())), signal: z.nullable(z.string().check(z.regex(/^SIG[A-Z0-9]+$/))),
   retries: z.literal(0),
+  biztagData: z.optional(BiztagData),
 });
 export type LocalJobReceipt = z.infer<typeof Receipt>;
 
@@ -32,9 +58,11 @@ export function parseLocalJobReceipt(value: unknown): LocalJobReceipt {
   if (receipt.scheduledFor !== localJobScheduledFor(receipt.kind, receipt.startedAt) ||
       (receipt.phase === "running" ? receipt.finishedAt !== null || receipt.code !== null || receipt.signal !== null
         : receipt.finishedAt === null || Date.parse(receipt.finishedAt) < Date.parse(receipt.startedAt)) ||
-      (receipt.code !== null && receipt.signal !== null)) {
+      (receipt.code !== null && receipt.signal !== null) ||
+      (receipt.biztagData !== undefined && (receipt.kind !== "biztag" || receipt.phase !== "finished"))) {
     throw new Error("ローカル実行receiptの時計・終了状態が不正です");
   }
+  if (receipt.biztagData !== undefined) readBiztagDataStatus(BIZTAG_DATA_PREFIX + JSON.stringify(receipt.biztagData));
   return receipt;
 }
 
