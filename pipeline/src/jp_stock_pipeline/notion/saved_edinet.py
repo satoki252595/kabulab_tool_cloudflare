@@ -9,14 +9,174 @@ import re
 from datetime import date, datetime
 
 from ..config import ConfigError, Settings
+from ..collectors import edinet_codelist
 from ..licensing import LicenseTag
-from ..models import RawArtifact, Source
+from ..models import RawArtifact, Source, now_jst
 from ..rawstore import save_raw
 from . import schema as S
 from .client import NotionClient
 
 logger = logging.getLogger(__name__)
 MAX_ZIP_BYTES = 5 * 1024 * 1024
+
+
+def read_saved_codelist(
+    client: NotionClient,
+    settings: Settings,
+    *,
+    not_before: date,
+) -> RawArtifact | None:
+    """⑤/共通universeの最新2行だけ。古い世代の明示不足以外は代替取得しない。"""
+    candidates: list[dict] = []
+    raw_db = settings.db_id("raw_files")
+    raw_pages = client.query_database(
+        raw_db,
+        filter={
+            "and": [
+                {"property": S.RAW_PROP_URL, "url": {"equals": edinet_codelist.CODELIST_URL}},
+                {"property": S.PROP_SOURCE, "select": {"equals": "EDINET"}},
+                {"property": S.RAW_PROP_DATATYPE, "rich_text": {"equals": "codelist"}},
+            ]
+        },
+        sorts=[{"property": S.PROP_FETCHED_AT, "direction": "descending"}],
+        page_size=2,
+        max_pages=1,
+        strict=True,
+    )
+    if len(raw_pages) > 2:
+        raise ValueError("保存公式銘柄表の有限読取が不正")
+    for page in raw_pages:
+        props = _active(page, raw_db)
+        clock = _clock(props[S.PROP_FETCHED_AT].get("date", {}).get("start"))
+        if (
+            props[S.RAW_PROP_URL].get("url") != edinet_codelist.CODELIST_URL
+            or props[S.PROP_SOURCE].get("select", {}).get("name") != "EDINET"
+            or props[S.PROP_LICENSE_TAG].get("select", {}).get("name") != "commercial-ok"
+            or _text(props[S.RAW_PROP_DATATYPE], "rich_text") != "codelist"
+            or _text(props[S.RAW_PROP_SCOPE], "rich_text") != "ALL"
+        ):
+            raise ValueError("保存公式銘柄表の来歴が不一致")
+        candidates.append(
+            {
+                "id": page["id"],
+                "clock": clock,
+                "filename": _text(props[S.RAW_PROP_FILENAME], "title"),
+                "sha": _text(props[S.RAW_PROP_SHA256], "rich_text"),
+                "size": props[S.RAW_PROP_SIZE].get("number"),
+                "files": props[S.RAW_PROP_FILES].get("files"),
+            }
+        )
+    if len(raw_pages) == 2 and candidates[0]["clock"] <= candidates[1]["clock"]:
+        raise ValueError("保存公式銘柄表の最新2行が同時計/降順不一致")
+    if not settings.notion_archive_page_id:
+        raise ConfigError("保存公式銘柄表の確認にNOTION_ARCHIVE_PAGE_IDが必要")
+    children = client.list_child_blocks(settings.notion_archive_page_id)
+    databases = [
+        b
+        for b in children
+        if b.get("type") == "child_database"
+        and b.get("child_database", {}).get("title") == "一次データ｜universe"
+        and b.get("archived") is not True
+        and b.get("in_trash") is not True
+    ]
+    if len(databases) > 1:
+        raise ValueError("保存公式銘柄表DBが非一意")
+    if databases:
+        db = databases[0]["id"]
+        pages = client.query_database(
+            db,
+            filter={"property": "Source", "rich_text": {"equals": edinet_codelist.CODELIST_URL}},
+            sorts=[{"property": "Fetched At", "direction": "descending"}],
+            page_size=2,
+            max_pages=1,
+            strict=True,
+        )
+        if len(pages) > 2:
+            raise ValueError("保存公式銘柄表の有限読取が不正")
+        for page in pages:
+            props = _active(page, db)
+            if (
+                _text(props["Source"], "rich_text") != edinet_codelist.CODELIST_URL
+                or props["Service"].get("select", {}).get("name") != "universe"
+                or props["Status"].get("select", {}).get("name") != "recorded"
+            ):
+                raise ValueError("保存公式銘柄表の来歴が不一致")
+            metadata = json.loads(_text(props["Metadata"], "rich_text"))
+            if "sourceUrl" in metadata and metadata["sourceUrl"] != edinet_codelist.CODELIST_URL:
+                raise ValueError("保存公式銘柄表のmetadata/取得元が不一致")
+            manifest = metadata["_fileManifest"]
+            if manifest.get("version") != 1 or not isinstance(manifest.get("files"), list):
+                raise ValueError("保存公式銘柄表のmanifestが不正")
+            entries = manifest["files"]
+            if any(m.get("upload") != "uploaded" for m in entries):
+                raise ValueError("保存公式銘柄表の物理保管が未完")
+            zips = [m for m in entries if m.get("originalFilename", "").endswith(".zip")]
+            if len(zips) != 1 or zips[0].get("originalFilename") != zips[0].get("uploadFilename"):
+                raise ValueError("保存公式銘柄表のZIPが非一意")
+            entry = zips[0]
+            if metadata.get("sha256") != entry.get("sha256") or metadata.get("bytes") != entry.get(
+                "byteLength"
+            ):
+                raise ValueError("保存公式銘柄表のmetadata/SHAが不一致")
+            candidates.append(
+                {
+                    "id": page["id"],
+                    "clock": _clock(props["Fetched At"].get("date", {}).get("start")),
+                    "filename": entry["originalFilename"],
+                    "sha": entry["sha256"],
+                    "size": entry["byteLength"],
+                    "files": props["Files"].get("files"),
+                }
+            )
+        if len(pages) == 2 and candidates[-2]["clock"] <= candidates[-1]["clock"]:
+            raise ValueError("保存公式銘柄表の最新2行が同時計/降順不一致")
+    moment = now_jst()
+    for item in candidates:
+        if (
+            item["clock"] > moment
+            or not isinstance(item["sha"], str)
+            or not re.fullmatch(r"[a-f0-9]{64}", item["sha"])
+            or type(item["size"]) is not int
+            or not 0 < item["size"] <= MAX_ZIP_BYTES
+            or not isinstance(item["filename"], str)
+            or not item["filename"].endswith(".zip")
+            or not isinstance(item["files"], list)
+            or len({f.get("name") for f in item["files"]}) != len(item["files"])
+        ):
+            raise ValueError("保存公式銘柄表の時計/SHA/サイズ/添付が不正")
+    candidates.sort(key=lambda item: item["clock"], reverse=True)
+    if not candidates:
+        return None
+    selected = candidates[0]
+    if len(candidates) > 1 and candidates[1]["clock"] == selected["clock"]:
+        raise ValueError("保存公式銘柄表の最新時計が競合")
+    if selected["clock"].astimezone(moment.tzinfo).date() < not_before:
+        return None
+    files = [f for f in selected["files"] if f.get("name") == selected["filename"]]
+    if len(files) != 1 or files[0].get("type") != "file":
+        raise ValueError("保存公式銘柄表の物理ZIPが非一意")
+    content = client.download_file(files[0]["file"]["url"], max_bytes=selected["size"])
+    if len(content) != selected["size"] or hashlib.sha256(content).hexdigest() != selected["sha"]:
+        raise ValueError("保存公式銘柄表の全bytes/SHAが不一致")
+    as_of, _, _ = edinet_codelist._read_codelist_rows(content)
+    if as_of is None or as_of > moment.date():
+        raise ValueError("保存公式銘柄表の基準日が不正")
+    if as_of < not_before:
+        return None
+    artifact = save_raw(
+        content,
+        source=Source.EDINET,
+        datatype="codelist",
+        scope="ALL",
+        data_date=as_of,
+        url=edinet_codelist.CODELIST_URL,
+        ext="zip",
+        license_tag=LicenseTag.COMMERCIAL_OK,
+        base_dir=settings.raw_data_dir,
+    )
+    artifact.fetched_at = selected["clock"]
+    artifact.notion_page_id = selected["id"]
+    return artifact
 
 
 def _text(prop: dict, kind: str) -> str:

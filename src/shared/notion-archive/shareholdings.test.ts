@@ -803,12 +803,21 @@ describe("原本完了とは独立した保存価格queue", () => {
     vi.mocked(notionRequest).mockImplementation(async (method, path, body) => {
       if (method === "POST" && path === `/databases/${"d".repeat(32)}/query`) return requestRouter(method, path, body);
       if (method === "POST" && path.endsWith("/query")) {
-        const filter = (body as { filter: { property: string; select: { equals: string } } }).filter;
-        const status = filter.select.equals;
-        const page = await requestRouter("GET", `/pages/${args.archivePageId}`) as { properties: Record<string, { select?: { name: string } }> };
-        return { results: page.properties[filter.property]?.select?.name === status ? [page] : [], has_more: false, next_cursor: null };
+        type Filter = { property: string; select?: { equals: string }; rich_text?: { contains?: string; does_not_contain?: string } };
+        const raw = (body as { filter: Filter & { and?: Filter[] } }).filter, filters = raw.and === undefined ? [raw] : raw.and;
+        const page = { ...await requestRouter("GET", `/pages/${args.archivePageId}`) as { properties: Record<string, { select?: { name: string }; rich_text?: Array<{ plain_text: string }> }> },
+          created_time: "2026-07-01T00:00:00.000Z", last_edited_time: "2026-07-01T00:00:00.000Z" }; // declared native transport clocks
+        const matches = filters.every(filter => {
+          const prop=page.properties[filter.property]; if(filter.select) return prop?.select?.name === filter.select.equals;
+          const text=prop?.rich_text?.map(v=>v.plain_text).join("");
+          return text !== undefined && (filter.rich_text?.contains === undefined || text.includes(filter.rich_text.contains)) &&
+            (filter.rich_text?.does_not_contain === undefined || !text.includes(filter.rich_text.does_not_contain));
+        });
+        return { results: matches ? [page] : [], has_more: false, next_cursor: null };
       }
-      return requestRouter(method, path, body);
+      const response=await requestRouter(method,path,body);
+      return method === "GET" && path === `/pages/${args.archivePageId}` ? { ...response as object,
+        created_time:"2026-07-01T00:00:00.000Z",last_edited_time:"2026-07-01T00:00:00.000Z" } : response;
     });
     vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(Uint8Array.from(zip)));
     return structuredClone(saved[`/pages/${args.archivePageId}`]) as Record<string, unknown>;
@@ -1114,4 +1123,94 @@ describe("原本完了とは独立した保存価格queue", () => {
     for (const name of ["保有明細状態", "保有明細理由", "保有明細再開情報"]) expect(sourceAfter[name]).toEqual(sourceBefore[name]);
     expect(sourceAfter["保有価格状態"]).toEqual({ select: { name: "価格照合完了" } });
   });
+  async function completedUnavailable() {
+    await seedPublishedSource();
+    vi.mocked(qualifyHoldingValuation).mockResolvedValue({ status: "unavailable", identity: null, reason: "旧snapshotで原本資格未成立" });
+    await resumePendingShareholdingsPrices({ sourceDb,maxRows:100,shouldStop:()=>false,budget:budget(),loadSources:async()=>ready });
+    expect(restartInfo(saved[`/pages/${args.archivePageId}`],"保有価格")).toMatchObject({snapshotId:ready.snapshotId,nextHoldingOffset:1,unavailableRows:1});
+    vi.mocked(recordPrimaryData).mockResolvedValue({pageId:"1".repeat(32),outcome:"recorded",fileTooLarge:false,manifestMatch:"written"});
+    vi.mocked(verifyArchivedAttachments).mockResolvedValue(undefined);
+    vi.mocked(notionRequest).mockClear(); vi.mocked(recordPrimaryData).mockClear();
+  }
+  const nextLoader=()=>Object.assign(async()=>({...ready,snapshotId:"next-price-snapshot"}),{currentSnapshotId:async()=>"next-price-snapshot"});
+  it("新世代だけ完了HOLDの全原表PREを物理保管し、通常価格writerで未資格行を回復する", async()=>{
+    await completedUnavailable(); const before=structuredClone(saved);
+    vi.mocked(qualifyHoldingValuation).mockResolvedValue(qualified());
+    expect(await resumePendingShareholdingsPrices({sourceDb,maxRows:100,shouldStop:()=>false,budget:budget(),loadSources:nextLoader()})).toMatchObject({usedRows:1,resumed:1,held:0});
+    expect(recordPrimaryData).toHaveBeenCalledTimes(1);
+    const archived=vi.mocked(recordPrimaryData).mock.calls[0][0], pre=JSON.parse(Buffer.from(archived.files![0].bytes).toString());
+    expect(pre.previousInfo).toMatchObject({snapshotId:ready.snapshotId,nextHoldingOffset:1,unavailableRows:1});expect(pre.rows).toHaveLength(1);
+    expect(verifyArchivedAttachments).toHaveBeenCalledWith("1".repeat(32),archived.files!.map(f=>({filename:f.filename,bytes:f.bytes})),"保有価格再資格PRE");
+    expect(restartInfo(saved[`/pages/${args.archivePageId}`],"保有価格")).toMatchObject({snapshotId:"next-price-snapshot",nextHoldingOffset:1,unavailableRows:0,
+      previousPricePass:{snapshotId:ready.snapshotId,nextHoldingOffset:1,unavailableRows:1,pre:{pageId:"1".repeat(32)}}});
+    for(const field of ["保有明細状態","保有明細理由","保有明細再開情報"]) expect(testProperties(saved[`/pages/${args.archivePageId}`])[field]).toEqual(testProperties(before[`/pages/${args.archivePageId}`])[field]);
+  });
+  it("同snapshotやsource未完了は価格HOLDを再開せずarchive/PATCH0",async()=>{
+    await completedUnavailable();
+    const same=Object.assign(async()=>ready,{currentSnapshotId:async()=>ready.snapshotId});
+    await resumePendingShareholdingsPrices({sourceDb,maxRows:100,shouldStop:()=>false,budget:budget(),loadSources:same});
+    expect(recordPrimaryData).not.toHaveBeenCalled();expect(vi.mocked(notionRequest).mock.calls.filter(([m])=>m==="PATCH")).toEqual([]);
+    testProperties(saved[`/pages/${args.archivePageId}`])["保有明細状態"]={select:{name:"要確認"}}; // declared208A-like source quarantine
+    await resumePendingShareholdingsPrices({sourceDb,maxRows:100,shouldStop:()=>false,budget:budget(),loadSources:nextLoader()});
+    expect(recordPrimaryData).not.toHaveBeenCalled();expect(vi.mocked(notionRequest).mock.calls.filter(([m])=>m==="PATCH")).toEqual([]);
+  });
+  it("再資格ZIPも既source byte予算へ入場し、不足ならhosted GET/PRE/PATCH0",async()=>{
+    await completedUnavailable();vi.mocked(fetch).mockClear();const limit={remainingChunks:116,remainingBytes:args.zip.length-1};
+    await resumePendingShareholdingsPrices({sourceDb,maxRows:100,shouldStop:()=>false,budget:limit,loadSources:nextLoader()});
+    expect(fetch).not.toHaveBeenCalled();expect(recordPrimaryData).not.toHaveBeenCalled();expect(vi.mocked(notionRequest).mock.calls.filter(([m])=>m==="PATCH")).toEqual([]);
+    limit.remainingBytes=args.zip.length;vi.mocked(qualifyHoldingValuation).mockResolvedValue(qualified());
+    await resumePendingShareholdingsPrices({sourceDb,maxRows:100,shouldStop:()=>false,budget:limit,loadSources:nextLoader()});
+    expect(limit.remainingBytes).toBe(0);expect(testProperties(saved[`/pages/${args.archivePageId}`])["保有価格状態"]).toEqual({select:{name:"再開待ち"}});
+    expect(vi.mocked(notionRequest).mock.calls.filter(([m,p])=>m==="PATCH"&&p===rowPath)).toEqual([]);
+  });
+  it("外部queueの再資格PRE欠落/他source key/SHA差を価格mutation前に拒否する",async()=>{
+    await completedUnavailable();const old=restartInfo(saved[`/pages/${args.archivePageId}`],"保有価格");
+    const file={pageId:"1".repeat(32),sha256:"2".repeat(64),bytes:100,filename:"holdings-price-requalification-PRE.json",
+      key:`holdings-price-requalification/${source.docId}/${ready.snapshotId}/next-price-snapshot/PRE/${"2".repeat(64)}`};
+    const valid={snapshotId:ready.snapshotId,nextHoldingOffset:1,unavailableRows:1,pre:file};
+    for(const previousPricePass of [{},{...valid,pre:{...file,pageId:undefined}},{...valid,pre:{...file,key:file.key.replace(source.docId,"S100OTHR")}},{...valid,pre:{...file,sha256:"3".repeat(64)}}]){
+      Object.assign(testProperties(saved[`/pages/${args.archivePageId}`]),{"保有価格状態":{select:{name:"再開待ち"}},"保有価格再開情報":{rich_text:[{text:{content:JSON.stringify({...old,snapshotId:"next-price-snapshot",nextHoldingOffset:0,unavailableRows:0,previousPricePass})}}]}});
+      await expect(resumePendingShareholdingsPrices({sourceDb,maxRows:100,shouldStop:()=>false,budget:budget(),loadSources:nextLoader()})).rejects.toThrow();
+    }
+    for(const snapshotId of [undefined,ready.snapshotId]){
+      Object.assign(testProperties(saved[`/pages/${args.archivePageId}`]),{"保有価格再開情報":{rich_text:[{text:{content:JSON.stringify({...old,snapshotId,nextHoldingOffset:0,unavailableRows:0,previousPricePass:valid})}}]}});
+      await expect(resumePendingShareholdingsPrices({sourceDb,maxRows:100,shouldStop:()=>false,budget:budget(),loadSources:nextLoader()})).rejects.toThrow();
+    }
+    expect(recordPrimaryData).not.toHaveBeenCalled();expect(vi.mocked(notionRequest).mock.calls.filter(([m])=>m==="PATCH")).toEqual([]);
+  });
+  it("新世代でも全facts変更はPRE/価格mutation前STOP、PRE unknownはdurable価格unknownで再送不可",async()=>{
+    await completedUnavailable();vi.mocked(parseShareholdingsData).mockReturnValue({...extraction,holdings:[{...holding,shares:13}]});
+    await expect(resumePendingShareholdingsPrices({sourceDb,maxRows:100,shouldStop:()=>false,budget:budget(),loadSources:nextLoader()})).rejects.toThrow();
+    expect(recordPrimaryData).not.toHaveBeenCalled();expect(vi.mocked(notionRequest).mock.calls.filter(([m])=>m==="PATCH")).toEqual([]);
+    vi.mocked(parseShareholdingsData).mockReturnValue(structuredClone(extraction));vi.mocked(recordPrimaryData).mockRejectedValueOnce(new Error("PRE_UPLOAD_UNKNOWN"));
+    const options={sourceDb,maxRows:100,shouldStop:()=>false,budget:budget(),loadSources:nextLoader()};
+    await expect(resumePendingShareholdingsPrices(options)).rejects.toThrow("PRE_UPLOAD_UNKNOWN");
+    expect(testProperties(saved[`/pages/${args.archivePageId}`])["保有価格状態"]).toEqual({select:{name:"実行中（結果未確定）"}});
+    await expect(resumePendingShareholdingsPrices(options)).rejects.toThrow("保有価格に結果未確定");expect(recordPrimaryData).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(notionRequest).mock.calls.filter(([m,path])=>m==="PATCH"&&path===rowPath)).toEqual([]);
+  });
+
+  it("再資格は既確定行の全props/旧proofを保持し、未資格行だけ新原本で算定する",async()=>{
+    const holdings=[holding,{...holding,kind:"みなし保有株式" as const,rowIndex:4}];
+    vi.mocked(parseShareholdingsData).mockReturnValue({...extraction,holdings});await seedPublishedSource();
+    const created=vi.mocked(notionRequest).mock.calls.filter(([m,p])=>m==="POST"&&p==="/pages");
+    const rows=created.map((call,index)=>({object:"page",id:(index===0?"e":"f").repeat(32),parent:{type:"database_id",database_id:"d".repeat(32)},archived:false,in_trash:false,
+      properties:{...legacy,...mirrored((call[2] as {properties:Record<string,unknown>}).properties),...formulaStatuses((call[2] as {properties:Record<string,unknown>}).properties)}}));
+    holdingPeriodRows=async()=>structuredClone(rows); const route=vi.mocked(notionRequest).getMockImplementation()!;
+    vi.mocked(notionRequest).mockImplementation(async(m,p,b,o)=>{const row=rows.find(v=>p===`/pages/${v.id}`);if(!row)return route(m,p,b,o);
+      if(m==="PATCH"){Object.assign(row.properties,mirrored((b as {properties:Record<string,unknown>}).properties));Object.assign(row.properties,formulaStatuses(row.properties));return{object:"page",id:row.id};}return structuredClone(row);});
+    vi.mocked(qualifyHoldingValuation).mockResolvedValueOnce(qualified()).mockResolvedValueOnce({status:"unavailable",identity:null,reason:"旧snapshot不足"});
+    await resumePendingShareholdingsPrices({sourceDb,maxRows:100,shouldStop:()=>false,budget:budget(),loadSources:async()=>ready});
+    const first=structuredClone(rows[0]), oldSource=structuredClone(saved[`/pages/${args.archivePageId}`]);
+    vi.mocked(recordPrimaryData).mockResolvedValue({pageId:"1".repeat(32),outcome:"recorded",fileTooLarge:false,manifestMatch:"written"});vi.mocked(verifyArchivedAttachments).mockResolvedValue(undefined);
+    vi.mocked(qualifyHoldingValuation).mockClear();vi.mocked(qualifyHoldingValuation).mockImplementation(async({holding:h})=>{if(h.kind==="特定投資株式")throw new Error("OLD_QUALIFIED_MUST_NOT_REPRICE");return qualified();});
+    const loader=Object.assign(vi.fn<HoldingPriceSourceLoader>(async()=>({...ready,snapshotId:"next-price-snapshot"})),{currentSnapshotId:async()=>"next-price-snapshot"});
+    vi.mocked(notionRequest).mockClear();
+    expect(await resumePendingShareholdingsPrices({sourceDb,maxRows:100,shouldStop:()=>false,budget:budget(),loadSources:loader})).toMatchObject({usedRows:2,resumed:1,held:0});
+    expect(rows[0]).toEqual(first);expect(loader.mock.calls[0][0]).toEqual([holdings[1]]);expect(qualifyHoldingValuation).toHaveBeenCalledTimes(1);
+    expect(restartInfo(saved[`/pages/${args.archivePageId}`],"保有価格")).toMatchObject({nextHoldingOffset:2,unavailableRows:0});
+    expect(vi.mocked(notionRequest).mock.calls.filter(([m,p])=>m==="PATCH"&&p===`/pages/${first.id}`)).toEqual([]);
+    for(const field of ["保有明細状態","保有明細理由","保有明細再開情報"]) expect(testProperties(saved[`/pages/${args.archivePageId}`])[field]).toEqual(testProperties(oldSource)[field]);
+  });
+
 });

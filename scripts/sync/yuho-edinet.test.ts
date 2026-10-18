@@ -41,7 +41,7 @@ describe("direct Node catchup", () => {
       expect(await main(["--part=0", "--of=8"])).toBe(0);
       expect(runYuhoEdinetCatchup).toHaveBeenCalledWith(db, {part: 0, of: 8}, sender, undefined, undefined, { observeIssuedShares: true });
       expect(createHoldingPriceSourceLoader).not.toHaveBeenCalled();
-      const loader = vi.fn(); vi.mocked(createHoldingPriceSourceLoader).mockReturnValue(loader);
+      const loader = Object.assign(vi.fn(), { currentSnapshotId: vi.fn(async () => null) }); vi.mocked(createHoldingPriceSourceLoader).mockReturnValue(loader);
       expect(await main([])).toBe(0);
       expect(runYuhoEdinetCatchup).toHaveBeenLastCalledWith(db, undefined, sender, loader, undefined, { observeIssuedShares: true });
       expect(sharedEnv.R2_SECRET_ACCESS_KEY).toHaveBeenCalledTimes(1);

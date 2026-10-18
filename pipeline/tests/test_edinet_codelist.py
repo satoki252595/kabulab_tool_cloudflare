@@ -28,6 +28,58 @@ def _zip_bytes() -> bytes:
     return fixture_path(ZIP_FIXTURE).read_bytes()
 
 
+class TestIssuerListingClassification:
+    def test_actual_nonlisted_issuer_requires_matching_jcn_and_qualified_date(self):
+        def classify(**changes):
+            args = {
+                "edinet_code": "E05633",
+                "corporate_number": "1250001002936",
+                "not_before": date(2026, 6, 10),
+                "observed_on": date(2026, 6, 10),
+            }
+            return mod.classify_issuer_listing(_zip_bytes(), **(args | changes))
+
+        assert classify().status == "excluded_nonlisted"
+        assert classify().as_of == date(2026, 6, 10)
+        for changes in [
+            {"corporate_number": None},
+            {"edinet_code": None},
+            {"corporate_number": "0000000000000"},
+            {"not_before": date(2026, 6, 11)},
+            {"observed_on": date(2026, 6, 9)},
+            {"edinet_code": "E02144"},
+        ]:
+            assert classify(**changes).status == "unresolved"
+
+    @pytest.mark.parametrize("fault", ["duplicate_issuer", "duplicate_jcn", "listed", "ticker"])
+    def test_conflicting_actual_row_is_not_excluded(self, monkeypatch, fault):
+        asof, idx, rows = mod._read_codelist_rows(_zip_bytes())
+        original = next((n, row) for n, row in rows if row[idx["ＥＤＩＮＥＴコード"]] == "E05633")
+        changed = [(n, list(row)) for n, row in rows]
+        if fault == "duplicate_issuer":
+            changed.append(original)
+        elif fault == "duplicate_jcn":
+            next(row for _, row in changed if row[idx["ＥＤＩＮＥＴコード"]] == "E02144")[
+                idx["提出者法人番号"]
+            ] = "1250001002936"
+        else:
+            row = next(row for _, row in changed if row[idx["ＥＤＩＮＥＴコード"]] == "E05633")
+            row[idx["上場区分"] if fault == "listed" else idx["証券コード"]] = (
+                "上場" if fault == "listed" else "38140"
+            )
+        monkeypatch.setattr(mod, "_read_codelist_rows", lambda _: (asof, idx, changed))
+        assert (
+            mod.classify_issuer_listing(
+                _zip_bytes(),
+                edinet_code="E05633",
+                corporate_number="1250001002936",
+                not_before=asof,
+                observed_on=asof,
+            ).status
+            == "unresolved"
+        )
+
+
 class TestNormalizeSecCode:
     def test_five_digits_trailing_zero(self):
         assert mod.normalize_sec_code("72030") == "7203"
