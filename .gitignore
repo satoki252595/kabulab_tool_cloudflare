@@ -104,6 +104,8 @@ __pycache__/
 # 収集データ（原本は Notion ⑤ に保存。ローカルは作業領域）
 pipeline/data/raw/
 pipeline/data/export/
+# rootからuv --project pipelineで起動した場合も原本を公開Gitへ含めない。
+/data/raw/
 
 # ------------------------------------------------------------------
 # 実レスポンスフィクスチャ（取得はするが commit しない）

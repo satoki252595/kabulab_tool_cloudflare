@@ -51,12 +51,14 @@ export async function archiveAndVerify(
   // record は 1 回だけ。再 POST・代替 key は作らない。
   let rec: Awaited<ReturnType<ArchiveDeps["record"]>>;
   try {
+    const archiveRequestedAt = new Date().toISOString();
     rec = await deps.record({
       service: input.service,
       key: input.key,
       source: input.source,
       force: false,
-      metadata: input.metadata,
+      fetchedAt: archiveRequestedAt,
+      metadata: { ...input.metadata, archiveRequestedAt },
       files: [
         { bytes: input.zipBytes, filename: input.zipName, contentType: "application/zip" },
         { bytes: input.manifestBytes, filename: input.manifestName, contentType: "application/json" },

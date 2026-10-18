@@ -1,6 +1,6 @@
 # 本番定期処理とSSHでの補完
 
-確認日: 2026-10-18。定期予定の確認対象: main `eb0484b67e9157c5fad131ae43971a5438ac79fc` と既存Mac設定。SSH補完入口はmain `09525901d6e569611a47cd8b8444e1aadaccfc0f`まで確認。
+確認日: 2026-10-18。定期予定の確認対象: main `f3aac29352ccc4e5d326c2bbc1e20119f2b02440` とMac095設定。SSH補完入口も同mainまで確認。
 時刻はJST、Cloudflareは起動・結果監視、重い取込本体はActionsまたはMacで実行する。
 設定上の予定と、実行成功・全銘柄のデータ充足は別に確認する。
 
@@ -39,6 +39,10 @@ CFの結果確認は株価/VWAP23:35、独立資金フロー23:45、開示20:05�
 同日12:12の追加準備でSSH mainを`3a0f9770c479e8d34c927d8ce17aa72fd177e145`へfast-forwardし、Notionの一次保管先・保有明細DBの既存IDだけをprivate `.env`へ追加した。NixのNode22.22.2、lock同一、価格補完の型付き10設定とCLI import、Git cleanを確認した。既存資格情報とraw/vwapのR2範囲は維持し、価格queueの実行はまだ開始していない。EDINET・Yahoo proxy等を要する別の取込が全て実行可能になったという意味ではない。
 
 同日12:33には週末決算日の資格修正を含むmain `09525901d6e569611a47cd8b8444e1aadaccfc0f`へ再度fast-forwardし、同じNix・両lock・型付き10設定・正常CLI importをHTTP0で確認した。Cloudflareの同main配備とmain CIも成功済み。必要な過去分をSSHで実行する準備を整えたもので、定期時刻での成功実績とは区別する。
+
+同日13:18にはSSHをmain `f3aac29352ccc4e5d326c2bbc1e20119f2b02440`へfast-forwardし、同じ10設定・lock・CLI importをHTTP0で確認した。価格単独実行用の`NOTION_MAX_RPS`だけを2.63へ変更し、他の設定と旧envを保持した。価格実行は新しい公式銘柄表と台帳の受入後に行う。
+
+Macの20時・21時の2labelは13:15に095版へ切り替え、既存予定・`RunAtLoad=false`・停止状態と全plistを実確認した。[自然起動の受入は別途](test-logs/body-mac-production-20261018.md)である。
 
 日足の通常全量更新は3,687銘柄中3,685銘柄を更新し、保存原本の通常parserで10/15・10/16それぞれ3,685銘柄に有効バーがあることを確認した。
 523A/641Aは過去バーの欠測でrepair HOLDとなり、旧データを保持した。新価格台帳の有効化は正規の公式銘柄表保管後に別途行う。同じ日足writerをSSHで重複起動せず、必要な保有価格queueの補完をSSHへ移す。

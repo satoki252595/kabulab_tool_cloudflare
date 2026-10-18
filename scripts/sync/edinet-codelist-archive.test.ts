@@ -97,6 +97,33 @@ describe("edinet-codelist-archive", () => {
     expect(calls.record).toBe(1);
   });
 
+  it("record直前の実時計をmetadataとFetched Atへ同値で渡し、入力の時計では上書きさせない", async () => {
+    stubTransport(GOOD_FILES, GOOD_BODIES);
+    const source = input();
+    source.metadata.archiveRequestedAt = "untrusted-input-clock";
+    const before = structuredClone(source);
+    const recorded: Array<Parameters<ArchiveDeps["record"]>[0]> = [];
+    const startedAt = Date.now();
+    let recordCalledAt = 0;
+    const result = await archiveAndVerify(source, deps({ record: async value => {
+      recordCalledAt = Date.now();
+      recorded.push(value);
+      return { pageId: PAGE_ID, outcome: "recorded", fileTooLarge: false, manifestMatch: "written" };
+    } }));
+    expect(result).toMatchObject({ ok: true, verified: true });
+    expect(recorded).toHaveLength(1);
+    const call = recorded[0]!;
+    const clock = call.fetchedAt!;
+    expect(new Date(clock).toISOString()).toBe(clock);
+    expect(Date.parse(clock)).toBeGreaterThanOrEqual(startedAt);
+    expect(Date.parse(clock)).toBeLessThanOrEqual(recordCalledAt);
+    expect(call).toEqual({ service: source.service, key: source.key, source: source.source, force: false,
+      fetchedAt: clock, metadata: { ...source.metadata, archiveRequestedAt: clock },
+      files: [{ bytes: source.zipBytes, filename: source.zipName, contentType: "application/zip" },
+        { bytes: source.manifestBytes, filename: source.manifestName, contentType: "application/json" }] });
+    expect(source).toEqual(before);
+  });
+
   it("skipped_existing + 同 bytes の readback 一致で ok (再 POST なし)", async () => {
     stubTransport(GOOD_FILES, GOOD_BODIES);
     const calls = { record: 0 };
