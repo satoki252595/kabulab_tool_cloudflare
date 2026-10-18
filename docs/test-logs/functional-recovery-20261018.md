@@ -1,12 +1,12 @@
 # 全20機能の復旧 — 2026-10-18
 
-追跡: [#348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)。対象は[元の機能別監査](feature-gap-audit-20261014.md)。不要な全履歴RAWミラーを完了条件から外した。未取得の原典、意図的な非提供、未解析条件を値で埋めない。下表は保存済み受入と10/18の追加実行を集約したもので、全サービスの同時再取得ではない。全20機能の完了ではなく、保有価格の資格未成立・財務断面/指標と将来の自然calendar受入が残る。
+追跡: [#348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)。対象は[元の機能別監査](feature-gap-audit-20261014.md)。不要な全履歴RAWミラーを完了条件から外した。未取得の原典、意図的な非提供、未解析条件を値で埋めない。下表は保存済み受入と10/18の追加実行を集約したもので、全サービスの同時再取得ではない。固定41銘柄の財務・指標補完は受入済み。全20機能の完了ではなく、保有価格の資格未成立・8303のRSI・原本HOLDと将来の自然calendar受入が残る。
 
 | # | 機能 | 確認済み | 今回閉じる残件 |
 |---|---|---|---|
 | 1 | 銘柄マスタ・上場状態 | 公式233イベントと発効日適用、同値再入。最新overlay10/16と廃止3件inactiveを照合 | 最新断面を[限定受入](remaining-features-acceptance-20261018.md)へ記録済み |
-| 2 | 株価・財務断面 | 10/16監視の当日価格不足41社を、[SSH通常CLIでOHLCVだけ挿入・全読戻し](stock41-price-repair-20261018.md)した | 通常5年価格＋同run財務原本を[41/41再資格化](stock41-financial-replay-20261018.md)。財務断面の監視3,646/3,687と指標への反映は別途実施。OHLCV補完を全断面復旧と混同しない |
-| 3 | RSI・スイング・モメンタム | 株価・指標の要確認42件は、当日価格41社と8303のRSI用履歴の問題に分かれる | 8303は過去245件のadjusted値が非正でRSI HOLD。41社の価格表補完後も指標は未更新。履歴値や欠測の派生値を生成しない |
+| 2 | 株価・財務断面 | 不足41社の[OHLCV補完](stock41-price-repair-20261018.md)に続き、通常5年価格＋同run財務原本から[財務断面・指標等を41社へ反映・全値照合](stock41-financial-replay-20261018.md)。通常coverageは価格・指標・モメンタム各3,687/3,687 | 年次・OHLCV・他銘柄の更新0。全金融項目や原本欠測の充足とは扱わない |
+| 3 | RSI・スイング・モメンタム | 要確認42件のうち当日価格不足41社は、同runの通常5年原本からRSI・指標・モメンタムと銘柄限定signalを反映。全POSTと保存物の通常再計算が一致 | 8303は過去245件のadjusted値が非正でRSI HOLD。履歴値や欠測の派生値を生成しない |
 | 4 | マクロ | 日米の公式営業日と必要session契約。通常10/16の判定C・必須6値と保存時計を照合 | 最新結合receiptを限定受入済み |
 | 5 | 財務サマリ | ROE/直接ROA等の原典にある項目を回収 | 非開示・主体・期間差の理由を保持 |
 | 6 | EDINET継続・識別 | 本文保存3,666社、訂正・取下げの共有guard。S100Z8OOは最新FSA原本で同一法人の非上場と確認、必要原本のNotion/R2/索引も照合 | 通常の対象外判定をmainへ反映。旧run失敗履歴と未解決HOLDを保持 |
@@ -40,7 +40,9 @@
 
 当日価格41社は保存済みVWAP日足10年原本から、直近130本と鮮度guard、さらに全履歴の通常`parseChartResponse`/`guardChartBars`で41/41を資格化した。この保存物診断のHTTP・R2・D1・モデル・業務書込は0。続いて14:12 JSTにSSHの通常限定CLIで全41件を4原子バッチ・9.192秒で挿入し、全値と物理receiptを検証した。quote summaryや財務断面全項目の再資格ではない。8303の過去245件の非正adjusted値は別のRSI HOLDとして残す。診断根拠は `tmp/feature-audit-20261018/stock41-vwap18-saved-crosscheck-v1/result.json`（SHA256 `f6e5bb8855fb9a6b377513a9f5e73f7a718d5c17881214cd8f073d76f2dcc4b3`）と同directoryの`full-history-price-check.json`（SHA256 `5932e11b4c775e40818a8987a5e059863a83b5f61895d864b8af40b154969431`）。
 
-11:53時点の旧CF本番main eb0484b6の配備成功と月水金VWAP trigger登録を管理ログで確認した。16:20にはREADMEの16処理表を含むmain531 `223b13c113cd20748f1696a9e3b478e44ecad3a3` のPR3checks・main CI・実CF配備を受入済みで、version `be5f74a7-03da-4259-809c-780756d05639`の配置ログは07:20:40 UTC。設定同一の10trigger登録も照合した。根拠は `tmp/feature-audit-20261018/product-main531-acceptance-v1.json`（SHA256 `385a0091d9c684f536ccdbc41de05d9d480981d1cb59b12c439f2eb7639ed976`）。10/16はCron未発火ではなく旧秒完全一致検査の例外だった。修正後の自然起動は10/19月曜17時が未受入。[定期処理の一覧とSSHでの補完範囲](../production-job-inventory.md)に、過去日指定の可否・モデルが必要なMac処理・現在のSSH設定不足を記録した。
+17:18 JSTには同runの通常5年価格・財務原本から固定41社の財務・RSI・指標・モメンタムを反映し、HOLD0・全列POST・物理receipt・独立保存物照合を[受入](stock41-financial-replay-20261018.md)した。所有親21.427秒、D1 124要求・Notion9要求・hosted1回、結果不明0。新取得元通信・モデル・年次/OHLCV/他銘柄更新0。17:19の通常coverage読取1回では価格・指標・モメンタム各3,687/3,687とマクロ10/16を確認し、`rows_read=14,749`・書込0。財務表とRSIの全項目充足を直接数えた検査とは区別する。
+
+11:53時点の旧CF本番main eb0484b6の配備成功と月水金VWAP trigger登録を管理ログで確認した。17:17にはmain532 `cc11b8b2ad51b49fb0ac8c216ca843721b3d941c` のPR3checks・main CI `39110627553`・実CF配備を受入済みで、version `b06976b4-6c47-4008-aa52-962280e926d0`と設定同一の10trigger登録を照合した。根拠は `tmp/feature-audit-20261018/stock41-financial-ssh-preparation-v1/actual-ssh-v1/data/product-main532-acceptance.json`（SHA256 `9f8ecfe7818878cb3866734c1c097c74061b87c4cf0bf876d9647e7d89020f05`）。Macの定期runtime529は保持し、SSHの532反映と分ける。10/16はCron未発火ではなく旧秒完全一致検査の例外だった。修正後の自然起動は10/19月曜17時が未受入。[定期処理の一覧とSSHでの補完範囲](../production-job-inventory.md)に、過去日指定の可否・モデルが必要なMac処理・現在のSSH設定不足を記録した。
 
 Sonnetは既存CLIの読み取り専用差分レビューを1回実施し、全市場読取の追加や同根拠reuseのjournal迂回は指摘なし。表示の空節・保管説明・欠測/操作countの混同を修正した。データ補完や金融値の判断はこのレビューに委ねない。秘密値・原文・署名URL・private fixtureはGitへ保存しない。
 
