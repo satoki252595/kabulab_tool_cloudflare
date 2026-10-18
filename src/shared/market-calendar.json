@@ -91,7 +91,20 @@
             }
           ]
         }
-      ]
+      ],
+      "weekendClosure2025": {
+        "effectiveFrom": "1989-02-01",
+        "continuedFrom": "2009-12-30",
+        "sourceUrl": "https://www.jpx.co.jp/equities/trading/domestic/tvdivq0000006blj-att/tradinghours_jp.pdf",
+        "sourcePin": {
+          "filename": "jpx-tradinghours-history.pdf",
+          "fetchedAt": "2026-10-18T03:21:41.637Z",
+          "sha256": "f6d90126fcbc85407d464044e434e79780f43d71ee3eb05d1b9e0699421ef006",
+          "bytes": 246153,
+          "pageId": "3fdd74ff-84cd-81a6-ad11-fcdc4eaa4608",
+          "readback": true
+        }
+      }
     },
     "NYSE": {
       "sourceUrl": "https://www.nyse.com/trade/hours-calendars",

@@ -33,3 +33,16 @@ it("記録済み公式休日だけ遡り、営業日なら同日を要求し、�
   expect(lastJpxSessionOnOrBefore("2026-01-01")).toMatchObject({ date: "2025-12-30", closedDates: ["2026-01-01", "2025-12-31"] });
   expect(() => lastJpxSessionOnOrBefore("2026-02-30")).toThrow("不正");
 });
+
+it("2025土日は同原本の直前金曜sessionがある場合だけ採り、金曜を推測しない", () => {
+  for (const [date, friday] of [["2025-08-31", "2025-08-29"], ["2025-11-30", "2025-11-28"], ["2025-12-20", "2025-12-19"]]) {
+    expect(lastJpxSessionOnOrBefore(date, new Set([friday]))).toMatchObject({ date: friday,
+      calendarSources: [expect.objectContaining({ sha256: "f6d90126fcbc85407d464044e434e79780f43d71ee3eb05d1b9e0699421ef006", readback: true })] });
+    expect(lastJpxSessionOnOrBefore(date)).toBeUndefined();
+    expect(lastJpxSessionOnOrBefore(date, new Set())).toBeUndefined();
+  }
+  for (const date of ["2025-11-28", "2025-11-24", "2025-01-04", "2025-01-05", "2024-11-30"]) {
+    expect(lastJpxSessionOnOrBefore(date, new Set(["2025-11-28", "2025-11-21", "2025-01-03", "2024-11-29"]))).toBeUndefined();
+  }
+  expect(lastJpxSessionOnOrBefore("2025-12-31", new Set(["2025-12-29"]))?.date).toBe("2025-12-30");
+});
