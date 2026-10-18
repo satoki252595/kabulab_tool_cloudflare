@@ -2,6 +2,8 @@
 
 Refs #515。`scripts/notion/raw-index-audit.ts` は固定manifestを独立に読み直す通常CLIで、SSH移行・本番全量監査の実施ではない。転送writer、既200 pool、旧unknown/STOP、state/active/cursor、Notion・上流・モデルは変更しない。追加依存・DDLなし。
 
+同日方針変更: 本CLIの全量実行は任意の保守監査で、全20機能の復旧条件から外す。通常運用の原本保存時検証は維持し、必要な本番原本の確認には`pnpm raw:required`を使う。[範囲の修正](../deterministic-production.md#必要なraw原本だけの確認)。
+
 ## 入力・結果
 
 plan/cutoff/count/full manifest SHA、件数/総受信bytes/requests/secondsを全て明示する。activeが同plan/SHAであること、manifest全body SHA、既`parseRawManifest`の集合・一意SHA/page・順序を検査する。原本は既R2 readerの`singleAttempt:true`で全文SHA/サイズを再検査する。D1は100 SHA以下の`WHERE sha256 IN (...)`を先に指定し、全15列を取得する。全表取得後のfilterやPUT/INSERT/state更新APIの接続はない。既single-SHA SELECT/通常writerのSQL・再読契約は維持する。

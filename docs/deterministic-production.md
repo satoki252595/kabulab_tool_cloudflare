@@ -8,7 +8,7 @@
 
 [21:52の追加記録](test-logs/recovery-functional-status-20261017.md#2152-jstの追加受入と実行先の区別)で、実21時の通常終了、208Aの限定4行訂正、通常ツールでの本文50社・全39項目・物理PRE/POST・永続completionを追加受入した。本文50社はモデル0・618.965秒、D1実読取106,874行/書込0行。旧原値・未知結果・期限を保持し、独立物理1,500社と別の通常completion258社の暫定union1,758/2,417を区別する。
 
-本体Cloudflare、独立JSS private、Macは別の配備先として確認する。#503のv4は本体と独立APIへ反映したが、1899の実1行移行とMac最新版はまだ未受入。#504のJPX保存コードも実設定・原本受入・権利の金融資格と分ける。RAWの有限な通常チェーンは継続中で、残4〜5日の条件付き見込みを全20機能の完了日へ読み替えない。
+本体Cloudflare、独立JSS private、Macは別の配備先として確認する。#503のv4は本体と独立APIへ反映したが、1899の実1行移行とMac最新版はまだ未受入。#504のJPX保存コードも実設定・原本受入・権利の金融資格と分ける。RAW全量チェーンの停止と必要原本への範囲変更は[以下](#必要なraw原本だけの確認)を参照。旧見込み4〜5日は任意の全量ミラーを続ける場合の値で、全20機能の完了日ではない。
 
 ## 実行先と現在の例外
 
@@ -41,6 +41,23 @@ GitHubの[workflow dispatch仕様](https://docs.github.com/en/rest/actions/workf
 固定manifest・元run pool・残run数・原本CAS/state・unknown停止・一度だけのdispatchは従来のまま。revision指定だけで別poolや古いunknownを回避できず、コード修正の受入を原本全量・最終anti-joinの完了と数えない。
 
 ## RAW転送・最終照合のSSH移行計画（2026-10-18）
+
+**同日方針変更:** 全20機能の復旧に、Notion歴史原本78,832件の全量R2コピー・独立全量再GET・SSHへの実行主体変更は要求しない。元機能監査の「必要な歴史範囲から補う」に戻す。旧yfinance日足バッチCSVは[既設計](CF-CANONICAL-DESIGN.md#36-⑤原本のうち-r2-に置かないもの)でCF対象外であり、歴史財務のNotion原本参照を一律にR2欠測へ読み替えない。
+
+専用手動workflow `raw_index_backfill.yml` は将来入場を無効化（HTTP204、`disabled_manually`を確認）。進行中run39083102703はcancelせず自然終端を待つ。原本・既copy・manifest・cursor・旧unknownは保持し、停止を全量完了とは表示しない。[判断・停止記録](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/515#issuecomment-6243841500)。以下は変更前の移行準備記録であり、全量作業の続行指示ではない。
+
+### 必要なRAW原本だけの確認
+
+`raw:required` は本番が原本実体を読む最新JSF shinaだけを確認する。Notionでソース/種別/対象を先に絞り、取得日時降順の最大2件から最新を一意に選ぶ。D1でも本番`shinaLatest`と同じ最新選択を確認し、同SHAの索引とR2全文SHA/サイズを既validator、CSVを本番parserで検証する。最新候補の食違いはHOLDとし、別原本をコピーして埋めない。
+
+```sh
+nix develop --offline --command pnpm raw:required \
+  --out=tmp/raw-required-new.jsonl --max-seconds=120
+```
+
+Node/Nix・依存lock・型付き`.env`はActions/SSHでも同じものを使う。Notionの全履歴棚卸し、原本の再取得、R2/D1/Notionへの書込、control/state/poolの更新、LLM起動はしない。出力は新規0600ファイルへ保存し、欠測や不一致を成功扱いにしない。APIで追加提供する原本や個別補完に必要な原本は、その明示対象に限って別に処理する。本確認の成功を、他APIや全20機能の完了へ広げない。
+
+### 変更前の準備観測
 
 ユーザー方針として、原本転送と独立した最終照合をSSH先PCの最新受入mainで実行し、照合にLLMを使わない。
 以下は10/18 08:22 JST記録の[移行準備観測](../tmp/feature-audit-20261018/raw-ssh-migration-preflight-v1/remote-observation-v1.json)（SHA256 `4cfeed9012c198b0814585ca4b684c055011bdabadb031e25348d11f1ef1e3ec`）に基づく。完了tool出力の構造化記録でSSH native全文ではなく、本番転送・最終照合は未実施。
