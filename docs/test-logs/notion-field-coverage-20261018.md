@@ -72,3 +72,17 @@ main535の定期jobは20:00:06.214に自然起動し、20:05:05.247にcode0・si
 全件初回検査で同じ39列を再読し直さないよう、既に完全検査した銘柄の実際の空欄数を全39項目で集計する。修復成功は最終POST、資格HOLDは同じ銘柄から全GETした現在値、未検査・取得失敗・メタ情報だけの補完は計数しない。`textEmptyCounts`と`textCheckedCodes`は通常JSON出力だけで、counter receiptへ本文や一覧を加えない。空欄から非公表/未対応を推測分類しない。追加HTTP・モデル・保存先0。
 
 今回のNix TS関連3suite170件PASS、Python関連4suite98件PASS・既存原本未配置15件SKIP。全体型検査・対象lint・独立FSレビューも通過。表示名差の6社・622Aの実適用と初回3,666社の検査は別に受入する。
+
+## SSHの基本情報補完と初回検査の読取範囲
+
+#537のmain `ef21d3e4bdad45474cceaa682ff67d49a8746644`をSSHへfast-forwardし、専用のclean detached runtimeで通常CLIを実行した。元の`.env`を変更せず、同じ資格情報から所有者限定0600の実行envを用意し、Nix内で同じuv.lockの依存を準備した。20:22:12–20:22:25 JSTの`master_sync --require-cloud --codes=622A`は処理1・失敗0で終了し、①主マスタ1社とD1の同社業種1行を更新した。全市場の業種診断や写し更新は0。641A/648Aは公式の直接証券コード未確認のため保留する。
+
+20:23:52–20:25:18 JSTの通常`biztag run --mechanical-only`では、表示差6社・622A・既補完640A/642Aの9社だけを指定し、基本情報7社を物理PRE/CAS/POSTとpublication journalで補完した。本文検査0、未検査9、本文なし状態と旧タグを保持し、モデル・新規取得元0。私有実行根拠はSSHの`tmp/supplement-initial-text-check-ssh-v1/`に保管。これらの終了件数から全39列の充足を推定しない。
+
+補完後に同じ欠測対象11コードだけをfresh再読し、補足の業種・主リンク、主マスタ、core業種の欠測は全て641A/648Aの2社だけと確認した。622Aは①のEDINET E42099とFSA業種サービス業、core/補足の業種・一意な①relationが一致した。shared clientのNotion READ4回と対象D1 SELECT1回、3.620秒、追加取得元・モデル・業務書込0。publisherの7completion・未閉鎖intent0と実行PID消失もFSで確認。私有根拠`tmp/feature-audit-20261018/supplement-metadata-post537-v1/post537-readback.json`のSHA256は`2f7ed29aae9649699216041d6a665d356f158f1b4c535ab64712bfb3e6deca15`。19:41全量とこの対象限定再読は異時点であり、原子的な全DB現況とは扱わない。
+
+初回3,666社・74有限バッチの開始前に、明示scopeでも関連先マスタを全市場から毎回読み直す箇所を検出した。共有`loadStockMasterIndex`へ任意の正準コードscopeを追加し、必要時だけ50コード以下のexact ORを全paginationする。空・重複・非正準入力はHTTP前、対象chunk外応答や不正schema/paginationは採用前に停止する。同コードの複数行は従来どおりrelationを採用しない。既に主マスタ関連がある本文検査・同期ではマスタ取得自体を省く。scope省略の日次全量契約は変更しない。
+
+Nixの関連2suite91件PASS、変更source/testのESLintと全体TypeScript型検査を通過。scopeによる50/1分割、全pagination、HTTP前入力拒否、対象外応答、重複不採用と、関連済み検査の読取0を回帰検証した。初回全件の実行・列別空欄理由の分類は別受入である。
+
+独立FSレビューは4source/testの固定bytesと呼出経路を確認してblocking0。根拠`tmp/feature-audit-20261018/biztag-scoped-master-lookup-v1/delegate-independent-fs-peer-v1.json`、SHA256 `2607ee9469da07ce05c0eb78a84ae15eb318aeb3879a3e820498687122299c97`。このレビュー自体の追加API・モデル・業務書込0。

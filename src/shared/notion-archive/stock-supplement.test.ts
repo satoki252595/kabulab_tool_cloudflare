@@ -7,6 +7,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { gunzipSync } from "node:zlib";
 import zeroWidthNative from "./fixtures/9273-s100z2z6-notion-zero-width.json";
 import {
   buildEvidenceBlock,
@@ -627,6 +629,49 @@ describe("stock-supplement (Notion 通信)", () => {
       const { index, duplicates } = await loadStockMasterIndex();
       expect(index.get("7203")).toBe("p-7203");
       expect(duplicates.size).toBe(0);
+    });
+
+    it.each(["rich_text", "title"])("限定masterは実51コードを50/1 exact %s filterに分け、各scopeを全paginationする", async type => {
+      const saved = JSON.parse(gunzipSync(readFileSync(new URL("../../../services/yuho-quant/src/biztag/fixtures/latest-docs-saved50-20261017.json.gz", import.meta.url))).toString());
+      const codes = saved.core.slice(0, 51).map((row: { code: string }) => row.code);
+      const page = (code: string) => ({ id: `declared-master-${code}`, properties: { 銘柄コード: { type, [type]: [{ plain_text: code }] } } });
+      route("GET", `/v1/databases/${MASTER_DB}`, [{ id: MASTER_DB, properties: { 銘柄コード: { id: "code-prop-id", type } } }]);
+      route("POST", `/v1/databases/${MASTER_DB}/query`, [
+        { results: [page(codes[0])], has_more: true, next_cursor: "declared-cursor" },
+        { results: codes.slice(1, 50).map(page), has_more: false, next_cursor: null },
+        { results: codes.slice(50).map(page), has_more: false, next_cursor: null },
+      ]);
+      const { loadStockMasterIndex } = await load();
+      const { index, duplicates } = await loadStockMasterIndex(codes);
+      expect(index.size).toBe(51); expect(duplicates.size).toBe(0);
+      const bodies = calls.filter(call => call.init.method === "POST").map(call => JSON.parse(String(call.init.body)));
+      expect(bodies.map(body => body.filter.or.length)).toEqual([50, 50, 1]);
+      expect(bodies[0].filter.or).toEqual(codes.slice(0, 50).map((code: string) => ({ property: "銘柄コード", [type]: { equals: code } })));
+      expect(bodies[1].filter).toEqual(bodies[0].filter); expect(bodies[1].start_cursor).toBe("declared-cursor");
+      expect(bodies[2]).not.toHaveProperty("start_cursor");
+    });
+
+    it.each([{ codes: [] }, { codes: ["bad"] }, { codes: ["130a"] }, { codes: ["7203", "7203"] }, { codes: Array<string>(1) }])("限定masterの空/非正準/重複scopeはHTTP前に拒否 (%j)", async ({ codes }) => {
+      const { loadStockMasterIndex } = await load();
+      await expect(loadStockMasterIndex(codes)).rejects.toThrow("正準コード"); expect(calls).toHaveLength(0);
+    });
+
+    it("限定masterの対象外応答は全scopeに含まれていても現在chunk外ならSTOP", async () => {
+      const saved = JSON.parse(gunzipSync(readFileSync(new URL("../../../services/yuho-quant/src/biztag/fixtures/latest-docs-saved50-20261017.json.gz", import.meta.url))).toString());
+      const codes = saved.core.slice(0, 51).map((row: { code: string }) => row.code);
+      route("GET", `/v1/databases/${MASTER_DB}`, [{ id: MASTER_DB, properties: { 銘柄コード: { id: "code-prop-id", type: "rich_text" } } }]);
+      route("POST", `/v1/databases/${MASTER_DB}/query`, [{ results: [{ id: "declared-offscope", properties: { 銘柄コード: { type: "rich_text", rich_text: [{ plain_text: codes[50] }] } } }], has_more: false, next_cursor: null }]);
+      const { loadStockMasterIndex } = await load();
+      await expect(loadStockMasterIndex(codes)).rejects.toThrow("対象外");
+      expect(calls.filter(call => call.init.method === "POST")).toHaveLength(1);
+    });
+
+    it("限定masterの同code重複は採用せず、旧duplicates契約でrelationを拒否", async () => {
+      route("GET", `/v1/databases/${MASTER_DB}`, [{ id: MASTER_DB, properties: { 銘柄コード: { id: "code-prop-id", type: "rich_text" } } }]);
+      route("POST", `/v1/databases/${MASTER_DB}/query`, [{ results: ["declared-a", "declared-b"].map(id => ({ id, properties: { 銘柄コード: { type: "rich_text", rich_text: [{ plain_text: "7203" }] } } })), has_more: false, next_cursor: null }]);
+      const { loadStockMasterIndex } = await load();
+      const result = await loadStockMasterIndex(["7203"]);
+      expect(result.index.has("7203")).toBe(false); expect(result.duplicates.get("7203")).toEqual(["declared-a", "declared-b"]);
     });
 
     it("loadStockMasterIndex: 重複コードはどれも選ばず duplicates に分ける", async () => {

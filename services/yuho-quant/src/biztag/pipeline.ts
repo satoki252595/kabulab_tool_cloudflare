@@ -393,7 +393,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
   const masterDuplicates: string[] = [];
   const loadMaster = async () => {
     if (masterIndex !== undefined) return;
-    masterIndex = await loadStockMasterIndex();
+    masterIndex = codes === undefined ? await loadStockMasterIndex() : await loadStockMasterIndex(codes);
     masterDuplicates.push(...[...masterIndex.duplicates.keys()].sort());
     if (masterDuplicates.length > 0) console.warn(
       `[biztag] ① 銘柄マスタに同じ銘柄コードの行が複数あるため relation を付けない: ${masterDuplicates.join(", ")}`
@@ -464,7 +464,8 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
       processed++;
       continue;
     }
-    if (codes !== undefined && ["create_row", "sync_and_tag", "retag", "retry", "sync_metadata", "verify_text", "sync_text"].includes(item.kind)) await loadMaster();
+    if (codes !== undefined && (["create_row", "sync_and_tag", "retag", "retry"].includes(item.kind) ||
+        ["sync_metadata", "verify_text", "sync_text"].includes(item.kind) && item.row?.masterLinked !== true)) await loadMaster();
     try {
       const outcome = await processStock(item, deps);
       if (outcome.textChecked && verification.has(item.stockCode)) {

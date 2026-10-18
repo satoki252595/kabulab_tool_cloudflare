@@ -28,6 +28,7 @@ import { canonicalizeForHash } from "./biztag-ledger.js";
 import { sha256Hex } from "../sha256.js";
 import { RICH_TEXT_MAX, joinRichText, splitRichText } from "./rich-text.js";
 import { NotionConfigError } from "./env.js";
+import { parseStockCode } from "../jpx/stock-code.js";
 
 export const SUPPLEMENT_DB_TITLE = "銘柄マスタ（補足）";
 
@@ -549,7 +550,15 @@ export interface StockMasterIndex {
   duplicates: Map<string, string[]>;
 }
 
-export async function loadStockMasterIndex(): Promise<StockMasterIndex> {
+export async function loadStockMasterIndex(codes?: readonly string[]): Promise<StockMasterIndex> {
+  let scopes: Array<readonly string[] | undefined> = [undefined];
+  if (codes !== undefined) {
+    if (!Array.isArray(codes) || codes.length === 0 || new Set(codes).size !== codes.length ||
+        Array.from(codes).some(code => typeof code !== "string" || parseStockCode(code) !== code)) {
+      throw new NotionConfigError("銘柄マスタの限定読取には空でない一意な正準コード一覧が必要です");
+    }
+    scopes = Array.from({ length: Math.ceil(codes.length / 50) }, (_, i) => codes.slice(i * 50, (i + 1) * 50));
+  }
   const dbId = notionEnv.NOTION_DB_STOCK_MASTER();
   const schema = await notionRequest<DbSchemaResponse>("GET", `/databases/${dbId}`);
   const entry = Object.entries(schema.properties).find(([name]) => name === "銘柄コード");
@@ -559,32 +568,48 @@ export async function loadStockMasterIndex(): Promise<StockMasterIndex> {
     );
   }
   const [, propDef] = entry;
+  if (codes !== undefined && (typeof propDef.id !== "string" || propDef.id.length === 0 ||
+      propDef.type !== "rich_text" && propDef.type !== "title")) throw new NotionConfigError("銘柄マスタのコード列型が不正です");
   const qs = `filter_properties=${encodeURIComponent(propDef.id)}`;
 
   const pagesByCode = new Map<string, string[]>();
-  let cursor: string | undefined;
-  const seen = new Set<string>();
-  for (;;) {
-    const body: Record<string, unknown> = { page_size: 100 };
-    if (cursor) body.start_cursor = cursor;
-    const res = await notionRequest<QueryResponse>(
-      "POST",
-      `/databases/${dbId}/query?${qs}`,
-      body
-    );
-    if (res.has_more === true) {
-      assertCursorProgress(seen, res.next_cursor as string);
+  for (const scope of scopes) {
+    let cursor: string | undefined;
+    const seen = new Set<string>();
+    for (;;) {
+      const body: Record<string, unknown> = { page_size: 100 };
+      if (scope !== undefined) body.filter = { or: scope.map(code => ({ property: "銘柄コード", [propDef.type]: { equals: code } })) };
+      if (cursor) body.start_cursor = cursor;
+      const res = await notionRequest<QueryResponse>(
+        "POST",
+        `/databases/${dbId}/query?${qs}`,
+        body
+      );
+      if (scope !== undefined && (!Array.isArray(res.results) || typeof res.has_more !== "boolean" ||
+          (res.has_more ? typeof res.next_cursor !== "string" || res.next_cursor.length === 0 : res.next_cursor !== null))) {
+        throw new NotionConfigError("銘柄マスタ限定queryのpaginationが不正です");
+      }
+      if (res.has_more === true) {
+        assertCursorProgress(seen, res.next_cursor as string);
+      }
+      for (const page of res.results) {
+        const prop = page.properties["銘柄コード"];
+        const code = scope === undefined ? readRich(prop) || readTitle(prop) : propDef.type === "rich_text" ? readRich(prop) : readTitle(prop);
+        if (scope !== undefined) {
+          const parts = propDef.type === "rich_text" ? prop?.rich_text : prop?.title;
+          if (typeof page.id !== "string" || page.id.length === 0 || prop?.type !== propDef.type || prop.has_more === true ||
+              !Array.isArray(parts) || parts.some(part => typeof part.plain_text !== "string") || !scope.includes(code) || parseStockCode(code) !== code) {
+            throw new NotionConfigError("銘柄マスタ限定queryが対象外/不正の行を返しました");
+          }
+        }
+        if (!code) continue;
+        const pages = pagesByCode.get(code);
+        if (pages) pages.push(page.id);
+        else pagesByCode.set(code, [page.id]);
+      }
+      if (!res.has_more || !res.next_cursor) break;
+      cursor = res.next_cursor;
     }
-    for (const page of res.results) {
-      const prop = page.properties["銘柄コード"];
-      const code = readRich(prop) || readTitle(prop);
-      if (!code) continue;
-      const pages = pagesByCode.get(code);
-      if (pages) pages.push(page.id);
-      else pagesByCode.set(code, [page.id]);
-    }
-    if (!res.has_more || !res.next_cursor) break;
-    cursor = res.next_cursor;
   }
   const index = new Map<string, string>();
   const duplicates = new Map<string, string[]>();
