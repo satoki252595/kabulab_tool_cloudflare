@@ -12,7 +12,7 @@ import pytest
 from jp_stock_pipeline.convert.xbrl_to_csv import edinet_csv_zip_to_tidy
 from jp_stock_pipeline.licensing import source_license
 from jp_stock_pipeline.models import Provenance, Source, StockMasterRecord, now_jst
-from jp_stock_pipeline.notion import schema as S, upsert as mod
+from jp_stock_pipeline.notion import file_upload, schema as S, upsert as mod
 from jp_stock_pipeline.transform.direct_roa import _dei
 from jp_stock_pipeline.transform.normalize import tidy_to_financial_record
 
@@ -121,6 +121,17 @@ def test_actual_primary_relation_only_full_pre_post_and_repeat_write_zero(actual
     assert len(a.archives) == 2 and [p["status"] for p in a.bucket.puts] == ["pending", "completed"]
     assert "declared-notion-transport.invalid" not in str(a.bucket.objects)
     assert _repair(a) == "already_linked" and len(a.patches) == 1 and len(a.archives) == 2
+
+
+def test_actual_financial_pre_archive_has_no_source_url(actual):
+    assert _repair(actual) == "repaired"
+    pre = actual.archives[0]
+    assert pre.source == Source.CALC and pre.datatype == "financial-master-pre"
+    assert pre.url == ""
+    properties = file_upload._raw_row_properties(pre, [])
+    assert properties[S.RAW_PROP_URL] == {"url": None}
+    assert properties[S.PROP_SOURCE] == mod.select_prop(Source.CALC.value)
+    assert pre.local_path.read_bytes() == mod._financial_relation_json(actual.bucket.puts[0])
 
 
 @pytest.mark.parametrize("fault", ["issuer", "period", "scope", "sha", "missing-number", "no-cloud"])
