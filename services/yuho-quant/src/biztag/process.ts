@@ -87,6 +87,8 @@ export interface ProcessOutcome {
   textMismatch?: boolean;
   textRepaired?: boolean;
   metadataRepaired?: boolean;
+  /** 正常publication後だけ。all-no/候補なしをタグ付与と混同しない。 */
+  emptyTagRepairResult?: { tagged: boolean; uncertain: boolean; noCandidates: boolean };
 }
 
 const ZERO_JEV_STATS = { jevCalls: 0, jevInputTokens: 0, jevOutputTokens: 0 };
@@ -454,6 +456,11 @@ export async function processStock(item: WorkItem, deps: ProcessDeps): Promise<P
 }
 
 async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<ProcessOutcome> {
+  if (item.emptyTagRepair && (item.kind !== "retag" || item.row?.tagStatus !== "判定済" ||
+      item.row.docId !== doc.docId || item.row.upstream.length + item.row.downstream.length + item.row.distribution.length !== 0 ||
+      item.sourceChangedLocalJudge || item.checkSourceInput)) {
+    throw new Error("空事業タグの再確認対象が不正です。旧値を保持してHOLD");
+  }
   if (doc.notionDocPageId === null) {
     // plan.ts の hasUsableText が保証しているはずで通常到達しない。
     throw new Error(`processStock: ${item.kind} に必要な notionDocPageId が無い (${item.stockCode})`);
@@ -507,6 +514,11 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
     textStatus: "取得済",
     texts: textsByColumn,
   };
+  if (item.emptyTagRepair && baseInput.masterPageId === null) {
+    return { stockCode: item.stockCode, kind: item.kind, outcome: "skipped", qualificationHeld: true,
+      tagStatus: item.row!.tagStatus, candidateCount: item.row!.candidateCount,
+      error: "空タグ再確認の一意な銘柄マスタが不明。既存relation/本文/判定を保持してHOLD", ...ZERO_JEV_STATS };
+  }
   const tagDoc = `${doc.docId} ${formatPeriodJa(doc.periodEnd)}`;
   const business = sectionMap.business;
   const sectionsSha256 = await sha256Hex(JSON.stringify(PREFILTER_SECTIONS.map((key) => [key, sectionMap[key] === undefined ? null : sectionMap[key]])));
@@ -526,7 +538,7 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
         candidateCount: item.row.candidateCount, ...(!deps.dryRun ? { textEmptySections: emptySectionsOf(textsByColumn) } : {}), ...ZERO_JEV_STATS };
     }
   }
-  const localJudge = item.initialSemif === true || item.sourceChangedLocalJudge === true;
+  const localJudge = item.initialSemif === true || item.sourceChangedLocalJudge === true || item.emptyTagRepair === true;
   // 同値判定は語彙/較正/model/journalに触れる前に閉じる。差があれば旧propsを保持する。
   if (deps.mechanicalOnly && localJudge) {
     return { stockCode: item.stockCode, kind: item.kind, outcome: "skipped", qualificationHeld: true,
@@ -542,7 +554,8 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
   };
   const syncedTexts = await textReceipt(doc, textsByColumn, receipt);
   const judgeName = localJudge ? localJudgeName(deps) : null;
-  const judgePrefix = item.sourceChangedLocalJudge ? `${judgeName}入力変更の再判定`
+  const judgePrefix = item.emptyTagRepair ? `${judgeName}空事業タグの明示再確認`
+    : item.sourceChangedLocalJudge ? `${judgeName}入力変更の再判定`
     : judgeName === "Clef-Flash" ? INITIAL_CLEF_INPUT_PREFIX : INITIAL_SEMIF_INPUT_PREFIX;
 
   if (result.candidates.length === 0) {
@@ -576,6 +589,7 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
       outcome: outcomeKindOf(item),
       tagStatus: "判定済",
       candidateCount: 0,
+      ...(item.emptyTagRepair ? { emptyTagRepairResult: { tagged: false, uncertain: false, noCandidates: true } } : {}),
       ...(!deps.dryRun ? { textEmptySections: emptySectionsOf(textsByColumn) } : {}),
       ...ZERO_JEV_STATS,
     };
@@ -652,6 +666,10 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
       outcome: outcomeKindOf(item),
       tagStatus: "判定済",
       candidateCount,
+      ...(item.emptyTagRepair ? { emptyTagRepairResult: {
+        tagged: tagOutcome.upstream.length + tagOutcome.downstream.length + tagOutcome.distribution.length > 0,
+        uncertain: tagOutcome.uncertainText !== null, noCandidates: false,
+      } } : {}),
       ...(!deps.dryRun ? { textEmptySections: emptySectionsOf(textsByColumn) } : {}),
       ...stats,
     };
@@ -661,10 +679,10 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
         candidateCount: item.row === null ? null : item.row.candidateCount, qualificationHeld: true, error: e.message, ...stats };
     }
     if (!(e instanceof SemifUnavailableError)) throw e;
-    if (item.sourceChangedLocalJudge && item.row !== null) {
+    if ((item.sourceChangedLocalJudge || item.emptyTagRepair) && item.row !== null) {
       return { stockCode: item.stockCode, kind: item.kind, outcome: "skipped", tagStatus: item.row.tagStatus,
         candidateCount: item.row.candidateCount, qualificationHeld: true,
-        error: `${judgeName}入力変更の再判定をHOLD (旧本文・タグ・根拠・判定版を保持): ${e.message}`, ...ZERO_JEV_STATS };
+        error: `${judgePrefix}をHOLD (旧本文・タグ・根拠・判定版を保持): ${e.message}`, ...ZERO_JEV_STATS };
     }
     return recordFailure(item, deps, {
       textStatus: "取得済",

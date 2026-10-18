@@ -39,3 +39,24 @@ it.each(["--allow-model", "--unknown", "--mechanical-only=true"])("未知flag/�
   await expect(import("./biztag.js")).rejects.toThrow("未知の引数/モデル許可");
   expect(writer).not.toHaveBeenCalled(); expect(pipeline.run).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
 });
+
+it.each([
+  [], ["--codes=6103"], ["--codes=6103", "--limit=1"],
+  ["--codes=6103,6103", "--limit=2", "--budget-min=12"],
+  ["--codes=6103,", "--limit=1", "--budget-min=12"],
+  ["--codes=6103", "--limit=2", "--budget-min=12"],
+  ["--codes=6103", "--limit=1", "--budget-min=21"],
+  ["--codes=6103", "--limit=1", "--budget-min=12", "--refresh-text-receipt", "--mechanical-only"],
+  ["--codes=6103", "--limit=1", "--budget-min=12", "--reconcile-pre-archive=proof"],
+].map(args => ({ args })))("空タグ明示再確認の不完全/重複/排他scopeは通常pipeline前に拒否 (%j)", async ({ args }) => {
+  process.argv = [argv[0], "biztag.ts", "run", "--repair-empty-tags", ...args];
+  await expect(import("./biztag.js")).rejects.toThrow(/repair-empty-tags|refresh-text-receipt/);
+  expect(pipeline.run).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+});
+
+it.each([false, true])("固定finite空タグ再確認を通常writerへ渡す (mechanical=%s)", async mechanical => {
+  process.argv = [argv[0], "biztag.ts", "run", "--repair-empty-tags", "--codes=6103", "--limit=1", "--budget-min=12", ...(mechanical ? ["--mechanical-only"] : [])];
+  await expect(import("./biztag.js")).rejects.toThrow("NORMAL_PIPELINE_INPUT_CAPTURED");
+  expect(pipeline.run.mock.calls[0][0]).toMatchObject({ codes: ["6103"], limit: 1, repairEmptyTags: true, mechanicalOnly: mechanical, budgetMs: 720_000 });
+  expect(writer.mock.calls[0][1]).toBe(mechanical); expect(fetch).not.toHaveBeenCalled();
+});

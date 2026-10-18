@@ -169,6 +169,26 @@ JSTへ変換し、再開日へ更新しない。これはモデル出力の受�
 SemIf/競合判定の既定経路にはこのjournalを接続しない。旧モデルの無記録履歴をClefへ付け替えない。
 有限回復の900 native要求/90分・メモリ等の予算は専用wrapperの別条件で、通常の定時頻度は変えない。
 
+## 空事業タグの有限見直し
+
+`判定済`でも3分類とも空の銘柄は、同docを再利用する通常定期では再判定されない。
+明示`--repair-empty-tags`を指定した有限のMac CLIだけ、同じ適格有報・現active・一意な主マスタを確認して
+既存のローカルClefと物理PRE/CAS/全POSTへ通せる。固定1〜50の一意コード、同数limit、明示20分以内budgetが必須。
+以下は入口の形式であり、実行前に指定コードの欠測対象と現在の資格を確認する。
+
+```sh
+nix develop --offline --no-write-lock-file --command env -u NODE_PATH \
+  node --import tsx services/yuho-quant/data-scripts/biztag.ts run \
+  --repair-empty-tags --codes=<固定コード一覧> --limit=<コード数> --budget-min=20
+```
+
+同じNix・承認main・所有者0600のprivate env・kernel writer排他・通常journalを使い、
+定期labelや当日の自然起動receiptを手動実行で置き換えない。refresh/reconcileとの併用は拒否する。
+既存非空タグ・本文なし・現在入力の資格不足はHOLD。`--mechanical-only`/`--dry-run`では推論しない。
+判定結果は`emptyTagRepair`で再確認・タグ付与・全no・要確認・候補なし・HOLD・残りを分ける。
+再利用できた決定の判定日は元の実完了時計を保ち、今回の操作時計は通常publicationに残す。
+空欄ゼロや全社の再判定を約束する入口ではなく、語彙不足と未採用は別に確認する。
+
 ## 選択理由と実証範囲
 
 調査時点でrepoにself-hosted runnerは0。pinされたnixpkgs25.11の

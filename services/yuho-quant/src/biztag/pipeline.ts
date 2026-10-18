@@ -82,6 +82,8 @@ export interface RunBiztagOptions {
   mechanicalOnly?: boolean;
   /** 明示scope/finite limit/budgetだけで旧送信表現receiptを再資格化する。既定は無効。 */
   refreshTextReceipt?: boolean;
+  /** 既定無効。固定1〜50codeの空3familyだけ通常Clefで明示再確認する。 */
+  repairEmptyTags?: boolean;
   thresholds: BtThresholds;
   model: string;
 }
@@ -131,6 +133,8 @@ export interface RunSummary {
   fieldCoverage?: { scope: "explicit_codes" | "daily_window"; selectedForTextCheck: number; textChecked: number; textUnchecked: number;
     textMismatched: number; textRepaired: number; metadataRepaired: number; status: "checked_scope_complete" | "partial" | "attention";
     wholeSupplementComplete: false };
+  emptyTagRepair?: { selected: number; eligible: number; rechecked: number; tagged: number; allNo: number;
+    uncertain: number; noCandidates: number; held: number; remaining: number };
 }
 
 /**
@@ -272,6 +276,11 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     throw new Error("明示codesには空でない正準証券コード一覧が必要です。全量実行はcodesを省略してください");
   }
   const codes = opts.codes === undefined ? undefined : [...new Set(opts.codes)];
+  if (opts.repairEmptyTags && (opts.refreshTextReceipt || typeof opts.localJournal !== "function" || opts.codes === undefined || opts.codes.length > 50 ||
+      codes!.length !== opts.codes.length || opts.limit !== opts.codes.length ||
+      !Number.isSafeInteger(opts.budgetMs) || opts.budgetMs <= 0 || opts.budgetMs > 20 * 60_000)) {
+    throw new Error("空事業タグの再確認にはnormal localJournal・固定1〜50一意codes・同数limit・明示20分以内budgetが必要です。receipt更新と併用しません");
+  }
   if (opts.refreshTextReceipt && (!opts.mechanicalOnly || opts.codes === undefined || opts.codes.length === 0 || opts.codes.length > 100 ||
       new Set(opts.codes).size !== opts.codes.length || opts.codes.some(code => parseStockCode(code) !== code) ||
       !Number.isSafeInteger(opts.limit) || opts.limit! <= 0 || opts.limit! > opts.codes.length ||
@@ -287,6 +296,12 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
   const today = todayJst(() => start);
   const db = createD1HttpDb(yuhoSchema) as unknown as BiztagSourceDb;
   const newStockEligibility = await loadNewStockEligibility(db, listingFrom, today);
+  const repairLatest = opts.repairEmptyTags ? await loadLatestDocs(db, codes) : undefined;
+  if (repairLatest !== undefined && (repairLatest.length !== codes!.length ||
+      new Set(repairLatest.map(row => row.stockCode)).size !== codes!.length ||
+      repairLatest.some(row => !codes!.includes(row.stockCode)))) {
+    throw new Error("空事業タグの固定codesと現在activeの取得scopeが一致しません。本文/判定/書込は開始しません");
+  }
   let initialClient: SemifClient | null = null;
   let localJudgeCalls = 0;
   let reusedOutputs = 0, batchIndex = 0;
@@ -354,7 +369,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
   }
 
   // 3. D1 の最新有報 (対象母集団)。
-  const latest = await loadLatestDocs(db, codes);
+  const latest = repairLatest === undefined ? await loadLatestDocs(db, codes) : repairLatest;
   const sector33Options = [...new Set(latest.map((l) => l.sector33).filter((s): s is string => s !== null))];
 
   // 4. 補足 DB を確保し、既存行を読む。
@@ -368,7 +383,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     rows.push(...scoped);
   }
   const verification = codes === undefined ? textVerificationCodes(latest, today, false) : new Set(codes);
-  const items = planWork(latest, rows, today, newStockEligibility).map(item =>
+  const items = planWork(latest, rows, today, newStockEligibility, opts.repairEmptyTags).map(item =>
     opts.refreshTextReceipt && item.kind === "skip" && !item.qualificationHeld && item.row?.tagStatus === "判定済"
       ? { ...item, kind: "sync_text" as const, refreshTextReceipt: true,
         reason: "明示finite scopeで旧原39同値を照合し、送信表現receiptを機械的に再資格化" }
@@ -442,6 +457,9 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
   let workBudgetLeft = opts.limit ?? Infinity;
   const checked = new Set<string>(); let textMismatched = 0, textRepaired = 0, metadataRepaired = 0;
   const textEmptyCounts = Object.fromEntries(TEXT_SECTIONS.map(({ title }) => [title, 0]));
+  const emptyTagRepair = opts.repairEmptyTags ? { selected: codes!.length,
+    eligible: items.filter(item => item.emptyTagRepair).length, rechecked: 0, tagged: 0, allNo: 0,
+    uncertain: 0, noCandidates: 0, held: 0, remaining: 0 } : undefined;
 
   for (let i = 0; i < items.length; i++) {
     publicationJournal.assertReady();
@@ -455,11 +473,11 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
       }
       workBudgetLeft--;
     }
-    if ((opts.dryRun || opts.mechanicalOnly) && !item.checkSourceInput && (item.initialSemif || item.sourceChangedLocalJudge)) {
+    if ((opts.dryRun || opts.mechanicalOnly) && !item.checkSourceInput && (item.initialSemif || item.sourceChangedLocalJudge || item.emptyTagRepair)) {
       // 明示モードでは推論しない。機械判定へも切り替えず保留を明示。
       qualificationHeld.push(item.stockCode);
       const mode = opts.mechanicalOnly ? "mechanical" : "dry_run";
-      const kind = `${item.sourceChangedLocalJudge ? "source_change" : "initial_judge"}_${mode}_hold`;
+      const kind = `${item.emptyTagRepair ? "empty_tag_repair" : item.sourceChangedLocalJudge ? "source_change" : "initial_judge"}_${mode}_hold`;
       countsByKind[kind] = (countsByKind[kind] ?? 0) + 1;
       processed++;
       continue;
@@ -477,6 +495,14 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
       if (outcome.textMismatch) textMismatched++;
       if (outcome.textRepaired && !opts.dryRun) textRepaired++;
       if (outcome.metadataRepaired && !opts.dryRun) metadataRepaired++;
+      if (emptyTagRepair && outcome.emptyTagRepairResult && !opts.dryRun) {
+        const result = outcome.emptyTagRepairResult;
+        emptyTagRepair.rechecked++;
+        if (result.tagged) emptyTagRepair.tagged++;
+        if (result.uncertain) emptyTagRepair.uncertain++;
+        if (result.noCandidates) emptyTagRepair.noCandidates++;
+        else if (!result.tagged && !result.uncertain) emptyTagRepair.allNo++;
+      }
       if (localJudgeStop !== undefined) throw localJudgeStop.error;
       if (outcome.qualificationHeld) qualificationHeld.push(item.stockCode);
       if (outcome.error) {
@@ -497,7 +523,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     } catch (e) {
       // Unknown model/publisher results stop the whole run, including later forwards and ledger tail.
       if (localJudgeStop !== undefined || e instanceof NotionUnknownResultError) throw e;
-      if (item.sourceChangedLocalJudge) qualificationHeld.push(item.stockCode);
+      if (item.sourceChangedLocalJudge || item.emptyTagRepair) qualificationHeld.push(item.stockCode);
       failures.push({ stockCode: item.stockCode, message: e instanceof Error ? e.message : String(e) });
     }
   }
@@ -517,6 +543,10 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
   }
 
   const elapsedMs = Date.now() - start;
+  if (emptyTagRepair) {
+    emptyTagRepair.held = new Set(qualificationHeld).size;
+    emptyTagRepair.remaining = emptyTagRepair.selected - emptyTagRepair.rechecked - emptyTagRepair.held;
+  }
   return {
     startedAt,
     elapsedMs,
@@ -542,6 +572,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     qualificationHeld: [...new Set(qualificationHeld)].sort(),
     textCheckedCodes: [...checked].sort(),
     textEmptyCounts,
+    ...(emptyTagRepair === undefined ? {} : { emptyTagRepair }),
     fieldCoverage: { scope: codes === undefined ? "daily_window" : "explicit_codes", selectedForTextCheck: verification.size,
       textChecked: checked.size, textUnchecked: verification.size - checked.size, textMismatched, textRepaired, metadataRepaired,
       status: failures.length > 0 || qualificationHeld.length > 0 ? "attention" : verification.size > checked.size || items.length > processed ? "partial" : "checked_scope_complete",
