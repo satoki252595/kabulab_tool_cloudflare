@@ -26,7 +26,7 @@ function generation() {
   const key = `edinet-codelist-${asOf}-${hash(JSON.stringify(capture)).slice(0, 12)}`;
   const captureBytes = Buffer.from(JSON.stringify({ ...capture, key }));
   const code: PriceFile = { ...previous, archivePageId: "b".repeat(32), filename: "new.zip" };
-  const metadata = { asOf, sha256: hash(zip), bytes: zip.length, completedAt: capture.completedAt,
+  const metadata = { asOf, sha256: hash(zip), bytes: zip.length, completedAt: capture.completedAt, archiveRequestedAt: fetched,
     _fileManifest: { version: 1, inputFingerprint: "c".repeat(64), files: [file(code.filename, zip), file("capture-sector33-manifest.json", captureBytes)] } };
   const page = { object: "page", id: code.archivePageId, archived: false, in_trash: false, parent: { type: "database_id", database_id: "d".repeat(32) },
     properties: { Key: text(key, "title"), "Fetched At": { type: "date", date: { start: fetched } }, Status: { type: "select", select: { name: "recorded" } },
@@ -61,6 +61,72 @@ describe("通常保管済み公式銘柄表の更新", () => {
     expect(await resolveLatestHoldingsCodeList(current.code, at)).toMatchObject({ status: "ready" });
     expect(notionRequest).toHaveBeenCalledTimes(2); expect(downloadArchivedFile).toHaveBeenCalledTimes(2);
   });
+  it.each(["exact", "minute"])("精密な保管開始時計とNotion日付の%s一致を確認し、取得秒を丸めない", async mode => {
+    // Declared transport clocks reproduce the observed minute normalization around the unchanged actual ZIP.
+    current.capture.completedAt = `${asOf}T11:00:10.501981+00:00`;
+    current.metadata.completedAt = current.capture.completedAt;
+    current.metadata.archiveRequestedAt = `${asOf}T11:00:23.456Z`;
+    const key = `edinet-codelist-${asOf}-${hash(JSON.stringify(current.capture)).slice(0, 12)}`;
+    current.captureBytes = Buffer.from(JSON.stringify({ ...current.capture, key }));
+    current.metadata._fileManifest.files[1] = file("capture-sector33-manifest.json", current.captureBytes);
+    current.page.properties.Metadata = text(JSON.stringify(current.metadata)); current.page.properties.Key = text(key, "title");
+    current.page.properties["Fetched At"].date.start = mode === "exact" ? current.metadata.archiveRequestedAt : fetched;
+    expect((await readVerifiedHoldingsCodeList(current.code)).generation).toEqual({ key,
+      completedAt: current.capture.completedAt, fetchedAt: current.page.properties["Fetched At"].date.start,
+      archiveRequestedAt: current.metadata.archiveRequestedAt });
+    expect(await resolveLatestHoldingsCodeList(current.code, at)).toMatchObject({ status: "ready" });
+  }, 15_000);
+  it.each(["missing", "imprecise", "invalid-day", "different-second", "different-minute", "sub-millisecond", "future"])("保管時計%sはhosted取得前に停止し旧候補を選ばない", async mode => {
+    if (mode === "missing") Reflect.deleteProperty(current.metadata, "archiveRequestedAt");
+    if (mode === "imprecise") current.metadata.archiveRequestedAt = `${asOf}T11:00:00Z`;
+    if (mode === "invalid-day") current.metadata.archiveRequestedAt = "2025-02-30T11:00:00.000Z";
+    if (mode === "different-second") current.page.properties["Fetched At"].date.start = `${asOf}T11:00:01.000Z`;
+    if (mode === "different-minute") current.page.properties["Fetched At"].date.start = `${asOf}T10:59:00.000Z`;
+    if (mode === "sub-millisecond") current.page.properties["Fetched At"].date.start = `${asOf}T11:00:00.000001Z`;
+    if (mode === "future") {
+      current.metadata.archiveRequestedAt = `${asOf}T12:00:00.001Z`;
+      current.page.properties["Fetched At"].date.start = at; // The minute date alone is not a future-clock guard.
+    }
+    current.page.properties.Metadata = text(JSON.stringify(current.metadata));
+    await expect(resolveLatestHoldingsCodeList(previous, at)).rejects.toThrow();
+    expect(downloadArchivedFile).not.toHaveBeenCalled();
+    expect(vi.mocked(notionRequest).mock.calls.some(([, path]) => path.endsWith(previous.archivePageId))).toBe(false);
+  });
+  it("取得完了が精密な保管開始より後なら停止する", async () => {
+    current.metadata.archiveRequestedAt = `${asOf}T09:59:59.999Z`;
+    current.page.properties["Fetched At"].date.start = current.metadata.archiveRequestedAt;
+    current.page.properties.Metadata = text(JSON.stringify(current.metadata));
+    await expect(readVerifiedHoldingsCodeList(current.code)).rejects.toThrow("時計の順序");
+  });
+  it("原manifestの取得開始が完了より後なら停止する", async () => {
+    current.capture.requestedAt = `${asOf}T10:00:00.001+00:00`;
+    const key = `edinet-codelist-${asOf}-${hash(JSON.stringify(current.capture)).slice(0, 12)}`;
+    current.captureBytes = Buffer.from(JSON.stringify({ ...current.capture, key })); current.page.properties.Key = text(key, "title");
+    current.metadata._fileManifest.files[1] = file("capture-sector33-manifest.json", current.captureBytes);
+    current.page.properties.Metadata = text(JSON.stringify(current.metadata));
+    await expect(readVerifiedHoldingsCodeList(current.code)).rejects.toThrow("時計の順序");
+  });
+  it.each(["future-completed", "future-requested", "valid"])("同一ミリ秒内の原時計%sも6桁小数の順序を保持する", async mode => {
+    current.capture.completedAt = `${asOf}T11:00:10.501981+00:00`;
+    current.capture.requestedAt = `${asOf}T11:00:10.${mode === "future-requested" ? "501982" : "501980"}+00:00`;
+    current.metadata.completedAt = current.capture.completedAt;
+    current.metadata.archiveRequestedAt = `${asOf}T11:00:10.${mode === "future-completed" ? "501" : "502"}Z`;
+    const key = `edinet-codelist-${asOf}-${hash(JSON.stringify(current.capture)).slice(0, 12)}`;
+    current.captureBytes = Buffer.from(JSON.stringify({ ...current.capture, key })); current.page.properties.Key = text(key, "title");
+    current.metadata._fileManifest.files[1] = file("capture-sector33-manifest.json", current.captureBytes);
+    current.page.properties.Metadata = text(JSON.stringify(current.metadata));
+    if (mode === "valid") expect((await readVerifiedHoldingsCodeList(current.code)).generation?.completedAt).toBe(current.capture.completedAt);
+    else await expect(readVerifiedHoldingsCodeList(current.code)).rejects.toThrow("時計の順序");
+  });
+  it("queryとpageの精密時計が同じ分内で変わっても旧原本へ進まず停止する", async () => {
+    current.metadata.archiveRequestedAt = `${asOf}T11:00:23.456Z`;
+    current.page.properties.Metadata = text(JSON.stringify(current.metadata));
+    queryRows = [structuredClone(current.page)];
+    current.metadata.archiveRequestedAt = `${asOf}T11:00:24.456Z`;
+    current.page.properties.Metadata = text(JSON.stringify(current.metadata));
+    await expect(resolveLatestHoldingsCodeList(previous, at)).rejects.toThrow("queryとpage");
+    expect(vi.mocked(notionRequest).mock.calls.some(([, path]) => path.endsWith(previous.archivePageId))).toBe(false);
+  });
   it("候補不在だけ明示HOLD、最新不完全を除外して古いrecordedへ戻さない", async () => {
     queryRows = []; expect(await resolveLatestHoldingsCodeList(previous, at)).toMatchObject({ status: "held" });
     const older = structuredClone(current.page); older.properties["Fetched At"].date.start = `${asOf}T08:00:00Z`;
@@ -70,7 +136,11 @@ describe("通常保管済み公式銘柄表の更新", () => {
     expect(downloadArchivedFile).not.toHaveBeenCalled();
   });
   it.each(["tie", "future", "wrong-page", "duplicate-files"])("%sは原本取得/送信前に停止する", async mode => {
-    if (mode === "tie") queryRows = [current.page, structuredClone(current.page)];
+    if (mode === "tie") {
+      const other = structuredClone(current.page); other.id = "e".repeat(32);
+      other.properties.Metadata = text(JSON.stringify({ ...current.metadata, archiveRequestedAt: `${asOf}T11:00:23.456Z` }));
+      queryRows = [current.page, other]; // Different precise clocks must not break a Notion same-minute ordering tie.
+    }
     if (mode === "future") current.page.properties["Fetched At"].date.start = `${asOf}T13:00:00Z`;
     if (mode === "wrong-page") vi.mocked(notionRequest).mockImplementation(async method => method === "POST" ? { results: queryRows, has_more: false, next_cursor: null } : { ...current.page, id: "f".repeat(32) } as never);
     if (mode === "duplicate-files") current.page.properties.Files.files[1] = current.page.properties.Files.files[0];

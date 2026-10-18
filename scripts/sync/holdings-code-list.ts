@@ -8,7 +8,7 @@ import { notionEnv } from "../../src/shared/notion-archive/env.js";
 import { priceFileSchema, type PriceFile } from "../../src/shared/holdings/price-registry.js";
 import { downloadArchivedFile } from "../moneyflow/lib/archived-files.js";
 import { parseHoldingsCodeList, type ArchivedSource } from "../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js";
-import { jstDateSec } from "../../src/shared/vwap/proof.js";
+import { isStrictIsoUtc, jstDateSec } from "../../src/shared/vwap/proof.js";
 
 type Part = { type: string; plain_text: string; text: { content: string } };
 interface Page {
@@ -30,6 +30,24 @@ function text(page: Page, name: string, type: "title" | "rich_text"): string {
 function clock(value: unknown): number {
   const result = Date.parse(z.string().datetime({ offset: true }).parse(value)); assert.ok(Number.isFinite(result)); return result;
 }
+function compareClocks(left: string, right: string): number {
+  const delta = clock(left) - clock(right);
+  if (delta !== 0) return delta;
+  // Python capture clocks retain microseconds that Date.parse drops within the same millisecond.
+  const fraction = (value: string) => { const match = /\.(\d+)(?:Z|[+-]\d\d:\d\d)$/.exec(value); return match === null ? "" : match[1]; };
+  const a = fraction(left), b = fraction(right), width = Math.max(a.length, b.length);
+  const normalizedA = a.padEnd(width, "0"), normalizedB = b.padEnd(width, "0");
+  return normalizedA < normalizedB ? -1 : normalizedA > normalizedB ? 1 : 0;
+}
+function archiveClock(page: Page, value: unknown): string {
+  assert.ok(isStrictIsoUtc(value), "公式銘柄表の精密な保管開始時計がありません");
+  const at = clock(value);
+  assert.equal(new Date(at).toISOString(), value, "公式銘柄表の保管開始時計はISOミリ秒UTC形式が必要です");
+  const fetchedAt = page.properties["Fetched At"]; assert.equal(fetchedAt.type, "date"); assert.ok(fetchedAt.date);
+  // Notion's observed date normalization drops seconds; the precise metadata is never reconstructed from it.
+  assert.ok(compareClocks(fetchedAt.date.start, value) === 0 || compareClocks(fetchedAt.date.start, new Date(Math.floor(at / 60_000) * 60_000).toISOString()) === 0, "公式銘柄表の保管開始時計とNotion日付が不一致です");
+  return value;
+}
 function pageGuard(page: Page, id: string, dbId?: string): void {
   assert.equal(page.object, "page"); assert.equal(page.id.replaceAll("-", ""), id.replaceAll("-", ""));
   assert.equal(page.archived, false); assert.equal(page.in_trash, false); assert.equal(page.parent.type, "database_id");
@@ -47,7 +65,7 @@ function canonical(value: unknown): unknown {
 
 /** One-file bootstrap remains supported; normal generations require the exact ZIP + capture manifest. */
 export async function readVerifiedHoldingsCodeList(expected: PriceFile, maxBytes?: number): Promise<{
-  source: ArchivedSource; asOf: string; readBytes: number; generation?: { key: string; completedAt: string; fetchedAt: string };
+  source: ArchivedSource; asOf: string; readBytes: number; generation?: { key: string; completedAt: string; fetchedAt: string; archiveRequestedAt: string };
 }> {
   priceFileSchema.parse(expected);
   assert.match(expected.filename, /^[A-Za-z0-9_.-]+\.zip$/);
@@ -70,8 +88,10 @@ export async function readVerifiedHoldingsCodeList(expected: PriceFile, maxBytes
   const zip = entries.filter(entry => entry.originalFilename === expected.filename); assert.equal(zip.length, 1);
   assert.equal(zip[0].sha256, expected.sha256); assert.equal(zip[0].byteLength, expected.byteLength);
   const capture = entries.find(entry => entry !== zip[0]);
+  let archiveRequestedAt: string | undefined;
   if (capture !== undefined) {
     assert.match(capture.originalFilename, /^[A-Za-z0-9_.-]+-sector33-manifest\.json$/); assert.ok(capture.byteLength <= 1024 * 1024);
+    archiveRequestedAt = archiveClock(page, metadata.archiveRequestedAt);
   }
   const readBytes = entries.reduce((sum, entry) => sum + entry.byteLength, 0);
   if (maxBytes !== undefined) {
@@ -86,7 +106,7 @@ export async function readVerifiedHoldingsCodeList(expected: PriceFile, maxBytes
   };
   const bytes = await read(zip[0]), source = { ...expected, bytes }, catalog = parseHoldingsCodeList(source);
   if (entries.length === 1) return { source, asOf: catalog.asOf, readBytes };
-  assert.ok(capture);
+  assert.ok(capture); assert.ok(archiveRequestedAt);
   const body = JSON.parse((await read(capture)).toString("utf8")), key = text(page, "Key", "title");
   assert.equal(body.key, key); assert.equal(body.sourceUrl, SOURCE_URL); assert.equal(body.asOf, catalog.asOf);
   assert.equal(body.zipSha256, expected.sha256); assert.equal(body.zipBytes, expected.byteLength);
@@ -94,10 +114,10 @@ export async function readVerifiedHoldingsCodeList(expected: PriceFile, maxBytes
   assert.equal(body.response.status, 200); assert.equal(body.response.finalUrl, SOURCE_URL);
   assert.ok(Number.isSafeInteger(body.listedRecords) && body.listedRecords > 0);
   const fetchedAt = page.properties["Fetched At"]; assert.equal(fetchedAt.type, "date"); assert.ok(fetchedAt.date);
-  assert.ok(clock(body.requestedAt) <= clock(body.completedAt) && clock(body.completedAt) <= clock(fetchedAt.date.start));
+  assert.ok(compareClocks(body.requestedAt, body.completedAt) <= 0 && compareClocks(body.completedAt, archiveRequestedAt) <= 0, "公式銘柄表の取得・保管時計の順序が不正です");
   const captureBody = Object.fromEntries(Object.entries(body).filter(([name]) => name !== "key"));
   assert.equal(key, `edinet-codelist-${body.asOf}-${hash(JSON.stringify(canonical(captureBody))).slice(0, 12)}`, "公式銘柄表のcapture世代keyが不一致です");
-  return { source, asOf: catalog.asOf, readBytes, generation: { key, completedAt: body.completedAt, fetchedAt: fetchedAt.date.start } };
+  return { source, asOf: catalog.asOf, readBytes, generation: { key, completedAt: body.completedAt, fetchedAt: fetchedAt.date.start, archiveRequestedAt } };
 }
 
 /** Bounded newest-two selection; malformed newest data never selects the older generation. */
@@ -121,18 +141,22 @@ export async function resolveLatestHoldingsCodeList(previous: PriceFile, finishe
   if (result.results.length === 2) assert.ok(fetched(selected) > fetched(result.results[1]), "最新の公式銘柄表が同時計競合/順序不一致です");
   const key = text(selected, "Key", "title"); assert.match(key, /^edinet-codelist-\d{4}-\d\d-\d\d-[a-f0-9]{12}$/);
   const metadata = JSON.parse(text(selected, "Metadata", "rich_text"));
+  const archiveRequestedAt = archiveClock(selected, metadata.archiveRequestedAt);
+  assert.ok(compareClocks(archiveRequestedAt, finishedAt) <= 0, "公式銘柄表の精密な保管開始時計が価格run完了より未来です");
   const entries: Entry[] = metadata._fileManifest.files; assert.ok(Array.isArray(entries) && entries.length === 2);
   const zip = entries.filter(entry => entry.originalFilename.endsWith(".zip")); assert.equal(zip.length, 1);
   const file = priceFileSchema.parse({ archivePageId: selected.id, filename: zip[0].originalFilename, sha256: zip[0].sha256, byteLength: zip[0].byteLength });
   const current = await readVerifiedHoldingsCodeList(file);
+  assert.ok(current.generation); assert.equal(current.generation.archiveRequestedAt, archiveRequestedAt, "公式銘柄表の保管時計がqueryとpage読戻しで変わりました");
   const before = JSON.stringify(priceFileSchema.parse(previous)) === JSON.stringify(file) ? current : await readVerifiedHoldingsCodeList(previous);
-  assert.ok(current.generation); assert.equal(current.generation.key, key); assert.equal(clock(current.generation.fetchedAt), fetched(selected));
-  assert.ok(clock(current.generation.completedAt) <= at);
+  assert.equal(current.generation.key, key); assert.equal(clock(current.generation.fetchedAt), fetched(selected));
+  assert.ok(compareClocks(current.generation.completedAt, finishedAt) <= 0);
   assert.ok(current.asOf >= before.asOf, "公式銘柄表の基準日が後退しています");
   assert.ok(current.asOf <= jstDateSec(at / 1000), "公式銘柄表の基準日が未来です");
   if (before.generation !== undefined) {
-    assert.ok(clock(current.generation.completedAt) >= clock(before.generation.completedAt), "公式銘柄表の実取得時計が後退しています");
-    if (clock(current.generation.completedAt) === clock(before.generation.completedAt)) assert.equal(current.source.sha256, before.source.sha256, "公式銘柄表の同一取得時計で原本が競合しています");
+    const order = compareClocks(current.generation.completedAt, before.generation.completedAt);
+    assert.ok(order >= 0, "公式銘柄表の実取得時計が後退しています");
+    if (order === 0) assert.equal(current.source.sha256, before.source.sha256, "公式銘柄表の同一取得時計で原本が競合しています");
   }
   return { status: "ready", file };
 }
