@@ -1,6 +1,6 @@
 # 本番定期処理とSSHでの補完
 
-確認日: 2026-10-18。対象: main `eb0484b67e9157c5fad131ae43971a5438ac79fc` と既存Mac設定。
+確認日: 2026-10-18。定期予定の確認対象: main `eb0484b67e9157c5fad131ae43971a5438ac79fc` と既存Mac設定。SSH補完入口はmain `3a0f9770c479e8d34c927d8ce17aa72fd177e145`まで確認。
 時刻はJST、Cloudflareは起動・結果監視、重い取込本体はActionsまたはMacで実行する。
 設定上の予定と、実行成功・全銘柄のデータ充足は別に確認する。
 
@@ -34,6 +34,8 @@ CFの結果確認は株価/VWAP23:35、独立資金フロー23:45、開示20:05�
 現SSHのR2資格情報はraw/vwapの2bucket限定。追加取得に必要なEDINET・Yahoo proxy・Notion保管先の設定はまだ揃っておらず、全処理をそのまま起動できる状態ではない。
 秘密値は表示/Git保存せず、必要な処理の設定だけをprivate `.env`へ渡す。
 
+同日12:12の追加準備でSSH mainを`3a0f9770c479e8d34c927d8ce17aa72fd177e145`へfast-forwardし、Notionの一次保管先・保有明細DBの既存IDだけをprivate `.env`へ追加した。NixのNode22.22.2、lock同一、価格補完の型付き10設定とCLI import、Git cleanを確認した。既存資格情報とraw/vwapのR2範囲は維持し、価格queueの実行はまだ開始していない。EDINET・Yahoo proxy等を要する別の取込が全て実行可能になったという意味ではない。
+
 日足の10/15・10/16不足は、進行中の通常全量日足更新が履歴ごと回収する対象。
 それと同じwriterをSSHで重複起動しない。終端summaryで未取得の銘柄/日だけを確定してから、必要な補完をSSHへ移す。
 全履歴RAWのミラー、全市場の再取得、月次処理の一括再実行は、この不足2日を直すための必須作業ではない。
@@ -52,7 +54,7 @@ Pythonの過去提出日補完はリポジトリのNix環境内で`pipeline`へ�
 `uv run python -m jp_stock_pipeline.jobs.edinet_daily --date YYYY-MM-DD --require-cloud`を使う。
 
 保有価格だけの補完は、既存CLIの`resume-prices`から定期EDINETと同じ価格queue/loaderを1回呼ぶ。
-上限は100明細・5文書・116価格chunk・256MiB・新規開始300秒。有報一覧/Yahoo取得・L2再構築は行わない。
+上限は100明細・5文書・116価格chunk・共有価格読取予算256MiB・新規開始300秒。所有者ZIPの初期読取は別枠で1文書20MiB以下×最大5文書（100MiB以下）であり、256MiBを全HTTP量の上限とはしない。有報一覧/Yahoo取得・L2再構築は行わない。
 出力先の親directoryを用意し、`nix develop --command pnpm exec tsx scripts/notion/shareholdings.ts resume-prices tmp/holdings-prices/price-001.json`で実行する。
 保留/続きありは非0終了でも、正常結果と`completed-write.json`がある場合だけ既知の未完として扱う。
 `pending-write.json`や通信結果不明がある場合は、出力名を変えて自動再送せず原記録を保持する。

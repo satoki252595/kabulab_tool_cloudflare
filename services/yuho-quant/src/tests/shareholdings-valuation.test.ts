@@ -16,14 +16,14 @@ const holding: Shareholding = { name: issuer.legalName, kind: "特定投資株�
   bookValueYen: 10000, bookValueRaw: 10, bookValueUnit: "千円", listingStatus: "unknown", price: null, priceDate: null,
   priceCurrency: null, tableIndex: 0, rowIndex: 3 };
 const ts = (date: string) => Date.parse(`${date}T00:00:00Z`) / 1000;
-function source(options: { splitDate?: string; priceDate?: string; currency?: string; issuerName?: string; symbol?: string; eventsQuery?: boolean; duplicate?: boolean } = {}): ArchivedSource {
+function source(options: { splitDate?: string; priceDate?: string; priceClose?: number | null; currency?: string; issuerName?: string; symbol?: string; eventsQuery?: boolean; duplicate?: boolean } = {}): ArchivedSource {
   const date = options.priceDate === undefined ? "2026-06-30" : options.priceDate;
   const currency = options.currency === undefined ? "JPY" : options.currency;
   const name = options.issuerName === undefined ? issuer.englishName : options.issuerName;
   const symbol = options.symbol === undefined ? "7203.T" : options.symbol;
   const raw = Buffer.from(JSON.stringify({ chart: { result: [{ meta: { symbol, range: "10y", currency,
     exchangeTimezoneName: "Asia/Tokyo", longName: name, regularMarketPrice: 100, regularMarketTime: ts("2026-07-01") },
-    timestamp: [ts(date), ts("2026-07-01")], indicators: { quote: [{ open: [100, 100], high: [100, 100], low: [100, 100], close: [100, 100], volume: [1, 1] }] },
+    timestamp: [ts(date), ts("2026-07-01")], indicators: { quote: [{ open: [100, 100], high: [100, 100], low: [100, 100], close: [options.priceClose === undefined ? 100 : options.priceClose, 100], volume: [1, 1] }] },
     ...(options.splitDate ? { events: { splits: { split: { date: ts(options.splitDate), numerator: 2, denominator: 1 } } } } : {}),
   }], error: null } }));
   const member = { api: "daily", symbol, status: 200, receivedAt: "2026-07-02T00:00:00Z", byteLength: raw.length,
@@ -128,7 +128,21 @@ describe("保有明細の期末参考時価", () => {
       priceSource: { evaluationDate: "2026-05-31", sharesAsOf: "2026-05-31", priceAsOf: "2026-05-29", marketCalendar: { closedDates: ["2026-05-31", "2026-05-30"], calendarSources: [expect.objectContaining({ readback: true })] } } });
     expect(await qualifyHoldingValuation({ ...input, prices: [source({ priceDate: "2026-05-28" })] })).toMatchObject({ status: "unavailable" });
     expect(await qualify(source({ priceDate: "2026-06-29" }))).toMatchObject({ status: "unavailable", reason: expect.stringContaining("市場営業日") });
-    expect(await qualifyHoldingValuation({ ...input, fiscalYearEnd: "2025-11-30", prices: [source({ priceDate: "2025-11-28" })] })).toMatchObject({ status: "unavailable", reason: expect.stringContaining("公式カレンダー") });
+    expect(await qualifyHoldingValuation({ ...input, fiscalYearEnd: "2025-11-30", prices: [source({ priceDate: "2025-11-28" })] })).toMatchObject({ status: "qualified", date: "2025-11-28", price: 100,
+      priceSource: { evaluationDate: "2025-11-30", sharesAsOf: "2025-11-30", priceAsOf: "2025-11-28", marketCalendar: { closedDates: ["2025-11-30", "2025-11-29"] } } });
+  });
+  it("2025週末でも直前金曜の有効barが必須で、祝日・年始・他年・splitを推測しない", async () => {
+    // Declared protocol/fault projection of the existing structural chart; not actual market prices.
+    const input = { holding, fiscalYearEnd: "2025-11-30", catalog };
+    for (const prices of [source({ priceDate: "2025-11-27" }), source({ priceDate: "2025-11-28", priceClose: null })]) {
+      expect(await qualifyHoldingValuation({ ...input, prices: [prices] })).toMatchObject({ status: "unavailable", reason: expect.stringContaining("公式カレンダー") });
+    }
+    await expect(qualifyHoldingValuation({ ...input, prices: [source({ priceDate: "2025-11-28", priceClose: 0 })] })).rejects.toThrow("非正");
+    for (const [fiscalYearEnd, priceDate] of [["2025-11-24", "2025-11-21"], ["2025-01-05", "2025-01-03"], ["2024-11-30", "2024-11-29"], ["2025-12-31", "2025-12-29"]]) {
+      expect(await qualifyHoldingValuation({ ...input, fiscalYearEnd, prices: [source({ priceDate })] })).toMatchObject({ status: "unavailable" });
+    }
+    expect(await qualifyHoldingValuation({ ...input, prices: [source({ priceDate: "2025-11-28", splitDate: "2025-11-27" })] }))
+      .toMatchObject({ status: "unavailable", reason: expect.stringContaining("法的分割日") });
   });
   it("期末後のsplitも、法的日付/株数単位が未確認の期末前splitも補正せず保留する", async () => {
     expect((await qualify(source({ splitDate: "2026-07-01" }))).status).toBe("unavailable");

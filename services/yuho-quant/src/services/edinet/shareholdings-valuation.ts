@@ -226,7 +226,7 @@ export async function qualifyHoldingValuation(args: {
   let priceDate = args.fiscalYearEnd, calendar: JpxReferenceSession | undefined;
   let indexes = dates.map((date: string, index: number) => date === priceDate ? index : -1).filter((index: number) => index >= 0);
   if (indexes.length === 0) {
-    const session = lastJpxSessionOnOrBefore(args.fiscalYearEnd);
+    const session = lastJpxSessionOnOrBefore(args.fiscalYearEnd, new Set(parsed.bars.filter(bar => bar.c > 0).map(bar => bar.date)));
     if (session === undefined) return { status: "unavailable", identity, reason: "期末以前の最終市場営業日を公式カレンダーで確認できません" };
     if (session.date === args.fiscalYearEnd) return { status: "unavailable", identity, reason: "当期末の市場営業日の価格バーを一意に観測していません" };
     calendar = session; priceDate = session.date;

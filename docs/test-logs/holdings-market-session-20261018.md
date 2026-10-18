@@ -37,3 +37,11 @@
 初回純検証時点では業務schema変更・価格列publishは0。Yahoo Chartの全OHLCV basis、法的効力日/市場権利落日/株式class、増資・消却・行使、旧保存の再資格を完了とはしない。
 
 10/18の通常スキーマ移行は完了した。同main c747の通常`apply-schema`を使い、物理PRE・全定義CAS・1PATCH・全定義読戻し・物理POSTを113.04秒で閉じた。34プロパティの全ID/typeと、価格状態formula/description以外の全定義が不変。Notion19要求・hosted全文読戻し2・429/retry0、保有行の変更0。PREは`3fdd74ff-84cd-8123-b44a-dfb23f66e13a`、POSTは`3fdd74ff-84cd-815f-ad91-e1bba30fab31`。private closed receipt SHAは`254ba4e34ca343fa3a02a7b646243dceb6c47e0d7fbb8e655ce9deeb2d9730fa`。価格queueの実反映と全POSTは引き続き別受入。
+
+## 2025年の週末決算日
+
+[JPX「売買立会時間の変遷・半休日／休業日の変遷」](https://www.jpx.co.jp/equities/trading/domestic/tvdivq0000006blj-att/tradinghours_jp.pdf)は、1989-02-01以降の土日休業と2009-12-30以降の継続を明記している。2026-10-18T03:21:41.637Zに取得した1ページPDF（246,153 bytes、SHA256 `f6d90126fcbc85407d464044e434e79780f43d71ee3eb05d1b9e0699421ef006`）を通常一次保管ページ`3fdd74ff-84cd-81a6-ad11-fcdc4eaa4608`へ物理保存し、全文読戻しと表の目視を確認した。初回は環境指定漏れでNotion送信前に停止したため、その記録を保持し、原期限内に取得済み同一PDFの保管だけを続けた。再取得0、保管はNotion8要求・hosted読戻し1・再試行0・62.604秒。closed receipt SHAは`bbfd75fa90ac0ab165ada68168c7cd0b669d06e749f1cc3e8fbb0da05f2d16b9`。
+
+共有資格関数は2025年の土日期末に限り、同じ検証済み価格原本に直前金曜の正の有効バーがある場合だけ、その金曜を採用する。金曜の欠測・祝日からさらに遡らず、年始1〜3日・平日の休日・他の未収録年は対象外。既存年末記録を優先し、2026/2027年と引数なしの既存callerは変更しない。株数・価格の時点分離、主体・英字名・通貨・全分割単位のguardは保持する。2025年全休日を確認した扱いにはしない。
+
+同じ保存217文書・2,822行・価格113chunk（169,195,325 bytes）の純比較で、旧947行の全資格・価格・値・proofが同一、全原表factsと順序が同一だった。2025-08-31／11-30／12-20の16行だけ結果が変わり、8行が追加資格、8行は既存の分割／単位保留を明記する理由へ進んだ。全体は資格955・未資格1,840・英字名不一致27。9.922秒、HTTP・モデル・業務書込0。これは旧active registry `37202207552.1`の保存入力での見込みであり、最新registryでの実公開件数ではない。Nix5suite141件、全体型検査・対象lint・diff検査PASS、別agentの読取レビューでblocking0。private manifestは`weekend2025-review-ready-v1.json`、SHA `d834633c09cf237118012c5f8a57ddb042d10151601dc5cf4416594c2016be45`。
