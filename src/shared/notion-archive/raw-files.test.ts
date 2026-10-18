@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { assertCanonicalRawMetadata, findCanonicalRawFileAttachments, findCanonicalRawFiles, listCanonicalRawFiles, parseCanonicalRawFile } from "./raw-files.js";
+import { assertCanonicalRawMetadata, findCanonicalRawFileAttachments, findCanonicalRawFiles, findLatestShinaRawFile, listCanonicalRawFiles, parseCanonicalRawFile } from "./raw-files.js";
 import { notionRequest } from "./client.js";
 vi.mock("./client.js", () => ({ notionRequest: vi.fn(), assertCursorProgress: (seen: Set<string>, cursor: string) => {
   if (seen.has(cursor)) throw new Error("cursor repeated"); seen.add(cursor);
@@ -17,6 +17,40 @@ function page() {
       "ライセンスタグ": { type: "select", select: { name: "commercial-ok" } }, "変換状態": { type: "select", select: { name: "完了" } } } };
 }
 beforeEach(() => vi.resetAllMocks());
+describe("本番で必要なshina最新原本だけを選ぶ", () => {
+  function shinaPage() {
+    const p = page();
+    p.properties["ソース"].select.name = "日証金";
+    p.properties["データ種別"].rich_text[0]!.plain_text = "shina";
+    p.properties["対象銘柄コード"].rich_text[0]!.plain_text = "ALL";
+    p.properties["ライセンスタグ"].select.name = "personal-only";
+    p.properties["ファイル名"].title[0]!.plain_text = "shina.csv";
+    p.properties["ファイル"].files[0]!.name = "shina.csv";
+    return p;
+  }
+  it("source/type/scopeをqueryで絞り、歴史件数によらず1要求・最大2件で最新を確定する", async () => {
+    const current = shinaPage(), older = shinaPage();
+    older.properties.SHA256.rich_text[0]!.plain_text = "d".repeat(64);
+    older.properties["取得日時"].date.start = "2026-10-12T18:00:00+09:00";
+    vi.mocked(notionRequest).mockResolvedValue({ results: [current, older], has_more: true });
+    const options = { singleAttempt: true, beforeRequest: vi.fn() };
+    expect(await findLatestShinaRawFile(options)).toMatchObject({ sha256: digest, datatype: "shina", scope: "ALL" });
+    expect(notionRequest).toHaveBeenCalledOnce();
+    expect(vi.mocked(notionRequest).mock.calls[0]?.[2]).toEqual({ filter: { and: [
+      { property: "ソース", select: { equals: "日証金" } },
+      { property: "データ種別", rich_text: { equals: "shina" } },
+      { property: "対象銘柄コード", rich_text: { equals: "ALL" } },
+    ] }, sorts: [{ property: "取得日時", direction: "descending" }], page_size: 2 });
+    expect(vi.mocked(notionRequest).mock.calls[0]?.[3]).toBe(options);
+  });
+  it.each(["empty", "tie", "wrong_source"])("%sを別原本で埋めない", async kind => {
+    const p = shinaPage();
+    if (kind === "wrong_source") p.properties["ソース"].select.name = "EDINET";
+    vi.mocked(notionRequest).mockResolvedValue({ results: kind === "empty" ? [] : kind === "tie" ? [p, p] : [p], has_more: false });
+    await expect(findLatestShinaRawFile()).rejects.toThrow();
+    expect(notionRequest).toHaveBeenCalledOnce();
+  });
+});
 describe("⑤原本のread-only照合", () => {
   it("明示singleAttempt/native guardを追加queryなしで共通clientへ透過する", async () => {
     vi.mocked(notionRequest).mockResolvedValue({ results: [page()], has_more: false });

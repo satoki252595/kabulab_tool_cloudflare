@@ -9,6 +9,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ## 2026-10-18
 
+- RAW復旧を本番で必要な原本に限定し、最新JSF shinaの選択・索引・全文SHA/サイズ・本番CSV parserだけを確認する`raw:required`を追加。全歴史原本ミラーと全量再読を機能復旧の必須条件から外し、専用bulkの新規起動を停止した。[必要範囲と運用](deterministic-production.md#必要なraw原本だけの確認)（Refs #515）。
 - 本番作業（SSH側設定）: 専用R2キーをraw/vwapの2バケットに限定して設定し、既存2オブジェクト77,759Bの全文SHA/サイズ一致を確認。[設定・実READ証跡](test-logs/ssh-r2-setup-20261018.md)を記録し、実WRITE・転送引継ぎ・独立全量照合は未受入のまま分ける（Refs #515）。
 - 本番作業: 海外売上の補完残26文書を通常CLIと独立照合で完了し、[固定集合166文書・993件の一致](test-logs/overseas-remaining26-closure-20261018.md)を確認。全市場の充足とは別に受け入れる。
 - 固定RAW全量をLLMなしで独立に再読する有限read-only CLIを追加。全body SHA/サイズとSHA先限定の15列索引を検証し、legacy欠測・履歴時計HOLDと原本整合を分け、private receipt/費用/原期限を保った正常partial再開に限定する。[実保存入力と費用・未実施境界](test-logs/raw-independent-audit-20261018.md)。SSH移行・本番全量照合は別受入（Refs #515）。

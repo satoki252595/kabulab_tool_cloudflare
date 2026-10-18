@@ -101,6 +101,29 @@ export async function findCanonicalRawFiles(shas: readonly string[]): Promise<Ma
   return new Map([...await queryCanonicalRawPages(shas)].map(([sha, value]) => [sha, value.raw]));
 }
 
+/** 本番shina readerが必要とする最新原本だけ。全履歴の棚卸しや添付の再取得はしない。 */
+export async function findLatestShinaRawFile(opts?: NotionRequestOptions): Promise<CanonicalRawFile> {
+  const dbId = notionEnv.NOTION_DB_RAW_FILES();
+  const response = await notionRequest<{ results: unknown[]; has_more: boolean }>("POST", `/databases/${dbId}/query`, {
+    filter: { and: [
+      { property: "ソース", select: { equals: "日証金" } },
+      { property: "データ種別", rich_text: { equals: "shina" } },
+      { property: "対象銘柄コード", rich_text: { equals: "ALL" } },
+    ] },
+    sorts: [{ property: "取得日時", direction: "descending" }], page_size: 2,
+  }, opts);
+  if (!Array.isArray(response.results) || response.results.length < 1 || response.results.length > 2 || typeof response.has_more !== "boolean")
+    throw new Error("⑤必要なshina最新原本が未確定です");
+  const rows = response.results.map(value => parseCanonicalRawFile(value, dbId));
+  if (rows.some(row => row.source !== "日証金" || row.datatype !== "shina" || row.scope !== "ALL" ||
+      row.licenseTag !== "personal-only" || !row.filename.toLowerCase().endsWith(".csv") || row.sizeBytes < 1 || row.sizeBytes > 2 * 1024 ** 2))
+    throw new Error("⑤必要なshina原本のmetadataが不一致です");
+  const latest = rows[0]!;
+  if (rows.length === 2 && (Date.parse(latest.fetchedAt) <= Date.parse(rows[1]!.fetchedAt) || latest.sha256 === rows[1]!.sha256))
+    throw new Error("⑤必要なshina最新原本が一意ではありません");
+  return latest;
+}
+
 export interface CanonicalRawAttachment { raw: CanonicalRawFile; file: { name: string; url: string } }
 /** 既存SHA queryのfilesを再利用。署名URLは短命のメモリ内利用専用、log/manifestへ保存禁止。 */
 export async function findCanonicalRawFileAttachments(shas: readonly string[], opts?: NotionRequestOptions): Promise<Map<string, CanonicalRawAttachment>> {
