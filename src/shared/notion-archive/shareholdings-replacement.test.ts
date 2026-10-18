@@ -4,7 +4,7 @@ const sourceDb = createReportedSourceTestDb().db;
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { replaceUnknownHoldingPatch, publishVerifiedShareholdings, qualifyHoldingPatchJournal } from "./shareholdings.js";
+import { replaceUnknownHoldingPatch, publishVerifiedShareholdings, qualifyHoldingPatchJournal, HOLDINGS_DESCRIPTION } from "./shareholdings.js";
 import { notionRequest } from "./client.js";
 import { recordPrimaryData } from "./archive.js";
 import { verifyArchivedAttachments } from "./readback.js";
@@ -22,7 +22,11 @@ vi.mock("./env.js", async original => ({ ...await original<typeof import("./env.
 const base = new URL("../../../services/yuho-quant/src/tests/fixtures/holdings-pending1911/", import.meta.url);
 const bytes = (name: string) => readFileSync(new URL(name, base));
 const read = (name: string) => JSON.parse(bytes(name).toString());
-const schema = read("schema.json"), source = read("provenance.json").source, ownerName = read("provenance.json").ownerName;
+// Declared current-server migration projection only; the original schema fixture/journal bytes stay intact.
+const schema = read("schema.json");
+schema.properties["価格状態"].formula.expression = 'if(prop("価格照合済"), "期末参考時価（期末株数×採用終値）", "未取得（価格・通貨・株数単位の照合未成立）")';
+for (const part of schema.description) { part.plain_text = HOLDINGS_DESCRIPTION; part.text.content = HOLDINGS_DESCRIPTION; }
+const source = read("provenance.json").source, ownerName = read("provenance.json").ownerName;
 const oldId = read("unknown-before.json").id, legacyId = "3fbd74ff-84cd-81fd-b919-c47b222b5f21";
 const sha = (value: Uint8Array | string) => createHash("sha256").update(value).digest("hex");
 const nid = (value: string) => value.replaceAll("-", "");
@@ -33,7 +37,7 @@ let additionalUnknown: ReturnType<typeof read>[];
 let writes: Array<{ method: string; path: string; body: unknown }>;
 const journal = () => ({ pending: JSON.stringify({ version: 2, noAutomaticReplay: true, mode: "latest-saved-holdings" }),
   journal: bytes("journal.jsonl").toString(), intent: bytes("unknown-intent.json").toString(), request: bytes("unknown-request.json").toString(), before: read("unknown-before.json"), schema,
-  beforeRaw: bytes("unknown-before.json").toString(), schemaRaw: bytes("schema.json").toString() });
+  beforeRaw: bytes("unknown-before.json").toString(), schemaRaw: JSON.stringify(schema) });
 const args = () => ({ source, ownerName, archivePageId: page.id, zip: bytes("1911-S100Y1XP.zip"), journal: journal(),
   legacyPre: { archivePageId: legacyId, filename: "holdings-legacy-PRE.json", sha256: sha(bytes("legacy-pre.json")), bytes: bytes("legacy-pre.json") }, assertLatestSource: vi.fn(async () => {}) });
 
@@ -54,7 +58,7 @@ function applyProperties(target: ReturnType<typeof read>, input: Record<string, 
     target.properties[name] = { ...property, [type]: value };
   }
   if (target.properties["検証状態"]) target.properties["検証状態"].formula.string = target.properties["原本照合済"].checkbox ? "明細原本照合済" : "未検証（旧取込）";
-  if (target.properties["価格状態"]) target.properties["価格状態"].formula.string = target.properties["価格照合済"].checkbox ? "期末参考時価（同日期末株数×終値）" : "未取得（価格・通貨・株数単位の照合未成立）";
+  if (target.properties["価格状態"]) target.properties["価格状態"].formula.string = target.properties["価格照合済"].checkbox ? "期末参考時価（期末株数×採用終値）" : "未取得（価格・通貨・株数単位の照合未成立）";
 }
 beforeEach(() => {
   vi.clearAllMocks(); additionalUnknown = []; fault = undefined; nextId = 1; writes = [];
@@ -106,6 +110,10 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("actual1911 normal constructive unknown replacement", () => {
+  it("original old schema cannot bypass a current schema migration", async () => {
+    const input = args(); input.journal.schema = read("schema.json"); input.journal.schemaRaw = bytes("schema.json").toString();
+    await expect(replaceUnknownHoldingPatch(input)).rejects.toThrow(); expect(writes).toHaveLength(0);
+  });
   it("preserves the143 journal and40-row PRE; retires only old32, proves44 current pages, then normal45 writes only13", async () => {
     const input = args(), originalJournal = input.journal.journal, extras = structuredClone(rows.filter((r: ReturnType<typeof read>) => !JSON.parse(bytes("legacy-pre.json").toString()).rows.some((p: { id: string }) => p.id === r.id) && r.properties["原本照合済"].checkbox === false));
     expect(extras).toHaveLength(2); const proof = read("replacement-provenance.json"); expect(sha(bytes("legacy-pre.json"))).toBe(proof.legacyPre.fixtureSha256); expect(sha(bytes("period-after31.json"))).toBe(proof.currentPeriod.fixtureSha256);

@@ -79,7 +79,7 @@ function formulaStatuses(properties: Record<string, unknown>) {
   const checked = properties["価格照合済"] as { checkbox?: boolean } | undefined;
   return {
     "価格状態": { id: migratedSchema().properties["価格状態"].id, type: "formula", formula: { type: "string", string: checked?.checkbox === true
-      ? "期末参考時価（同日期末株数×終値）" : "未取得（価格・通貨・株数単位の照合未成立）" } },
+      ? "期末参考時価（期末株数×採用終値）" : "未取得（価格・通貨・株数単位の照合未成立）" } },
     "検証状態": { id: migratedSchema().properties["検証状態"].id, type: "formula", formula: { type: "string", string: "明細原本照合済" } },
   };
 }

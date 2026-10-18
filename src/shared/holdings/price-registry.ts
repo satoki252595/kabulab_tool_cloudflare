@@ -23,10 +23,19 @@ export const priceSnapshotSchema = z.object({
   version: z.literal(1), snapshotId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,40}$/),
   sessionDate: z.string().refine(isCalendarDateString), createdAt: clock,
   codeList: priceFileSchema, members: z.record(symbol, priceReferenceSchema),
+  // Legacy snapshots omit coverage. New ordinary runs retain source HOLDs without old-member substitution.
+  coverage: z.object({ outcomes: z.record(z.string().regex(/^[0-9A-Z]{4}$/), z.enum(["accepted", "empty", "error"])) }).strict().optional(),
 }).strict().superRefine((value, context) => {
   const entries = Object.entries(value.members);
   if (entries.length === 0 || entries.length > 8192 || entries.some(([key, ref]) => key !== ref.symbol)) {
     context.addIssue({ code: "custom", message: "price snapshot membership mismatch" });
+  }
+  if (value.coverage !== undefined) {
+    const outcomes = Object.entries(value.coverage.outcomes);
+    const eligible = outcomes.filter(([, status]) => status === "accepted").map(([code]) => `${code}.T`).sort();
+    if (outcomes.length === 0 || outcomes.length > 8192 || JSON.stringify(eligible) !== JSON.stringify(entries.map(([key]) => key).sort())) {
+      context.addIssue({ code: "custom", message: "price snapshot coverage/member mismatch" });
+    }
   }
   const files = new Map<string, number>();
   for (const [, ref] of entries) {

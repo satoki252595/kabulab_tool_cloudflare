@@ -25,7 +25,7 @@ export interface HoldingsSchema {
   properties: Record<string, { id: string; type: string; formula?: { expression: string }; select?: { options: Array<{ id: string; name: string; color: string }> } }>;
 }
 
-export const HOLDINGS_DESCRIPTION = "有報の保有株式明細。原本照合済の列だけ確定値として扱い、旧取込の値は未検証列に保持する。期末参考時価は同日期末株数×終値で、価格・通貨・単位・分割を照合できない場合は欠測理由を示す。";
+export const HOLDINGS_DESCRIPTION = "有報の保有株式明細。原本照合済の列だけ確定値として扱い、旧取込の値は未検証列に保持する。期末参考時価は期末株数×採用終値で、価格時点と株数時点を根拠・理由に明示し、価格・通貨・単位・分割を照合できない場合は欠測理由を示す。";
 
 export const LEGACY_HOLDINGS_COLUMNS = [
   ["区分", "旧分類（未検証）", "select"],
@@ -58,7 +58,7 @@ const canonical: Record<string, Record<string, unknown>> = {
   "価格照合済": { checkbox: {} },
   "原本照合済": { checkbox: {} },
   "検証状態": { formula: { expression: 'if(prop("原本照合済"), "明細原本照合済", "未検証（旧取込）")' } },
-  "価格状態": { formula: { expression: 'if(prop("価格照合済"), "期末参考時価（同日期末株数×終値）", "未取得（価格・通貨・株数単位の照合未成立）")' } },
+  "価格状態": { formula: { expression: 'if(prop("価格照合済"), "期末参考時価（期末株数×採用終値）", "未取得（価格・通貨・株数単位の照合未成立）")' } },
 };
 
 /** 既存property/option IDを維持するので、27587行の数値を書き換えない。 */
@@ -551,7 +551,7 @@ function assertPriceStatus(properties: Record<string, HoldingProperty>, schema: 
   assert.equal(status?.type, "formula", "価格状態がformulaではありません");
   assert.equal(checked?.type, "checkbox"); assert.equal(typeof checked.checkbox, "boolean");
   assert.deepEqual(status.formula, { type: "string", string: checked.checkbox
-    ? "期末参考時価（同日期末株数×終値）" : "未取得（価格・通貨・株数単位の照合未成立）" }, "価格状態の計算結果が照合済フラグと不一致です");
+    ? "期末参考時価（期末株数×採用終値）" : "未取得（価格・通貨・株数単位の照合未成立）" }, "価格状態の計算結果が照合済フラグと不一致です");
 }
 
 export interface ShareholdingsBudget { remainingRows: number }
@@ -1068,6 +1068,7 @@ function valuationProperties(holding: Shareholding, valuation: HoldingValuation,
     Object.assign(properties, { "株価": { number: valuation.price }, "保有時価": { number: valuation.value },
       "通貨": rt(valuation.currency), "基準日": { date: { start: valuation.date } },
       "価格照合根拠": rt(JSON.stringify(valuation.priceSource)), "価格照合済": { checkbox: true } });
+    if (valuation.priceSource.evaluationDate !== undefined) missing.push(`参考評価時点${valuation.priceSource.evaluationDate}。株数時点${valuation.priceSource.sharesAsOf}。採用終値の市場日${valuation.priceSource.priceAsOf}（公式に確認した期末以前の最終市場営業日）`);
     missing.push("期末参考時価。現在の株価・保有量およびraw capture後の状態は未観測");
   } else {
     missing.push(valuation.reason);

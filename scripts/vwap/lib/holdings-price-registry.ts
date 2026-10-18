@@ -1,9 +1,10 @@
-/** Activate only complete ordinary-run evidence. Raw bodies remain in Notion. */
+/** Activate fully accounted ordinary runs. Source HOLDs remain excluded; raw bodies stay in Notion. */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { r2GetVersion, r2Put } from "./r2.js";
 import { priceActiveSchema, priceSnapshotSchema, PRICE_ACTIVE_KEY, type PriceReference, type PriceSnapshot } from "../../../src/shared/holdings/price-registry.js";
+import type { IngestCodeOutcome } from "./ingest-guard.js";
 import { resolveLatestHoldingsCodeList } from "../../sync/holdings-code-list.js";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -72,24 +73,33 @@ export async function bootstrapPriceSnapshot(snapshot: PriceSnapshot, verifyFres
 export async function publishDailyPriceSnapshot(args: {
   runId: string; sessionDate: string; finishedAt: string; universe: readonly string[];
   codes: readonly string[]; references: ReadonlyMap<string, PriceReference>; complete: boolean;
+  outcomes?: Readonly<Record<string, IngestCodeOutcome>>;
   beforeMutation?: () => void;
 }): Promise<{ status: "activated" | "unchanged" } | { status: "held"; reason: string }> {
   if (!args.complete || JSON.stringify([...args.codes].sort()) !== JSON.stringify([...args.universe].sort())) {
     return { status: "held", reason: "通常全母集団の受入が未完了です。旧価格snapshotを維持します" };
   }
-  if (new Set(args.codes).size !== args.codes.length || args.codes.some(code => !args.references.has(code))) {
-    return { status: "held", reason: "一部の日足に物理原本参照がありません。旧価格snapshotを維持します" };
+  if (new Set(args.codes).size !== args.codes.length) return { status: "held", reason: "通常日足の母集団が重複しています" };
+  const outcomes = args.outcomes;
+  if (outcomes !== undefined && (JSON.stringify(Object.keys(outcomes).sort()) !== JSON.stringify([...args.codes].sort()) ||
+    Object.values(outcomes).some(value => !["written", "skipped", "empty", "error"].includes(value.status)))) {
+    return { status: "held", reason: "通常日足に未着手・結果未確定・未accounted対象があります。旧価格snapshotを維持します" };
   }
+  const eligible = outcomes === undefined ? args.codes : args.codes.filter(code => outcomes[code].status === "written" || outcomes[code].status === "skipped");
+  if (eligible.length === 0 || eligible.some(code => !args.references.has(code))) {
+    return { status: "held", reason: "資格済日足の物理原本参照がありません。旧価格snapshotを維持します" };
+  }
+  const coverage = outcomes === undefined ? undefined : { outcomes: Object.fromEntries([...args.codes].sort().map(code => [code, outcomes[code].status === "written" || outcomes[code].status === "skipped" ? "accepted" : outcomes[code].status])) };
   const before = await readActive();
   if (before.active === null || before.snapshot === null) return { status: "held", reason: "初期snapshotのfresh物理受入・有効化が未実施です" };
   assert.ok(args.sessionDate >= before.snapshot.sessionDate, "価格snapshotの対象sessionが後退しています");
   const codeList = await resolveLatestHoldingsCodeList(before.snapshot.codeList, args.finishedAt);
   if (codeList.status === "held") return codeList;
-  const members = Object.fromEntries([...args.codes].sort().map(code => [`${code}.T`, args.references.get(code)!]));
+  const members = Object.fromEntries([...eligible].sort().map(code => [`${code}.T`, args.references.get(code)!]));
   const snapshot = priceSnapshotSchema.parse({ version: 1, snapshotId: args.runId, sessionDate: args.sessionDate,
-    createdAt: args.finishedAt, codeList: codeList.file, members });
+    createdAt: args.finishedAt, codeList: codeList.file, members, ...(coverage === undefined ? {} : { coverage }) });
   assert.ok(Object.values(snapshot.members).every(ref => Date.parse(ref.receivedAt) <= Date.parse(args.finishedAt)), "価格原本の実時計がrun完了後です");
-  const evidence = (s: PriceSnapshot) => JSON.stringify({ sessionDate: s.sessionDate, codeList: s.codeList, members: s.members });
+  const evidence = (s: PriceSnapshot) => JSON.stringify({ sessionDate: s.sessionDate, codeList: s.codeList, members: s.members, ...(s.coverage === undefined ? {} : { coverage: s.coverage }) });
   if (evidence(snapshot) === evidence(before.snapshot)) return { status: "unchanged" };
   const body = JSON.stringify(snapshot), digest = hash(body), registryKey = `ops/holdings-price/snapshot-${args.runId}-${digest}.json`;
   const existing = await get(registryKey, 8 * 1024 * 1024);

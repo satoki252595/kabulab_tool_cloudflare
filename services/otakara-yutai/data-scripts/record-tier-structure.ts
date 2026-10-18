@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { BenefitRecordTierStructure, BenefitTierLiterals } from "../src/public-facts.js";
+import { extractBenefitRegistryStructure } from "./registry-structure.js";
 import { splitHeadedDescription } from "./estimated-value-guard.js";
 
 /** 既存の全文定型と同じ2期間・掲載額・名簿定義・発送予定だけ。本人の適用は未確認。 */
@@ -50,8 +51,11 @@ export function extractBenefitTierLiterals(description: string): BenefitTierLite
     combinationClauses.push({ scope: "coupon_use", counterpart: /券/u.test(clause[1]) ? "other_coupon" : "other_discount", allowed: ["可", "可能", "できる"].includes(clause[2]) });
     consumed.add(index);
   }
-  if (tiers.length + combinationClauses.length === 0 || tiers.length > 32 || combinationClauses.length > 32) return null;
+  const registry = extractBenefitRegistryStructure(description);
+  if ((tiers.length + combinationClauses.length === 0 && registry === null) || tiers.length > 32 || combinationClauses.length > 32) return null;
+  const remainingConditionLines = lines.filter((line, index) => line.length > 0 && !consumed.has(index)).length - (registry === null ? 0 : registry.ast.clauses.length);
+  if (remainingConditionLines < 0) throw new Error("条件行の計数が一致しません");
   return { status: "literal_extracted", rule: "holding-tier-lines-v1", applicability: "unverified",
     sourceSha256: createHash("sha256").update(description).digest("hex"),
-    ast: { tiers, combinationClauses, remainingConditionLines: lines.filter((line, index) => line.length > 0 && !consumed.has(index)).length } };
+    ast: { tiers, combinationClauses, ...(registry === null ? {} : { registry }), remainingConditionLines } };
 }

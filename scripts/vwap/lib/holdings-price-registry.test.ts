@@ -121,4 +121,29 @@ describe("通常全量だけの価格snapshot activation", () => {
     await expect(readActivatedPriceSnapshot()).rejects.toThrow("結果未確定");
     expect(r2Put).toHaveBeenCalledTimes(sends);
   });
+  it("全母集団known終端のsource error/emptyは除外し、旧memberを黙って継承しない", async () => {
+    const outcome = (status: "written" | "error" | "empty") => ({ status, latestSourceBar: null, bodySha: null });
+    const codes = ["7203", "6758", "1301"];
+    const outcomes = { "7203": outcome("written"), "6758": outcome("error"), "1301": outcome("empty") };
+    const references = new Map([["7203", ref], ["6758", { ...ref, symbol: "6758.T" }]]); // rejected standing ref must not enter members
+    expect(await publishDailyPriceSnapshot({ ...args, codes, universe: codes, references, outcomes })).toEqual({ status: "activated" });
+    const accepted = await readActivatedPriceSnapshot();
+    expect(accepted?.members).toEqual({ "7203.T": ref });
+    expect(accepted?.coverage).toEqual({ outcomes: { "1301": "empty", "6758": "error", "7203": "accepted" } });
+    expect(r2Put).toHaveBeenCalledTimes(4);
+    vi.mocked(r2Put).mockClear();
+    expect(await publishDailyPriceSnapshot({ ...args, runId: "repeat", codes, universe: codes, references,
+      outcomes: { ...outcomes, "7203": { ...outcomes["7203"], status: "skipped" } } })).toEqual({ status: "unchanged" });
+    expect(r2Put).not.toHaveBeenCalled();
+  });
+  it.each(["unknown", "notStarted"] as const)("%s/未accounted/abortedはregistry mutation0", async status => {
+    const old = store.get(PRICE_ACTIVE_KEY), outcome = { status, latestSourceBar: null, bodySha: null };
+    const changes: Array<Partial<Parameters<typeof publishDailyPriceSnapshot>[0]>> = [{ outcomes: { "7203": outcome } }, { outcomes: {} },
+      { complete: false, outcomes: { "7203": { ...outcome, status: "written" } } }];
+    for (const changed of changes) {
+      expect((await publishDailyPriceSnapshot({ ...args, ...changed })).status).toBe("held");
+    }
+    expect(store.get(PRICE_ACTIVE_KEY)).toBe(old); expect(r2Put).not.toHaveBeenCalled();
+  });
+
 });
