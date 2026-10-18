@@ -50,16 +50,16 @@ export type HoldingPriceSources = { status: "ready"; snapshotId: string; evidenc
   { status: "held"; reasonCode: "snapshot_unavailable" | "budget_exhausted" | "issuer_source_unavailable"; reason: string };
 
 /** A single scheduled run owns this cache and its mutable download budget. Failed reads are not resent. */
-export function createHoldingPriceSourceLoader(): (holdings: readonly Shareholding[], budget: HoldingPriceBudget, shouldStop?: () => boolean, fiscalYearEnd?: string) => Promise<HoldingPriceSources> {
+export function createHoldingPriceSourceLoader(): ((holdings: readonly Shareholding[], budget: HoldingPriceBudget, shouldStop?: () => boolean, fiscalYearEnd?: string) => Promise<HoldingPriceSources>) & { currentSnapshotId: () => Promise<string | null> } {
   let snapshot: Promise<PriceSnapshot | null> | undefined;
   let codeList: Promise<ArchivedSource> | undefined;
   let catalog: ReturnType<typeof parseHoldingsCodeList> | undefined;
   const chunks = new Map<string, Promise<ArchivedSource>>();
   const officialNames = createHoldingOfficialNamesLoader();
-  return async (holdings, budget, shouldStop, fiscalYearEnd) => {
+  const currentSnapshot = () => { snapshot ??= readActivatedPriceSnapshot(); return snapshot; };
+  return Object.assign(async (holdings: readonly Shareholding[], budget: HoldingPriceBudget, shouldStop?: () => boolean, fiscalYearEnd?: string): Promise<HoldingPriceSources> => {
     assert.ok(Number.isSafeInteger(budget.remainingChunks) && budget.remainingChunks >= 0 && Number.isSafeInteger(budget.remainingBytes) && budget.remainingBytes >= 0, "価格取得予算が不正です");
-    snapshot ??= readActivatedPriceSnapshot();
-    const active = await snapshot;
+    const active = await currentSnapshot();
     if (active === null) return { status: "held", reasonCode: "snapshot_unavailable", reason: "保存価格snapshotのfresh物理受入・有効化が未実施です" };
     if (codeList === undefined) {
       if (active.codeList.byteLength > budget.remainingBytes) return { status: "held", reasonCode: "budget_exhausted", reason: "公式銘柄表の保存原本読取予算が不足しています" };
@@ -118,5 +118,5 @@ export function createHoldingPriceSourceLoader(): (holdings: readonly Shareholdi
     if (names.status === "held") return names;
     return { status: "ready", snapshotId: active.snapshotId, priceIndex, officialIssuerNames: names.names, checkOfficialIssuerNames: names.checkCurrent,
       evidenceScope: `snapshot ${active.snapshotId} 内。その他保存観測の存在は未判定`, codeList: codes, prices };
-  };
+  }, { currentSnapshotId: async () => { const active = await currentSnapshot(); return active === null ? null : active.snapshotId; } });
 }

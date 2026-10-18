@@ -719,6 +719,7 @@ export async function publishVerifiedShareholdings(args: PublishHoldingsArgs): P
 }
 
 async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapshotId?: string; info: RecoveryInfo }, diagnostic?: { observation?: IssuedShareObservation }): Promise<PublishHoldingsResult> {
+  if (pricePhase) assertPreviousPricePass(pricePhase.info);
   assert.ok(Number.isSafeInteger(args.maxRows) && args.maxRows >= 0 && args.maxRows <= 1000);
   assert.ok(args.ownerName.trim().length > 0);
   if (args.budget) assert.ok(Number.isSafeInteger(args.budget.remainingRows) && args.budget.remainingRows >= 0 && args.budget.remainingRows <= 100);
@@ -878,13 +879,17 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
   const offset = pricePhase ? pricePhase.info.nextHoldingOffset! : sourceInfo!.sourceNextHoldingOffset!;
   const selected = parsed.holdings.slice(offset, offset + maxRows);
   if (args.budget) args.budget.remainingRows += reservedRows - selected.length;
+  const retained = pricePhase?.info.previousPricePass === undefined ? undefined : await readHoldingPeriodRows(notionEnv.NOTION_STOCK_HOLDINGS_DB_ID(), args.source);
+  const retainedChoices = retained === undefined ? undefined : resolveHoldingRows(args.source, args.ownerName, parsed.holdings, selected, retained);
+  if (retainedChoices?.status === "held") return hold(retainedChoices.reason, parsed.holdings.length, false, true);
   const ready: Array<{ holding: Shareholding; valuation: HoldingValuation; properties: Record<string, HoldingProperty> }> = [];
   try {
     const catalog = args.valuationSources ? parseHoldingsCodeList(args.valuationSources.codeList) : null;
     const prices = args.valuationSources ? (args.valuationSources.priceIndex === undefined ? new HoldingsPriceIndex(args.valuationSources.prices) : args.valuationSources.priceIndex) : null;
     if (args.valuationSources?.priceIndex) args.valuationSources.priceIndex.assertSources(args.valuationSources.prices);
-    for (const holding of selected) {
-      const valuation: HoldingValuation = catalog && prices
+    for (const [index, holding] of selected.entries()) {
+      const alreadyQualified = retainedChoices?.status === "ready" && retainedChoices.selected[index].existing?.properties["価格照合済"]?.checkbox === true;
+      const valuation: HoldingValuation = alreadyQualified ? { status: "unavailable", identity: null, reason: "既照合済みの価格・根拠を保持します" } : catalog && prices
         ? await qualifyHoldingValuation({ holding, fiscalYearEnd: args.source.fiscalYearEnd, catalog, prices, officialIssuerNames: args.valuationSources?.officialIssuerNames })
         : { status: "unavailable", identity: null, reason: "銘柄同定・個別価格・分割観測の保存原本が未指定です" };
       ready.push({ holding, valuation, properties: { ...holdingProperties(args.source, args.ownerName, holding),
@@ -916,6 +921,10 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
   }
   const resolved = resolveHoldingRows(args.source, args.ownerName, parsed.holdings, selected, periodRows);
   if (resolved.status === "held") return hold(resolved.reason, parsed.holdings.length, false);
+  if (retainedChoices?.status === "ready") for (const [index, choice] of resolved.selected.entries()) {
+    const previous = retainedChoices.selected[index].existing; assert(previous && choice.existing);
+    assertSameHoldingPage(choice.existing, previous);
+  }
   // 既照合行はfile/contextを含む全原本列を確認してからwrite0とする。
   for (const [index, choice] of resolved.selected.entries()) if (choice.existing?.properties["原本照合済"]?.checkbox === true) {
     try { assertProperties(choice.existing.properties, Object.fromEntries(Object.entries(ready[index].properties).filter(([name]) => !VALUATION_COLUMNS.has(name)))); }
@@ -963,7 +972,7 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
       }
       const expected = Object.fromEntries(Object.entries(properties).filter(([name]) => VALUATION_COLUMNS.has(name)));
       if (existing.properties["価格照合済"]?.checkbox === true) {
-        assertProperties(existing.properties, expected);
+        if (!pricePhase?.info.previousPricePass) assertProperties(existing.properties, expected);
         result.unchanged++;
         continue;
       }
@@ -1237,6 +1246,24 @@ interface RecoveryInfo {
   /** 元unknown journalは不変。物理置換proofと原legacy PREを通常完了まで引き継ぐ。 */
   patchResolution?: HoldingPatchResolution;
   priceQueueVersion?: 1; nextHoldingOffset?: number; unavailableRows?: number; snapshotId?: string;
+  previousPricePass?: { snapshotId: string; nextHoldingOffset: number; unavailableRows: number; pre: MigrationFile };
+}
+
+/** 外部queueのoptional presenceだけで旧価格保持分岐へ入らない。初回targetはPRE keyに固定。 */
+function assertPreviousPricePass(info: RecoveryInfo): void {
+  const prior = info.previousPricePass; if (prior === undefined) return;
+  assert.deepEqual(Object.keys(prior).sort(), ["nextHoldingOffset", "pre", "snapshotId", "unavailableRows"]);
+  assert.match(prior.snapshotId, /^[A-Za-z0-9][A-Za-z0-9_.-]{0,40}$/);
+  assert(typeof info.snapshotId === "string"); assert.match(info.snapshotId, /^[A-Za-z0-9][A-Za-z0-9_.-]{0,40}$/); assert.notEqual(info.snapshotId, prior.snapshotId);
+  assert.equal(prior.nextHoldingOffset, info.parsed); assert(Number.isSafeInteger(prior.unavailableRows) && prior.unavailableRows > 0 && prior.unavailableRows <= info.parsed);
+  const file = prior.pre; assert(file);
+  assert.deepEqual(Object.keys(file).sort(), ["bytes", "filename", "key", "pageId", "sha256"]);
+  assert(typeof file.pageId === "string"); assert.match(file.pageId.replaceAll("-", ""), /^[a-f0-9]{32}$/);
+  assert.match(file.sha256, /^[a-f0-9]{64}$/); assert(Number.isSafeInteger(file.bytes) && file.bytes > 0 && file.bytes <= 20 * 1024 * 1024);
+  assert.equal(file.filename, "holdings-price-requalification-PRE.json");
+  const parts = file.key.split("/"); assert.equal(parts.length, 6); assert.match(parts[3], /^[A-Za-z0-9][A-Za-z0-9_.-]{0,40}$/);
+  assert.notEqual(parts[3], prior.snapshotId);
+  assert.equal(file.key, `holdings-price-requalification/${info.source.docId}/${prior.snapshotId}/${parts[3]}/PRE/${file.sha256}`);
 }
 
 async function recordRecoveryMarker(args: PublishHoldingsArgs, status: string, reason: string, parsed: number, factsSha256?: string, issuedSharesObservation?: IssuedShareObservation,
@@ -1274,7 +1301,7 @@ function qualifyRecoveryPage(page: HoldingPage, archivePageId: string, dbId: str
   assert.equal(key.title.map(part => { assert.equal(part.type, "text"); assert.equal(part.plain_text, part.text?.content); return part.plain_text; }).join(""), `${source.docId}:type1`);
 }
 
-async function recordRecoveryInfo(archivePageId: string, info: RecoveryInfo, status: string, reason: string, price: boolean, previousOffset?: number, sourceExpected?: HoldingPage, pricePreflight = false): Promise<HoldingPage> {
+async function recordRecoveryInfo(archivePageId: string, info: RecoveryInfo, status: string, reason: string, price: boolean, previousOffset?: number, sourceExpected?: HoldingPage, pricePreflight = false, priceRestartFrom?: HoldingPage): Promise<HoldingPage> {
   if (pricePreflight) assert.ok(price && (status === "再開待ち" || status === "要確認") && previousOffset === undefined);
   const dbId = await recoveryDatabase();
   const before = await notionRequest<HoldingPage>("GET", `/pages/${archivePageId}`);
@@ -1319,13 +1346,30 @@ async function recordRecoveryInfo(archivePageId: string, info: RecoveryInfo, sta
   }
   if (price) {
     assert.equal(before.properties["保有明細状態"]?.select?.name, "明細原本照合済", "原本未確定の価格phaseは開始しません");
-    assert.equal(before.properties["保有価格状態"]?.select?.name, pricePreflight || status === "実行中（結果未確定）" ? "再開待ち" : "実行中（結果未確定）");
+    if (priceRestartFrom) {
+      assertSameHoldingPage(before, priceRestartFrom);
+      assert.equal(before.properties["保有価格状態"]?.select?.name, "要確認");
+      assert.equal(status, "実行中（結果未確定）"); assert.equal(pricePreflight, false);
+    } else assert.equal(before.properties["保有価格状態"]?.select?.name, pricePreflight || status === "実行中（結果未確定）" ? "再開待ち" : "実行中（結果未確定）");
     const saved = JSON.parse(richValue(before.properties["保有価格再開情報"])) as RecoveryInfo;
     for (const name of ["source", "ownerName", "zipBytes", "zipSha256", "parsed", "factsSha256"] as const) assert.deepEqual(saved[name], info[name], "価格queueの原本束縛が変更されています");
     assert.equal(saved.priceQueueVersion, 1); assert.equal(info.priceQueueVersion, 1);
-    assert.equal(saved.nextHoldingOffset, previousOffset === undefined ? info.nextHoldingOffset : previousOffset, "価格queue cursorが変化しています");
-    assert.ok(info.nextHoldingOffset! >= saved.nextHoldingOffset! && info.nextHoldingOffset! <= info.parsed);
-    assert.ok(info.unavailableRows! >= saved.unavailableRows! && info.unavailableRows! <= info.nextHoldingOffset!);
+    if (priceRestartFrom) {
+      assert.equal(saved.nextHoldingOffset, saved.parsed); assert(saved.unavailableRows! > 0);
+      assert(typeof saved.snapshotId === "string" && saved.snapshotId.length > 0);
+      assert(typeof info.snapshotId === "string" && info.snapshotId.length > 0 && saved.snapshotId !== info.snapshotId);
+      assert.equal(info.nextHoldingOffset, 0); assert.equal(info.unavailableRows, 0);
+      assert.deepEqual(info.previousPricePass, { snapshotId: saved.snapshotId, nextHoldingOffset: saved.nextHoldingOffset,
+        unavailableRows: saved.unavailableRows, pre: info.previousPricePass?.pre });
+      const pre = info.previousPricePass?.pre; assert(pre && !pre.pageId);
+      assert.match(pre.sha256, /^[a-f0-9]{64}$/); assert(Number.isSafeInteger(pre.bytes) && pre.bytes > 0 && pre.bytes <= 20 * 1024 * 1024);
+      assert.equal(pre.filename, "holdings-price-requalification-PRE.json");
+      assert.equal(pre.key, `holdings-price-requalification/${info.source.docId}/${saved.snapshotId}/${info.snapshotId}/PRE/${pre.sha256}`);
+    } else {
+      assert.equal(saved.nextHoldingOffset, previousOffset === undefined ? info.nextHoldingOffset : previousOffset, "価格queue cursorが変化しています");
+      assert.ok(info.nextHoldingOffset! >= saved.nextHoldingOffset! && info.nextHoldingOffset! <= info.parsed);
+      assert.ok(info.unavailableRows! >= saved.unavailableRows! && info.unavailableRows! <= info.nextHoldingOffset!);
+    }
     if (pricePreflight) assert.equal(info.unavailableRows, saved.unavailableRows, "価格preflight HOLDは既知cursor/欠測数を変えません");
   }
   const properties: Record<string, HoldingProperty> = { [`${phase}状態`]: { select: { name: status } },
@@ -1371,6 +1415,65 @@ async function recordRecoveryInfo(archivePageId: string, info: RecoveryInfo, sta
   return actual;
 }
 
+/** 新世代がある完了HOLDだけ。全原表PREを保管し、同一snapshotのHOLDは繰り返さない。 */
+async function reopenHeldPricePasses(args: { sourceDb: ReportedSourceDb; dbId: string; snapshotId: string; budget: HoldingPriceBudget; shouldStop: () => boolean }): Promise<HoldingPage[]> {
+  const result: HoldingPage[] = [];
+  let cursor: string | undefined, sourceAttempts = 0;
+  // ponytail: 同世代除外の最大300 metadata候補/5 source試行。母集団が増えたら通常queryのcursorを別途運用する。
+  for (let pageIndex = 0; pageIndex < 3 && sourceAttempts < 5 && !args.shouldStop(); pageIndex++) {
+    const listed = await notionRequest<{ results: HoldingPage[]; has_more: boolean; next_cursor: string | null }>("POST", `/databases/${args.dbId}/query`, {
+      filter: { and: [{ property: "保有価格状態", select: { equals: "要確認" } },
+        { property: "保有価格再開情報", rich_text: { contains: '"snapshotId":' } },
+        { property: "保有価格再開情報", rich_text: { does_not_contain: JSON.stringify("snapshotId") + ":" + JSON.stringify(args.snapshotId) } }] },
+      sorts: [{ timestamp: "created_time", direction: "ascending" }], page_size: 100, ...(cursor === undefined ? {} : { start_cursor: cursor }) }, { singleAttempt: true });
+    assert(Array.isArray(listed.results) && listed.results.length <= 100); assert.equal(typeof listed.has_more, "boolean");
+    if (listed.has_more) assert(typeof listed.next_cursor === "string" && listed.next_cursor.length > 0 && listed.next_cursor !== cursor);
+    else assert.equal(listed.next_cursor, null);
+    for (const page of listed.results) {
+      if (sourceAttempts === 5 || args.shouldStop()) break;
+      const info = JSON.parse(richValue(page.properties["保有価格再開情報"])) as RecoveryInfo;
+      if (page.properties["保有明細状態"]?.select?.name !== "明細原本照合済" || info.snapshotId === undefined || info.snapshotId === args.snapshotId ||
+        info.nextHoldingOffset !== info.parsed || !(info.unavailableRows! > 0)) continue;
+      qualifyRecoveryPage(page, page.id, args.dbId, info.source); assert.equal(page.properties["保有価格状態"]?.select?.name, "要確認");
+      for (const clock of [page.created_time, page.last_edited_time]) assert(typeof clock === "string" && Number.isFinite(Date.parse(clock)), "再資格sourceのnative時計が欠けています");
+      assert.equal(info.priceQueueVersion, 1); assert(typeof info.factsSha256 === "string");
+      assert(Number.isSafeInteger(info.parsed) && info.parsed > 0 && info.parsed <= 1000);
+      assert(Number.isSafeInteger(info.unavailableRows) && info.unavailableRows! <= info.parsed);
+      assert.match(info.snapshotId, /^[A-Za-z0-9][A-Za-z0-9_.-]{0,40}$/); assert.match(args.snapshotId, /^[A-Za-z0-9][A-Za-z0-9_.-]{0,40}$/);
+      assertPreviousPricePass(info);
+      sourceAttempts++;
+      try { await assertReportedDocumentUsable(args.sourceDb, info.source.docId); }
+      catch (error) { if (error instanceof ReportedDocumentHoldError) continue; throw error; }
+      if (args.shouldStop()) break;
+      const saved = await readSavedHoldingsZip(info.source, args.budget);
+      if (saved.status === "held") { if (saved.reasonCode === "budget_exhausted") return result; continue; }
+      assert.equal(saved.archivePageId.replaceAll("-", ""), page.id.replaceAll("-", "")); assert.equal(saved.sha256, info.zipSha256); assert.equal(saved.bytes.length, info.zipBytes);
+      const parsed = parseShareholdingsData(saved.bytes, info.source);
+      assert.equal(parsed.status, "ok"); assert.equal(parsed.holderScope, "filer_only"); assert.equal(parsed.holdings.length, info.parsed);
+      assert.equal(holdingsFactsSha256(parsed.holdings), info.factsSha256);
+      const rows = await readHoldingPeriodRows(notionEnv.NOTION_STOCK_HOLDINGS_DB_ID(), info.source);
+      assert.equal(verifyCompletedHoldingsSource(info.source, info.ownerName, parsed, info.zipSha256, rows).status, "verified");
+      if (args.shouldStop()) break;
+      const bytes = Buffer.from(JSON.stringify({ source: info.source, previousInfo: info, sourcePage: page, rows, targetSnapshotId: args.snapshotId }));
+      assert(bytes.length <= 20 * 1024 * 1024, "保有価格再資格PREが20MiBを超えています");
+      const digest = holdingHash(bytes), file: MigrationFile = { key: `holdings-price-requalification/${info.source.docId}/${info.snapshotId}/${args.snapshotId}/PRE/${digest}`,
+        filename: "holdings-price-requalification-PRE.json", sha256: digest, bytes: bytes.length };
+      const next = { ...info, snapshotId: args.snapshotId, nextHoldingOffset: 0, unavailableRows: 0,
+        previousPricePass: { snapshotId: info.snapshotId, nextHoldingOffset: info.nextHoldingOffset!, unavailableRows: info.unavailableRows!, pre: file } };
+      // PRE upload unknownもdurable価格latchに残す。別run/別outから再送しない。
+      await recordRecoveryInfo(page.id, next, "実行中（結果未確定）", "新しい保存価格で再資格する全原表PREの保管未完了", true, undefined, undefined, false, page);
+      const archived = await recordPrimaryData({ service: "yuho-quant", key: file.key, source: "新しい保存価格で保有明細を再資格する原表PRE", metadata: { source: info.source, previousSnapshotId: info.snapshotId, targetSnapshotId: args.snapshotId, sha256: digest },
+        files: [{ filename: file.filename, contentType: "application/json", bytes }] });
+      assert.equal(archived.fileTooLarge, false); assert(archived.manifestMatch === "written" || archived.manifestMatch === "same");
+      await verifyArchivedAttachments(archived.pageId, [{ filename: file.filename, bytes }], "保有価格再資格PRE");
+      next.previousPricePass.pre = { ...file, pageId: archived.pageId };
+      result.push(await recordRecoveryInfo(page.id, next, "再開待ち", "新しい保存価格の全原表PREを保管済み。確定済み価格を保持し未資格行だけ再開", true, 0));
+    }
+    if (!listed.has_more) break; cursor = listed.next_cursor!;
+  }
+  return result;
+}
+
 /** 原本完了とは独立。保存ZIP・限定snapshotだけで価格列を追記し、未知は再送しない。 */
 export async function resumePendingShareholdingsPrices(args: {
   sourceDb: ReportedSourceDb;
@@ -1387,7 +1490,16 @@ export async function resumePendingShareholdingsPrices(args: {
   const unknown = await query("実行中（結果未確定）", 1);
   assert.equal(unknown.results.length, 0, "保有価格に結果未確定があります。原本完了は保持し、自動再送せず読取照合してください");
   const queue = await query("再開待ち", 6), attention = await query("要確認", 1);
-  const result = { usedRows: 0, resumed: 0, held: attention.results.length, pending: queue.has_more || queue.results.length > 5 };
+  // Older injected loaders remain first-pass only; the normal Node factory owns this read-only capability.
+  const snapshotReader = (args.loadSources as HoldingPriceSourceLoader & { currentSnapshotId?: () => Promise<string | null> }).currentSnapshotId;
+  if (queue.results.length === 0 && attention.results.length > 0 && args.maxRows > 0 && !args.shouldStop() && snapshotReader) {
+    const snapshotId = await snapshotReader();
+    if (snapshotId !== null) {
+      queue.results = await reopenHeldPricePasses({ sourceDb: args.sourceDb, dbId, snapshotId, budget: args.budget, shouldStop: args.shouldStop });
+      if (queue.results.length === 5) queue.has_more = true; // Conservative boundary; do not call other old HOLDs complete.
+    }
+  }
+  const result = { usedRows: 0, resumed: 0, held: attention.results.filter(page => !queue.results.some(next => next.id === page.id)).length, pending: queue.has_more || queue.results.length > 5 };
   for (const page of queue.results.slice(0, 5)) {
     if (args.shouldStop() || result.usedRows === args.maxRows) { result.pending = true; break; }
     assert.equal(page.archived, false); assert.equal(page.in_trash, false);
@@ -1406,6 +1518,7 @@ export async function resumePendingShareholdingsPrices(args: {
     assert.equal(info.priceQueueVersion, 1);
     assert.ok(Number.isSafeInteger(info.nextHoldingOffset) && info.nextHoldingOffset! >= 0 && info.nextHoldingOffset! <= info.parsed);
     assert.ok(Number.isSafeInteger(info.unavailableRows) && info.unavailableRows! >= 0 && info.unavailableRows! <= info.nextHoldingOffset!);
+    assertPreviousPricePass(info);
     // 既知の状態HOLDは価格のunknown markerより前に分離する。queueや旧値は変更しない。
     try { await assertReportedDocumentUsable(args.sourceDb, info.source.docId); }
     catch (error) {
@@ -1415,9 +1528,11 @@ export async function resumePendingShareholdingsPrices(args: {
     let saved: Awaited<ReturnType<typeof readSavedHoldingsZip>>;
     let sources: Awaited<ReturnType<HoldingPriceSourceLoader>>;
     try {
-      saved = await readSavedHoldingsZip(info.source);
+      saved = await readSavedHoldingsZip(info.source, info.previousPricePass === undefined ? undefined : args.budget);
       if (saved.status === "held") {
-        await recordRecoveryInfo(page.id, info, "要確認", saved.reason, true, undefined, undefined, true); result.held++; continue;
+        const retry = saved.reasonCode === "budget_exhausted";
+        await recordRecoveryInfo(page.id, info, retry ? "再開待ち" : "要確認", saved.reason, true, undefined, undefined, true);
+        if (retry) result.pending = true; else result.held++; continue;
       }
       assert.equal(saved.archivePageId.replaceAll("-", ""), page.id.replaceAll("-", ""));
       assert.equal(saved.sha256, info.zipSha256); assert.equal(saved.bytes.length, info.zipBytes);
@@ -1426,7 +1541,14 @@ export async function resumePendingShareholdingsPrices(args: {
       assert.equal(parsed.holdings.length, info.parsed, "価格phaseで原表の明細集合が変更されています");
       assert.equal(holdingsFactsSha256(parsed.holdings), info.factsSha256, "価格phaseで全facts/orderが変化しています");
       const selected = parsed.holdings.slice(info.nextHoldingOffset, info.nextHoldingOffset! + args.maxRows - result.usedRows);
-      sources = await args.loadSources(selected, args.budget, args.shouldStop, info.source.fiscalYearEnd);
+      let needed = selected;
+      if (info.previousPricePass !== undefined) {
+        const rows = await readHoldingPeriodRows(notionEnv.NOTION_STOCK_HOLDINGS_DB_ID(), info.source);
+        const choices = resolveHoldingRows(info.source, info.ownerName, parsed.holdings, selected, rows);
+        if (choices.status === "held") throw new Error(choices.reason);
+        needed = selected.filter((_, index) => choices.selected[index].existing?.properties["価格照合済"]?.checkbox !== true);
+      }
+      sources = await args.loadSources(needed, args.budget, args.shouldStop, info.source.fiscalYearEnd);
       if (sources.status === "held" || args.shouldStop()) {
         if (sources.status === "held") assert.ok(sources.reasonCode === "budget_exhausted" || sources.reasonCode === "snapshot_unavailable" || sources.reasonCode === "issuer_source_unavailable");
         const retry = sources.status !== "held" || sources.reasonCode === "budget_exhausted";

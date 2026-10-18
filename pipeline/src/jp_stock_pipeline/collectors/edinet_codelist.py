@@ -18,6 +18,7 @@ import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
+from typing import Literal
 
 import requests
 
@@ -217,6 +218,59 @@ def _read_codelist_rows(
             )
         validated.append((lineno, row))
     return data_date, idx, validated
+
+
+@dataclass(frozen=True)
+class IssuerListingClassification:
+    status: Literal["excluded_nonlisted", "unresolved"]
+    reason: str
+    as_of: date | None
+    line: int | None = None
+
+
+def classify_issuer_listing(
+    zip_bytes: bytes,
+    *,
+    edinet_code: object,
+    corporate_number: object,
+    not_before: date,
+    observed_on: date,
+) -> IssuerListingClassification:
+    """同一issuer/JCNの明示「非上場」だけ。空ticker・不在・名前では除外しない。"""
+    as_of, idx, rows = _read_codelist_rows(zip_bytes)
+
+    def held(reason: str) -> IssuerListingClassification:
+        return IssuerListingClassification("unresolved", reason, as_of)
+
+    if (
+        not isinstance(edinet_code, str)
+        or not re.fullmatch(r"E[0-9]{5}", edinet_code)
+        or not isinstance(corporate_number, str)
+        or not re.fullmatch(r"[0-9]{13}", corporate_number)
+    ):
+        return held("issuer_or_corporate_number_missing")
+    if as_of is None or not not_before <= as_of <= observed_on:
+        return held("codelist_date_unqualified")
+    corporate_column = idx.get("提出者法人番号")
+    if corporate_column is None:
+        return held("codelist_corporate_number_missing")
+    matches = [
+        (line, row) for line, row in rows if row[idx[_COL_EDINET_CODE]].strip() == edinet_code
+    ]
+    if len(matches) != 1:
+        return held("issuer_absent_or_nonunique")
+    line, row = matches[0]
+    if row[corporate_column].strip() != corporate_number:
+        return held("corporate_number_mismatch")
+    if sum(row[corporate_column].strip() == corporate_number for _, row in rows) != 1:
+        return held("corporate_number_nonunique")
+    if row[idx[_COL_LISTED]].strip() != "非上場":
+        return held("issuer_not_explicitly_nonlisted")
+    if row[idx[_COL_SEC_CODE]].strip():
+        return held("nonlisted_ticker_conflict")
+    return IssuerListingClassification(
+        "excluded_nonlisted", "official_nonlisted_issuer", as_of, line
+    )
 
 
 def parse_codelist(

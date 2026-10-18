@@ -16,6 +16,7 @@ import re
 import stat
 import tempfile
 import zipfile
+from collections.abc import Callable
 from dataclasses import asdict
 from datetime import date, datetime, timedelta
 from functools import partial
@@ -23,7 +24,7 @@ from pathlib import Path
 
 from ..cloud_store import notion_pages
 from ..cloud_store.d1 import D1Error, D1Store
-from ..collectors import edinet
+from ..collectors import edinet, edinet_codelist
 from ..convert import json_to_parquet, xbrl_to_csv
 from ..http import FetchError
 from ..licensing import LicenseTag, source_license
@@ -271,6 +272,17 @@ def _roa_table_original(
     return full, full_tidy
 
 
+def load_issuer_codelist(ctx: JobContext, not_before: date) -> RawArtifact:
+    """通常の保存loader→明示不足時だけ公式1 ZIP→共通物理archive。"""
+    artifact = saved_edinet.read_saved_codelist(ctx.client, ctx.settings, not_before=not_before)
+    if artifact is None:
+        artifact = edinet_codelist.fetch_codelist(ctx.settings)
+        artifact.notion_page_id = ctx.upload_raw(artifact)
+    if artifact.notion_page_id is None:
+        raise ValueError("公式銘柄表の物理原本が未資格")
+    return artifact
+
+
 def _process_document(
     ctx: JobContext,
     doc: dict,
@@ -283,12 +295,45 @@ def _process_document(
     disc_map_ok: bool = False,
     target_date: date | None = None,
     sha_map: dict[str, str] | None = None,
-) -> None:
+    codelist_loader: Callable[[date], RawArtifact] | None = None,
+) -> str | None:
     master_map = master_map or {}
     disc_map = disc_map or {}
     doc_id = doc["docID"]
     resolved = edinet.resolve_company_code(doc, edinet_map if edinet_map is not None else {})
-    if resolved is None and doc.get("secCode") is None and doc.get("docTypeCode") in ("120", "130"):
+    if (
+        resolved is None
+        and doc.get("secCode") in (None, "00000")
+        and doc.get("docTypeCode") in ("120", "130")
+    ):
+        if codelist_loader is not None and edinet.company_edinet_code(doc) is not None:
+            submitted = edinet._parse_submit_datetime(doc["submitDateTime"]).date()
+            catalog = codelist_loader(submitted)
+            catalog_bytes = catalog.local_path.read_bytes()
+            if (len(catalog_bytes) != catalog.size_bytes
+                    or hashlib.sha256(catalog_bytes).hexdigest() != catalog.sha256):
+                raise ValueError("公式銘柄表の分類前bytes/SHAが不一致")
+            classification = edinet_codelist.classify_issuer_listing(
+                catalog_bytes,
+                edinet_code=doc.get("edinetCode"),
+                corporate_number=doc.get("JCN"),
+                not_before=submitted,
+                observed_on=now_jst().date(),
+            )
+            if classification.status == "excluded_nonlisted":
+                logger.info(
+                    "excluded_nonlisted: docID=%s issuer=%s JCN=%s asOf=%s "
+                    "sourceSHA=%s archivePage=%s sourceLine=%s (body取得/財務書込0)",
+                    doc_id,
+                    doc["edinetCode"],
+                    doc["JCN"],
+                    classification.as_of,
+                    catalog.sha256,
+                    catalog.notion_page_id,
+                    classification.line,
+                )
+                return "excluded_nonlisted"
+            raise ValueError("NULL証券コードの年次書類は未解決: " + classification.reason)
         # 原本を取る前に停止。未観測の提出者を別銘柄へ補完しない。
         raise ValueError("NULL証券コードの年次書類を①マスタで一意に特定できない")
     code = resolved if resolved is not None else ""
@@ -487,20 +532,47 @@ def execute(ctx: JobContext) -> None:
         "④",
     )
 
+    codelist: RawArtifact | None = None
+    codelist_error: Exception | None = None
+    codelist_attempted = False
+
+    def load_codelist(submitted: date) -> RawArtifact:
+        # 1 run 1回だけ。保管・読取結果不明で次の書類から再送しない。
+        nonlocal codelist, codelist_error, codelist_attempted
+        if not codelist_attempted:
+            codelist_attempted = True
+            try:
+                codelist = load_issuer_codelist(ctx, max(submitted, target_date))
+            except Exception as exc:
+                codelist_error = exc
+                raise
+        if codelist_error is not None:
+            raise codelist_error
+        if codelist is None or codelist.notion_page_id is None:
+            raise ValueError("公式銘柄表の物理原本が未資格")
+        return codelist
+
+    excluded_nonlisted = 0
     for doc in targets:
         try:
-            _process_document(
+            outcome = _process_document(
                 ctx, doc, list_page_id,
                 master_map=master_map, master_map_ok=master_map_ok,
                 edinet_map=edinet_map,
                 disc_map=disc_map, disc_map_ok=disc_map_ok, target_date=target_date,
                 sha_map=sha_map,
+                codelist_loader=load_codelist,
             )
+            if outcome == "excluded_nonlisted":
+                excluded_nonlisted += 1
+                continue  # 財務保存の成功件数には数えない。
             ctx.add_success()
         except (FetchError, file_upload.RawUploadError):
             raise  # 取得・原本保管が不明なまま次の書類を取得しない。
         except Exception as exc:
             ctx.add_failure(doc.get("docID", "?"), f"書類処理失敗: {exc}")
+
+    logger.info("EDINET 母集団外: excluded_nonlisted=%d (取得一覧の原本は保管済み)", excluded_nonlisted)
 
 
 def _existing_page_id(pid: str) -> str:

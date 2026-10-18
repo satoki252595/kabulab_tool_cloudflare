@@ -47,6 +47,15 @@ beforeEach(() => {
   vi.mocked(downloadArchivedFile).mockImplementation(async file => file.name === codeFile.filename ? zip : gzip);
 });
 describe("通常Nodeの保存価格loader", () => {
+  it("active世代IDだけの判定はNotion/原本GET0でcacheを共有し、unknownは握りつぶさない", async () => {
+    const loader=createHoldingPriceSourceLoader();
+    expect(await loader.currentSnapshotId()).toBe(active.snapshotId); expect(await loader.currentSnapshotId()).toBe(active.snapshotId);
+    expect(readActivatedPriceSnapshot).toHaveBeenCalledTimes(1); expect(notionRequest).not.toHaveBeenCalled(); expect(downloadArchivedFile).not.toHaveBeenCalled();
+    vi.mocked(readActivatedPriceSnapshot).mockResolvedValueOnce(null);
+    expect(await createHoldingPriceSourceLoader().currentSnapshotId()).toBeNull();
+    vi.mocked(readActivatedPriceSnapshot).mockRejectedValueOnce(new Error("ACTIVATION_UNKNOWN"));
+    await expect(createHoldingPriceSourceLoader().currentSnapshotId()).rejects.toThrow("ACTIVATION_UNKNOWN");
+  });
   it("native manifest/fullSHAを照合し同じrunのchunkは一度だけ取得、明示memberとsnapshot範囲を返す", async () => {
     const loader = createHoldingPriceSourceLoader(), limit = budget();
     const first = await loader([holding], limit), second = await loader([holding], limit);
