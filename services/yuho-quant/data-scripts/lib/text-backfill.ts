@@ -44,6 +44,9 @@ export interface TextBackfillTarget {
   docId: string;
   periodEnd: string;
   filerName: string;
+  /** 0節の確定時だけ必須。既本文や不明な旧状態を空へ置換しない。 */
+  textParseStatus?: string | null;
+  notionDocPageId?: string | null;
 }
 
 /**
@@ -51,7 +54,7 @@ export interface TextBackfillTarget {
  * 構築する。呼び出し側は toD1BatchStatements で変換し d1HttpBatch の
  * 単一 batch で送る。逐次だと UPDATE 後に落ちた場合「status だけ埋まって
  * 索引 0 件」の部分行が残り、次回選定から外れて永久欠損になる同根因。
- * sections 0 件でも UPDATE + DELETE の 2 文は返す (全 tuple に記録)。
+ * 解析失敗はSQL作成前に停止。0節は既状態が確認でき、正常本文/pointerが無い時だけ確定する。
  */
 export function buildTextBackfillStatements(
   db: Database,
@@ -61,6 +64,15 @@ export function buildTextBackfillStatements(
   /** 全文読戻し済みのNotion行。索引/statusと同一batchで確定する。 */
   notionDocPageId?: string
 ) {
+  if (status === "parse_error") throw new Error("本文解析失敗のため旧status/索引/pointerを保持してHOLD");
+  if (sections.length === 0) {
+    if (target.textParseStatus === undefined || target.notionDocPageId === undefined) {
+      throw new Error("0節確定に必要な旧本文snapshotが不明のためHOLD");
+    }
+    if (target.textParseStatus === "ok" || target.notionDocPageId !== null) {
+      throw new Error("再抽出0節のため既存の正常本文/status/索引/pointerを保持してHOLD");
+    }
+  }
   const sectionRows = sections.map((s) => ({
     documentId: target.id,
     stockId: target.stockId,

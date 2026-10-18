@@ -104,6 +104,7 @@ const all = await db
     periodEnd: yuhoDocuments.periodEnd,
     filerName: yuhoDocuments.filerName,
     textParseStatus: yuhoDocuments.textParseStatus,
+    notionDocPageId: yuhoDocuments.notionDocPageId,
   })
   .from(yuhoDocuments)
   .where(textBackfillWhere(docFilter, force));
@@ -138,7 +139,7 @@ for (const r of targets) {
     }
     tally[status] = (tally[status] ?? 0) + 1;
 
-    // 空セクションは抽出状態を確定する。本文ありはNotion verify前に旧索引を触らない。
+    // 0節は旧snapshotを共有builderで資格化する。解析失敗/旧正常本文は保持して非0終了。
     if (sections.length === 0) {
       await d1HttpBatch(toD1BatchStatements(buildTextBackfillStatements(db as unknown as Database, r, status, sections)));
     }

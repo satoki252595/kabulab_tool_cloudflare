@@ -45,6 +45,7 @@ import {
   TEXT_SECTIONS,
 } from "../services/edinet/text-sections.js";
 import type { EdinetCsvRow } from "../services/edinet/csv.js";
+import { openActualSnapshot, readSnapshot, type Snapshot } from "../../data-scripts/lib/saved-overseas-atomic.js";
 
 const FX = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 const fx = (n: string) => readFileSync(join(FX, n), "utf8");
@@ -153,6 +154,56 @@ describe("text-sections: 通常選定 (ok+pointer-NULL 再開)", () => {
     } finally {
       sqlite.close();
     }
+  });
+});
+
+describe("text-sections: 解析失敗と旧本文の0節置換を保全停止", () => {
+  it.each(["parse_error", "old-ok", "old-pointer", "snapshot-missing"] as const)(
+    "%sは保存6963の旧37索引/status/pointerを変更せず送信0", (fault) => {
+      const saved = JSON.parse(readFileSync(join(FX, "ingest-csv-reingest-6963/saved-business.json"), "utf8")) as {
+        item: { stockId: number; documentId: number }; d1: Snapshot;
+      };
+      const sqlite = openActualSnapshot(ROOT, saved.d1);
+      const buildDb = drizzleProxy(async () => { throw new Error("builderの実行は禁止"); }) as unknown as Database;
+      try {
+        // 原37索引は不変。status/pointerの組合せだけを明示した障害投影。
+        if (fault === "old-ok") sqlite.prepare("UPDATE yuho_documents SET notion_doc_page_id=NULL WHERE id=?").run(saved.item.documentId);
+        if (fault === "old-pointer") sqlite.prepare("UPDATE yuho_documents SET text_parse_status=NULL WHERE id=?").run(saved.item.documentId);
+        const row = sqlite.prepare("SELECT * FROM yuho_documents WHERE id=?").get(saved.item.documentId) as Record<string, unknown>;
+        const target = { id: saved.item.documentId, stockId: saved.item.stockId, docId: String(row.doc_id),
+          periodEnd: String(row.period_end), filerName: String(row.filer_name),
+          ...(fault === "snapshot-missing" ? {} : { textParseStatus: row.text_parse_status as string | null,
+            notionDocPageId: row.notion_doc_page_id as string | null }) };
+        const before = readSnapshot(sqlite, saved.item.stockId), sent: unknown[] = [];
+        expect(before.yuho_text_sections).toHaveLength(37);
+        const run = () => {
+          const batch = toD1BatchStatements(buildTextBackfillStatements(buildDb, target,
+            fault === "parse_error" ? "parse_error" : "no_text_sections", []));
+          sent.push(batch);
+          for (const s of batch) sqlite.prepare(s.sql).run(...s.params as never[]);
+        };
+        expect(run).toThrow("HOLD");
+        expect(sent).toEqual([]);
+        expect(readSnapshot(sqlite, saved.item.stockId)).toEqual(before);
+      } finally { sqlite.close(); }
+    }
+  );
+
+  it("明示新規NULL+NULLの正常0節はno_text_sectionsとして確定する", () => {
+    const { sqlite, buildDb } = openDb();
+    try {
+      seedStock(sqlite);
+      sqlite.prepare("INSERT INTO yuho_documents (stock_id,edinet_code,doc_id,doc_type_code,filer_name,period_end,submitted_at,parse_status) VALUES (11,'E00001','S100TEXT01','120','テスト','2025-03-31',1719792000,'ok_pattern_a')").run();
+      const row = sqlite.prepare("SELECT id FROM yuho_documents WHERE doc_id='S100TEXT01'").get() as { id: number };
+      const batch = toD1BatchStatements(buildTextBackfillStatements(buildDb,
+        { ...row, stockId: 11, docId: "S100TEXT01", periodEnd: "2025-03-31", filerName: "テスト",
+          textParseStatus: null, notionDocPageId: null }, "no_text_sections", []));
+      expect(batch).toHaveLength(2);
+      for (const s of batch) sqlite.prepare(s.sql).run(...s.params as never[]);
+      expect(sqlite.prepare("SELECT text_parse_status,notion_doc_page_id FROM yuho_documents WHERE id=?").get(row.id))
+        .toEqual({ text_parse_status: "no_text_sections", notion_doc_page_id: null });
+      expect(sqlite.prepare("SELECT * FROM yuho_text_sections").all()).toEqual([]);
+    } finally { sqlite.close(); }
   });
 });
 
