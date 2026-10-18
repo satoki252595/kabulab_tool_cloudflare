@@ -127,6 +127,16 @@ Macの優待要約はmain535のまま21:00:06.265に自然起動し、21:00:08.9
 
 通常plannerは同docの「判定済」を再利用するため、この空タグを本文39列の検査だけでは補完しない。全社の無差別再判定や旧判定をキーワードだけで覆す方法は採らず、明示した有限コードの空タグだけを既存ローカルClef・原本資格・PRE/CAS/POSTへ通す入口を実装中。定期の新規初回/実入力変更の経路は維持する。全いいえ・要確認・語彙候補0は再確認と記録し、タグを埋めた件数には加えない。
 
+## 空タグの明示再確認入口
+
+ユーザーの空欄指摘を受け、`biztag run --repair-empty-tags`を追加した。固定1〜50の一意な正準コード・同数limit・明示20分以内budgetを必須とし、active返却コード集合が指定scopeと完全一致しない場合は本文/モデル/書込前に停止する。現在の適格有報と既存行の同doc・通常のメタ/来歴資格・判定済み・3分類全空だけを専用markerで選択する。非空タグ、本文なし、入力変更や根拠不整合はHOLDにして、通常の別writerへ流さない。
+
+既存の原文読取・候補語抽出・固定Clef較正・durable journal・物理PRE/CAS/全POSTを再用する。一意なマスタを解決できなければ旧relationを消さずモデル前HOLD。旧no/uncertainをkeyword一致だけで覆さず、入力変更の再判定とは異なる専用prefixを記録する。機械専用/dry-runは本文・モデル前HOLD。通常定期の既定対象・モデル・しきい値・秘密情報・保存先は増やさない。
+
+summaryの`emptyTagRepair`はselected/eligible/rechecked/tagged/allNo/uncertain/noCandidates/held/remainingを分ける。タグ付与と要確認は同時にあり得るが、全noは候補ありで両方なしの場合だけ。候補語なし・要確認・全noを空欄補完成功とは数えない。完全同一の保存決定を再利用する場合は元の判定完了日を保持し、今回のpublication時計は通常journalへ残す。
+
+Nixの直接関連4suite214件PASS、全体TypeScript型検査・変更8source/testのESLint・diff checkを通過。readyは`biztag-empty-tags-requalification-v1/ready-v1.json` SHA256 `16b9046c0fbfbd75f3809c5d008ad74d0e9c414419d9f71005e5c9f41326b567`。この時点で新しいモデル推論・原本取得・本番書込は0で、981社の再確認やタグ付与を完了したものではない。
+
 ## 月次relation初回適用の既知拒否
 
 #540はCI3checks成功後21:18:38 JSTにmain `4e40ab90c1abe67639f68b1835c1ed753a2f3a25`へマージ。Cloudflare main build `f12f070a-1b69-4b47-8936-9d4920ed0b76`で21:19:13にversion `52c158cb-7892-43e6-acc6-b58aa0920fcc`・同一10triggerを確認した。SSHも同mainへ更新し、本文用538と別のclean runtime・所有者0600の専用envで実行した。

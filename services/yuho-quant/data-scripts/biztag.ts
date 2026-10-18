@@ -128,6 +128,15 @@ async function runCommand(): Promise<void> {
   if (rest.includes("--codes") || (codes !== undefined && codes.length === 0)) {
     throw new Error("--codesを指定するときは空でない証券コード一覧が必要です。全量実行は--codesを省略してください");
   }
+  const repairEmptyTags = hasFlag("repair-empty-tags");
+  if (repairEmptyTags && (codes === undefined || codes.length > 50 || new Set(codes).size !== codes.length ||
+      arg("codes")!.split(",").length !== codes.length || limit !== codes.length ||
+      arg("limit") === undefined || arg("budget-min") === undefined ||
+      !Number.isFinite(budgetMin) || budgetMin <= 0 || budgetMin > 20 ||
+      hasFlag("refresh-text-receipt") || arg("reconcile-pre-archive") !== undefined || arg("reconcile-proof-sha256") !== undefined ||
+      ["codes", "limit", "budget-min"].some(key => rest.filter(flag => flag.startsWith(`--${key}=`)).length !== 1))) {
+    throw new Error("--repair-empty-tagsには固定1〜50一意codes・同数limit・明示20分以内budgetが必要です。refresh/reconcileと併用しません");
+  }
   const dryRun = hasFlag("dry-run");
   const reconciliationStartedAt = Date.now();
   const reconciliationPath = arg("reconcile-pre-archive"), reconciliationSha256 = arg("reconcile-proof-sha256");
@@ -159,6 +168,7 @@ async function runCommand(): Promise<void> {
     dryRun,
     mechanicalOnly: hasFlag("mechanical-only"),
     refreshTextReceipt: hasFlag("refresh-text-receipt"),
+    repairEmptyTags,
     // 本文同期・機械照合は較正不要。実際のAI判定直前だけ固定モデルと閾値を検証する。
     get thresholds() {
       calibration ??= loadCalibration("clef");
@@ -585,7 +595,7 @@ if (["gate", "golden"].includes(subcommand) ||
     (((subcommand === "competitors" && !hasFlag("prepare-only")) || subcommand === "competitors-eval") && judgeArg() === "jev")) {
   assertTypeSafeEnabled();
 }
-if (subcommand === "run" && rest.some(flag => !["--mechanical-only", "--dry-run", "--refresh-text-receipt", "--codes"].includes(flag) &&
+if (subcommand === "run" && rest.some(flag => !["--mechanical-only", "--dry-run", "--refresh-text-receipt", "--repair-empty-tags", "--codes"].includes(flag) &&
     !/^--(codes|limit|budget-min|reconcile-pre-archive|reconcile-proof-sha256)=/.test(flag))) {
   throw new Error("biztag runの未知の引数/モデル許可は受け付けません");
 }

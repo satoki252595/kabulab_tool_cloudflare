@@ -132,6 +132,8 @@ export interface WorkItem {
   initialSemif?: boolean;
   /** 既存判定の入力doc/4対象節が変わった場合。機械照合へ代替しない。 */
   sourceChangedLocalJudge?: boolean;
+  /** 明示finite scopeの空3family再確認。入力変更を偽称せず通常Clefへ渡す。 */
+  emptyTagRepair?: boolean;
   /** 同一docの新しい保存本文。既知SHAを照合し、同一なら39本文だけを同期する。 */
   checkSourceInput?: boolean;
   /** 入力資格/本文/保存済み結果が未確定。skip でも完了扱いにしないための明示。 */
@@ -338,11 +340,22 @@ export function planWork(
   latest: LatestDoc[],
   rows: SupplementRow[],
   today: string,
-  eligibility?: NewStockEligibility
+  eligibility?: NewStockEligibility,
+  repairEmptyTags = false
 ): WorkItem[] {
   const rowByCode = new Map(rows.map((r) => [r.stockCode, r] as const));
   if (rowByCode.size !== rows.length) throw new Error("planWork: 同じ銘柄コードの補足行が重複しています。判定停止");
-  return latest.map((l) =>
-    planOne(l, rowByCode.get(l.stockCode) ?? null, today, eligibility)
-  );
+  return latest.map((l): WorkItem => {
+    const item = planOne(l, rowByCode.get(l.stockCode) ?? null, today, eligibility);
+    if (!repairEmptyTags) return item;
+    const row = item.row;
+    if (!item.qualificationHeld && !item.sourceChangedLocalJudge && hasUsableText(item.doc) &&
+        row?.tagStatus === "判定済" && row.docId === item.doc.docId &&
+        row.upstream.length + row.downstream.length + row.distribution.length === 0) {
+      return { ...item, kind: "retag", emptyTagRepair: true,
+        reason: "明示finite scopeの空3familyを現有報で再確認。旧no/uncertainをキーワードだけで覆さない" };
+    }
+    return { ...item, kind: "skip", qualificationHeld: true,
+      reason: "空事業タグ再確認の資格不足または既存タグ非空。通常の別操作へ流さず保持してHOLD" };
+  });
 }
