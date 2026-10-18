@@ -54,8 +54,22 @@ export type BenefitRecordTierStructure = {
   };
 };
 
+/** 行に明記された期間と円額だけ。残りの条件や重複期間の優先順位を推定しない。 */
+export type BenefitTierLiterals = {
+  status: "literal_extracted";
+  rule: "holding-tier-lines-v1";
+  sourceSha256: string;
+  applicability: "unverified";
+  ast: {
+    tiers: { ordinal: number; holdingPeriod: string; listedYen: number; notation: "相当" | "分" }[];
+    combinationClauses: { scope: "coupon_use"; counterpart: "other_discount" | "other_coupon"; allowed: boolean }[];
+    remainingConditionLines: number;
+  };
+};
+
 export type PublicBenefitFacts = ({ version: 1 } | { version: 2; conditionStructure: BenefitConditionStructure }
-  | { version: 3; conditionStructure: BenefitHoldingStructure } | { version: 4; conditionStructure: BenefitRecordTierStructure }) & {
+  | { version: 3; conditionStructure: BenefitHoldingStructure } | { version: 4; conditionStructure: BenefitRecordTierStructure }
+  | { version: 5; conditionStructure: BenefitTierLiterals }) & {
   sourceGroup: string;
   /** 掲載表記の検出。必要条件・適用対象を確認済みという意味ではない。 */
   holding: boolean;
@@ -106,9 +120,9 @@ export function parsePublicBenefitFacts(value: unknown, code?: string): PublicBe
   const raw: unknown = typeof value === "string" ? JSON.parse(value) : value;
   const version = typeof raw === "object" && raw !== null && "version" in raw ? raw.version : undefined;
   const facts = record(raw,
-    ["version", "sourceGroup", "holding", "holdingPeriods", "choice", "lottery", "application", "combination", "valueStatus", "qualifiedAmount", "valueReasons", "source", ...(version === 2 || version === 3 || version === 4 ? ["conditionStructure"] : [])]);
+    ["version", "sourceGroup", "holding", "holdingPeriods", "choice", "lottery", "application", "combination", "valueStatus", "qualifiedAmount", "valueReasons", "source", ...(version === 2 || version === 3 || version === 4 || version === 5 ? ["conditionStructure"] : [])]);
   const source = record(facts.source, ["listingUrl", "fetchedAt", "batchFetchedAt", "officialStatus", "officialUrl", "verifiedAt"]);
-  if ((facts.version !== 1 && facts.version !== 2 && facts.version !== 3 && facts.version !== 4) || typeof facts.sourceGroup !== "string" || !/^[0-9a-f]{16}$/.test(facts.sourceGroup) ||
+  if ((facts.version !== 1 && facts.version !== 2 && facts.version !== 3 && facts.version !== 4 && facts.version !== 5) || typeof facts.sourceGroup !== "string" || !/^[0-9a-f]{16}$/.test(facts.sourceGroup) ||
       [facts.holding, facts.choice, facts.lottery, facts.application].some(v => typeof v !== "boolean") ||
       !Array.isArray(facts.holdingPeriods) || facts.holdingPeriods.some(v => typeof v !== "string" || !/^(?:[0-9]+|半)(?:年|か月)(?:以上|未満|以下|超)$/.test(v)) ||
       (facts.holding === false && facts.holdingPeriods.length > 0) ||
@@ -184,6 +198,25 @@ export function parsePublicBenefitFacts(value: unknown, code?: string): PublicBe
         typeof definition.minimumEntries !== "number" || !Number.isSafeInteger(definition.minimumEntries) || definition.minimumEntries <= 0 ||
         typeof shipment.month !== "number" || !Number.isInteger(shipment.month) || shipment.month < 1 || shipment.month > 12 ||
         !["上旬", "中旬", "下旬"].includes(shipment.part as string) || shipment.frequency !== "annual" || shipment.status !== "planned") throw new Error("名簿定義・発送予定が不正です");
+  }
+  if (facts.version === 5) {
+    const structure = record(facts.conditionStructure, ["status", "rule", "sourceSha256", "applicability", "ast"]);
+    const ast = record(structure.ast, ["tiers", "combinationClauses", "remainingConditionLines"]);
+    if (structure.status !== "literal_extracted" || structure.rule !== "holding-tier-lines-v1" ||
+        typeof structure.sourceSha256 !== "string" || !/^[0-9a-f]{64}$/.test(structure.sourceSha256) || structure.applicability !== "unverified" ||
+        !Array.isArray(ast.tiers) || ast.tiers.length > 32 || (ast.tiers.length > 0 && facts.holding !== true) ||
+        !Array.isArray(ast.combinationClauses) || ast.combinationClauses.length > 32 || ast.tiers.length + ast.combinationClauses.length === 0 ||
+        typeof ast.remainingConditionLines !== "number" || !Number.isSafeInteger(ast.remainingConditionLines) || ast.remainingConditionLines < 0) throw new Error("掲載期間行の構造が不正です");
+    for (const [index, value] of ast.tiers.entries()) {
+      const tier = record(value, ["ordinal", "holdingPeriod", "listedYen", "notation"]);
+      if (tier.ordinal !== index + 1 || typeof tier.holdingPeriod !== "string" || !facts.holdingPeriods.includes(tier.holdingPeriod) ||
+          typeof tier.listedYen !== "number" || !Number.isSafeInteger(tier.listedYen) || tier.listedYen <= 0 ||
+          !["相当", "分"].includes(tier.notation as string)) throw new Error("掲載期間行と円額の対応が不正です");
+    }
+    for (const value of ast.combinationClauses) {
+      const clause = record(value, ["scope", "counterpart", "allowed"]);
+      if (clause.scope !== "coupon_use" || !["other_discount", "other_coupon"].includes(clause.counterpart as string) || typeof clause.allowed !== "boolean") throw new Error("券利用時の併用条件が不正です");
+    }
   }
   if (code !== undefined && source.listingUrl !== `https://minkabu.jp/stock/${code}/yutai`) {
     throw new Error("公開条件の銘柄と掲載出典が一致しません");

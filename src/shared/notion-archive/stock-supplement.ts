@@ -1173,9 +1173,8 @@ export async function replaceEvidenceBlock(
   const children = await evidenceChildren(pageId);
   const old = children.filter((b) => b.type === "heading_3" && richPlain((b.heading_3 as { rich_text: unknown }).rich_text).startsWith(EVIDENCE_TITLE_PREFIX));
   if (old.length > 1) throw new Error("複数の事業タグ根拠が存在。前回実行/PREを照合するまでHOLD");
-  if (block !== null && block !== undefined && old.some((b) => JSON.stringify(evidenceValue(b)) === JSON.stringify(evidenceValue(block)))) {
-    throw new Error("同じ新根拠が既に存在。前回の結果不明をPRE/現値照合するまで再送しません");
-  }
+  const reuseEvidence = block !== null && block !== undefined && old.length === 1 &&
+    JSON.stringify(evidenceValue(old[0])) === JSON.stringify(evidenceValue(block));
   const snapshot = JSON.stringify(canonicalizeForHash({ page: before, children, expectedProperties: props, expectedEvidence: block }));
   const preSha = await sha256Hex(snapshot);
   // 推論確率・新根拠の揺れでunknownの再送ラッチを迂回させない。
@@ -1200,12 +1199,15 @@ export async function replaceEvidenceBlock(
   }
   const fresh = await evidencePage(pageId);
   if (JSON.stringify(canonicalizeForHash(fresh)) !== JSON.stringify(canonicalizeForHash(before))) throw new SupplementWriteHeldError("PRE保管中に補足が変更 (旧根拠保持・HOLD)");
+  if (reuseEvidence && JSON.stringify(canonicalizeForHash(await evidenceChildren(pageId))) !== JSON.stringify(canonicalizeForHash(children))) {
+    throw new SupplementWriteHeldError("PRE保管中に再利用する根拠/保持本文が変更 (全根拠保持・HOLD)");
+  }
   if (publication.preArchive !== undefined && JSON.stringify(canonicalizeForHash(await evidenceChildren(pageId))) !== JSON.stringify(canonicalizeForHash(children))) {
     throw new SupplementWriteHeldError("PRE照合中に旧根拠が変更。未閉鎖intentを保持");
   }
   await beforeWrite(); // 対象1社のD1最新doc/pointer。ここまではbusiness write 0。
   if (publication.preArchive !== undefined) await publication.preArchive.beforeWrite();
-  if (block !== null && block !== undefined) {
+  if (block !== null && block !== undefined && !reuseEvidence) {
     try {
       const appended = await notionRequest<{ results: ChildBlock[] }>("PATCH", `/blocks/${pageId}/children`, { children: [block] }, { singleAttempt: true });
       if (!Array.isArray(appended.results) || appended.results.length !== 1 || typeof appended.results[0].id !== "string") {
@@ -1237,18 +1239,21 @@ export async function replaceEvidenceBlock(
         throw new Error(`補足の保持対象が読戻し時に変更: ${name}`);
       }
     }
-    if (publication.preArchive !== undefined) {
+    if (reuseEvidence && JSON.stringify(canonicalizeForHash(await evidenceChildren(pageId))) !== JSON.stringify(canonicalizeForHash(children))) {
+      throw new Error("再利用した根拠/保持本文の全文が読戻し時に変更");
+    }
+    if (publication.preArchive !== undefined || reuseEvidence) {
       for (const [name, expected] of Object.entries(before.properties)) {
         if (!(name in props) && JSON.stringify(propertyValue(after.properties[name])) !== JSON.stringify(propertyValue(expected))) throw new Error(`明示PRE再開の保持列が変更: ${name}`);
       }
-      if (JSON.stringify(canonicalizeForHash(await evidenceChildren(pageId))) !== JSON.stringify(canonicalizeForHash(children))) throw new Error("明示PRE再開の旧根拠が変更");
+      if (publication.preArchive !== undefined && JSON.stringify(canonicalizeForHash(await evidenceChildren(pageId))) !== JSON.stringify(canonicalizeForHash(children))) throw new Error("明示PRE再開の旧根拠が変更");
     }
     postPageSha256 = await sha256Hex(JSON.stringify(canonicalizeForHash(after)));
   } catch (cause) {
     throw new NotionUnknownResultError(`補足propertiesの結果確認が未完。再送・旧根拠削除を停止しPREと現値を照合してください。PRE=${archivePageId}`, { cause });
   }
   try {
-    for (const previous of block === undefined ? [] : old) {
+    for (const previous of block === undefined || reuseEvidence ? [] : old) {
       const retired = await notionRequest<{ id: string; archived: boolean }>("DELETE", `/blocks/${previous.id}`, undefined, { singleAttempt: true });
       if (retired.id !== previous.id || retired.archived !== true) throw new NotionUnknownResultError(`旧根拠退役ACKが不正。PRE=${archivePageId}`);
       const check = await notionRequest<{ id: string; archived: boolean }>("GET", `/blocks/${previous.id}`);

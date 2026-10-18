@@ -1,4 +1,5 @@
 import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { R2PutRejectedError, R2PutUnknownError } from "./lib/r2.js";
 import { r2GetVersion, r2Put } from "./lib/r2.js";
 import { loadCodes } from "./lib/codes.js";
-import { YahooRawTooLargeError, YahooRateLimitError, parseBars5m, type YahooRawCapture } from "../../src/shared/yahoo/client.js";
+import { YahooRawTooLargeError, YahooRateLimitError, parseBars5m, describeIntraSource, type YahooRawCapture } from "../../src/shared/yahoo/client.js";
 import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
 import { NotionUnknownResultError } from "../../src/shared/notion-archive/client.js";
 import { NotionConfigError } from "../../src/shared/notion-archive/env.js";
@@ -33,11 +34,19 @@ vi.mock("../../src/shared/yahoo/client.js", async (importOriginal) => {
     if (rawHook.replay !== null) {
       const capture = rawHook.replay.get(args[0]); if (!capture) throw new Error("unexpected actual replay symbol");
       await args[2]?.onRaw?.(capture);
-    } else if (rawHook.enabled) await args[2]?.onRaw?.({ symbol: args[0], status: 200,
-      bytes: new TextEncoder().encode("test-only captured HTTP body"),
+      return intraSource(...args);
+    }
+    // Declared transport projection: source bars and HTTP diagnostic must describe the same rows.
+    let bars: Array<typeof BAR> = [], failure: unknown;
+    try { bars = await intraSource(...args); } catch (error) { failure = error; }
+    if (rawHook.enabled) await args[2]?.onRaw?.({ symbol: args[0], status: 200,
+      bytes: new TextEncoder().encode(JSON.stringify({ chart: { result: [{ meta: { symbol: args[0] }, timestamp: bars.map(b => b.ts),
+        indicators: { quote: [{ open: bars.map(b => b.o), high: bars.map(b => b.h), low: bars.map(b => b.l), close: bars.map(b => b.c), volume: bars.map(b => b.v) }] } }], error: null } })),
       url: "https://query1.finance.yahoo.com/v8/finance/chart/test", receivedAt: new Date().toISOString(), headers: {} });
-    return intraSource(...args);
+    if (failure !== undefined) throw failure;
+    return bars;
   } };
+
 });
 vi.mock("../../src/shared/yahoo/raw-custody.js", () => ({ archiveYahooRawBatch: vi.fn() }));
 vi.mock("../../src/shared/notion-archive/index.js", () => ({
@@ -143,7 +152,9 @@ describe("通常定時VWAPの5分足は同run受付と終了窓を継承", () =>
     expect(process.exitCode).toBe(2); expect(mockFetch5m).toHaveBeenCalledTimes(1);
     expect(mockFetch5m.mock.calls[0][2].beforeRequest).toBeTypeOf("function");
     expect(mockRawArchive).toHaveBeenCalledTimes(1); expect(mockRecord).toHaveBeenCalledTimes(1);
-    expect(mockR2Put).not.toHaveBeenCalled();
+    // Empty-response status is now persisted before the summary; the late summary still fails.
+    expect(mockR2Put).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(mockR2Put.mock.calls[0][1])).toMatchObject({ bars: [], sourceStatus: { status: "source_empty" } });
     expect(recordedBody().scheduledWindow).toMatchObject({ admittedAt: "2026-10-14T08:00:00.000Z" });
   });
   it.each(["missing", "expired"])("受付%sはsource・母集団・PUT0で停止", async (mode) => {
@@ -313,7 +324,13 @@ describe("ingest-intra main flow", () => {
   });
   it("normal positive + skip control (exit 0, all codes accounted)", async () => {
     mockLoadCodes.mockResolvedValue(["A", "B"]);
-    mockR2Get.mockImplementation(async (key: string) => (key === "intra/A.json" ? { body: existingA, etag: "observed-version" } : null));
+    const at = new Date().toISOString();
+    const makeCapture = (symbol: string): YahooRawCapture => ({ symbol, status: 200, receivedAt: at, headers: {}, url: "https://query1.finance.yahoo.com/v8/finance/chart/test",
+      bytes: new TextEncoder().encode(JSON.stringify({ chart: { error: null, result: [{ meta: { symbol }, timestamp: [BAR.ts], indicators: { quote: [{ open: [BAR.o], high: [BAR.h], low: [BAR.l], close: [BAR.c], volume: [BAR.v] }] } }] } })) });
+    const capture = makeCapture("A.T");
+    rawHook.replay = new Map([["A.T", capture], ["B.T", makeCapture("B.T")]]);
+    const existing = JSON.stringify({ ...JSON.parse(existingA), sourceStatus: await describeIntraSource(capture, [BAR]) });
+    mockR2Get.mockImplementation(async (key: string) => (key === "intra/A.json" ? { body: existing, etag: "observed-version" } : null));
     mockFetch5m.mockResolvedValue([BAR]);
     await main();
     expect(process.exitCode).toBe(0);
@@ -500,4 +517,46 @@ describe("ingest-intra main flow", () => {
     await expect(main()).rejects.toThrow(/1d〜60d/);
     expect(mockLoadCodes).not.toHaveBeenCalled();
   });
+});
+
+// Full real vendor bodies remain private. CI runs the declared two-row transport projection separately.
+const CURRENT2_RAW = join(SAVED_CWD, ".yahoo-raw-custody/yahoo-raw-local-4ba99b6d-vwap-intra-0-part-0.json.gz");
+it.skipIf(!existsSync(CURRENT2_RAW))("actual 7531/9311 fresh60d source gaps retain full old bars and report their last valid date", async () => {
+  const gzip = readFileSync(CURRENT2_RAW);
+  expect(createHash("sha256").update(gzip).digest("hex")).toBe("ca47b94e7b7daee55b1d07ad4997f7a8bf213e90f6a4cb8e92c3be25c2200234");
+  const data = JSON.parse(gunzipSync(gzip).toString()) as { members: Array<Omit<YahooRawCapture,"bytes"> & { bodyBase64:string; sha256:string; byteLength:number }> };
+  rawHook.replay = new Map(); const parsed = new Map<string, ReturnType<typeof parseBars5m>>();
+  for (const m of data.members) {
+    const bytes = Buffer.from(m.bodyBase64,"base64"); expect(createHash("sha256").update(bytes).digest("hex")).toBe(m.sha256); expect(bytes.length).toBe(m.byteLength);
+    rawHook.replay.set(m.symbol,{...m,bytes}); parsed.set(m.symbol,parseBars5m(JSON.parse(bytes.toString()),m.symbol));
+  }
+  process.argv.push("--codes=7531,9311","--range=60d");
+  mockLoadCodes.mockResolvedValue(["7531","9311"]);
+  const old = new Map(data.members.map(m => { const code=m.symbol.slice(0,4); return [code,readFileSync(join(SAVED_CWD,"tmp/feature-audit-20261018/holdings-rights-needed-current-v1/vwap2-readonly-v1",`${code}-body.private.json`),"utf8")]; }));
+  mockR2Get.mockImplementation(async key=>({body:old.get(key.slice(6,10))!,etag:"saved-before"}));
+  mockFetch5m.mockImplementation(async symbol=>parsed.get(symbol));
+  await main(); expect(process.exitCode).toBe(0); expect(mockR2Put).toHaveBeenCalledTimes(2);
+  for (const [key,raw] of mockR2Put.mock.calls) {
+    const code=key.slice(6,10), payload=JSON.parse(raw), before=JSON.parse(old.get(code)!);
+    expect(before.bars.every((b:{ts:number})=>payload.bars.some((n:{ts:number})=>n.ts===b.ts))).toBe(true);
+    expect(payload.sourceStatus).toMatchObject({status:"source_unavailable",lastSourceDate:"2026-10-16"});
+    expect((recordedBody().outcomes as Record<string,unknown>)[code]).toMatchObject({sourceStatus:payload.sourceStatus,lastValidDate:code==="7531"?"2026-10-08":"2026-10-07"});
+  }
+  expect(mockRawArchive.mock.invocationCallOrder[0]).toBeLessThan(mockR2Put.mock.invocationCallOrder[0]);
+});
+
+it("declared actual-row all-NULL fault persists source status only, keeps old bars, and retains nonzero exit", async () => {
+  const wire = JSON.parse(readFileSync(new URL("./tests/fixtures/intra-source-status-7531.json", import.meta.url), "utf8"));
+  const oldBars = parseBars5m(wire, "7531.T");
+  const r = wire.chart.result[0], q = r.indicators.quote[0];
+  r.timestamp = [r.timestamp[1]]; for (const k of Object.keys(q)) q[k] = [q[k][1]];
+  const capture: YahooRawCapture = { symbol: "7531.T", status: 200, receivedAt: wire.provenance.receivedAt, headers: {}, url: "https://query1.finance.yahoo.com/v8/finance/chart/7531.T", bytes: new TextEncoder().encode(JSON.stringify(wire)) };
+  rawHook.replay = new Map([["7531.T", capture]]);
+  mockLoadCodes.mockResolvedValue(["7531"]); mockFetch5m.mockImplementation(async () => parseBars5m(wire, "7531.T"));
+  const old = { code: "7531", bars: oldBars }; mockR2Get.mockResolvedValue({ body: JSON.stringify(old), etag: "old-version" });
+  await main(); expect(process.exitCode).toBe(1); expect(mockFetch5m).toHaveBeenCalledTimes(1); expect(mockR2Put).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(mockR2Put.mock.calls[0][1])).toMatchObject({ bars: old.bars, sourceStatus: { status: "source_unavailable", lastValidSourceDate: null } });
+  expect(mockR2Put.mock.calls[0][2]).toBe("old-version");
+  expect(recordedBody()).toMatchObject({ errors: 1, empty: 0, written: 1, outcomes: { "7531": { status: "error", bodySha: expect.stringMatching(/^[a-f0-9]{64}$/) } } });
+  expect(mockRawArchive.mock.invocationCallOrder[0]).toBeLessThan(mockR2Put.mock.invocationCallOrder[0]);
 });

@@ -5,15 +5,16 @@ import "dotenv/config";
 // 最大 60d まで提供するので、初回は INTRA_RANGE=60d でバックフィルし、以後 5d で延伸。
 // 実行: npx tsx scripts/ingest-intra.ts [--codes=...] [--limit=N] [--range=60d]   KEEP_DAYS=365
 import { fileURLToPath } from "node:url";
-import { fetchBars5m, fetchBars5mWindow, YahooRawTooLargeError, MAX_YAHOO_RAW_BYTES, type YahooRawCapture } from "../../src/shared/yahoo/client.js";
+import { fetchBars5m, fetchBars5mWindow, describeIntraSource, YahooIntraSourceUnavailableError, YahooRawTooLargeError, MAX_YAHOO_RAW_BYTES, type YahooRawCapture } from "../../src/shared/yahoo/client.js";
 import { r2GetVersion, r2Put, mapLimit, sleep, retry, R2PutRejectedError, R2PutUnknownError } from "./lib/r2.js";
 import { assertCodesInUniverse, loadCodes, arg } from "./lib/codes.js";
 import { sharedEnv } from "../../src/shared/env.js";
-import { archiveSummaryOrFatal, assertSavedIntraShape, bodyPin, buildIngestSummary, findInvalidBars, mergeIntraBars, resolveExitCode, resolveRunId, sanitizeLogText, shouldSkipPut, universePin, writeSummaryLocal, type IngestCodeOutcome, type SavedIntra } from "./lib/ingest-guard.js";
+import { archiveSummaryOrFatal, assertSavedIntraShape, bodyPin, buildIngestSummary, findInvalidBars, mergeIntraBars, resolveExitCode, resolveRunId, retainIntraSourceStatus, sanitizeLogText, shouldSkipPut, universePin, writeSummaryLocal, type IngestCodeOutcome, type SavedIntra } from "./lib/ingest-guard.js";
 import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
 import { archiveYahooRawBatch, type YahooRawAttempt, type YahooRawMissing } from "../../src/shared/yahoo/raw-custody.js";
 import { proveIntraRecoveryCapture, resolveIntraRecoveryWindow, type IntraRecoveryProof } from "./lib/intra-recovery.js";
 import { scheduledVwapGuard } from "./lib/scheduled-window.js";
+import { jstDateSec, type IntraSourceStatus } from "../../src/shared/vwap/proof.js";
 import { notionStats } from "../../src/shared/notion-archive/client.js";
 
 export async function main() {
@@ -53,6 +54,8 @@ export async function main() {
   const unknownCodes: string[] = [];
   const rejectedCodes: string[] = [];
   const outcomes: Record<string, IngestCodeOutcome> = {};
+  const sourceStatuses: Record<string, IntraSourceStatus> = {};
+  const lastValidDates: Record<string, string | null> = {};
   const sourceProofs: Record<string, IntraRecoveryProof> = {};
   // R2 fault (PUT unknown/rejected・GET fault) は新規作業を止める。
   // inflight は止めず settle させ正直計数する (取消成功の仮定なし)。
@@ -86,6 +89,8 @@ export async function main() {
         if (done % 500 === 0) console.info(JSON.stringify({ progress: done, total: codes.length, range: RANGE, written, empty, errors, rateLimited }));
         let fresh: Awaited<ReturnType<typeof fetchBars5m>>;
         let attempt = 0;
+        let sourceCapture: YahooRawCapture | undefined;
+        let sourceMissing = false;
         try {
           fresh = await retry(async () => {
             if (fatal || aborted) throw new Error("新規Yahoo取得はraw/R2 faultまたはABORTで停止済みです");
@@ -99,6 +104,7 @@ export async function main() {
                 onRaw: (capture: YahooRawCapture) => {
                   captures.push({ api: "intra", attempt, capture });
                   rawCapture = capture;
+                  sourceCapture = capture;
                   captured = true;
                   if (capture.symbol !== `${code}.T`) {
                     fatal = true;
@@ -139,9 +145,16 @@ export async function main() {
             return;
           }
           errors++; if (errors <= 5) console.error(`  ${code}: ${e}`);
-          outcomes[code] = { status: "error", latestSourceBar: null, bodySha: null };
-          return;
+          if (!(e instanceof YahooIntraSourceUnavailableError) || sourceWindow !== null) {
+            outcomes[code] = { status: "error", latestSourceBar: null, bodySha: null };
+            return;
+          }
+          // 既知の全NULL応答だけ、原本保管後に取得状況をCASする。旧barsは変更しない。
+          fresh = [];
+          sourceMissing = true;
         }
+        if (sourceCapture === undefined) throw new Error("5分足の診断に原応答captureがありません");
+        sourceStatuses[code] = await describeIntraSource(sourceCapture, fresh);
         consecRL = 0;                                        // 成功で連続カウントをリセット
         if (aborted || fatal) return;                        // source await 中に counterpart が fatal 化しうる
         // R2 GET fault は fatal。null は明示 NoSuchKey の正常 bootstrap のみ。
@@ -171,10 +184,10 @@ export async function main() {
             return;
           }
         }
-        if (!fresh.length) { empty++; outcomes[code] = { status: "empty", latestSourceBar: null, bodySha: null }; return; }
+        if (!fresh.length && !sourceMissing) empty++;
         // 実応答の最新 source ts (実秒の最大)。完了取引日の推定はしない。
-        let latest = -1;
-        for (const b of fresh) if (b.ts > latest) latest = b.ts;
+        let latest: number | null = null;
+        for (const b of fresh) if (latest === null || b.ts > latest) latest = b.ts;
         // 保存前 invalid-price STOP: 壊れた実値は書かず数える (欠落と混同しない)。
         const bad = findInvalidBars(fresh);
         if (bad.length > 0) {
@@ -183,16 +196,18 @@ export async function main() {
           outcomes[code] = { status: "error", latestSourceBar: latest, bodySha: null };
           return;
         }
-        const bars = mergeIntraBars(old, fresh, cutoffTs);
+        const bars = fresh.length === 0 && old !== null ? old.bars : mergeIntraBars(old, fresh, cutoffTs);
+        const lastTs = bars.reduce<number | null>((last, b) => last === null || (b.ts as number) > last ? b.ts as number : last, null);
+        lastValidDates[code] = lastTs === null ? null : jstDateSec(lastTs);
         // same-cached-input 2回目は内容同一で PUT skip (updated 不変)。
         // keep 剪定で集合が変われば内容が変わるため PUT する。
         // 比較対象は保存 object そのもの (Sol HOLD1: code/bars/splits 抜粋禁止)。
-        const payload = { code, updated: new Date().toISOString(), bars };
+        const payload = { code, updated: new Date().toISOString(), bars, sourceStatus: retainIntraSourceStatus(old, bars, sourceStatuses[code]) };
         const payloadJson = JSON.stringify(payload);
         if (shouldSkipPut(existing, payload)) {
           skipped++;
           // skip の pin は standing の既存 bytes (新規 timestamp 付き payload ではない)。
-          outcomes[code] = { status: "skipped", latestSourceBar: latest, bodySha: existing === null ? null : bodyPin(existing) };
+          outcomes[code] = { status: sourceMissing ? "error" : "skipped", latestSourceBar: latest, bodySha: existing === null ? null : bodyPin(existing) };
           return;
         }
         if (aborted || fatal) {
@@ -223,7 +238,7 @@ export async function main() {
             return;
           }
           written++;
-          outcomes[code] = { status: "written", latestSourceBar: latest, bodySha: bodyPin(payloadJson) };
+          outcomes[code] = { status: sourceMissing ? "error" : "written", latestSourceBar: latest, bodySha: bodyPin(payloadJson) };
         });
       }));
       for (let i = captureStart; i < captures.length; i++) rawBytes += captures[i].capture.bytes.length;
@@ -250,6 +265,8 @@ export async function main() {
   // 未着手の全件 accounting。prepared-but-stopped は上で latest 付き notStarted。
   for (const code of codes) {
     outcomes[code] ??= { status: "notStarted", latestSourceBar: null, bodySha: null };
+    if (sourceStatuses[code] !== undefined) outcomes[code].sourceStatus = sourceStatuses[code];
+    if (Object.hasOwn(lastValidDates, code)) outcomes[code].lastValidDate = lastValidDates[code];
     if (sourceProofs[code] !== undefined) outcomes[code].sourceWindowProof = sourceProofs[code];
   }
   const sortedOutcomes: Record<string, IngestCodeOutcome> = {};

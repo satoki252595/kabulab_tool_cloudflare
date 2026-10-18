@@ -1,6 +1,6 @@
 import { parseBenefitChoiceStructure } from "./choice-structure.js";
 import { parseBenefitHoldingStructure } from "./holding-structure.js";
-import { parseBenefitRecordTierStructure } from "./record-tier-structure.js";
+import { extractBenefitTierLiterals, parseBenefitRecordTierStructure } from "./record-tier-structure.js";
 import { benefitKey } from "./benefit-key.js";
 import { extractYenAmounts, qualifyCompanyPerGrantValue } from "./estimated-value-guard.js";
 import { sourceSummaryConditions } from "./summary-contract.js";
@@ -35,11 +35,13 @@ export function buildPublicBenefitFacts(input: {
   const allowed = /併用(?:は|が)?(?:可|可能|できます|できる)(?=$|[。、,;；)）]|\r?\n)/m.test(source);
   const evaluation = evaluateCompanyValue(input.description, input.context);
   const holdingStructure = parseBenefitHoldingStructure(input.description);
+  const choiceStructure = parseBenefitChoiceStructure(input.description);
   const recordTier = parseBenefitRecordTierStructure(input.description);
   const qualifiedRecordTier = recordTier !== null && evaluation.value === null && evaluation.reason === "ambiguous_condition_tiers";
+  const tierLiterals = holdingStructure === null && !qualifiedRecordTier && choiceStructure.status !== "literal_parsed" ? extractBenefitTierLiterals(input.description) : null;
   const facts = parsePublicBenefitFacts({
-    version: qualifiedRecordTier ? 4 : holdingStructure === null ? 2 : 3,
-    conditionStructure: qualifiedRecordTier ? recordTier : holdingStructure === null ? parseBenefitChoiceStructure(input.description) : holdingStructure,
+    version: qualifiedRecordTier ? 4 : holdingStructure !== null ? 3 : tierLiterals !== null ? 5 : 2,
+    conditionStructure: qualifiedRecordTier ? recordTier : holdingStructure !== null ? holdingStructure : tierLiterals !== null ? tierLiterals : choiceStructure,
     sourceGroup: benefitKey(input.code, input.description),
     ...conditions,
     combination: allowed === forbidden ? "unverified" : forbidden ? "not_allowed" : "allowed",

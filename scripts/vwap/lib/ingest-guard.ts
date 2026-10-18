@@ -1,3 +1,4 @@
+import { isIntraSourceStatus, type IntraSourceStatus } from "../../../src/shared/vwap/proof.js";
 /**
  * VWAP 取込の保存前妥当性 + run 粒度バッチ保管の入力 builder (純関数)。
  *
@@ -337,9 +338,17 @@ export function hasCompletedDailyFetch(saved: SavedDaily, range: { from: string;
 }
 
 export type SavedIntra = {
+  sourceStatus?: IntraSourceStatus;
   code: string;
   bars: Array<Record<string, unknown>>;
 };
+
+/** 同じバーと取得状況なら既存の証拠時計・SHAを保持し、無変更PUTを増やさない。 */
+export function retainIntraSourceStatus(old: SavedIntra | null, bars: SavedIntra["bars"], fresh: IntraSourceStatus): IntraSourceStatus {
+  const saved = old?.sourceStatus;
+  return old !== null && saved !== undefined && isDeepStrictEqual(old.bars, bars) && saved.status === fresh.status &&
+    saved.lastSourceDate === fresh.lastSourceDate && saved.lastValidSourceDate === fresh.lastValidSourceDate ? saved : fresh;
+}
 
 /** 通常取得と保存原文の修復で、同じts上書き・保持期間剪定を使う。 */
 export function mergeIntraBars(
@@ -485,6 +494,9 @@ export function assertSavedIntraShape(raw: string, key: string, expectedCode: st
   if (bad.length > 0) {
     throw new Error(`保存済み形状が不正です (bars 価格異常 ${bad.length} 件): ${key}`);
   }
+  if (o.sourceStatus !== undefined && !isIntraSourceStatus(o.sourceStatus)) {
+    throw new Error(`保存済み形状が不正です (sourceStatus 不正): ${key}`);
+  }
   return o as unknown as SavedIntra;
 }
 
@@ -579,6 +591,8 @@ export type IngestCodeOutcome = {
   sourceFetched?: false;
   /** 明示期間回復だけ。同一captureの全raw timestampと実要求を証明する。 */
   sourceWindowProof?: IntraRecoveryProof;
+  sourceStatus?: IntraSourceStatus;
+  lastValidDate?: string | null;
 };
 
 export type IngestRunStats = {

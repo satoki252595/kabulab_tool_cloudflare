@@ -9,7 +9,7 @@ import { ROOT } from "../../../../src/shared/db/tests/source-scan.js";
 import type { D1BatchStatement } from "../../../../src/shared/db/d1-http-client.js";
 import { assertPublicFactsUpgradeReady, claimPublicFactsUpgrade, planPublicFactsV1Upgrade, parsePublicFactsUpgradeScope,
   planPublicFactsV1HoldingUpgrade, parsePublicFactsHoldingUpgradeScope,
-  planPublicFactsV1RecordTierUpgrade, parsePublicFactsRecordTierUpgradeScope,
+  planPublicFactsV1RecordTierUpgrade, parsePublicFactsRecordTierUpgradeScope, planV1StructureUpgrade,
   applyPublicFactsBackfillOnce, type PublicFactsPreimage, type PublicFactsUpgradeScope } from "../../data-scripts/backfill-public-facts.js";
 import { benefitKey } from "../../data-scripts/benefit-key.js";
 import { buildPublicBenefitFacts } from "../../data-scripts/public-facts.js";
@@ -266,4 +266,25 @@ describe("明示v1条件だけの有限更新", () => {
     const wrongChoice = { version: 1 as const, groups: fixed.groups };
     expect(() => planPublicFactsV1Upgrade(source(rows), rows, wrongChoice)).toThrow();
   });
+});
+
+// 文法・完全CAS専用。実掲載値のfixtureはprivate原本で別検証する。
+it("一般の期間行v5も旧v1の全値・時計を保ち同じ全列CASを使う", async () => {
+  const rows = protocolRows().slice(0, 1);
+  const description = '【種別："QUOカード"】\n【1年以上保有】\n1,000円相当\n【3年以上保有株主】\n2,000円分\n※同じ株主番号の条件あり';
+  const next = buildPublicBenefitFacts({ code: rows[0].stockCode, description, context: { minShares: [100], recordMonths: [3] }, fetchedAt: null, batchFetchedAt: null });
+  if (next.version !== 5) throw new Error("v5 expected");
+  const { conditionStructure, version, ...old } = next; void conditionStructure; void version;
+  rows[0] = { ...rows[0], description, publicFacts: JSON.stringify({ ...old, version: 1 }) };
+  const plan = planV1StructureUpgrade(source(rows), rows, scope(rows), 5);
+  expect(parsePublicBenefitFacts(plan.expected[0].publicFacts)).toEqual(next);
+  expect(plan.targetRows).toBe(1);
+  const sibling = protocolRows()[1];
+  const { db, read, send } = database([...rows, sibling]);
+  try {
+    const before = read(); await send(plan.statements);
+    expect(read()).toEqual(before.map(row => row.id === rows[0].id ? { ...row, public_facts: plan.expected[0].publicFacts } : row));
+    const accepted = read(); await expect(send(plan.statements)).rejects.toThrow(); expect(read()).toEqual(accepted);
+  } finally { db.close(); }
+  expect(() => planV1StructureUpgrade(source(rows), [{ ...rows[0], publicFacts: JSON.stringify(next) }], scope(rows), 5)).toThrow();
 });

@@ -51,7 +51,7 @@ describe("全文対応した掲載2期間と名簿定義のv4", () => {
       description + "\n申込が必要", description + "\n併用可", description + "\n300株以上", description + "\n※その他条件あり",
     ]) {
       expect(parseBenefitRecordTierStructure(changed)).toBeNull();
-      expect(build(changed).version).toBe(2);
+      expect(build(changed).version).not.toBe(4);
     }
   });
 

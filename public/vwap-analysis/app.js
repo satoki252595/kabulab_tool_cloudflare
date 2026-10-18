@@ -299,7 +299,7 @@ async function load(code) {
   // !ok は json 化せず throw → 明示の失敗表示。silent の「未取得」化はしない。
   const needOk = (name) => (r) => { if (!r.ok) throw new Error(`${name} HTTP ${r.status}`); return r.json(); };
   const dailyReq = fetch(`${apiBase()}/api/daily?code=${code}`).then(needOk("daily"));
-  const fiveReq = fetch(`${apiBase()}/api/intra?code=${code}`).then(needOk("intra")).then((j) => ({ v: parseIntra(j), basis: (j && j.basis) || null })).catch((e) => ({ err: String(e) }));
+  const fiveReq = fetch(`${apiBase()}/api/intra?code=${code}`).then(needOk("intra")).then((j) => ({ v: parseIntra(j), basis: (j && j.basis) || null, sourceStatus: j.sourceStatus, lastValidDate: j.lastValidDate })).catch((e) => ({ err: String(e) }));
   const marginReq = fetch(`${apiBase()}/api/margin?code=${code}&n=104`).then((r) => r.json()).then((j) => ({ v: j.dates || [], amb: j.ambiguousDates || [] })).catch((e) => ({ err: String(e) }));
 
   let dj, fr, mr;
@@ -327,7 +327,7 @@ async function load(code) {
     code, daily, splits: (dj && dj.splits) || [], five,
     margin: mr.v || null, marginErr: mr.err || null, marginAmbiguous: mr.amb || [],
     fiveDays: fiveDates.length, fiveStart: fiveDates[0] || null, fiveErr: fr.err || null, fiveHold,
-    covStart, covEnd,
+    covStart, covEnd, fiveSourceStatus: fr.sourceStatus, fiveLastValidDate: fr.lastValidDate,
   };
   $("empty").hidden = true;
   render();
@@ -448,10 +448,18 @@ function renderFooter() {
     : (data.fiveHold
       ? `5分足の確認待ち（日足のみ表示）`
       : (data.fiveDays ? `5分足 ${data.fiveDays}日（${data.fiveStart}〜）` : `5分足: 未取得`));
+  const source = data.fiveSourceStatus;
+  const lastValid = data.fiveLastValidDate === null || data.fiveLastValidDate === undefined
+    ? "有効な5分足なし" : `最終有効日 ${data.fiveLastValidDate}`;
+  const sourceNote = data.fiveErr ? "" : source === null || source === undefined
+    ? ` ／ 最新の取得状況は未確認（${lastValid}）`
+    : source.status === "source_empty" ? ` ／ 取得元の応答が空（${lastValid}）`
+    : source.status === "source_unavailable" ? ` ／ 最新の応答日 ${source.lastSourceDate} に使える5分足なし（${lastValid}）`
+    : ` ／ ${lastValid}`;
   const exNote = "";
   const legend = [tip("VWAP", "up"), tip("POC", "up"), tip("バリューエリア", "up"), tip("価格別出来高", "up"), tip("信用残高", "up r")].join(" ・ ");
   $("updated").innerHTML =
-    `<span class="ft-note">全 ${master.length.toLocaleString()} 銘柄（東証全上場） ／ 日足（VWAP・価格別出来高は5分足から算出）${exNote} ／ ${cov} ／ 信用残高 日次</span>` +
+    `<span class="ft-note">全 ${master.length.toLocaleString()} 銘柄（東証全上場） ／ 日足（VWAP・価格別出来高は5分足から算出）${exNote} ／ ${cov}${sourceNote} ／ 信用残高 日次</span>` +
     `<span class="ft-legend">用語: ${legend}</span>`;
 }
 

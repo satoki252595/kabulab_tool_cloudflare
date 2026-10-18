@@ -45,6 +45,28 @@ export function tenYearRangeForDate(to: string): { from: string; to: string } {
   return { from, to };
 }
 
+/** 原応答の最終日と採用バーの日付。休場・売買停止や窓の完全性は認定しない。 */
+export type IntraSourceStatus = {
+  status: "source_available" | "source_empty" | "source_unavailable";
+  observedAt: string;
+  rawSha256: string;
+  lastSourceDate: string | null;
+  lastValidSourceDate: string | null;
+};
+
+/** 旧保存物の欠落は呼出側で未観測とする。存在する診断は厳格に検証する。 */
+export function isIntraSourceStatus(value: unknown): value is IntraSourceStatus {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const s = value as Record<string, unknown>;
+  if (!isStrictIsoUtc(s.observedAt) || typeof s.rawSha256 !== "string" || !/^[a-f0-9]{64}$/.test(s.rawSha256)) return false;
+  if (s.status === "source_empty") return s.lastSourceDate === null && s.lastValidSourceDate === null;
+  if (!isCalendarDateString(s.lastSourceDate)) return false;
+  if (s.status === "source_available") return s.lastValidSourceDate === s.lastSourceDate;
+  if (s.status === "source_unavailable") return s.lastValidSourceDate === null ||
+    (isCalendarDateString(s.lastValidSourceDate) && s.lastValidSourceDate < s.lastSourceDate);
+  return false;
+}
+
 /** DailyFetchProof の形状検証 (保存物・応答物の strict-when-present 用)。 */
 export function isDailyFetchProof(p: unknown): p is DailyFetchProof {
   if (p === null || typeof p !== "object" || Array.isArray(p)) return false;

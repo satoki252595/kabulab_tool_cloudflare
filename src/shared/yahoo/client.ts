@@ -26,6 +26,7 @@ import {
   guardChartBars,
   isProvenSamePoint,
 } from "./bar-sanity.js";
+import { isIntraSourceStatus, jstDateSec, type IntraSourceStatus } from "../vwap/proof.js";
 import { STOCK_CODE_REGEX } from "../jpx/stock-code.js";
 import { sha256HexBytes } from "../sha256.js";
 import { fetchYahooWithSpacing } from "./request-spacing.js";
@@ -1127,6 +1128,25 @@ export async function fetchBars5mWindow(
   return parseBars5m(await response.json(), symbol);
 }
 
+/** 形状・実価格検査を通ったがNULL行で採用barがない。通信/不正値とは分離する。 */
+export class YahooIntraSourceUnavailableError extends Error {}
+
+/** 同captureの原応答日と採用日を記録する。未観測の取引日・無取引は推測しない。 */
+export async function describeIntraSource(capture: YahooRawCapture, bars: readonly Bar5m[]): Promise<IntraSourceStatus> {
+  if (capture.status !== 200) throw new Error("5分足の取得状況に成功HTTP原本がありません");
+  const { timestamps } = extractChartResult(capture.symbol, JSON.parse(new TextDecoder().decode(capture.bytes)));
+  let sourceTs: number | null = null, validTs: number | null = null;
+  for (const ts of timestamps) if (sourceTs === null || ts > sourceTs) sourceTs = ts;
+  for (const b of bars) if (validTs === null || b.ts > validTs) validTs = b.ts;
+  const lastSourceDate = sourceTs === null ? null : jstDateSec(sourceTs);
+  const lastValidSourceDate = validTs === null ? null : jstDateSec(validTs);
+  const status: IntraSourceStatus = { status: lastSourceDate === null ? "source_empty" :
+    lastSourceDate === lastValidSourceDate ? "source_available" : "source_unavailable",
+    observedAt: capture.receivedAt, rawSha256: await sha256HexBytes(new Uint8Array(capture.bytes)), lastSourceDate, lastValidSourceDate };
+  if (!isIntraSourceStatus(status)) throw new Error("5分足の原応答日と採用日の診断が不正です");
+  return status;
+}
+
 /** 保存済みの原応答も同じ検査で解析する。HTTP取得・受領時計の再生成はしない。 */
 export function parseBars5m(json: unknown, symbol: string): Bar5m[] {
   const j = json as YahooChartJson;
@@ -1194,7 +1214,7 @@ export function parseBars5m(json: unknown, symbol: string): Bar5m[] {
     });
   }
   if (out.length === 0 && droppedNull > 0) {
-    throw new Error(
+    throw new YahooIntraSourceUnavailableError(
       `Chart API エラー [${symbol}]: 全行欠落のため空として採用しません ` +
         `(timestamps=${timestamps.length} null脱落=${droppedNull} v0除外=${droppedZeroVol})。`
     );
