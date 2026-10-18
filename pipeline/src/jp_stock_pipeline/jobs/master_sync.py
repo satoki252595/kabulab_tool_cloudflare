@@ -37,6 +37,11 @@ from __future__ import annotations
 
 import logging
 import json
+import hashlib
+import re
+from datetime import datetime
+from pathlib import Path
+from uuid import UUID
 import time
 from functools import partial
 
@@ -69,9 +74,130 @@ def _code_scope(args) -> set[str] | None:
     return set(codes)
 
 
+
+def _load_financial_pre_rejection(path: str, digest: str) -> dict:
+    """認可SHAに束縛した540の既知PRE URL400だけ。一般400/unknownは受けない。"""
+    if not re.fullmatch(r"[a-f0-9]{64}", digest):
+        raise ValueError("reconcile proof SHA256が不正")
+    with Path(path).open("rb") as handle:
+        body = handle.read(64 * 1024 + 1)
+    if len(body) > 64 * 1024 or hashlib.sha256(body).hexdigest() != digest:
+        raise ValueError("reconcile proof bytes/SHA256が不一致")
+    proof = json.loads(body)
+    required = {"version", "kind", "code", "financialPageId", "masterPageId", "controlKey",
+                "oldPendingSha256", "preSha256", "oldRevision", "capturedFiles"}
+    if (set(proof) != required or proof["version"] != 1
+            or proof["kind"] != "financial-pre-empty-url-400"
+            or proof["oldRevision"] != "4e40ab90c1abe67639f68b1835c1ed753a2f3a25"
+            or parse_stock_code(proof["code"]) != proof["code"] or proof["code"] == "0000"
+            or str(UUID(proof["financialPageId"])) != proof["financialPageId"]
+            or str(UUID(proof["masterPageId"])) != proof["masterPageId"]
+            or proof["controlKey"] != f"financial-master-relations/{proof['financialPageId']}.json"):
+        raise ValueError("reconcile proofの対象/旧revisionが不正")
+    files = proof["capturedFiles"]
+    source_hashes = {
+        "oldSource": "c5e4beca7a055b48c34d0f39bde08d699a35ec765bd4fc19315d4132b3faf48a",
+        "oldUploadSource": "9efde803aba2a3fcc23ef74a3b536fe92ab126a389f82a80b5cb4b240e841739",
+        "oldRunnerSource": "c99d9f05031896f7192245f0d9c880056df01ac9ee0aafcd21c87e120c80fe0f",
+    }
+    if set(files) != {"normalStarted", "normalFinished", "normalLog", "freshReadback",
+                      "expectedFinancial", "processClosure", *source_hashes}:
+        raise ValueError("reconcile原証跡が不完全")
+    evidence = {}
+    for name, pin in files.items():
+        if set(pin) != {"path", "sha256"}:
+            raise ValueError("reconcile原証跡pin形状が不正")
+        with Path(pin["path"]).open("rb") as handle:
+            data = handle.read(1024 * 1024 + 1)
+        if len(data) > 1024 * 1024 or hashlib.sha256(data).hexdigest() != pin["sha256"]:
+            raise ValueError("reconcile原証跡bytes/SHA256が不一致")
+        if name in source_hashes and pin["sha256"] != source_hashes[name]:
+            raise ValueError("未知の旧sourceはreconcile不可")
+        evidence[name] = data.decode("utf-8")
+    started, finished, closure = [json.loads(evidence[k]) for k in
+                                  ("normalStarted", "normalFinished", "processClosure")]
+    if (finished["exitCode"] != 1 or started["pid"] != finished["pid"]
+            or started["startedAt"] != finished["startedAt"]
+            or started["revision"] != proof["oldRevision"] or finished["revision"] != proof["oldRevision"]
+            or proof["code"] not in started["scope"]
+            or closure["kind"] != "financial-master-run-process-closure"
+            or closure["oldRevision"] != proof["oldRevision"] or closure["normalPid"] != started["pid"]
+            or set(closure["absentPids"]) != {closure["operatorPid"], started["pid"]}
+            or closure["psExitCode"] != 1 or closure["psOutput"] != "" or closure["normalExitCode"] != 1
+            or closure["normalFinishedSha256"] != files["normalFinished"]["sha256"]
+            or closure["normalLogSha256"] != files["normalLog"]["sha256"]):
+        raise ValueError("旧normal/親processの既知閉鎖が不一致")
+    clocks = [datetime.fromisoformat(value) for value in
+              (started["startedAt"], finished["finishedAt"], closure["observedAt"])]
+    if any(clock.tzinfo is None for clock in clocks) or not clocks[0] <= clocks[1] <= clocks[2]:
+        raise ValueError("旧normal閉鎖の実時計が不一致")
+    log = evidence["normalLog"]
+    if ('POST https://api.notion.com/v1/pages "HTTP/1.1 400 Bad Request"' not in log
+            or any(f'File "{started["runtime"]}/pipeline/src/jp_stock_pipeline/{file}"' not in log
+                   for file in ("notion/upsert.py", "notion/file_upload.py", "jobs/runner.py"))
+            or 'body.properties.取得URL.url should be populated or `null`, instead was `""`.' not in log
+            or 'pre_archive = physical(pending, "pre")' not in log
+            or 'notion.file_upload.RawUploadError' not in log or 'HTTP Request: PATCH ' in log
+            or f"-_financial-master-pre_{proof['code']}_" not in log):
+        raise ValueError("旧failureは既知PRE URL400の未PATCH証拠でない")
+    readback = json.loads(evidence["freshReadback"])
+    expected = {case["code"]: case["financial"] for case in json.loads(evidence["expectedFinancial"])["cases"]}
+    observed = [datetime.fromisoformat(readback[k]) for k in ("startedAt", "finishedAt")]
+    if any(clock.tzinfo is None for clock in observed) or not clocks[1] <= observed[0] <= observed[1] <= clocks[2]:
+        raise ValueError("旧readbackの実時計が不一致")
+    cases = readback["cases"]
+    if (len(cases) != len(expected) or len({case["code"] for case in cases}) != len(cases)
+            or {case["code"] for case in cases} != set(expected)):
+        raise ValueError("旧financial readback母集団が不一致")
+    target = None
+    for case in cases:
+        if (case["allPropertiesUnchanged"] is not True
+                or case["current"]["properties"] != expected[case["code"]]["properties"]
+                or case["financialPageId"] != case["current"]["id"]
+                or case["current"]["id"] != expected[case["code"]]["id"]):
+            raise ValueError("旧financial全propsが不一致")
+        if case["code"] == proof["code"]:
+            target = case
+        elif case["r2Found"] is not False or case["r2Value"] is not None:
+            raise ValueError("別financial操作はreconcile不可")
+    if (target is None or target["r2Found"] is not True or target["r2Key"] != proof["controlKey"]
+            or target["financialPageId"] != proof["financialPageId"]):
+        raise ValueError("旧pending対象が不一致")
+    pending = target["r2Value"]
+    if (set(pending) != {"version", "status", "code", "financial_page_id", "master_page_id", "pre",
+                        "pre_sha256", "raw", "native", "started_at"}
+            or pending["status"] != "pending" or pending["version"] != 1
+            or pending["code"] != proof["code"] or pending["financial_page_id"] != proof["financialPageId"]
+            or pending["master_page_id"] != proof["masterPageId"]
+            or hashlib.sha256(upsert._financial_relation_json(pending)).hexdigest() != proof["oldPendingSha256"]
+            or pending["pre_sha256"] != proof["preSha256"]
+            or hashlib.sha256(upsert._financial_relation_json(pending["pre"])).hexdigest() != proof["preSha256"]
+            or pending["pre"]["properties"] != target["current"]["properties"]):
+        raise ValueError("旧pending/PRE全bytesが不一致または消費済み")
+    pending_clock = datetime.fromisoformat(pending["started_at"])
+    if pending_clock.tzinfo is None or not clocks[0] <= pending_clock <= clocks[1]:
+        raise ValueError("旧pendingの実時計が不一致")
+    return {**proof, "proofSha256": digest, "oldPending": pending}
+
+
 def execute(ctx: JobContext) -> None:
     # 不正な部分scopeは原本取得より前に止める。省略時は従来の全件同期。
     scope = _code_scope(ctx.args)
+    path, digest = ctx.args.reconcile_financial_pre, ctx.args.reconcile_financial_pre_sha256
+    if path is not None or digest is not None:
+        if path is None or digest is None or scope is None or len(scope) != 1 or ctx.args.limit is not None:
+            raise ValueError("reconcileは両proof引数と1code必須、limit併用不可")
+        proof = _load_financial_pre_rejection(path, digest)
+        if scope != {proof["code"]}:
+            raise ValueError("reconcile --codesと証跡対象が不一致")
+        bucket = None if (ctx.cloud is None or not ctx.cloud.settings.r2_enabled()) else ctx.cloud.raw_bucket
+        result = upsert.reconcile_financial_master_pre_rejection(
+            ctx.client, ctx.settings, proof, raw_bucket=bucket, archive=ctx.upload_raw,
+        )
+        if result != "repaired":
+            raise RuntimeError("reconcileが正常完了していない")
+        ctx.add_success()
+        return
     # 1-3. Fetch / Save raw / Convert
     artifact = edinet_codelist.fetch_codelist(ctx.settings)
     artifact = edinet_codelist.convert_codelist(artifact)
@@ -390,6 +516,8 @@ def _hold_absent_codes(
 
 def main(argv: list[str] | None = None, *, env: dict[str, str] | None = None) -> int:
     parser = build_parser("EDINETコードリスト → ① 銘柄マスタ同期 (月1)")
+    parser.add_argument("--reconcile-financial-pre", default=None, help="既知PRE URL400の固定証跡FILE")
+    parser.add_argument("--reconcile-financial-pre-sha256", default=None, help="明示認可した証跡SHA256")
     return run_job(JOB_NAME, execute, argv, parser=parser, env=env)
 
 

@@ -327,3 +327,83 @@ def test_selected_empty_projection_chunks_and_offscope_stop_before_repair(actual
         mod.sync_financial_master_relations(a.client, a.settings, records,
                                            raw_bucket=a.bucket, archive=a.archive, on_hold=lambda *args: None)
     assert a.patches == []
+
+
+def _known_pre_rejection(actual):
+    a = actual
+    archive = a.archive
+    a.archive = lambda _: (_ for _ in ()).throw(RuntimeError("declared known PRE page rejection"))
+    with pytest.raises(RuntimeError, match="known PRE"):
+        _repair(a)
+    a.archive = archive
+    pending = deepcopy(next(iter(a.bucket.objects.values())))
+    proof = {"code": a.record.code, "financialPageId": a.pre["id"],
+             "controlKey": f"financial-master-relations/{a.pre['id']}.json",
+             "oldPendingSha256": sha256(mod._financial_relation_json(pending)).hexdigest(),
+             "oldPending": pending, "proofSha256": sha256(b"declared offline proof authorization").hexdigest()}
+    a.bucket.etag = "old-claim"
+    a.bucket.get_json_with_etag = lambda key, **kwargs: (
+        deepcopy(a.bucket.objects[key]), mod._financial_relation_json(a.bucket.objects[key]), a.bucket.etag,
+    )
+    def put(key, value, *, etag=None):
+        assert etag == a.bucket.etag
+        a.bucket.etag = "consumed-marker" if value["status"] == "pending" else "complete"
+        a.bucket.objects[key] = deepcopy(value)
+        a.bucket.puts.append(deepcopy(value))
+        return a.bucket.etag
+    a.bucket.put_json_conditional = put
+    return proof
+
+
+def _reconcile(a, proof):
+    return mod.reconcile_financial_master_pre_rejection(a.client, a.settings, proof,
+                                                      raw_bucket=a.bucket, archive=a.archive)
+
+
+def test_known_pre_rejection_consumes_once_and_preserves_original_pre(actual):
+    a, proof = actual, _known_pre_rejection(actual)
+    original = mod._financial_relation_json(proof["oldPending"])
+    assert _reconcile(a, proof) == "repaired"
+    assert a.archives[0].local_path.read_bytes() == original
+    completed = a.bucket.objects[proof["controlKey"]]
+    assert completed["started_at"] == proof["oldPending"]["started_at"]
+    assert completed["pre"] == proof["oldPending"]["pre"]
+    assert completed["reconcile"]["old_pending_sha256"] == sha256(original).hexdigest()
+    assert completed["reconcile"]["proof_sha256"] == proof["proofSha256"]
+    assert len(a.patches) == 1 and len(a.archives) == 2
+    with pytest.raises(RuntimeError, match="再入禁止"):
+        _reconcile(a, proof)
+    assert len(a.patches) == 1
+
+
+@pytest.mark.parametrize("fault", ["body", "pre", "native", "cas-unknown", "cas-applied-unknown", "patch-unknown"])
+def test_reconcile_mismatch_or_unknown_never_blindly_repatches(actual, fault):
+    a, proof = actual, _known_pre_rejection(actual)
+    if fault == "body":
+        a.bucket.objects[proof["controlKey"]]["started_at"] = now_jst().isoformat()
+    elif fault == "pre":
+        a.pre["properties"][S.FIN_PROP_ROA]["number"] = None
+    elif fault == "native":
+        a.master["properties"][S.MASTER_PROP_EDINET_CODE] = _response({
+            S.MASTER_PROP_EDINET_CODE: mod.text_prop("E00000")})[S.MASTER_PROP_EDINET_CODE]
+    elif fault in ("cas-unknown", "cas-applied-unknown"):
+        put = a.bucket.put_json_conditional
+        def unknown_cas(*args, **kwargs):
+            if fault == "cas-applied-unknown":
+                put(*args, **kwargs)
+            raise RuntimeError("CAS unknown")
+        a.bucket.put_json_conditional = unknown_cas
+    else:
+        patch = a.client.raw_api
+        def unknown(*args, **kwargs):
+            patch(*args, **kwargs)
+            raise RuntimeError("PATCH unknown after application")
+        a.client.raw_api = unknown
+    with pytest.raises((RuntimeError, mod.FinancialRelationHold)):
+        _reconcile(a, proof)
+    assert len(a.patches) == (1 if fault == "patch-unknown" else 0)
+    if fault in ("patch-unknown", "cas-applied-unknown"):
+        assert "reconcile" in a.bucket.objects[proof["controlKey"]]
+        with pytest.raises(RuntimeError, match="再入禁止"):
+            _reconcile(a, proof)
+        assert len(a.patches) == (1 if fault == "patch-unknown" else 0)

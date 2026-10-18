@@ -96,6 +96,26 @@ class R2Store:
             raise R2Error(f"R2 PUT 失敗 {self.bucket}/{key}: {exc}") from exc
         logger.info("R2 PUT %s/%s (%d bytes)", self.bucket, key, len(body))
 
+    def get_json_with_etag(self, key: str, *, max_bytes: int) -> tuple[dict, bytes, str]:
+        """既存controlの原bytes/ETagを同一GETから返す。不存在/不完全はSTOP。"""
+        if type(max_bytes) is not int or max_bytes <= 0:
+            raise ValueError("control max_bytesは正整数必須")
+        try:
+            response = self.s3.get_object(Bucket=self.bucket, Key=key)
+            stream = response["Body"]
+            try:
+                body = stream.read(max_bytes + 1)
+            finally:
+                stream.close()
+            etag = response.get("ETag")
+            payload = json.loads(body)
+            if (len(body) > max_bytes or not isinstance(payload, dict)
+                    or not isinstance(etag, str) or not etag):
+                raise ValueError("control body/ETagが不完全")
+            return payload, body, etag
+        except Exception as exc:  # noqa: BLE001 - 欠測をabsentへ変換しない
+            raise R2Error("R2 control原bytes/ETagを読めない; reconcile禁止") from exc
+
     def put_json_conditional(self, key: str, payload: dict, *, etag: str | None = None) -> str:
         """Absent claim / same-ETag completion only. 412 and transport unknown both STOP."""
         condition = {"IfNoneMatch": "*"} if etag is None else {"IfMatch": etag}

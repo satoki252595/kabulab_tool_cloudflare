@@ -145,6 +145,23 @@ Nixの直接関連4suite214件PASS、全体TypeScript型検査・変更8source/t
 
 financial PATCHは例外より後の経路にあり未到達。3行のfresh全property再読が旧値と完全一致し、R2pendingは624Aの1件だけ、他2社は未入場だった。旧pending・原log・PRE原本を保持し、結果不明の再送禁止を解除しない。実行19.420秒・exit1、finance補完0件。readback私有根拠`financial-master-relations-normal540-v1/after-known-pre-rejection.json` SHA256 `78c36e5a6dd704c5af2e2f1606160a4a79d3e6d75c9fcf6118eede21bf48457e`。本文検査は33窓の正常閉鎖後に区切り、財務停止と保全確認後21:25:03に同じdriver/runtime/envから再開した。
 
+## 既知の物理PRE拒否からの限定再開
+
+624Aの旧pendingを削除して再実行せず、通常`master_sync`に明示入口を追加した。旧main540の3source、実log、開始/終了receipt、終了PID確認、3財務の全property不変読戻し、旧pending全文を固定SHAで検証する。任意の400や結果不明を例外扱いしない。実証跡9ファイルを使うoffline loader検査も通過した。
+
+実行はNix内・設定済み`.env`・適用mainの専用runtimeで、通常のPython moduleに次の引数を渡す。両proof引数と`--codes=624A`を必須とし、`--limit`は許可しない。SSHへの移送では9原本bytesを保持してproofの絶対pathだけを付け替え、その新しいproof SHAを明示する。
+
+```sh
+python -m jp_stock_pipeline.jobs.master_sync --require-cloud --codes=624A \
+  --reconcile-financial-pre=FILE --reconcile-financial-pre-sha256=SHA
+```
+
+この入口は公式コード表取得・①upsert・D1業種更新より前に分岐する。現在の財務全文、一意な①、⑤と原本native主体/期間を再資格化し、同一GETのR2本文/ETagが旧pendingと完全一致する時だけ同keyへ条件付き再開markerを保存する。markerの成功応答後にのみ、旧pending原本の物理PRE保管・通常の書込直前比較・空relation1列PATCH・全文POST/物理POST・条件付きcompletion/読戻しを行う。数値19列・出典・ライセンス・源取得時計・旧開始時計を変更しない。
+
+既存SDKの条件付きPUT再送は維持する。markerが適用された結果不明、PATCHの結果不明、POST未完はmarker/pendingを保持して停止し、同じ証跡の再PATCHを許さない。markerの通信結果不明でサーバー未適用なら旧SHAが残り得るため、この場合まで永続的な再入場禁止を保証するものではない。運用は停止・自動再実行なしとする。通常月次経路は引き続き既存pendingで停止し、この例外を自動適用しない。
+
+Nixの6suite356件PASS・既存原本未配置2件SKIP、URL修正541の統合後3suite158件PASS・実証跡loader PASS、変更7PythonのRuffと独立FSレビューを通過。ready-v2 SHA256 `89072f2b16f371ac8839d625b4fb77ccdcaa815f35073a67621661ce1f1836e7`、統合peer SHA256 `d94ad61949fd2811497d6d2206058366939bbe1f4a9d038e53291b09a4201245`。542のmergeでは当該7Python bytesは変わっていない。この時点では新入口の本番実行・3relation補完は未実施で、コード受入と実データ受入を区別する。
+
 ## 過去本文の再抽出失敗による旧索引消去を防ぐ
 
 `backfill-text-sections --force`は非空の再抽出なら、新Notion全文の往復照合→D1のstatus/索引/新pointerを同一batchで確定→旧Notion行を退役する既存経路が接続している。一方、CSV未提供・parse失敗で0節になった場合は、旧Notionpointerを残したまま正常な旧D1索引をDELETEする枝があった。
