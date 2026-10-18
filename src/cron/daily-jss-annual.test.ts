@@ -31,11 +31,13 @@ CREATE TABLE jss_financials (
 
 let sqlite: DatabaseSync;
 let executed: string[];
+let bound: unknown[][];
 
 function makeProxyDb(target: DatabaseSync, log: string[]) {
   return drizzle(
     async (sqlStr, params, method) => {
       log.push(sqlStr);
+      bound.push([...params]);
       const stmt = target.prepare(sqlStr);
       const bind = params as (null | number | bigint | string | Uint8Array)[];
       if (method === "run") {
@@ -72,6 +74,7 @@ beforeEach(() => {
   sqlite = new DatabaseSync(":memory:");
   sqlite.exec(DDL);
   executed = [];
+  bound = [];
 });
 
 afterEach(() => {
@@ -111,4 +114,27 @@ describe("loadJssAnnualMap", () => {
       'where ("jss_financials"."disclosure_type" = ? and "jss_financials"."license_tag" = ?)'
     );
   });
+
+  it("optional codes scope is applied by SQL with one JSON bind and unchanged annual qualification", async () => {
+    seed("8154", "2026-03-31", "本決算", "連結", 658_941_000_000, "commercial-ok");
+    seed("8154", "2025-03-31", "本決算", "連結", null, "commercial-ok");
+    seed("1002", "2025-03-31", "本決算", "単体", 10_000_000_000, "commercial-ok");
+    seed("8154", "2024-03-31", "本決算", "連結", 777, "factual-cite");
+    const all = await loadJssAnnualMap(db());
+    executed = []; bound = [];
+    const scoped = await loadJssAnnualMap(db(), ["8154", "8154"]);
+    expect([...scoped]).toEqual([["8154", all.get("8154")]]);
+    expect(executed).toHaveLength(1);
+    expect(executed[0]).toContain('"jss_financials"."code" in (select value from json_each(?))');
+    expect(bound).toEqual([["本決算", "commercial-ok", '["8154"]']]);
+  });
+
+  it("explicit empty scope makes no query; noncanonical scope stops before SQL", async () => {
+    expect(await loadJssAnnualMap(db(), [])).toEqual(new Map());
+    for (const codes of [["8154 "], ["bad"], Array<string>(1)]) {
+      await expect(loadJssAnnualMap(db(), codes)).rejects.toThrow("正準形");
+    }
+    expect(executed).toEqual([]);
+  });
+
 });

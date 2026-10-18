@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import * as coreSchema from "../shared/db/core-schema.js";
 import * as rsiSchema from "../../services/rsi-screening/src/db/schema.js";
 import * as swingSchema from "../../services/swing-trading/src/db/schema.js";
 import * as projectionSchema from "../shared/db/projection-schema.js";
 import {
+  buildStockSnapshotStatements,
   collectOhlcvGapCandidates,
   flushSnapshots,
   loadSavedOhlcvDates,
@@ -121,6 +122,57 @@ function countInsertsInto(calls: RecordedCall[], table: string): number {
   const pattern = new RegExp(`insert into "${table}"`, "i");
   return calls.filter((c) => pattern.test(c.sql)).length;
 }
+
+describe("normal snapshot SQL preparation", () => {
+  it.each([
+    { writeAnnual: true, writeCoreFinancials: true },
+    { writeAnnual: false, writeCoreFinancials: true },
+    { writeAnnual: false, writeCoreFinancials: false },
+  ])("prepares without executing and keeps normal writer SQL/params: %j", async options => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-18T07:38:23.588Z"));
+    try {
+      const { db, calls } = makeRecordingDb();
+      const snap = { ...makeSnap(1), pbr: null, latestVolume: 0 };
+      const prepared = buildStockSnapshotStatements(db, snap, "2026-09-10", { ...options, runStartedSec: 1_792_308_000 });
+      expect(calls).toEqual([]);
+      await writeStockSnapshot(db, snap, "2026-09-10", { ...options, runStartedSec: 1_792_308_000 });
+      expect(prepared.statements).toEqual(calls);
+      expect(prepared.statements.every(value => value.params.length <= 100)).toBe(true);
+      expect(prepared.statements.some(value => /swing_daily_ohlcv|^delete/i.test(value.sql))).toBe(false);
+      if (!options.writeAnnual) expect(prepared.expectedRows.some(value => value.table === "core_stock_annual_financials")).toBe(false);
+      const indicator = prepared.expectedRows.find(value => value.table === "swing_stock_indicators")!.rows[0];
+      expect(indicator).toMatchObject({ stock_id: 1, trend_long: 0, latest_volume: 0, latest_close: null });
+      expect(indicator).not.toHaveProperty("computed_at"); // server default is not a provided value
+      const momentum = prepared.expectedRows.find(value => value.table === "p_momentum")!.rows[0];
+      expect(momentum.computed_at).toBe(Math.floor(Date.now() / 1000));
+      if (options.writeCoreFinancials) expect(prepared.expectedRows.find(value => value.table === "core_stock_financials")!.rows[0].pbr).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps signal INSERT and actual run clock as normal driver values", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-18T07:38:23.588Z"));
+    try {
+      const { db, calls } = makeRecordingDb();
+      const snap = { ...makeSnap(1), latestClose: 100, latestOpen: 95, latestHigh: 101, latestLow: 94,
+        previousClose: 95, range20dHigh: 90, range20dLow: 80, rangeWidth: 10, volumeRatio: 2 };
+      const runStartedSec = Math.floor(Date.now() / 1000);
+      const prepared = buildStockSnapshotStatements(db, snap, "2026-09-10", { writeAnnual: false, runStartedSec });
+      expect(calls).toEqual([]);
+      const signals = prepared.expectedRows.find(value => value.table === "swing_entry_signals")!.rows;
+      expect(signals.length).toBeGreaterThan(0);
+      expect(signals.every(value => value.stock_id === 1 && value.computed_at === runStartedSec)).toBe(true);
+      await writeStockSnapshot(db, snap, "2026-09-10", { writeAnnual: false, runStartedSec });
+      expect(prepared.statements).toEqual(calls);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+});
 
 describe("flushSnapshots (L-56)", () => {
   const N = 20;

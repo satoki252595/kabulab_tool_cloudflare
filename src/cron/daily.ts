@@ -39,8 +39,10 @@
  *   - マクロ 4 指数のどれかが取れない場合も null で通す
  */
 
-import { sql, eq, and, or, gte, lte, lt, asc, isNull, inArray } from "drizzle-orm";
-import { createD1HttpBatchSender, createD1HttpDb, toD1BatchStatements } from "../shared/db/d1-http-client.js";
+import { sql, eq, and, or, gte, lte, lt, asc, isNull, inArray, getTableColumns, getTableName } from "drizzle-orm";
+import type { SQLiteTable } from "drizzle-orm/sqlite-core";
+import { parseStockCode } from "../shared/jpx/stock-code.js";
+import { createD1HttpBatchSender, createD1HttpDb, toD1BatchStatements, type D1BatchStatement } from "../shared/db/d1-http-client.js";
 import { publicSectorColumn } from "../shared/db/public-columns.js";
 import { activeEquityCondition } from "../shared/db/active-equity.js";
 import {
@@ -711,8 +713,15 @@ export async function loadDailyTargets(db: Db) {
  * (単年 jss 値への置換は定義を変えるのでしない)。
  */
 export async function loadJssAnnualMap(
-  db: Db
+  db: Db,
+  codes?: readonly string[]
 ): Promise<Map<string, JssAnnualRow[]>> {
+  if (codes !== undefined) {
+    for (const code of codes) {
+      if (parseStockCode(code) !== code) throw new Error("年次入力の銘柄コードscopeが正準形ではありません");
+    }
+    if (codes.length === 0) return new Map();
+  }
   const rows = await db
     .select({
       code: jssFinancials.code,
@@ -724,7 +733,9 @@ export async function loadJssAnnualMap(
     .where(
       and(
         eq(jssFinancials.disclosureType, "本決算"),
-        eq(jssFinancials.licenseTag, PUBLISHABLE_LICENSE_TAG)
+        eq(jssFinancials.licenseTag, PUBLISHABLE_LICENSE_TAG),
+        codes === undefined ? undefined : inArray(jssFinancials.code,
+          sql`(select value from json_each(${JSON.stringify([...new Set(codes)])}))`)
       )
     )
     .orderBy(asc(jssFinancials.code), asc(jssFinancials.fiscalPeriodEnd));
@@ -2476,33 +2487,18 @@ function buildMomentumRows(
  * 表ごとの multi-row upsert 1 仕様。行の組み立て (build) と書込 (upsert) を分ける。
  */
 interface TableFlushSpec {
+  table: SQLiteTable;
   rowsPerStatement: number;
   build: (item: FlushItem<never>) => BuiltRow<Record<string, unknown>>[];
-  upsert: (db: Db, rows: Record<string, unknown>[]) => Promise<void>;
+  upsert: (db: Db, rows: Record<string, unknown>[]) => PromiseLike<unknown> & { toSQL(): { sql: string; params: unknown[] } };
 }
 
-/**
- * 複数銘柄の snapshot を表ごとにまとめて書く (L-56)。
- *
- * 失敗の扱いは旧 writeStockSnapshot と同じ粒度にする: チャンク単位で
- * try/catch し、落ちたチャンクの銘柄だけを失敗として返して続行する。
- * upsert は冪等なので、回収がその銘柄を全表で書き直しても壊れない。
- * 1 行 flush は旧 writeStockSnapshot と同じ文になる。
- *
- * @returns 失敗した銘柄 (target 付き)。空なら全件成功。
- */
-export async function flushSnapshots<T>(
-  db: Db,
-  items: FlushItem<T>[],
-  options: WriteStockSnapshotOptions = {}
-): Promise<FlushFailure<T>[]> {
+function snapshotFlushSpecs(options: WriteStockSnapshotOptions): TableFlushSpec[] {
   const { writeCoreFinancials = true, writeAnnual = true } = options;
-  const runStartedSec =
-    options.runStartedSec ?? Math.floor(Date.now() / 1000);
-  if (items.length === 0) return [];
-
-  const specs: TableFlushSpec[] = [
+  const runStartedSec = options.runStartedSec ?? Math.floor(Date.now() / 1000);
+  return [
     {
+      table: coreSchema.stockAnnualFinancials,
       rowsPerStatement: FLUSH_ROWS_PER_STATEMENT.annual,
       build: (item) =>
         buildAnnualRows(
@@ -2525,10 +2521,10 @@ export async function flushSnapshots<T>(
               coreSchema.stockAnnualFinancials.fiscalYear,
             ],
             set: { revenue: sql`excluded.revenue` },
-          })
-          .then(() => undefined),
+          }),
     },
     {
+      table: coreSchema.stockFinancials,
       rowsPerStatement: FLUSH_ROWS_PER_STATEMENT.financials,
       build: (item) =>
         buildFinancialsRows(item as FlushItem<never>, writeCoreFinancials),
@@ -2552,10 +2548,10 @@ export async function flushSnapshots<T>(
               dataDate: sql`excluded.data_date`,
               fetchedAt: sql`(unixepoch())`,
             },
-          })
-          .then(() => undefined),
+          }),
     },
     {
+      table: rsiSchema.stockRsiPercentile,
       rowsPerStatement: FLUSH_ROWS_PER_STATEMENT.rsi,
       build: (item) => buildRsiRows(item as FlushItem<never>),
       upsert: (db, rows) =>
@@ -2577,10 +2573,10 @@ export async function flushSnapshots<T>(
               revenueTrend: sql`excluded.revenue_trend`,
               computedAt: sql`(unixepoch())`,
             },
-          })
-          .then(() => undefined),
+          }),
     },
     {
+      table: swingSchema.dailyOhlcv,
       rowsPerStatement: FLUSH_ROWS_PER_STATEMENT.ohlcv,
       build: (item) => buildOhlcvRows(item as FlushItem<never>),
       upsert: (db, rows) =>
@@ -2597,10 +2593,10 @@ export async function flushSnapshots<T>(
               volume: sql`excluded.volume`,
               adj: sql`excluded.adj`,
             },
-          })
-          .then(() => undefined),
+          }),
     },
     {
+      table: swingSchema.stockIndicators,
       rowsPerStatement: FLUSH_ROWS_PER_STATEMENT.indicators,
       build: (item) => buildIndicatorRows(item as FlushItem<never>),
       upsert: (db, rows) =>
@@ -2649,20 +2645,20 @@ export async function flushSnapshots<T>(
               allPassedShort: sql`excluded.all_passed_short`,
               computedAt: sql`(unixepoch())`,
             },
-          })
-          .then(() => undefined),
+          }),
     },
     {
+      table: swingSchema.entrySignals,
       rowsPerStatement: FLUSH_ROWS_PER_STATEMENT.signals,
       build: (item) =>
         buildSignalRows(item as FlushItem<never>, runStartedSec),
       upsert: (db, rows) =>
         db
           .insert(swingSchema.entrySignals)
-          .values(rows as never[])
-          .then(() => undefined),
+          .values(rows as never[]),
     },
     {
+      table: projectionSchema.momentumProjection,
       rowsPerStatement: FLUSH_ROWS_PER_STATEMENT.momentum,
       build: (item) => buildMomentumRows(item as FlushItem<never>),
       upsert: (db, rows) =>
@@ -2678,10 +2674,55 @@ export async function flushSnapshots<T>(
               sourceMaxDate: sql`excluded.source_max_date`,
               computedAt: sql`excluded.computed_at`,
             },
-          })
-          .then(() => undefined),
+          }),
     },
   ];
+}
+
+/** 通常writerと同じ行・SQLを実行せず組み立てる。期待値はDB列名/driver値で返す。 */
+export function buildStockSnapshotStatements(
+  db: Db,
+  snap: StockSnapshot,
+  existingMaxDate: string | undefined,
+  options: WriteStockSnapshotOptions = {}
+): { statements: D1BatchStatement[]; expectedRows: Array<{ table: string; rows: Record<string, unknown>[] }> } {
+  const item: FlushItem<never> = { snap, existingMaxDate, correctionDates: options.correctionDates, savedDates: options.savedDates };
+  const statements: D1BatchStatement[] = [], expectedRows: Array<{ table: string; rows: Record<string, unknown>[] }> = [];
+  for (const spec of snapshotFlushSpecs(options)) {
+    const rows = spec.build(item).map(value => value.row);
+    if (rows.length === 0) continue;
+    const columns = getTableColumns(spec.table);
+    expectedRows.push({ table: getTableName(spec.table), rows: rows.map(row => Object.fromEntries(
+      Object.entries(row).filter(([, value]) => value !== undefined).map(([key, value]) => {
+        const column = columns[key];
+        if (column === undefined) throw new Error(`通常snapshotの未知の列: ${key}`);
+        return [column.name, value === null ? null : column.mapToDriverValue(value)];
+      })
+    )) });
+    for (let i = 0; i < rows.length; i += spec.rowsPerStatement) {
+      statements.push(...toD1BatchStatements([spec.upsert(db, rows.slice(i, i + spec.rowsPerStatement))]));
+    }
+  }
+  return { statements, expectedRows };
+}
+
+/**
+ * 複数銘柄の snapshot を表ごとにまとめて書く (L-56)。
+ *
+ * 失敗の扱いは旧 writeStockSnapshot と同じ粒度にする: チャンク単位で
+ * try/catch し、落ちたチャンクの銘柄だけを失敗として返して続行する。
+ * upsert は冪等なので、回収がその銘柄を全表で書き直しても壊れない。
+ * 1 行 flush は旧 writeStockSnapshot と同じ文になる。
+ *
+ * @returns 失敗した銘柄 (target 付き)。空なら全件成功。
+ */
+export async function flushSnapshots<T>(
+  db: Db,
+  items: FlushItem<T>[],
+  options: WriteStockSnapshotOptions = {}
+): Promise<FlushFailure<T>[]> {
+  if (items.length === 0) return [];
+  const specs = snapshotFlushSpecs(options);
 
   const failed = new Map<FlushItem<T>, FlushFailure<T>>();
   const failItems = (chunk: BuiltRow<Record<string, unknown>>[], error: unknown) => {

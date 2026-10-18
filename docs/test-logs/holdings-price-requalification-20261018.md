@@ -28,3 +28,28 @@ PRE送信前に通常価格markerを「実行中（結果未確定）」へ単�
 通常loaderのactive cache共有・明示null・unknown伝播、通常価格queueの新世代回復、同世代/source未完了のmutation 0、facts変更でPRE前停止、PRE unknownのsticky marker、既資格行の全props/旧proof保持と新pass未資格数0、ZIP予算不足でhosted/PRE/PATCH 0、外部再資格PREの欠落/key/SHA差でmutation前STOPを回帰で確認した。query時計は試験で明示したtransport投影であり、fresh本番観測の証拠ではない。Nixで関連6スイート187件、全体型検査、owned lintが成功した。
 
 正式な権利効力日・Yahoo価格basisを資格化できない行は従来どおり理由付きHOLD。今回の再資格入口はその値を推測せず、全権利処理や全価格セルの完成を意味しない。新registryの通常producer実受入、schema migration、現在原本/価格のfresh資格と通常価格writerの本番受入は別途必要である。
+
+
+## SSHでの固定価格対象の一巡
+
+10/18 16:48 JSTまでに通常の価格補完は`pending=false`で停止し、次の窓は開始しなかった。main527固定の追加47窓で2,755行を確認し、先行main526の2窓67行を含む累計は217文書・2,822行。これは確認した明細数であり、新規価格資格成立数ではない。47窓の全ACK/戻り・pending不存在・metadata STOP0・所有プロセス閉鎖を保存物から照合した。
+
+16:49の最後のメタデータ読取は通常共有Notion clientを使う読取専用5query、2.866秒で正常終了した。基準218文書すべてを観測し、基準外の旧台帳1文書を別集計した。現在の`local-9fe26841-activation1`へ結び付く固定217文書の全cursorが末尾に達していた。
+
+| 現在の保存counter | 行数 |
+|---|---:|
+| 原本明細 | 2,822 |
+| 価格資格成立または旧確定値保持 | 1,064 |
+| 価格資格未成立 | 1,758 |
+| 未処理 | 0 |
+
+価格状態は完了17文書・要確認200文書。別名義208Aの4行は元原本に残し、価格対象の算術から除外した。未処理0を全価格の資格成立へ読み替えない。新規資格成立行数、全行の現台帳による再資格、全行の現権利根拠再確認は未測定であり、上の1,064には旧確定値保持を含む。新台帳・必要原本の更新時に、通常定期処理が未資格行を再確認する。
+
+最後の読取では業務書込・取得元API・hosted・モデル0。追加の明細ごとのGETや全原本再取得は行わず、原300秒内の通常閉鎖と保存算術を独立に確認した。47窓全体のR2 native要求数・実読取量・実請求額は未測定。
+
+私有保存先: `tmp/feature-audit-20261018/holdings-rights-needed-current-v1/final-price-recovery-metadata-read-v1/`。
+
+- メタデータ結果 `actual-metadata-v1.json`: SHA256 `6c88469fd7d7a804c93255ccc5df96f6fe3737b6b09ef5a7f9866636439844f3`
+- 通常閉鎖 `final-metadata-read-known-closure-v1.json`: SHA256 `7707e9dd9c80934d93d6261326ca413fb6e76f5750ed2cdca89e1f72109352d0`
+- Root保存物集計 `root-fixed-scope-acceptance-v1.json`: SHA256 `75c6fbb4a045523f18e848c3a45151556fa0b61581e9943a0eafe93aceaf8032`
+- 独立保存物照合 `delegate-final-metadata-saved-peer-v1.json`: SHA256 `aed0981bfd8d8c8f8f91a8cde6d4e29c3e1018309f41e57091cea56964048c62`
