@@ -1,5 +1,5 @@
 /** Normal CLI with structural D1/archive adapters; no network or production writes. */
-import { existsSync, mkdtempSync, readFileSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -28,11 +28,11 @@ const originalArgv = process.argv;
 const directories: string[] = [];
 afterEach(() => { process.argv = originalArgv; for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true }); vi.unstubAllGlobals(); });
 
-function inputs() {
+function inputs(literals = false) {
   const base = mkdtempSync(join(tmpdir(), "yutai-record-tier-cli-")); directories.push(base);
-  const description = '【種別："QUOカード"】\n【1年未満保有株主】\n2,000円相当\n【1年以上保有株主】\n5,000円相当\n■継続保有期間について\n1年以上継続保有:株主名簿に3回以上記載または記録\n\n■贈呈時期\n毎年3月下旬発送予定';
+  const description = '【種別："QUOカード"】\n【1年未満保有株主】\n2,000円相当\n【1年以上保有株主】\n5,000円相当\n■継続保有期間について\n1年以上継続保有:株主名簿に3回以上記載または記録\n\n■贈呈時期\n毎年3月下旬発送予定' + (literals ? '\n※同じ株主番号が必要' : '');
   const facts = buildPublicBenefitFacts({ code: "1899", description, context: { minShares: [200], recordMonths: [12] }, fetchedAt: null, batchFetchedAt: null });
-  if (facts.version !== 4) throw Error("protocol v4 required");
+  if (facts.version !== (literals ? 5 : 4)) throw Error("protocol version required");
   const { conditionStructure, ...fields } = facts; void conditionStructure;
   const row: PublicFactsPreimage = { id: 1, stockId: 1, stockCode: "1899", stockName: "文法試験", description, genreId: 1, createdAt: 1, updatedAt: 2,
     shortSummary: null, estimatedValue: null, estimateValueSource: null, minShares: 200, recordMonth: 12, recordDate: null, publicFacts: JSON.stringify({ ...fields, version: 1 }) };
@@ -42,9 +42,9 @@ function inputs() {
   const { genreId, createdAt, publicFacts, ...sourceRow } = row; void genreId; void createdAt; void publicFacts;
   const sourcePath = join(base, "source.json"), scopePath = join(base, "scope.json"), dir = join(base, "prepared");
   writeFileSync(sourcePath, JSON.stringify({ fetchedAt: "2026-10-17T00:00:00.000Z", rows: [sourceRow] }));
-  writeFileSync(scopePath, JSON.stringify({ version: 1, kind: "holding-record-tiers-v1", groups: [{ code: row.stockCode, taskId: benefitKey(row.stockCode, description), sourceSha256: facts.conditionStructure.sourceSha256, rows: 1, recipients: [{ minShares: 200, recordMonth: 12, recordDate: null }] }] }));
+  writeFileSync(scopePath, JSON.stringify({ version: 1, ...(literals ? {} : { kind: "holding-record-tiers-v1" }), groups: [{ code: row.stockCode, taskId: benefitKey(row.stockCode, description), sourceSha256: facts.conditionStructure.sourceSha256, rows: 1, recipients: [{ minShares: 200, recordMonth: 12, recordDate: null }] }] }));
   const run = (mode: string) => { process.argv = ["node", "backfill-public-facts.ts", mode, sourcePath, dir, scopePath]; return runPublicFactsBackfillCLI(); };
-  return { base, dir, run, state: join(base, "tmp/yutai-public-facts-v1-record-tier-upgrade") };
+  return { base, dir, run, state: join(base, literals ? "tmp/yutai-public-facts-v1-tier-literals-upgrade" : "tmp/yutai-public-facts-v1-record-tier-upgrade") };
 }
 
 describe("通常CLIの明示v1→v4有限入口", () => {
@@ -84,4 +84,22 @@ describe("通常CLIの明示v1→v4有限入口", () => {
     expect(readFileSync(join(state, "upgrade-v1-started.json")).equals(pending)).toBe(true);
     expect(native).not.toHaveBeenCalled();
   });
+});
+
+// 通常CLIの同じadapterでv5を通し、前batchの壊れた完了を迂回しない。
+it("期間行v5を同じ物理PRE/POST・限定CASで更新し、壊れた前completionでは再送しない", async () => {
+  const { dir, run, state } = inputs(true), native = vi.fn(); vi.stubGlobal("fetch", native);
+  await run("prepare-upgrade-tier-literals-v1");
+  adapter.after = JSON.parse(readFileSync(join(dir, "expected.json"), "utf8"));
+  await run("apply-upgrade-tier-literals-v1");
+  expect(adapter.batches).toHaveLength(1);
+  expect(adapter.batches[0][0].sql).toContain("json_extract(b.public_facts,'$.sourceGroup') IN");
+  expect(adapter.archives).toHaveLength(2);
+  expect(adapter.archives[0].metadata).toMatchObject({ kind: "holding-tier-lines-v1", targetVersion: 5 });
+  const prior = join(state, readdirSync(state)[0]);
+  const completed = JSON.parse(readFileSync(join(prior, "upgrade-v1-completed.json"), "utf8"));
+  expect(completed.kind).toBe("holding-tier-lines-v1");
+  writeFileSync(join(prior, "upgrade-v1-completed.json"), JSON.stringify({ ...completed, intentSha256: "0".repeat(64) }));
+  await expect(run("apply-upgrade-tier-literals-v1")).rejects.toThrow(/receipt/);
+  expect(adapter.batches).toHaveLength(1); expect(native).not.toHaveBeenCalled();
 });

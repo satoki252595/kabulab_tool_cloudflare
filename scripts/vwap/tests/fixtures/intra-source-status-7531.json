@@ -1,0 +1,48 @@
+{
+  "provenance": {
+    "symbol": "7531.T",
+    "receivedAt": "2026-10-18T01:35:47.884Z",
+    "fullSourceSha256": "139b7cfcc8cd92f23ff8d91fa092cc05b3321a1450f415cba4d44142e5970961",
+    "projection": "Actual last valid row and last all-NULL row only; this is not the full native response."
+  },
+  "chart": {
+    "error": null,
+    "result": [
+      {
+        "meta": {
+          "symbol": "7531.T"
+        },
+        "timestamp": [
+          1791421800,
+          1792108800
+        ],
+        "indicators": {
+          "quote": [
+            {
+              "open": [
+                1311.0,
+                null
+              ],
+              "high": [
+                1311.0,
+                null
+              ],
+              "low": [
+                1311.0,
+                null
+              ],
+              "close": [
+                1311.0,
+                null
+              ],
+              "volume": [
+                200,
+                null
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

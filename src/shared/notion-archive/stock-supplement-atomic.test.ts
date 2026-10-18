@@ -1,7 +1,7 @@
 /** Saved source values with structural Notion responses; no network or production writes. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -27,9 +27,10 @@ const guard = vi.fn(async () => {});
 let requestNonce = 0;
 const old = { id: "old", type: "heading_3", has_children: false,
   heading_3: { rich_text: [{ plain_text: "事業タグの根拠（旧書類）" }], is_toggleable: true } };
-function setup(options: { badEvidence?: boolean; unknownAppend?: boolean; unknownPatch?: boolean; unknownRetire?: boolean; nestedEvidence?: boolean; badPost?: boolean; stalePre?: boolean; longProperty?: boolean; changedProtectedAfter?: boolean; reverseKeys?: boolean | "alternate" } = {}) {
+function setup(options: { badEvidence?: boolean; unknownAppend?: boolean; unknownPatch?: boolean; unknownRetire?: boolean; nestedEvidence?: boolean; sameEvidence?: boolean; evidenceDriftRead?: number; multipleEvidence?: boolean; unknownEvidenceRead?: boolean; badPost?: boolean; stalePre?: boolean; longProperty?: boolean; changedProtectedAfter?: boolean; reverseKeys?: boolean | "alternate" } = {}) {
   let patched = false;
   let pageReads = 0;
+  let evidenceReads = 0;
   const before = { id: "row", last_edited_time: "2026-10-14T00:00:00Z", properties: expected };
   const after = { ...before, properties: { ...before.properties, ...buildSupplementProperties(input) } };
   if (options.changedProtectedAfter) Object.assign(after.properties, buildSupplementProperties({ vocabVersion: "変更された旧model版" }));
@@ -43,8 +44,20 @@ function setup(options: { badEvidence?: boolean; unknownAppend?: boolean; unknow
       return options.reverseKeys === true || options.reverseKeys === "alternate" && pageReads % 2 === 0 ? reverseKeys(response) : response;
     }
     if (method === "GET" && path.startsWith("/pages/row/properties/")) return { results: [{ rich_text: { plain_text: "保存原文" } }], has_more: false, next_cursor: null };
-    if (method === "GET" && path.startsWith("/blocks/row/children")) return { results: [{ ...old, has_children: options.nestedEvidence === true }], has_more: false, next_cursor: null };
-    if (method === "GET" && path.startsWith("/blocks/old/children")) return { results: [{ id: "old-quote", type: "quote", quote: { rich_text: [{ plain_text: "旧根拠全文" }] } }], has_more: false, next_cursor: null };
+    if (method === "GET" && path.startsWith("/blocks/row/children")) {
+      evidenceReads++;
+      if (options.unknownEvidenceRead) throw new Error("existing full evidence unknown");
+      const existing = options.sameEvidence ? { id: "old", type: "heading_3", has_children: true,
+        heading_3: { rich_text: structuredClone((block as typeof old).heading_3.rich_text), is_toggleable: true } }
+        : { ...old, has_children: options.nestedEvidence === true };
+      return { results: options.multipleEvidence ? [existing, { ...existing, id: "another" }] : [existing], has_more: false, next_cursor: null };
+    }
+    if (method === "GET" && (path.startsWith("/blocks/old/children") || path.startsWith("/blocks/another/children"))) {
+      const quotes = options.sameEvidence ? structuredClone((block as { heading_3: { children: Array<{ quote: { rich_text: unknown[] } }> } }).heading_3.children)
+        : [{ type: "quote", quote: { rich_text: [{ plain_text: "旧根拠全文" }] } }];
+      if (options.evidenceDriftRead === evidenceReads) quotes[0].quote.rich_text = [{ plain_text: "並行編集された根拠" }];
+      return { results: quotes.map((q, i) => ({ id: `old-quote-${i}`, ...q })), has_more: false, next_cursor: null };
+    }
     if (method === "GET" && path.startsWith("/blocks/new/children")) return { results: (block as { heading_3: { children: unknown[] } }).heading_3.children, has_more: false, next_cursor: null };
     if (method === "PATCH" && path === "/blocks/row/children") {
       expect(opts?.singleAttempt).toBe(true);
@@ -246,6 +259,90 @@ describe("supplement evidence two-phase replacement", () => {
     const requests = io.request.mock.calls.map(([method, path]) => `${method} ${path}`);
     expect(requests.indexOf("GET /blocks/new")).toBeLessThan(requests.indexOf("PATCH /pages/row"));
     expect(requests.lastIndexOf("GET /pages/row")).toBeLessThan(requests.indexOf("DELETE /blocks/old"));
+  });
+  it("同じ単一根拠を全文再検証して再利用し、PRE/CAS/fullPOST後にだけ完了する", async () => {
+    setup({ sameEvidence: true });
+    const complete = vi.fn(), reserve = vi.fn(() => ({ complete }));
+    await replaceEvidenceBlock("row", block, input, expected, guard, { assertReady() {}, reserve });
+    expect(mutations()).toEqual(["PATCH /pages/row"]);
+    expect(io.archive).toHaveBeenCalledTimes(1); expect(io.verify).toHaveBeenCalledTimes(1);
+    expect(guard).toHaveBeenCalledTimes(1); expect(reserve).toHaveBeenCalledTimes(1); expect(complete).toHaveBeenCalledTimes(1);
+    const snapshot = JSON.parse(new TextDecoder().decode(io.archive.mock.calls[0][0].files[0].bytes));
+    expect(snapshot.children[0].id).toBe("old");
+    expect(snapshot.children[0].heading_3.children).toHaveLength((block as { heading_3: { children: unknown[] } }).heading_3.children.length);
+    expect(io.request.mock.calls.filter(([method, path]) => method === "GET" && String(path).startsWith("/blocks/old/children"))).toHaveLength(3);
+    expect(complete.mock.invocationCallOrder[0]).toBeGreaterThan(io.request.mock.invocationCallOrder.at(-1)!);
+  });
+  it.each([2, 3])("同値根拠のPRE中/POST後の全文driftを止め、根拠と未完intentを保持する (%s)", async evidenceDriftRead => {
+    setup({ sameEvidence: true, evidenceDriftRead }); const complete = vi.fn();
+    const run = replaceEvidenceBlock("row", block, input, expected, guard, { assertReady() {}, reserve() { return { complete }; } });
+    await expect(run).rejects.toBeInstanceOf(evidenceDriftRead === 2 ? SupplementWriteHeldError : NotionUnknownResultError);
+    expect(mutations()).toEqual(evidenceDriftRead === 2 ? [] : ["PATCH /pages/row"]); expect(complete).not.toHaveBeenCalled();
+  });
+  it.each([{ multipleEvidence: true }, { unknownEvidenceRead: true }])("同値候補でも複数/未知根拠をPRE前に拒否する (%j)", async option => {
+    setup({ sameEvidence: true, ...option }); await expect(replaceEvidenceBlock("row", block, input, expected, guard, journal)).rejects.toThrow();
+    expect(io.archive).not.toHaveBeenCalled(); expect(mutations()).toEqual([]);
+  });
+  it("同値根拠でも既存PRE/不明PATCHを再送・完了扱いしない", async () => {
+    setup({ sameEvidence: true }); io.archive.mockResolvedValueOnce({ pageId: "pre-archive", outcome: "skipped_existing" });
+    await expect(replaceEvidenceBlock("row", block, input, expected, guard, journal)).rejects.toBeInstanceOf(NotionUnknownResultError);
+    expect(mutations()).toEqual([]);
+    io.request.mockClear(); setup({ sameEvidence: true, unknownPatch: true }); const complete = vi.fn();
+    await expect(replaceEvidenceBlock("row", block, input, expected, guard, { assertReady() {}, reserve() { return { complete }; } })).rejects.toBeInstanceOf(NotionUnknownResultError);
+    expect(mutations()).toEqual(["PATCH /pages/row"]); expect(complete).not.toHaveBeenCalled();
+  });
+  const privateRead = join(process.cwd(), "tmp/feature-audit-20261018/biztag-saved59-current-read-v2/actual-once-v1/SUCCESS.json");
+  const privatePrepared = join(process.cwd(), "tmp/feature-audit-20261018/biztag-saved59-current-read-v2/prepared59-saved-only.json");
+  it.skipIf(!existsSync(privateRead) || !existsSync(privatePrepared)).each(["6038", "9344"])("実保存%sの単一同値根拠をnormal publisherで保持し、3file completionを閉じる（宣言IO）", async code => {
+    const bytes = readFileSync(privateRead), preparedBytes = readFileSync(privatePrepared);
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe("96eb4edd99764739429f9dd2a012f5041a58c76a582fd07e33be5bb6e9036156");
+    expect(createHash("sha256").update(preparedBytes).digest("hex")).toBe("903b8b27812f7fcbb0243b5b8d002e374376fe128ff5c61b5961804d00d25caa");
+    const observed = JSON.parse(bytes.toString()).held.find((r: { code: string }) => r.code === code);
+    const prepared = JSON.parse(preparedBytes.toString()).records.find((r: { stockCode: string }) => r.stockCode === code);
+    expect(prepared.diagnostic.sameExistingEvidence).toBe(true);
+    let fullCompetitors: unknown[] | undefined;
+    if (code === "9344") {
+      const fullBytes = readFileSync(join(process.cwd(), "tmp/feature-audit-20261018/biztag-saved59-current-read-v2/property9344-once-v1/SUCCESS.json"));
+      expect(createHash("sha256").update(fullBytes).digest("hex")).toBe("61538e9a5c35637c6867d6126d02a332a088699e0785e719a89c607e0b170b6f");
+      const full = JSON.parse(fullBytes.toString()); expect(full.after.properties).toEqual(observed.target.properties);
+      expect(full.values).toHaveLength(32); fullCompetitors = full.values;
+    }
+    const current = structuredClone(observed.target), byParent = new Map<string, unknown[]>();
+    const children = (parent: string, blocks: Array<Record<string, unknown>>) => {
+      byParent.set(parent, blocks);
+      for (const b of blocks) if (b.has_children) children(b.id as string, (b[b.type as string] as { children: Array<Record<string, unknown>> }).children);
+    };
+    children(current.id, observed.children);
+    io.request.mockImplementation(async (method: string, path: string, body?: { properties: Record<string, Record<string, unknown>> }) => {
+      if (method === "GET" && path === `/pages/${current.id}`) return structuredClone(current);
+      if (method === "GET" && path.startsWith(`/pages/${current.id}/properties/`)) {
+        const propertyId = decodeURIComponent(path.split("/")[4].split("?")[0]);
+        const property = Object.values(current.properties).find((p) => (p as { id: string }).id === propertyId) as { type: string; rich_text?: unknown[]; title?: unknown[]; relation?: unknown[] };
+        const values = property.type === "relation" ? fullCompetitors : property[property.type as "rich_text" | "title"];
+        expect(Array.isArray(values)).toBe(true);
+        return { results: values!.map(value => ({ [property.type]: value })), has_more: false, next_cursor: null };
+      }
+      const match = /^\/blocks\/([^/]+)\/children\?/.exec(path);
+      if (method === "GET" && match && byParent.has(match[1])) return { results: structuredClone(byParent.get(match[1])), has_more: false, next_cursor: null };
+      if (method === "PATCH" && path === `/pages/${current.id}`) {
+        for (const [name, value] of Object.entries(body!.properties)) current.properties[name] = { ...current.properties[name], ...value };
+        return {};
+      }
+      throw new Error(`declared actual saved fixture rejects ${method} ${path}`);
+    });
+    const state = realpathSync(mkdtempSync(join(tmpdir(), "supplement-same-evidence-"))); privateStates.push(state);
+    const durable = createSupplementPublicationJournal(state);
+    durable.bindSource?.({ stockCode: code, docId: prepared.docId, sourcePageId: prepared.sourcePageId });
+    await replaceEvidenceBlock(current.id, prepared.expectedEvidence, prepared.newInput, prepared.existingRowGuard, guard, durable);
+    expect(mutations().every(value => value === `PATCH /pages/${current.id}`)).toBe(true);
+    expect(mutations().length).toBeGreaterThan(0); expect(io.archive).toHaveBeenCalledTimes(1); expect(io.verify).toHaveBeenCalledTimes(1);
+    if (code === "9344") {
+      const snapshot = JSON.parse(new TextDecoder().decode(io.archive.mock.calls[0][0].files[0].bytes));
+      expect(snapshot.page.properties["競合他社"].relation).toHaveLength(32);
+    }
+    const keys = readdirSync(join(state, "supplement-publications")); expect(keys).toHaveLength(1);
+    expect(readdirSync(join(state, "supplement-publications", keys[0])).sort()).toEqual(["completed.json", "intent.json", "pre.json"]);
+    durable.assertReady();
   });
   it.each([{ badEvidence: true }, { unknownAppend: true }])("failed/unknown new evidence keeps old properties and evidence (%j)", async (option) => {
     const state = setup(option);

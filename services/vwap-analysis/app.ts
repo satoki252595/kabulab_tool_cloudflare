@@ -9,13 +9,15 @@ import { assertCorporateEventsShape, assertEventSourceProof, corporateEventPins,
 import { sha256Hex } from "../../src/shared/sha256.js";
 import {
   intraWindowOf,
+  isIntraSourceStatus,
+  jstDateSec,
   isCalendarDateString,
   isDailyBarShape,
   isDailyFetchProof,
   isIntraBarShape,
   zeroSplitCovered,
 } from "../../src/shared/vwap/proof.js";
-import type { IntraWindow } from "../../src/shared/vwap/proof.js";
+import type { IntraSourceStatus, IntraWindow } from "../../src/shared/vwap/proof.js";
 import {
   MARGIN_DAILY_FORMAT,
   selectDailyMarginRows,
@@ -133,7 +135,7 @@ async function readDailyObject(
   return { updated: body.updated ?? null, bars: body.bars, splits, proof, corporateEvents };
 }
 
-type ValidIntra = { updated: unknown; bars: unknown[]; window: IntraWindow | null };
+type ValidIntra = { updated: unknown; bars: unknown[]; window: IntraWindow | null; sourceStatus: IntraSourceStatus | null };
 
 /** 5分足 object の strict 読取。欠落は null、形状不正は throw (reject)。 */
 async function readIntraObject(
@@ -142,11 +144,13 @@ async function readIntraObject(
 ): Promise<ValidIntra | null> {
   const o = await bucket.get(`intra/${code}.json`);
   if (!o) return null;
-  const body = JSON.parse(await o.text()) as { code?: unknown; bars?: unknown; updated?: unknown };
+  const body = JSON.parse(await o.text()) as { code?: unknown; bars?: unknown; updated?: unknown; sourceStatus?: unknown };
   if (body.code !== code) throw new Error(`intra object の code 不一致: ${code}`);
   if (!Array.isArray(body.bars)) throw new Error(`intra object の bars 非配列: ${code}`);
   const bars = body.bars;
-  if (bars.length === 0) return { updated: body.updated ?? null, bars, window: null };
+  if (body.sourceStatus !== undefined && !isIntraSourceStatus(body.sourceStatus)) throw new Error(`intra取得状況が不正: ${code}`);
+  const sourceStatus = body.sourceStatus === undefined ? null : body.sourceStatus;
+  if (bars.length === 0) return { updated: body.updated ?? null, bars, window: null, sourceStatus };
   const tsList: number[] = [];
   const seen = new Set<number>();
   for (const b of bars) {
@@ -156,7 +160,7 @@ async function readIntraObject(
     seen.add(ts);
     tsList.push(ts);
   }
-  return { updated: body.updated ?? null, bars, window: intraWindowOf(tsList) };
+  return { updated: body.updated ?? null, bars, window: intraWindowOf(tsList), sourceStatus };
 }
 
 // 蓄積5分足(R2) + proof 検証 basis を配信
@@ -166,20 +170,22 @@ app.get("/api/intra", async (c) => {
   const cached = (o: unknown) =>
     new Response(JSON.stringify(o), { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=3600" } });
   const intra = await readIntraObject(c.env.BUCKET, code);
-  if (!intra) return cached({ code, bars: [], note: "未蓄積", basis: holdBasis("intra-missing", null, []) });
+  if (!intra) return cached({ code, sourceStatus: null, lastValidDate: null, bars: [], note: "未蓄積", basis: holdBasis("intra-missing", null, []) });
+  const observed = { sourceStatus: intra.sourceStatus,
+    lastValidDate: intra.window === null ? null : jstDateSec(intra.window.lastTs) };
   if (!intra.window) {
-    return cached({ code, updated: intra.updated, bars: [], basis: holdBasis("intra-empty", null, []) });
+    return cached({ code, ...observed, updated: intra.updated, bars: [], basis: holdBasis("intra-empty", null, []) });
   }
   const daily = await readDailyObject(c.env.BUCKET, code);
   if (!daily) {
     return cached({
-      code, updated: intra.updated, bars: intra.bars,
+      code, ...observed, updated: intra.updated, bars: intra.bars,
       basis: holdBasis("daily-unavailable", intra.window, intra.window.sessions),
     });
   }
   if (!daily.proof) {
     return cached({
-      code, updated: intra.updated, bars: intra.bars,
+      code, ...observed, updated: intra.updated, bars: intra.bars,
       basis: holdBasis("proof-absent", intra.window, intra.window.sessions),
     });
   }
@@ -187,7 +193,7 @@ app.get("/api/intra", async (c) => {
   // 照合済み。ここでは 10y 以外の proof を HOLD する (書換えはしない)。
   if (daily.proof.requestedRange !== "10y") {
     return cached({
-      code, updated: intra.updated, bars: intra.bars,
+      code, ...observed, updated: intra.updated, bars: intra.bars,
       basis: holdBasis("range-not-10y", intra.window, intra.window.sessions),
     });
   }
@@ -199,11 +205,11 @@ app.get("/api/intra", async (c) => {
   );
   if (!cov.ok) {
     return cached({
-      code, updated: intra.updated, bars: intra.bars,
+      code, ...observed, updated: intra.updated, bars: intra.bars,
       basis: holdBasis(cov.reason, intra.window, intra.window.sessions),
     });
   }
-  return cached({ code, updated: intra.updated, bars: intra.bars, basis: passBasis(intra.window) });
+  return cached({ code, ...observed, updated: intra.updated, bars: intra.bars, basis: passBasis(intra.window) });
 });
 
 // 日足10年(R2) + producer proof を検証して配信

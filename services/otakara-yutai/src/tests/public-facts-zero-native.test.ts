@@ -110,7 +110,7 @@ describe("holding明示search READ1停止の一度再資格", () => {
     writeFileSync(hook, "globalThis.fetch=async()=>{throw new Error('procedural transport denied; no native HTTP');};\n");
     expect(() => execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), "--import", hook,
       join(ROOT, "services/otakara-yutai/data-scripts/backfill-public-facts.ts"), "resume-upgrade-holding-v1-read-only-stop",
-      f.sourcePath, f.directory, f.scopePath, f.qualificationPath], { cwd: f.root, stdio: "pipe", timeout: 10_000 })).toThrow();
+      f.sourcePath, f.directory, f.scopePath, f.qualificationPath], { cwd: f.root, env: { PATH: process.env.PATH, NODE_ENV: "test" }, stdio: "pipe", timeout: 10_000 })).toThrow();
     expect(readFileSync(f.startedPath).equals(old)).toBe(true); expect(readFileSync(f.sidecarPath).equals(oldResume)).toBe(true);
     expect(existsSync(join(f.state, "upgrade-v1-read-only-resume-started.json"))).toBe(true);
     const failure = readdirSync(f.directory).find(n => n.startsWith("upgrade-failure-")); expect(failure).toBeDefined();
@@ -154,7 +154,7 @@ describe("holding zero-nativeの明示再資格", () => {
     writeFileSync(hook, "globalThis.fetch=async()=>{throw new Error('procedural transport denied; no native HTTP');};\n");
     expect(() => execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), "--import", hook,
       join(ROOT, "services/otakara-yutai/data-scripts/backfill-public-facts.ts"), "resume-upgrade-holding-v1-zero-native",
-      f.sourcePath, f.directory, f.scopePath, f.proofPath], { cwd: f.root, stdio: "pipe", timeout: 10_000 })).toThrow();
+      f.sourcePath, f.directory, f.scopePath, f.proofPath], { cwd: f.root, env: { PATH: process.env.PATH, NODE_ENV: "test" }, stdio: "pipe", timeout: 10_000 })).toThrow();
     expect(readFileSync(f.startedPath).equals(old)).toBe(true); expect(existsSync(join(f.state, "upgrade-v1-zero-native-resume-started.json"))).toBe(true);
     const failures = readdirSync(f.directory).filter(n => n.startsWith("upgrade-failure-")); expect(failures).toHaveLength(1);
     expect(read(join(f.directory, failures[0]))).toMatchObject({ mode: "resume-upgrade-holding-v1-zero-native", error: { name: expect.any(String), message: expect.any(String) } });
