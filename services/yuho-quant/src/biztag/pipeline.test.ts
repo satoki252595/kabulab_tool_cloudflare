@@ -446,6 +446,75 @@ function minimalRow(overrides: Partial<SupplementRow>): SupplementRow {
   };
 }
 
+describe("明示finite空事業タグの再確認", () => {
+  const latest: LatestDoc = { stockCode: "6103", companyName: "オークマ", sector33: "機械", doc: {
+    docId: "S100YFQC", docTypeCode: "120", periodEnd: "2026-03-31", submittedAt: "2026-06-25T00:00:00Z",
+    notionDocPageId: "declared-notion-okuma-source", textParseStatus: "ok",
+  } };
+  const localJournal = () => ({ decidedAt: "2026-10-18T12:00:00Z", beforeSend: vi.fn(), response: vi.fn(), accepted: vi.fn() });
+  const options = () => ({ budgetMs: 60_000, codes: ["6103"], limit: 1, repairEmptyTags: true,
+    thresholds: { yesMin: 0.8, noMax: 0.2 }, model: CLEF_MODEL, localJournal });
+  function prepare() {
+    vi.mocked(loadLatestDocs).mockResolvedValue([latest]);
+    notionMocks.loadStockMasterIndex.mockResolvedValue({ index: new Map([["6103", "declared-notion-okuma-master"]]), duplicates: new Map() });
+    notionMocks.loadSupplementRows.mockResolvedValue([minimalRow({ stockCode: "6103", companyName: "オークマ", sector33: "機械",
+      docId: "S100YFQC", tagDoc: "S100YFQC 2026年3月期", tagStatus: "判定済", vocabVersion: "v0", judgeInput: "旧判定SHA未保存" })]);
+    // process.test.tsと同じ実有報 S100YFQC の冒頭を使用。応答確率は宣言transportのみ。
+    notionMocks.readStockTextRow.mockResolvedValue([{ sectionKey: "business", itemName: "事業の内容", text:
+      "３ 【事業の内容】当グループは、当社、連結子会社16社、非連結子会社15社で構成され、ＮＣ旋盤、" +
+      "マシニングセンタ、複合加工機、ＮＣ研削盤等の工作機械の製造・販売を主な事業内容としております。" }]);
+  }
+  it.each([
+    { probability: 0.1, tagged: 0, allNo: 1, uncertain: 0 },
+    { probability: 0.5, tagged: 0, allNo: 0, uncertain: 1 },
+    { probability: 0.95, tagged: 1, allNo: 0, uncertain: 0 },
+  ])("正常publication後の再確認と付与/no/uncertainを区別 (%j)", async expected => {
+    prepare();
+    vi.mocked(createClefClient).mockReturnValueOnce({ askNoul: async () => ({ model: CLEF_MODEL,
+      answers: { "bt.B.MACH.MACHINE_TOOL": expected.probability }, inputTokens: 0, outputTokens: 0, latencyMs: 1, attempts: 1 }), close: vi.fn() });
+    const summary = await runBiztag(options());
+    expect(summary.emptyTagRepair).toEqual({ selected: 1, eligible: 1, rechecked: 1, tagged: expected.tagged,
+      allNo: expected.allNo, uncertain: expected.uncertain, noCandidates: 0, held: 0, remaining: 0 });
+    expect(summary.judge?.calls).toBe(1); expect(summary.textCheckedCodes).toEqual(["6103"]);
+    expect(notionMocks.replaceEvidenceBlock).toHaveBeenCalledOnce();
+    expect(notionMocks.replaceEvidenceBlock.mock.calls[0][2].judgeInput).toMatch(/^Clef-Flash空事業タグの明示再確認/);
+  });
+  it("mechanical-onlyはsource/model前でHOLDし、通常別writerにも流さない", async () => {
+    prepare();
+    const summary = await runBiztag({ ...options(), mechanicalOnly: true });
+    expect(summary.emptyTagRepair).toMatchObject({ selected: 1, eligible: 1, rechecked: 0, tagged: 0, held: 1, remaining: 0 });
+    expect(summary.qualificationHeld).toEqual(["6103"]);
+    expect(notionMocks.readStockTextRow).not.toHaveBeenCalled(); expect(notionMocks.replaceEvidenceBlock).not.toHaveBeenCalled();
+    expect(createClefClient).not.toHaveBeenCalled(); expect(notionMocks.loadStockMasterIndex).not.toHaveBeenCalled();
+  });
+  it("active scope不一致はNotion metadata/source/model/write前STOP", async () => {
+    await expect(runBiztag(options())).rejects.toThrow("現在activeの取得scopeが一致しません");
+    expect(notionMocks.ensureLedgerDb).not.toHaveBeenCalled(); expect(notionMocks.loadSupplementRows).not.toHaveBeenCalled();
+    expect(notionMocks.readStockTextRow).not.toHaveBeenCalled(); expect(createClefClient).not.toHaveBeenCalled();
+  });
+  it("master一意性不明は旧relationを空で上書きせずモデル前HOLD", async () => {
+    prepare(); notionMocks.loadStockMasterIndex.mockResolvedValue({ index: new Map(), duplicates: new Map() });
+    const summary = await runBiztag(options());
+    expect(summary.emptyTagRepair).toMatchObject({ rechecked: 0, tagged: 0, held: 1 });
+    expect(createClefClient).not.toHaveBeenCalled(); expect(notionMocks.replaceEvidenceBlock).not.toHaveBeenCalled();
+  });
+  it.each([
+    { codes: ["6103", "6103"], limit: 2 }, { limit: 2 }, { budgetMs: 20 * 60_000 + 1 },
+    { refreshTextReceipt: true }, { localJournal: undefined },
+  ])("内部APIも固定有限scope/journalを省略できない (%j)", async invalid => {
+    await expect(runBiztag({ ...options(), ...invalid })).rejects.toThrow("空事業タグの再確認には");
+    expect(loadLatestDocs).not.toHaveBeenCalled(); expect(notionMocks.ensureLedgerDb).not.toHaveBeenCalled();
+  });
+  it("publisher未知は空タグ再確認でも正常summaryや次forwardへ進めない", async () => {
+    prepare();
+    vi.mocked(createClefClient).mockReturnValueOnce({ askNoul: async () => ({ model: CLEF_MODEL,
+      answers: { "bt.B.MACH.MACHINE_TOOL": 0.95 }, inputTokens: 0, outputTokens: 0, latencyMs: 1, attempts: 1 }), close: vi.fn() });
+    notionMocks.replaceEvidenceBlock.mockRejectedValueOnce(new NotionUnknownResultError("declared publication unknown"));
+    await expect(runBiztag(options())).rejects.toThrow("publication unknown");
+    expect(notionMocks.readStockTextRow).toHaveBeenCalledOnce();
+  });
+});
+
 describe("runBiztag — 保存済みマスタの参照", () => {
   it.each([
     { docId: "TEST_DOC", vocabVersion: "v0", dryRun: false },

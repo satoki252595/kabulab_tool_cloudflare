@@ -145,6 +145,48 @@ function jevAnswering(answers: Record<string, number>): JevClient {
 }
 
 describe("processStock", () => {
+  it.each([
+    { probability: 0.1, tagged: false, uncertain: false },
+    { probability: 0.5, tagged: false, uncertain: true },
+    { probability: 0.95, tagged: true, uncertain: false },
+  ])("空タグ明示再確認はkeyword一致でも通常judge結果を保持 (%j)", async expected => {
+    const row = rowOf({ docId: "S100YFQC", tagDoc: "S100YFQC 2026年3月期", tagStatus: "判定済", vocabVersion: "v0", judgeInput: "旧入力SHA未記録" });
+    const ask = vi.fn(jevAnswering({ "bt.B.MACH.MACHINE_TOOL": expected.probability }).askNoul);
+    const { deps, updated } = makeDeps({ model: "Cloudflare/clef-flash@explicit-test/torch-mps", jevClient: { askNoul: ask },
+      localJudgeDate: () => "2026-10-18", readStockTextRow: async () => [{ sectionKey: "business", itemName: "事業の内容", text: OKUMA_BUSINESS_TEXT }] });
+    const outcome = await processStock(itemOf({ kind: "retag", row, emptyTagRepair: true }), deps);
+    expect(outcome.emptyTagRepairResult).toEqual({ tagged: expected.tagged, uncertain: expected.uncertain, noCandidates: false });
+    expect(ask).toHaveBeenCalledOnce(); expect(updated).toHaveLength(1);
+    expect(updated[0].input.upstream).toEqual(expected.tagged ? ["工作機械"] : []);
+    expect(updated[0].input.judgeInput).toMatch(/^Clef-Flash空事業タグの明示再確認/);
+    expect(updated[0].input.judgedAt).toBe("2026-10-18");
+    expect(readInputReceipt(updated[0].input.judgeInput)?.stateSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(row.judgeInput).toBe("旧入力SHA未記録");
+  });
+  it.each([true, false])("空タグ再確認のmechanical/判定不能は旧結果全保持 (mechanical=%s)", async mechanicalOnly => {
+    const row = rowOf({ docId: "S100YFQC", tagStatus: "判定済", judgeInput: "旧no結果" }), before = structuredClone(row);
+    const ask = vi.fn(async () => { throw new SemifUnavailableError("declared local inference unavailable"); });
+    const { deps, updated, evidenceCalls } = makeDeps({ mechanicalOnly, jevClient: { askNoul: ask },
+      readStockTextRow: async () => [{ sectionKey: "business", itemName: "事業の内容", text: OKUMA_BUSINESS_TEXT }] });
+    expect(await processStock(itemOf({ kind: "retag", row, emptyTagRepair: true }), deps)).toMatchObject({ outcome: "skipped", qualificationHeld: true });
+    expect(ask).toHaveBeenCalledTimes(mechanicalOnly ? 0 : 1); expect(updated).toEqual([]); expect(evidenceCalls).toEqual([]); expect(row).toEqual(before);
+  });
+  it("空タグ再確認の候補なしはsource機械検査だけで閉じ、付与/all-noと区別", async () => {
+    const row = rowOf({ stockCode: "1301", companyName: "極洋", docId: "S100YE8K", tagStatus: "判定済" });
+    const ask = vi.fn(async () => { throw new Error("no candidate must not infer"); });
+    const { deps, updated } = makeDeps({ jevClient: { askNoul: ask },
+      readStockTextRow: async () => [{ sectionKey: "business", itemName: "事業の内容", text: KYOKUYO_BUSINESS_TEXT }] });
+    const outcome = await processStock(itemOf({ kind: "retag", stockCode: "1301", companyName: "極洋", row,
+      doc: docOf({ docId: "S100YE8K" }), emptyTagRepair: true }), deps);
+    expect(outcome.emptyTagRepairResult).toEqual({ tagged: false, uncertain: false, noCandidates: true });
+    expect(ask).not.toHaveBeenCalled(); expect(updated[0].input.upstream).toEqual([]);
+  });
+  it("直接processも非空タグを空タグ再確認として上書きしない", async () => {
+    const read = vi.fn(async () => []), { deps, updated } = makeDeps({ readStockTextRow: read });
+    await expect(processStock(itemOf({ kind: "retag", emptyTagRepair: true,
+      row: rowOf({ docId: "S100YFQC", tagStatus: "判定済", upstream: ["工作機械"] }) }), deps)).rejects.toThrow("再確認対象が不正");
+    expect(read).not.toHaveBeenCalled(); expect(updated).toEqual([]);
+  });
   it("法人格/幅の表示差では旧非空titleを送信せず、coreの厳密な書込前資格を維持", async () => {
     const latest: LatestDoc = { stockCode: "618A", companyName: "ＫＯＭＰＥＩＴＯ", sector33: null, doc: null };
     const row = rowOf({ stockCode: latest.stockCode, companyName: "（株）KOMPEITO", sector33: null, masterLinked: false, textStatus: "本文なし", tagStatus: "本文なし" });

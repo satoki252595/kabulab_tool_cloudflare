@@ -75,6 +75,21 @@ function planSingle(
 }
 
 describe("planWork (保存タグを再利用し、不足だけ補完)", () => {
+  it("空タグの再確認は明示scopeだけ、旧入力不明を入力変更と偽称しない", () => {
+    const doc = latestDocOf({ docId: "S100YFQC" });
+    const row = rowOf({ docId: doc.docId, tagDoc: `${doc.docId} 2026年3月期`, tagStatus: "判定済", vocabVersion: "v1" });
+    expect(planWork([latestOf({ doc })], [row], TODAY)[0].kind).toBe("sync_text");
+    expect(planWork([latestOf({ doc })], [row], TODAY, undefined, true)[0]).toMatchObject({ kind: "retag", emptyTagRepair: true });
+    expect(planWork([latestOf({ doc })], [row], TODAY, undefined, true)[0].sourceChangedLocalJudge).toBeUndefined();
+  });
+  it.each([
+    { upstream: ["工作機械"], evidenceText: "保存済み根拠" },
+    { tagStatus: "本文なし" as const }, { companyName: "不同会社" }, { docId: "S100OLD", tagDoc: "S100OLD 2025年3月期" },
+  ])("空タグ限定scopeの非適格行はmetadata/text等の別writerへ流さずHOLD (%j)", overrides => {
+    const doc = latestDocOf({ docId: "S100YFQC" });
+    const row = rowOf({ docId: doc.docId, tagDoc: `${doc.docId} 2026年3月期`, tagStatus: "判定済", vocabVersion: "v1", ...overrides });
+    expect(planWork([latestOf({ doc })], [row], TODAY, undefined, true)[0]).toMatchObject({ kind: "skip", qualificationHeld: true });
+  });
   it.each([
     ["625A", "（株）Skyfall", "Ｓｋｙｆａｌｌ"],
     ["621A", "（株）オーディオストック", "オーディオストック"],
