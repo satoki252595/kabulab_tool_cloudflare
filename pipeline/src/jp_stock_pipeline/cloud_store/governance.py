@@ -149,6 +149,10 @@ TABLE_LICENSE: dict[str, TableLicense] = {
         "JPX 月末銘柄一覧と公式イベントからの派生",
         "src/cron/universe-overlay.ts。base_as_of / held_listing_codes を含むため表全体で継承",
     ),
+    "yahoo_proxy_cooldown": _operational(
+        "src/routes/ingest-proxy.ts の取得停止状態。id/retry_at_ms/upstream_status のみを持ち、"
+        "銘柄・価格・原本文は保持しない"
+    ),
     # --- kabulab-cf 所有の派生断面・時系列（Yahoo 由来）---------------------
     "core_stock_financials": _uniform(LicenseTag.PERSONAL_ONLY, _YAHOO, _CHILD),
     "core_stock_annual_financials": _uniform(LicenseTag.PERSONAL_ONLY, _YAHOO, _CHILD),
@@ -218,6 +222,9 @@ TABLE_LICENSE: dict[str, TableLicense] = {
     "yuho_text_sections": _uniform(LicenseTag.COMMERCIAL_OK, "EDINET（金融庁）", _CHILD),
     "yuho_edinet_reported_changes": _uniform(
         LicenseTag.COMMERCIAL_OK, "EDINET（金融庁）", f"{_CHILD} / 原一覧の報告状態・親書類ID（関係未資格）"
+    ),
+    "yuho_edinet_reported_resolutions": _uniform(
+        LicenseTag.PERSONAL_ONLY, "EDINET＋既存JPX由来マスタ状態", f"{_CHILD} / 情報修正の内部CAS証拠。元マスタの公開制約を継承"
     ),
     "yuho_edinet_catchup_progress": _operational(
         "EDINET日/文書checkpoint。原本文を持たず、保管参照・SHA・完了/保留状態を保持"

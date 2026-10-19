@@ -54,6 +54,7 @@ import { backupDocTextToNotion } from "../src/services/text-backup.js";
 import { retireStockTextRow } from "../../../src/shared/notion-archive/index.js";
 import type { Database } from "../src/db/client.js";
 import * as yuhoSchema from "../src/db/schema.js";
+import { assertReportedDocumentUsable } from "../src/services/edinet/reported-changes.js";
 
 const arg = (n: string) =>
   process.argv.find((a) => a.startsWith(`--${n}=`))?.split("=")[1];
@@ -120,6 +121,7 @@ let n = 0;
 for (const r of targets) {
   // 1 通の失敗で全体を落とさない (残りは次回実行で回収。再開可能)。
   try {
+    await assertReportedDocumentUsable(db, r.docId);
     let status: string;
     let sections: ReturnType<typeof extractTextSections> = [];
     try {

@@ -108,6 +108,30 @@ describe("POST /api/dcf/calc — 1414 バグ再発防止", () => {
     expect(res.status).toBe(200);
   });
 
+  it("配当利回りの欠測と 0 を GET・POST で区別し、どちらも手動試算できる", async () => {
+    for (const [dividendYield, label] of [[null, "未確定"], [0, "無配"]] as const) {
+      d1.sqlite.prepare("UPDATE core_stock_financials SET dividend_yield = ? WHERE stock_id = 1").run(dividendYield);
+      const page = await request("/dcf?code=7203");
+      expect(page.status).toBe(200);
+      const html = await page.text();
+      expect(html).toContain(`配当利回り: <strong>${label}</strong>`);
+      expect(html).toContain('<details class="advanced span-full" open>');
+      expect(html).toMatch(/name="expectedDividend"\s+value=""/);
+      if (dividendYield === null) expect(html).not.toContain("⚠ 無配銘柄");
+
+      const fields = { code: "7203", mode: "gordon", expectedDividend: "", requiredReturnPct: "7", growthRatePct: "3" };
+      const noDividend = await postForm("/api/dcf/calc", fields);
+      expect(noDividend.status).toBe(400);
+      const errorHtml = await noDividend.text();
+      expect(errorHtml).toContain(`配当利回り: <strong>${label}</strong>`);
+      if (dividendYield === null) expect(errorHtml).not.toContain("⚠ 無配銘柄");
+
+      const manual = await postForm("/api/dcf/calc", { ...fields, expectedDividend: "100" });
+      expect(manual.status).toBe(200);
+      expect(await manual.text()).toMatch(/class="result-headline">2,500/);
+    }
+  });
+
   it("code='1414' のバリデーション層は通る (DB レス)", async () => {
     // バリデータが 4 桁数字を許容することを直接確認 (DB アクセスは別)
     const { dcfFormSchema } = await import("../../validators/dcf.js");

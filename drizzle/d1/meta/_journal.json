@@ -232,6 +232,20 @@
       "when": 1792242778761,
       "tag": "0032_edinet_reported_changes",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1792402218469,
+      "tag": "0033_yahoo_proxy_cooldown",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1792425815009,
+      "tag": "0034_edinet_reported_resolutions",
+      "breakpoints": true
     }
   ]
 }

@@ -30,6 +30,7 @@ beforeEach(() => {
   queries = [];
   responses = [];
   sqlite = new DatabaseSync(":memory:");
+  sqlite.exec(readFileSync(new URL("../../../../drizzle/d1/0034_edinet_reported_resolutions.sql", import.meta.url), "utf8"));
   sqlite.exec(`
     CREATE TABLE universe_overlay_state (
       id INTEGER PRIMARY KEY, base_as_of TEXT, events_fetched_at TEXT, events_sha TEXT,

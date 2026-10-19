@@ -1,5 +1,5 @@
 /** 提出者 EDINET コードから銘柄を特定する。原本の secCode は変更しない。 */
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { sqliteTable, text, type BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
 import { parseStockCode } from "../../../../../src/shared/jpx/stock-code.js";
 import { stocks } from "../../../../../src/shared/db/core-schema.js";
@@ -11,6 +11,16 @@ const notionPages = sqliteTable("jss_notion_pages", {
   db: text("db").notNull(),
   pageId: text("page_id").notNull(),
 });
+
+/** 情報修正の完了CASでも、同じ既存issuer逆引きを原子的に検査する。 */
+export function edinetTickerIdentityGuard(db: BaseSQLiteDatabase<"async", unknown, Record<string, unknown>>,
+  edinetCode: string, ticker: string) {
+  return db.select({ identityUnchanged: sql`json(case when (select count(*) from ${notionPages}
+    where ${notionPages.db}='stock_master_by_edinet' and ${notionPages.code}=${edinetCode})=1
+    and exists(select 1 from ${notionPages} where ${notionPages.db}='stock_master_by_edinet'
+      and ${notionPages.code}=${edinetCode} and ${notionPages.pageId}=${ticker})
+    then 'null' else '' end)` }).from(sql`(select 1)`);
+}
 
 /** マスタ未到着と、既存行が正規取込母集団外である場合を混同しない。 */
 export async function loadKnownStockCodes(

@@ -296,9 +296,6 @@ function freshDb(): Db {
       consolidated text NOT NULL,
       net_sales real,
       license_tag text NOT NULL,
-      source text NOT NULL,
-      dps_forecast real,
-      disclosed_at integer,
       PRIMARY KEY (code, fiscal_period_end, disclosure_type, consolidated)
     );
   `);
@@ -522,10 +519,10 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
     // 正常定時入口も同じpure builderへ接続。保存済みprojectionは原clockで解析しtransport0。
     const value = await parseSavedStockRawData("8303", source);
     const hold = value.rsiHistoryHold!;
-    const snapshot = buildStockSnapshot(1, "8303", null, "2026-10-14", value, { kind: "unverified", reason: "no-forecast-row" }, [], source.chart.capture);
+    const snapshot = buildStockSnapshot(1, "8303", null, "2026-10-14", value, [], source.chart.capture);
     expect(snapshot).toMatchObject({ price: 1478.5, latestDate: "2026-10-14", rsiPercentile: null, rsiHistoryHold: hold });
     expect(snapshot.ohlcv6mo).toHaveLength(130);
-    expect(() => buildStockSnapshot(1, "8303", null, "2026-10-15", value, { kind: "unverified", reason: "no-forecast-row" }, [], source.chart.capture))
+    expect(() => buildStockSnapshot(1, "8303", null, "2026-10-15", value, [], source.chart.capture))
       .toThrow(/実日足が未取得/);
     vi.mocked(fetchStockRawData).mockImplementation(async (...args) => {
       const [symbol, , options] = args;

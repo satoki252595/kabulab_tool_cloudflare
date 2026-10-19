@@ -46,7 +46,7 @@ describe("通常株式日次の用途別資格 (実原典の最小projection・�
       expect(raw.rsiHistoryHold).toMatchObject({
         reasonCode: position === 0 ? "missing_adjusted_close" : "non_positive_adjusted_close", invalidBars: 1,
       });
-      const build = () => buildStockSnapshot(1, code, null, raw.ohlcv.at(-1)!.date, raw, { kind: "unverified", reason: "no-forecast-row" }, []);
+      const build = () => buildStockSnapshot(1, code, null, raw.ohlcv.at(-1)!.date, raw, []);
       if (position === 0) expect(build()).toMatchObject({ rsiPercentile: null, rsiHistoryHold: raw.rsiHistoryHold });
       else expect(build).toThrow(/調整済み終値.*通常終値で補完しません/);
     }
@@ -156,13 +156,13 @@ describe("保存原本と通常定時取得の共通計算", () => {
     expect(expected).not.toEqual(saved.ohlcv.slice(-90).map(b => b.close));
     expect(calcMomentum(decodeCloses(row!.closes), 60)).toEqual(calcMomentum(expected, 60));
     expect(row).toMatchObject({ bars: 90, asOf: "2026-10-14" });
-    const snapshot = buildStockSnapshot(1, "8303", null, "2026-10-14", saved, { kind: "unverified", reason: "no-forecast-row" });
-    expect(snapshot).toEqual(buildStockSnapshot(1, "8303", null, "2026-10-14", normal, { kind: "unverified", reason: "no-forecast-row" }));
+    const snapshot = buildStockSnapshot(1, "8303", null, "2026-10-14", saved);
+    expect(snapshot).toEqual(buildStockSnapshot(1, "8303", null, "2026-10-14", normal));
     expect(snapshot.latestClose).toBe(1478.5);
     // 明示fault injection: 元原典の別日の調整終値を末尾へ置き、raw closeとの差を作る。
     const changed = structuredClone(saved);
     changed.ohlcv.at(-1)!.adj = changed.ohlcv.at(-3)!.adj;
-    const trend = buildStockSnapshot(1, "8303", null, "2026-10-14", changed, { kind: "unverified", reason: "no-forecast-row" });
+    const trend = buildStockSnapshot(1, "8303", null, "2026-10-14", changed);
     expect(trend.sma5).toBeLessThan(trend.latestClose!);
     expect(trend.sma5).toBeGreaterThan(changed.ohlcv.at(-1)!.adj!);
     expect(trend.sma5).toBeLessThan(trend.sma20!);

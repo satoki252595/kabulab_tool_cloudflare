@@ -260,12 +260,16 @@ class SemifServerProcess {
         }
       });
 
-      child.stderr?.on("data", () => {
-        // server.py はログを全て stderr へ出す (プロトコル行と混ぜない設計)。
-        // ここでは握りつぶさず、プロセス終了時のエラーメッセージにのみ使う
-        // ため、直近のログはプロセス終了ハンドラで参照できるよう保持しない
-        // (量が多くなり得るため、必要なら運営が semif_server.py を直接
-        // 起動してログを見る運用とする — 依頼どおりの範囲)。
+      // null は上限超過した未完行。末尾を安全な別行として扱わず改行まで破棄する。
+      let stderrLine: string | null = "";
+      child.stderr?.on("data", (chunk: Buffer | string) => {
+        const parts = chunk.toString().split("\n");
+        for (let i = 0; i < parts.length; i++) {
+          if (stderrLine !== null) stderrLine = stderrLine.length + parts[i].length <= 512 ? stderrLine + parts[i] : null;
+          if (i === parts.length - 1) continue;
+          if (stderrLine !== null && /^\[clef_server\] (request|startup)_failed class=[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(stderrLine)) console.error(stderrLine);
+          stderrLine = "";
+        }
       });
 
       child.on("error", (err) => {

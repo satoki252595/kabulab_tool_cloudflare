@@ -14,7 +14,7 @@ import { appendFileSync, readFileSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createClefJournal } from "../../../scripts/biztag-local/clef-journal.js";
+import { acknowledgeClefError, createClefJournal } from "../../../scripts/biztag-local/clef-journal.js";
 import { reconcileSupplementPreArchive, reconcileAppliedSupplementPublication } from "../../../scripts/biztag-local/publication-journal.js";
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import {
@@ -44,7 +44,7 @@ import { parseVocabulary } from "../src/biztag/vocabulary/load.js";
 import { TEXT_SECTIONS } from "../src/services/edinet/text-sections.js";
 import * as yuhoSchema from "../src/db/schema.js";
 import { createSemifClient, SEMIF_MODEL } from "../../../src/shared/semif/index.js";
-import { CLEF_MODEL } from "../../../src/shared/clef/client.js";
+import { CLEF_MODEL, qualifyClefContextUpgrade } from "../../../src/shared/clef/client.js";
 import { loadCompetitorCalibration, type CompetitorJudge } from "../src/biztag/competitors/calibration.js";
 import {
   evaluateCompetitorsAtThresholds,
@@ -129,6 +129,12 @@ async function runCommand(): Promise<void> {
     throw new Error("--codesを指定するときは空でない証券コード一覧が必要です。全量実行は--codesを省略してください");
   }
   const repairEmptyTags = hasFlag("repair-empty-tags");
+  const contextUpgrade = arg("context-upgrade");
+  if (rest.includes("--context-upgrade") || (contextUpgrade !== undefined &&
+      (!/^[a-f0-9]{64}$/.test(contextUpgrade) || !repairEmptyTags || codes?.length !== 1 || limit !== 1 ||
+       hasFlag("dry-run") || hasFlag("mechanical-only") || rest.length !== 5))) {
+    throw new Error("--context-upgradeには既知拒否の旧key・repair-empty-tags・固定1code/limit1・明示budget-minだけを指定してください");
+  }
   if (repairEmptyTags && (codes === undefined || codes.length > 50 || new Set(codes).size !== codes.length ||
       arg("codes")!.split(",").length !== codes.length || limit !== codes.length ||
       arg("limit") === undefined || arg("budget-min") === undefined ||
@@ -159,7 +165,8 @@ async function runCommand(): Promise<void> {
       journal ??= createClefJournal(join(dirname(realpathSync(fileURLToPath(new URL("../../../.env", import.meta.url)))), "tmp/biztag-local"), {
         modelManifestSha256: createHash("sha256").update(readFileSync(new URL("../../../src/shared/clef/manifest.json", import.meta.url))).digest("hex"),
         calibrationSha256: createHash("sha256").update(readFileSync(new URL("../src/biztag/calibration.clef.json", import.meta.url))).digest("hex"),
-      });
+      }, contextUpgrade === undefined ? undefined : { stockCode: codes![0], oldKey: contextUpgrade, qualify: qualifyClefContextUpgrade,
+        previousCalibrationSha256: JSON.parse(readFileSync(new URL("../src/biztag/calibration.clef.json", import.meta.url), "utf8")).basis.contextUpgrade.previousCalibrationSha256 });
       return journal(input);
     },
     budgetMs: remainingBudgetMs,
@@ -562,6 +569,15 @@ async function main(): Promise<void> {
     assertTypeSafeEnabled();
   }
   switch (subcommand) {
+    case "acknowledge-clef-error": {
+      const key = arg("journal-key"), sha = arg("response-sha256");
+      if (rest.length !== 2 || key === undefined || sha === undefined) throw new Error("acknowledge-clef-errorにはjournal-key/response-sha256の2引数が必要です");
+      const state = join(dirname(realpathSync(fileURLToPath(new URL("../../../.env", import.meta.url)))), "tmp/biztag-local");
+      acknowledgeClefError(state, key, sha);
+      console.info(JSON.stringify({ status: "known_clef_error_acknowledged", journalKey: key,
+        sameInputReinference: false, modelForwards: 0, businessWrites: 0 }));
+      return;
+    }
     case "reconcile-applied":
       return reconcileAppliedCommand();
     case "run":
@@ -582,7 +598,7 @@ async function main(): Promise<void> {
       return competitorsEvalCommand();
     default:
       console.error(
-        "usage: pnpm biztag <run|reconcile-applied|gate|golden|rollback|packet|stats|competitors|competitors-eval> [options] " +
+        "usage: pnpm biztag <run|acknowledge-clef-error|reconcile-applied|gate|golden|rollback|packet|stats|competitors|competitors-eval> [options] " +
           "(docs/005-yuho-quant-business-tags.md §11・「競合他社」節)"
       );
       process.exit(2);
@@ -596,7 +612,7 @@ if (["gate", "golden"].includes(subcommand) ||
   assertTypeSafeEnabled();
 }
 if (subcommand === "run" && rest.some(flag => !["--mechanical-only", "--dry-run", "--refresh-text-receipt", "--repair-empty-tags", "--codes"].includes(flag) &&
-    !/^--(codes|limit|budget-min|reconcile-pre-archive|reconcile-proof-sha256)=/.test(flag))) {
+    !/^--(codes|limit|budget-min|reconcile-pre-archive|reconcile-proof-sha256|context-upgrade)=/.test(flag))) {
   throw new Error("biztag runの未知の引数/モデル許可は受け付けません");
 }
 await withBiztagWriter(main, subcommand === "run" && hasFlag("mechanical-only") && !hasFlag("allow-model"));

@@ -29,7 +29,7 @@ function snapshot(code: string, removeNewHolds = false) {
   const raw = structuredClone(raws.get(code)!);
   if (removeNewHolds && raw.corporateDiagnostics) raw.corporateDiagnostics.unknownReasons =
     raw.corporateDiagnostics.unknownReasons.filter(r => !reasons.has(r));
-  return buildStockSnapshot(1, code, null, "2026-10-16", raw, { kind: "unverified", reason: "no-forecast-row" });
+  return buildStockSnapshot(1, code, null, "2026-10-16", raw);
 }
 function diagnostic(code: string, bars = parseChartResponse(JSON.parse(fixture[`${code}-chart`]), code).bars, json = JSON.parse(fixture[`${code}-chart`])) {
   const receivedAt = proof.members.find(m => m.key === `${code}-chart`)!.receivedAt;

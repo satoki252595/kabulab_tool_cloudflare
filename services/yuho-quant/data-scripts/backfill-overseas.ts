@@ -43,6 +43,7 @@ import {
   type OverseasParseStatus,
 } from "../src/services/overseas-parser.js";
 import * as yuhoSchema from "../src/db/schema.js";
+import { assertReportedDocumentUsable, reportedDocumentAtomicGuard } from "../src/services/edinet/reported-changes.js";
 
 const arg = (n: string) =>
   process.argv.find((a) => a.startsWith(`--${n}=`))?.split("=")[1];
@@ -91,6 +92,8 @@ console.info(
 const tally: Record<string, number> = {};
 let n = 0;
 for (const r of targets) {
+  // 源取得前に最新報告を確認し、処理中の変化は同じ保存batchでも拒否する。
+  await assertReportedDocumentUsable(db, r.docId);
   // 全経路 (try 成功・catch・検証降格) で代入後に初読される。初期値なし。
   let status: OverseasParseStatus | "parse_error";
   let honbunFile: string | null = null;
@@ -174,6 +177,7 @@ for (const r of targets) {
     ...o,
   }));
   const statements = [
+    reportedDocumentAtomicGuard(db, r.docId),
     db
       .update(yuhoDocuments)
       .set({ overseasParseStatus: status, overseasHonbunFile: honbunFile, overseasOmissionJson })

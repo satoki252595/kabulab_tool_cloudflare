@@ -39,7 +39,7 @@
  *   - マクロ 4 指数のどれかが取れない場合も null で通す
  */
 
-import { sql, eq, and, or, gt, gte, lte, lt, asc, isNull, inArray, like, getTableColumns, getTableName } from "drizzle-orm";
+import { sql, eq, and, or, gte, lte, lt, asc, isNull, inArray, getTableColumns, getTableName } from "drizzle-orm";
 import type { SQLiteTable } from "drizzle-orm/sqlite-core";
 import { parseStockCode } from "../shared/jpx/stock-code.js";
 import { createD1HttpBatchSender, createD1HttpDb, toD1BatchStatements, type D1BatchStatement } from "../shared/db/d1-http-client.js";
@@ -91,18 +91,6 @@ import { fetchNikkeiVi } from "../shared/yahoo/nikkei-vi.js";
 import { calculateAllRsiSeries } from "../shared/indicators/rsi.js";
 import { computeRsiPercentileSnapshot } from "../shared/indicators/percentile.js";
 import { evaluateBlueChip } from "../shared/indicators/blue-chip.js";
-import {
-  classifyDividendForecastEvent,
-  dividendForecastAsOfSec,
-  DIVIDEND_FORECAST_EVENT_KEYWORDS,
-  EVENT_WINDOW_DAYS,
-  forecastDividendYield,
-  judgeDividendForecast,
-  type DividendForecastBasis,
-  type DividendForecastEvent,
-  type DividendForecastRow,
-} from "../shared/indicators/forecast-dividend-yield.js";
-import { disclosures as irDisclosures } from "../../services/ir-catalog/src/db/schema.js";
 import {
   sma,
   atr14,
@@ -188,7 +176,6 @@ interface StockSnapshot {
   price: number | null;
   per: number | null;
   pbr: number | null;
-  /** 予想配当利回り (% 値)。会社予想 ÷ price。null = 未確定 (無配は 0) */
   dividendYield: number | null;
   eps: number | null;
   bps: number | null;
@@ -767,83 +754,6 @@ export async function loadJssAnnualMap(
     }
   }
   return byCode;
-}
-
-/** 予想配当の基準を銘柄コードで引く。短信行が無い銘柄も理由付きで返す */
-export type DividendForecastLookup = (code: string) => DividendForecastBasis;
-
-/**
- * 予想配当利回りの基準 (会社予想の年間配当) を全銘柄ぶん一括で読む。
- *
- * `jss_financials` の TDnet 短信行 (asOf 以前) から銘柄ごとに最新の短信を選び、
- * `ir_disclosures` の後続開示 (短信・配当・分割/併合) で無効化を判定する
- * (`judgeDividendForecast`)。2 文で全件引く (全銘柄 × 毎日の per-stock SELECT にしない)。
- * 表が無い DB では落ちる (黙って全銘柄を未確定にしない)。
- */
-export async function loadDividendForecastLookup(
-  db: Db,
-  asOfDate: string,
-  codes?: readonly string[]
-): Promise<DividendForecastLookup> {
-  const asOfSec = dividendForecastAsOfSec(asOfDate);
-  if (codes !== undefined) {
-    for (const code of codes) {
-      if (parseStockCode(code) !== code) throw new Error("予想配当入力の銘柄コードscopeが正準形ではありません");
-    }
-  }
-  const codeScope = (column: typeof jssFinancials.code | typeof coreSchema.stocks.code) =>
-    codes === undefined ? undefined : inArray(column, sql`(select value from json_each(${JSON.stringify([...new Set(codes)])}))`);
-  const rows = await db
-    .select({ code: jssFinancials.code, dpsForecast: jssFinancials.dpsForecast, disclosedAt: jssFinancials.disclosedAt })
-    .from(jssFinancials)
-    .where(and(
-      eq(jssFinancials.source, "TDnet"),
-      or(isNull(jssFinancials.disclosedAt), lte(jssFinancials.disclosedAt, asOfSec)),
-      codeScope(jssFinancials.code),
-    ));
-  const eventRows = await db
-    .select({ code: coreSchema.stocks.code, title: irDisclosures.title, pubdate: irDisclosures.pubdate })
-    .from(irDisclosures)
-    .innerJoin(coreSchema.stocks, eq(coreSchema.stocks.id, irDisclosures.stockId))
-    .where(and(
-      gt(irDisclosures.pubdate, new Date((asOfSec - EVENT_WINDOW_DAYS * 86_400) * 1000)),
-      lte(irDisclosures.pubdate, new Date(asOfSec * 1000)),
-      or(...DIVIDEND_FORECAST_EVENT_KEYWORDS.map((word) => like(irDisclosures.title, `%${word}%`))),
-      codeScope(coreSchema.stocks.code),
-    ));
-
-  const rowsByCode = new Map<string, { disclosedAt: number | null; dpsForecast: number | null }[]>();
-  for (const r of rows) {
-    const list = rowsByCode.get(r.code);
-    if (list === undefined) rowsByCode.set(r.code, [r]);
-    else list.push(r);
-  }
-  const eventsByCode = new Map<string, DividendForecastEvent[]>();
-  for (const e of eventRows) {
-    const kind = classifyDividendForecastEvent(e.title);
-    if (kind === null) throw new Error(`予想配当の開示分類が LIKE 絞り込みと食い違います: ${e.title}`);
-    const event = { kind, pubdate: Math.floor(e.pubdate.getTime() / 1000) };
-    const list = eventsByCode.get(e.code);
-    if (list === undefined) eventsByCode.set(e.code, [event]);
-    else list.push(event);
-  }
-  const judged = new Map<string, DividendForecastBasis>();
-  for (const [code, list] of rowsByCode) {
-    if (list.some((r) => r.disclosedAt === null)) {
-      judged.set(code, { kind: "unverified", reason: "disclosed-at-missing" });
-      continue;
-    }
-    const latestAt = Math.max(...list.map((r) => r.disclosedAt as number));
-    const latest: DividendForecastRow[] = list
-      .filter((r) => r.disclosedAt === latestAt)
-      .map((r) => ({ dpsForecast: r.dpsForecast, disclosedAt: latestAt }));
-    const events = eventsByCode.get(code);
-    judged.set(code, judgeDividendForecast(latest, events === undefined ? [] : events, asOfSec));
-  }
-  return (code) => {
-    const basis = judged.get(code);
-    return basis === undefined ? { kind: "unverified", reason: "no-forecast-row" } : basis;
-  };
 }
 
 /**
@@ -1428,16 +1338,6 @@ async function runDailySyncAndRecord(
   // is_blue_chip が偽で上書きされるので、黙って空扱いにしない)。
   const jssAnnualByCode = await loadJssAnnualMap(db);
   console.info(`[sync-daily]   正本年次: ${jssAnnualByCode.size} 銘柄ぶんを読込`);
-  // 予想配当利回りの基準 (会社予想の年間配当)。Yahoo の配当利回りは使わない。
-  const dividendForecastFor = await loadDividendForecastLookup(db, targetDate);
-  const dividendBasisCounts = new Map<string, number>();
-  for (const t of targets) {
-    const basis = dividendForecastFor(t.code);
-    const key = basis.kind === "forecast" ? "forecast" : basis.reason;
-    dividendBasisCounts.set(key, (dividendBasisCounts.get(key) ?? 0) + 1);
-  }
-  console.info(`[sync-daily]   予想配当の基準: ${[...dividendBasisCounts].map(([k, n]) => `${k}=${n}`).join(" ")} ` +
-    "(forecast 以外は dividend_yield を NULL で保存)");
 
   // 増分判定の既存日付は Phase 1 の targets に載っている (latest_date JOIN)。
   // NULL/未登録は初回 backfill (6mo 全 upsert)。
@@ -1505,7 +1405,7 @@ async function runDailySyncAndRecord(
     };
     try {
       return await buildSnapshot(target.id, target.code, target.sector, targetDate,
-        dividendForecastFor(target.code), jssAnnualByCode.get(target.code) ?? [], { onChartRaw: add("chart"), onSummaryRaw: add("quote-summary"), assertCaptured,
+        jssAnnualByCode.get(target.code) ?? [], { onChartRaw: add("chart"), onSummaryRaw: add("quote-summary"), assertCaptured,
           onCorporateDiagnostics: diagnostic => { corporateDiagnostics.push({ code: symbol, attempt, expectedDate: targetDate, diagnostic }); } });
     } catch (error) {
       if (error instanceof YahooRawTooLargeError) custodyStop = error;
@@ -2064,7 +1964,6 @@ async function buildSnapshot(
   code: string,
   sector: string | null,
   expectedDate: string,
-  dividendBasis: DividendForecastBasis,
   jssAnnualRows: JssAnnualRow[] = [],
   rawOptions?: NonNullable<Parameters<typeof fetchStockRawData>[2]> & {
     assertCaptured: () => void; onCorporateDiagnostics?: (diagnostic: StockCorporateDiagnostics) => void;
@@ -2082,7 +1981,7 @@ async function buildSnapshot(
   });
   rawOptions?.assertCaptured();
   if (raw.corporateDiagnostics !== undefined) rawOptions?.onCorporateDiagnostics?.(raw.corporateDiagnostics);
-  return buildStockSnapshot(stockId, code, sector, expectedDate, raw, dividendBasis, jssAnnualRows, chartRaw);
+  return buildStockSnapshot(stockId, code, sector, expectedDate, raw, jssAnnualRows, chartRaw);
 }
 
 /** 通常日次・保存原本補完が共有する純計算。取得・書込・clock生成は含まない。 */
@@ -2092,7 +1991,6 @@ export function buildStockSnapshot(
   sector: string | null,
   expectedDate: string,
   raw: Awaited<ReturnType<typeof fetchStockRawData>>,
-  dividendBasis: DividendForecastBasis,
   jssAnnualRows: JssAnnualRow[] = [],
   chartRaw?: YahooRawCapture,
 ): StockSnapshot {
@@ -2215,9 +2113,7 @@ export function buildStockSnapshot(
     price: raw.price,
     per: raw.per,
     pbr: raw.pbr,
-    // 会社予想 ÷ 株価。Yahoo の dividendYield (raw.dividendYield) は検算できない
-    // 過大値を含むため保存しない (forecast-dividend-yield.ts)。
-    dividendYield: forecastDividendYield(dividendBasis, raw.price).value,
+    dividendYield: raw.dividendYield,
     eps: raw.eps,
     bps: raw.bps,
     roe: raw.roe,

@@ -198,7 +198,7 @@ describe("text-sections: 解析失敗と旧本文の0節置換を保全停止", 
       const batch = toD1BatchStatements(buildTextBackfillStatements(buildDb,
         { ...row, stockId: 11, docId: "S100TEXT01", periodEnd: "2025-03-31", filerName: "テスト",
           textParseStatus: null, notionDocPageId: null }, "no_text_sections", []));
-      expect(batch).toHaveLength(2);
+      expect(batch).toHaveLength(3);
       for (const s of batch) sqlite.prepare(s.sql).run(...s.params as never[]);
       expect(sqlite.prepare("SELECT text_parse_status,notion_doc_page_id FROM yuho_documents WHERE id=?").get(row.id))
         .toEqual({ text_parse_status: "no_text_sections", notion_doc_page_id: null });
@@ -254,9 +254,9 @@ describe("text-sections: batch 途中失敗は status+旧索引を rollback し�
           "ok",
           sections
         );
-        // [update, delete, insert×2] の 4 文 (batch 輸送は検証済み包みで実行)。
+        // [reported guard, update, delete, insert×2] の 5 文 (batch 輸送は検証済み包みで実行)。
         const batch = toD1BatchStatements(statements);
-        expect(batch).toHaveLength(4);
+        expect(batch).toHaveLength(5);
         sqlite.exec("BEGIN");
         try {
           for (const st of batch) {

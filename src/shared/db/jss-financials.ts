@@ -9,7 +9,7 @@
  * generate が `CREATE TABLE jss_financials` の migration を吐き、
  * 本番の既存表と衝突する。writer も持たない (stockStock 側が所有)。
  *
- * 列は読む列だけ (年次系列 5 列 + license 列 + 予想配当の 3 列。YAGNI で全列は写さない)。
+ * 列は読む 6 列だけ (使用 5 列 + license 列。YAGNI で全列は写さない)。
  * 公開面の数値クエリは `license_tag='commercial-ok'` (EDINET) を SQL 条件に
  * 必ず含める。TDnet 短信由来 (factual-cite) の行は公開面に出さない。
  * 来歴列を select しないだけでは公開制限にならないので、WHERE で落とす。
@@ -18,7 +18,6 @@ import {
   sqliteTable,
   text,
   real,
-  integer,
   primaryKey,
 } from "drizzle-orm/sqlite-core";
 
@@ -36,12 +35,6 @@ export const jssFinancials = sqliteTable(
     netSales: real("net_sales"),
     /** commercial-ok (EDINET) / factual-cite (TDnet 短信) / personal-only */
     licenseTag: text("license_tag").notNull(),
-    /** 'EDINET' / 'TDnet'。会社予想 (dps_forecast) は TDnet 短信にだけある */
-    source: text("source").notNull(),
-    /** 年間1株配当の会社予想 (円)。短信の AnnualMember 予想。未定・採取不能は NULL */
-    dpsForecast: real("dps_forecast"),
-    /** 開示時刻 (unix 秒) */
-    disclosedAt: integer("disclosed_at"),
   },
   (table) => [
     primaryKey({
