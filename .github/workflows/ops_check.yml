@@ -103,7 +103,6 @@ jobs:
           CF_D1_DATABASE_ID: ${{ secrets.CF_D1_DATABASE_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          BIZTAG_LOCAL_ACCEPTED_REVISION: ${{ secrets.BIZTAG_LOCAL_ACCEPTED_REVISION }}
         run: nix develop -c bash -c 'cd pipeline && uv run python -m jp_stock_pipeline.jobs.ops_check'
 
       # 検出層: core_stocks の列定義ドリフト (E7)。**`core_stocks` に対しては

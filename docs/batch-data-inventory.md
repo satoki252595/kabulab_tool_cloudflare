@@ -2,7 +2,7 @@
 
 確認日: 2026-10-20。対象は本repoの14 workflow、宣言19 jobs（歴史RAWの無効1 jobを除き有効13 workflow／18 jobs）、CFの10 trigger、通常CLI、Macの2 LaunchAgent。GitHubが動的生成するDependency Graphは業務バッチに含めない。各行はデータ機能単位で、列の欠測や同じ原本の再利用を「新規取得成功」と数えない。
 
-**Macの2定期設定はユーザー指示でdisable＋bootout済み。本文・タグ・競合準備・優待要約の代替定期実行は未配備。** 他のCF／Actions定期は継続する。以下の「自動」は設定上の入口であり、全件充足・直近実行成功の保証ではない。全時刻はJST。
+**Macの2定期設定はユーザー指示でdisable＋bootout済み。本文・タグ・競合準備・優待要約は[月次手動スクリプト](mac-monthly-manual.md)を準備し、月1回のコマンド案内から手動実行する方針。** 他のCF／Actions定期は継続する。以下の「自動」は設定上の入口であり、全件充足・直近実行成功の保証ではない。全時刻はJST。
 
 ## CF／Actionsの通常取得・更新
 
@@ -91,19 +91,19 @@
 
 根拠: [登録26 spec](../scripts/moneyflow/sources.ts)＋[Phase1の3 source](../scripts/moneyflow/ingest.ts)。内部取得と公開利用資格は別であり、全29取得元を公開APIへ出す意味ではない。
 
-## 停止したMac設定と同居機能
+## 旧Mac自動起動と月次手動の対象機能
 
-**全行、移設未受入。自動では蓄積しない。** plist・env・モデル・原本・進捗・未完journalを保持し、2labelを永続disable/unloadした。新環境へ載せる際は未完状態・writer排他・R2 receipt・監視も引き継ぐ。23:30の旧receipt検査は現在も残り、移設完了まで停止を検出し得る。監視を成功へ偽装しない。
+**全行、月次手動スクリプトの準備のみ。実処理は未実行で、自動では蓄積しない。** plist・env・モデル・原本・進捗・未完journalを保持し、2labelを永続disable/unloadした。月次手動では受入済みMac runtimeと既存の未完状態・writer排他を使う。23:30の旧Mac日次receipt期待は廃止し、月次手動を旧日次成功へ偽装しない。共通の旧validatorと原本は保全する。
 
 | ID | 機能 | 旧予定 | LLM | 移設の境界 |
 |---|---|---|---|---|
-| M01 | 補足DBの基本情報・マスタrelation | 毎日20時 | なし | 既存mechanical-onlyはLinux可 |
+| M01 | 補足DBの基本情報・マスタrelation | 旧毎日20時→月次手動 | なし | 受入済みMac runtimeの通常CLIを使う |
 | M02 | 補足DBへの39本文同期・不一致修復・実値/欠測観測 | 同上、通常確認窓50社 | なし | 有報テキスト抽出D29とは別。新規/変更の意味判定HOLDを保持 |
 | M03 | keywords/excludes、候補抽出、上流/下流タグ・テーマ導出、同入力判定再利用 | 同上 | なし | 既存no/uncertainを単語一致だけで覆さない |
-| M04 | 適格新規・実入力変更の事業タグClef判定 | 同上 | **あり** | 現行torch-MPS専用。CPU/CUDA未受入。モデル約19GB、SSH RAM約15.4GiBで同等実行の根拠なし |
-| M05 | 競合入力・質問・候補の機械準備 | 20時job成功後、設定対象から最大5社 | なし | 現envキーは設定あり。controller/CLIのMac条件・永続cursorも移設。意味判定は行わない |
-| M06 | 優待の機械要約、金額/条件検証、PRE/CAS/POST | 毎日21時、最大60群 | なし | 規則未対応は保留。現在の親・CLIのMac限定条件を修正する必要あり |
-| M07 | 2jobの30分期限、共有lock、原文/journal、R2 receipt | 両job共通 | なし | ephemeral Actionsへコマンドだけ移しても永続進捗を引き継げない |
+| M04 | 適格新規・実入力変更の事業タグClef判定 | 同上 | **あり** | 現行torch-MPS専用でMacの月次手動。モデル約19GB。別ホストへ移設せず既存受入runtimeを使う |
+| M05 | 競合入力・質問・候補の機械準備 | 20時job成功後、設定対象から最大5社 | なし | 現envキーは設定あり。同じMac runtimeのcursor/pendingを再利用。意味判定は行わない |
+| M06 | 優待の機械要約、金額/条件検証、PRE/CAS/POST | 毎日21時、最大60群 | なし | 規則未対応は保留。Mac限定条件は維持し、受入runtimeから直接実行 |
+| M07 | 旧日次の30分期限・R2 receipt（保全）、共有lock・原文/journal | 両処理共通 | なし | 月次はstageごとの独立期限。旧日次receiptは更新せず、既存stateを使う |
 
 根拠: [launcher](../scripts/biztag-local/main.ts)、[OS/lock条件](../scripts/biztag-local/runtime.ts)、[優待CLI](../services/otakara-yutai/data-scripts/summary-local.ts)、[Clef](../services/yuho-quant/scripts/clef_server.py)。優待の定期実行は`--allow-model`なしだった。月次`sync:monthly`からもMac要約stageを除去し、優待取得→再計算だけにする。
 
@@ -133,7 +133,7 @@
 |---|---|---|
 | O01 | 予定dispatchのR2 receipt確保・GitHub実run/期限照合 | CF5系列×dispatch/readcheckの10cron |
 | O02 | データ鮮度・件数・容量の観測 | 毎日23:30 |
-| O03 | SLO・株価coverage・マクロ日付・開示/PDF欠測・ローカル2job receipt判定 | 毎日23:30、観測失敗でも判定 |
+| O03 | SLO・株価coverage・マクロ日付・開示/PDF欠測判定（旧Mac日次receipt期待は廃止） | 毎日23:30、観測失敗でも判定 |
 | O04 | core schema drift検証 | 同job、先行失敗でも実施 |
 | O05 | 列license map投入・照合 | 同job、先行失敗でも実施 |
 | O06 | 失敗Issue作成・回復時close | 各workflow/監視の結果に従う |
@@ -151,7 +151,7 @@
 | X02 | 保有価格の初期snapshot bootstrap、過去保有価格の資格化・隔離・既存物公開 | 固定PRE/journal/原本/basisを使う手動。通常D19/D32とは別 | なし |
 | X03 | 財務の保存原本再解析、Notion修復、D1同期、歴史relation補修 | 手動、過去全件を日次で再走査しない | なし |
 | X04 | ZIP/PDF欠損原本回復・parser不一致・主体不明の解決 | 適格原本と同定が必要。定期が推測して解除しない | なし |
-| X05 | 空タグの明示再確認、既知Clef拒否のSHA付き閉鎖 | 固定対象・明示修復。定期新規/入力変更とは別。Mac方式は廃止 | 判定時のみClef |
+| X05 | 空タグの明示再確認、既知Clef拒否のSHA付き閉鎖 | 固定対象・明示修復。定期新規/入力変更とは別。Mac自動起動は廃止 | 判定時のみClef |
 | X06 | 優待規則未対応の生成要約 | 手動`--allow-model`のMLXコードが残存。現在非稼働、移設未受入 | あり |
 | X07 | 優待要約の旧外部タスクexport/import、公開facts/利回り再補修 | 手動。外部LLM自動経路はない | export/importの生成先次第 |
 | X08 | 競合の意味判定、TypeSafe、語彙外部審査、定期golden評価 | 意図的停止。M05準備は判定完了ではない | 停止中 |
@@ -170,10 +170,8 @@
 
 権利・主体・期間・公開資格・原本不足を別値や別モデルで埋めない。既存全列の欠測が今後の定期だけで全て解消するわけではない。旧実績の件数・未完データは[復旧状況](test-logs/recovery-functional-status-20261020.md)へ分離する。
 
-## 移設に必要な順序
+## 月次手動の順序
 
-1. M01〜M07のうち機械部分の実行先、Clefの実行先/資源/許容費用を決める。新しい有料GPUや別モデルを無断で追加しない。
-2. 未完intent・原本・state・lock・受入revisionと監視契約を保持し、Linux許可条件と永続進捗を通常CLIへ接続する。
-3. 固定対象でPRE/CAS/POST、receipt、時間/メモリ/通信を受入れてから定期を登録する。停止したMacを代替定期の稼働済みとは扱わない。
+Mac専用分は[月次手動スクリプト](mac-monthly-manual.md)で、受入済みruntime・既存stateを明示し、通常biztag→設定済みscopeの競合準備→優待機械要約の順に実行する。失敗時は後続STOP、未完intentを維持し再試行しない。既存クラウド月次は毎月10日10:30なので、案内は翌11日09:00 JSTを推奨。メールの繰り返し設定と初回実行は別受入。
 
-private証跡は`tmp/feature-audit-20261020/mac-retirement-inventory-v1/`と`local-manual-dependencies-audit-v1/`。停止前snapshotと各disable/bootout1回、postcheck、env/plist保全を記録した。停止後の旧監視設定も棚卸し対象に含める。
+private証跡は`tmp/feature-audit-20261020/mac-retirement-inventory-v1/`と`local-manual-dependencies-audit-v1/`。停止前snapshotと各disable/bootout1回、postcheck、env/plist保全を記録した。
