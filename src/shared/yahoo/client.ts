@@ -523,6 +523,33 @@ function impliedShareCount(total: number | null, perShare: number | null): numbe
 // この境界から正しい株数・EPS・時価総額を推定してはならない。
 const MAX_SHARE_BASIS_RATIO = 10;
 
+// Yahoo の summaryDetail.dividendYield は日本株で dividendRate がほぼ常に欠損 (10/16 実測
+// 3675/3687) で、応答内で 利回り=配当÷株価 を割り戻せない。同一応答の実績年間配当
+// (trailingAnnualDividendRate ÷ financialData.currentPrice) と比べ、増減配の範囲 (半減〜倍増)
+// を超えて食い違うものは検算不能として採用しない (6871 は 5.4% vs 実績 0.71% で 7.6 倍)。
+// 境界から正しい利回りを推定してはならない。
+const MAX_DIVIDEND_YIELD_TRAILING_RATIO = 2;
+
+/** 同一応答の実績年間配当で裏づけられた配当利回り (小数) だけを返す。欠損で埋めない。 */
+function corroboratedDividendYield(
+  dividendYield: number | null, trailingRate: number | null, price: number | null,
+): number | null {
+  if (dividendYield === null || trailingRate === null || price === null ||
+    !Number.isFinite(dividendYield) || !Number.isFinite(trailingRate) || !Number.isFinite(price) ||
+    dividendYield < 0 || trailingRate < 0 || price <= 0) return null;
+  // 両方 0 だけを「無配」の一致とみなす。片方だけ 0 は増減配の比率で照合できない。
+  if (dividendYield === 0 || trailingRate === 0) return dividendYield === 0 && trailingRate === 0 ? 0 : null;
+  const ratio = dividendYield / (trailingRate / price);
+  return ratio <= MAX_DIVIDEND_YIELD_TRAILING_RATIO && ratio >= 1 / MAX_DIVIDEND_YIELD_TRAILING_RATIO
+    ? dividendYield : null;
+}
+
+// bookValue/priceToBook は defaultKeyStatistics.mostRecentQuarter 時点の BS から作られる。
+// 上場会社は四半期ごとに開示するため、株価日から 1 年超古い四半期末は Yahoo 側の BS 系列が
+// 止まっている (10/16 実測 134 銘柄。6016 は 2022-03-31 の BPS を 2024 年の 3:1 分割で
+// 割り直した 794.877 のまま、決算 BPS 2193.51 に対し PBR 15.52)。
+const MAX_BOOK_VALUE_AGE_DAYS = 365;
+
 /** Unix タイムスタンプ (秒) → `YYYY-MM-DD` */
 function toDateString(timestampSec: number): string {
   return new Date(timestampSec * 1000).toISOString().split("T")[0];
@@ -1356,6 +1383,8 @@ export interface QuoteSummaryResult {
   dividendYield: number | null;
   eps: number | null;
   bps: number | null;
+  /** bps/pbr の基準四半期末 (mostRecentQuarter)。株価日との鮮度照合は combineStockRawData */
+  bookValueQuarterEnd: string | null;
   roe: number | null;
   roa: number | null;
   marketCap: number | null;
@@ -1436,10 +1465,19 @@ function parseQuoteSummaryResponse(json: unknown, code: string): QuoteSummaryRes
 
   // Yahoo の配当利回りは 0.0234 (小数) で返ってくる → % に直して 2 桁丸め
   const rawDividendYield = extractRawValue(summaryDetail?.dividendYield);
+  const verifiedDividendYield = corroboratedDividendYield(
+    rawDividendYield,
+    extractRawValue(summaryDetail?.trailingAnnualDividendRate),
+    extractRawValue(financialData?.currentPrice),
+  );
+  if (rawDividendYield !== null && verifiedDividendYield === null) {
+    console.warn(`[yahoo] ${code}: 配当利回りが同一応答の実績配当÷株価で裏づけられないため採用しません`);
+  }
   const dividendYield =
-    rawDividendYield !== null
-      ? Math.round(rawDividendYield * 100 * 100) / 100
+    verifiedDividendYield !== null
+      ? Math.round(verifiedDividendYield * 100 * 100) / 100
       : null;
+  const mostRecentQuarter = extractRawValue(keyStats?.mostRecentQuarter);
 
   const incomeHistory =
     result.incomeStatementHistory?.incomeStatementHistory ?? [];
@@ -1475,6 +1513,7 @@ function parseQuoteSummaryResponse(json: unknown, code: string): QuoteSummaryRes
     dividendYield,
     eps: shareBasisUnconfirmed ? null : eps,
     bps,
+    bookValueQuarterEnd: mostRecentQuarter === null ? null : toDateString(mostRecentQuarter),
     roe,
     roa,
     marketCap: shareBasisUnconfirmed ? null : marketCap,
@@ -1537,13 +1576,18 @@ export async function fetchStockRawData(
 function combineStockRawData(
   chart: ChartResult, summary: QuoteSummaryResult,
 ): StockRawData & { rsiHistoryHold?: RsiHistoryHold } {
+  const bookValueCurrent = summary.bookValueQuarterEnd !== null &&
+    Date.parse(chart.dataDate) - Date.parse(summary.bookValueQuarterEnd) <= MAX_BOOK_VALUE_AGE_DAYS * 86_400_000;
+  if (!bookValueCurrent && (summary.pbr !== null || summary.bps !== null)) {
+    console.warn(`[yahoo] ${chart.symbol}: BPS/PBR の基準四半期末 ${summary.bookValueQuarterEnd ?? "欠損"} が株価日 ${chart.dataDate} から ${MAX_BOOK_VALUE_AGE_DAYS} 日以内でないため採用しません`);
+  }
   return {
     price: chart.price,
     per: summary.per,
-    pbr: summary.pbr,
+    pbr: bookValueCurrent ? summary.pbr : null,
     dividendYield: summary.dividendYield,
     eps: summary.eps,
-    bps: summary.bps,
+    bps: bookValueCurrent ? summary.bps : null,
     roe: summary.roe,
     roa: summary.roa,
     marketCap: summary.marketCap,

@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-let { fetchChart, fetchQuoteSummary, yahooHttpErrorMessage } = await import("./client.js");
+let { fetchChart, fetchQuoteSummary, fetchStockRawData, yahooHttpErrorMessage } = await import("./client.js");
 
 const ORIGINAL_PROXY_BASE = process.env.YAHOO_PROXY_BASE;
 const ORIGINAL_CRON_SECRET = process.env.CRON_SECRET;
 
 beforeEach(async () => {
   vi.resetModules();
-  ({ fetchChart, fetchQuoteSummary, yahooHttpErrorMessage } = await import("./client.js"));
+  ({ fetchChart, fetchQuoteSummary, fetchStockRawData, yahooHttpErrorMessage } = await import("./client.js"));
 });
 
 afterEach(() => {
@@ -111,13 +111,14 @@ describe("fetchQuoteSummary — 株数の尺度 guard (F-15)", () => {
         eps: rejected ? null : row.eps,
         per: rejected ? null : row.per,
         marketCap: rejected ? null : row.cap,
-        bps: row.bps, pbr: row.pbr, roe: row.roe, roa: row.roa,
+        bps: row.bps, pbr: row.pbr, bookValueQuarterEnd: null, roe: row.roe, roa: row.roa,
         operatingMarginTtm: row.margin,
-        dividendYield: Math.round(row.dividend * 10000) / 100,
+        // 9/28 原本の抜粋には実績配当・現在値が無く、利回りを裏づけられない。
+        dividendYield: null,
         annualFinancials: [{ fiscalYear: row.annualYear, revenue: row.annualRevenue }],
       });
-      expect(warn).toHaveBeenCalledTimes(rejected ? 1 : 0);
-      if (rejected) expect(warn).toHaveBeenCalledWith(expect.stringContaining("株数の尺度"));
+      const shareWarns = warn.mock.calls.filter(([m]) => String(m).includes("株数の尺度"));
+      expect(shareWarns).toHaveLength(rejected ? 1 : 0);
     } finally {
       warn.mockRestore();
     }
@@ -143,7 +144,7 @@ describe("fetchQuoteSummary — 株数の尺度 guard (F-15)", () => {
         const result = await readSummary(json, row.code);
         expect({ eps: result.eps, per: result.per, cap: result.marketCap })
           .toEqual({ eps: row.eps, per: row.per, cap: row.cap });
-        expect(warn).not.toHaveBeenCalled();
+        expect(warn.mock.calls.filter(([m]) => String(m).includes("株数の尺度"))).toHaveLength(0);
       } finally {
         warn.mockRestore();
       }
@@ -161,10 +162,135 @@ describe("fetchQuoteSummary — 株数の尺度 guard (F-15)", () => {
       expect({ eps: result.eps, per: result.per, cap: result.marketCap })
         .toEqual({ eps: null, per: null, cap: null });
       expect(result.bps).toBe(row.bps);
-      expect(warn).toHaveBeenCalledOnce();
+      expect(warn.mock.calls.filter(([m]) => String(m).includes("株数の尺度"))).toHaveLength(1);
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe("fetchStockRawData — PBR/BPS・配当利回りの検算 guard (2026-10-16 観測)", () => {
+  // 10/16 原本 (Notion 一次データ｜stock-sync, run 38877553046.1) の必要な数値だけ。
+  // 6016: mostRecentQuarter=2022-03-31 の BPS を分割調整した値 (決算 BPS 2193.51)。
+  //       配当利回り 0.42% に対し同一応答の実績年間配当は 7.333 円 (0.06%)。
+  // 6871: 配当利回り 5.4% に対し同一応答の実績年間配当は 95 円 (0.71%)。
+  const observed = {
+    "6016": { price: 12340, bps: 794.877, pbr: 15.524414, mrq: 1648684800, dividend: 0.0042, trailing: 7.333 },
+    "6871": { price: 13450, bps: 2355.421, pbr: 5.7102323, mrq: 1782777600, dividend: 0.054, trailing: 95 },
+  };
+  type Row = (typeof observed)["6016"];
+
+  function chart(code: string, price: number) {
+    return {
+      chart: {
+        result: [{
+          meta: { symbol: `${code}.T`, regularMarketPrice: price, previousClose: price },
+          timestamp: [1792022400, 1792108800],
+          indicators: {
+            quote: [{ open: [price, price], high: [price, price], low: [price, price], close: [price, price], volume: [1000, 1000] }],
+            adjclose: [{ adjclose: [price, price] }],
+          },
+        }],
+        error: null,
+      },
+    };
+  }
+
+  function summary(row: Row) {
+    return {
+      quoteSummary: {
+        result: [{
+          defaultKeyStatistics: { bookValue: { raw: row.bps }, priceToBook: { raw: row.pbr }, mostRecentQuarter: { raw: row.mrq } },
+          financialData: { currentPrice: { raw: row.price } },
+          summaryDetail: { dividendYield: { raw: row.dividend }, trailingAnnualDividendRate: { raw: row.trailing } },
+        }],
+        error: null,
+      },
+    };
+  }
+
+  async function read(code: string, summaryJson: unknown, price: number) {
+    process.env.YAHOO_PROXY_BASE = "https://kabulab.example.test";
+    process.env.CRON_SECRET = "test-secret";
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(
+      decodeURIComponent(url).includes("quoteSummary") ? summaryJson : chart(code, price)
+    ), { status: 200, headers: { "Content-Type": "application/json" } })));
+    return fetchStockRawData(code);
+  }
+
+  it("6016: 株価日から1年超古い四半期末の BPS/PBR と、実績配当で裏づけられない利回りを採用しない", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const row = observed["6016"];
+      const result = await read("6016", summary(row), row.price);
+      expect({ pbr: result.pbr, bps: result.bps, dividendYield: result.dividendYield })
+        .toEqual({ pbr: null, bps: null, dividendYield: null });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("基準四半期末 2022-03-31"));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("配当利回り"));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("6871: 四半期末が新しい BPS/PBR は保持し、実績配当と7倍超食い違う利回りだけ採用しない", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const row = observed["6871"];
+      const result = await read("6871", summary(row), row.price);
+      expect({ pbr: result.pbr, bps: result.bps, dividendYield: result.dividendYield })
+        .toEqual({ pbr: row.pbr, bps: row.bps, dividendYield: null });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it.each([
+    ["増配 (実績比1.9倍)", 0.0132, 95, 1.32],
+    ["減配 (実績比0.55倍)", 0.0039, 95, 0.39],
+    ["無配の一致", 0, 0, 0],
+  ])("%s は同一応答で裏づけられるので%%に直して採用する", async (_label, dividend, trailing, expected) => {
+    const row = { ...observed["6871"], dividend, trailing };
+    const result = await read("6871", summary(row), row.price);
+    expect(result.dividendYield).toBe(expected);
+  });
+
+  it.each([
+    ["実績配当欠損", { trailingAnnualDividendRate: undefined }],
+    ["現在値欠損", { currentPrice: undefined }],
+    ["実績0・予想あり", { trailingAnnualDividendRate: { raw: 0 } }],
+  ])("%s は利回りを検算できないので欠損にする (補完しない)", async (_label, patch) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const row = observed["6871"];
+      const json = summary({ ...row, dividend: 0.0071 });
+      const item = json.quoteSummary.result[0];
+      if ("trailingAnnualDividendRate" in patch) Object.assign(item.summaryDetail, patch);
+      if ("currentPrice" in patch) Object.assign(item.financialData, patch);
+      const result = await read("6871", json, row.price);
+      expect(result.dividendYield).toBeNull();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("基準四半期末が欠損なら BPS/PBR の鮮度を確かめられないので欠損にする", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const row = observed["6871"];
+      const json = summary(row);
+      Object.assign(json.quoteSummary.result[0].defaultKeyStatistics, { mostRecentQuarter: undefined });
+      const result = await read("6871", json, row.price);
+      expect({ pbr: result.pbr, bps: result.bps }).toEqual({ pbr: null, bps: null });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("基準四半期末 欠損"));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("株価日からちょうど365日前の四半期末は採用する", async () => {
+    const row = { ...observed["6871"], mrq: 1760572800 };
+    const result = await read("6871", summary(row), row.price);
+    expect({ pbr: result.pbr, bps: result.bps }).toEqual({ pbr: row.pbr, bps: row.bps });
   });
 });
 
