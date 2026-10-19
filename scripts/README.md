@@ -1,58 +1,24 @@
 # scripts/
 
-ルートレベルのスクリプト一覧。kabulab mono-repo 横断で使うエントリポイントだけをここに置く。
-サービス内部の細かなユーティリティは `services/<slug>/src/scripts/` または
-`services/<slug>/data-scripts/` に置く。
+mono-repo横断のCLI。サービス内の細かな処理は`services/<slug>/data-scripts/`へ置く。環境構築はrepoのNixを使う。
 
-> 全サービスを **Cloudflare D1 + R2 + Notion** へ移行済み（Neon 全廃）。
-> 日次/月次の指標・スコア計算は **GitHub Actions (Node)** が自動実行する。本ディレクトリの
-> `sync/*` は手動/CI 用の実行入口、`vwap/*` は GitHub Actions 用の取込。
-> 旧 `migrate/*` (Neon→D1 移行ツール) は K1a で削除済み。
+取得・更新・監視・手動/停止/未実装の全件は[データ一覧](../docs/batch-data-inventory.md)、予定と先行条件は[README](../README.md#本番の定期処理先行条件llm利用)を参照。
 
-```
-scripts/
-├── README.md                         # このファイル
-├── sync/                             # 取込トリガ / 母集団 seed
-│   ├── daily.ts                      # pnpm sync:daily:core — core/rsi/swing を計算して D1 へ書込
-│   ├── monthly.ts                    # pnpm sync:monthly:core — otakara 派生テーブルを再構築
-│   ├── universe.ts                   # pnpm sync:universe — 東証母集団を core_stocks に seed (Node・xlsx)
-│   ├── all-daily.ts / all-monthly.ts # ローカル手動フル実行のオーケストレータ
-│   ├── yuho-edinet.ts              # 005: Worker /yuho-quant/admin/catchup を叩く薄いトリガ
-│   ├── ir-tdnet.ts                 # 006: TDnet を Node 直接実行 (kuromoji) → D1 HTTP 書込
-└── vwap/                             # 007 VWAP 取込 → R2 (GitHub Actions で定期実行)
-    ├── ingest-daily.ts / ingest-intra.ts / ingest-margin.ts
-    └── lib/                          # R2(S3互換) / Yahoo(YAHOO_PROXY_BASE 経由) / codes ヘルパ
-```
+| 入口 | 用途・定期接続 |
+|---|---|
+| `sync/daily.ts` | core/rsi/swing。CF→Actionsの平日18時、contextは火〜土06時 |
+| `sync/monthly.ts` | 優待派生再計算。Actions毎月10日10:30、母集団→優待原文の後 |
+| `sync/universe.ts` | JPX公式母集団 |
+| `sync/yuho-edinet.ts` | 共有Node取込をD1 HTTPで実行。Worker管理ルートを叩く薄いトリガではない |
+| `sync/ir-tdnet.ts` | NodeのTDnet・IR取込 |
+| `vwap/ingest-daily.ts` / `ingest-intra.ts` | CF→Actions月水金17時、日足→5分足 |
+| `vwap/ingest-margin.ts` | Actions平日17時、市場信用残 |
+| `moneyflow/ingest.ts` | 29取得元。独立28はCF平日18:15、業種売買代金は株式成功後 |
+| `sync/all-daily.ts` | 手動一括。独立した定期設定ではない |
+| `sync/all-monthly.ts` | 手動の優待取得→再計算。Mac要約の起動は除去済み |
+| `biztag-local/` | **旧Mac定期2本は廃止・停止済み、移設未完**。本文補足同期・タグ・競合準備・優待要約の旧状態/receiptを保持 |
+| `notion/`、個別repair/backfill | 固定対象の補完・照合・原本/索引管理。全てが定期ではない |
 
-## 運用サマリ（定点ジョブ）
+D1/R2/Notionが本番保存先。CFは配信・取得プロキシ・Cron dispatch/期限監視、Actionsが取得本体を担当する。重い全市場取込をWorkerへ載せない。
 
-| ジョブ | 実行 | コマンド / トリガ |
-|---|---|---|
-| 日次 stock sync (core/rsi/swing) | **自動** (CF trigger 09:00 UTC dispatch + GitHub Actions) | `.github/workflows/stock-sync.yml`(株式・マクロ21:00 UTC) / 手動 `pnpm sync:daily:core --stocks-only` / `--context-only` |
-| 月次 母集団 + otakara rebuild | **自動** (GitHub Actions) | 同上(10 日 01:30 UTC) / 手動 `pnpm sync:universe` + `pnpm sync:monthly:core` |
-| VWAP 日足/5分足/信用 → R2 | **自動** (GitHub Actions) | `.github/workflows/vwap-ingest.yml` / 手動 `pnpm ingest:vwap-*` |
-| 005 EDINET / 006 TDnet | **自動** (GitHub Actions) | `.github/workflows/catchup.yml`(平日 11:00 UTC) / 手動 `pnpm ingest:yuho-edinet` / `ingest:ir-tdnet` |
-| 002 優待スクレイプ+LLM要約 | 手動 (Node) + 要約は外部のクラウド LLM | `services/otakara-yutai/data-scripts/*`（月次）/ [作業仕様書](../services/otakara-yutai/docs/llm-summary-task.md) |
-
-詳細・前提・残タスクは root [`README.md`](../README.md#運用ステータス自動化手作業残タスク) と
-[`docs/deploy-cloudflare.md`](../docs/deploy-cloudflare.md) を参照。
-
-## 取込の実装メモ
-
-- `sync/daily.ts`(= [`src/cron/daily.ts`](../src/cron/daily.ts)) / `sync/monthly.ts`(=
-  [`src/cron/monthly.ts`](../src/cron/monthly.ts)) は **Node 実行**。D1 へは `createD1HttpDb`
-  (D1 REST)で書き、Yahoo は共有クライアントが `YAHOO_PROXY_BASE`(Worker エッジの
-  `/api/ingest/yahoo`)経由で叩いて 429 を回避する。OHLCV は増分 upsert。
-- `vwap/*` も Node 実行。Yahoo は共有クライアントが `/api/ingest/yahoo` 経由 (旧 `/vwap-analysis/api/ingest-fetch` は K4c-1 で廃止)、R2 へは S3 互換 API。
-- Worker(無料プラン)は配信 + 取込プロキシ + 005/006 の /admin/catchup のみ(Workers Cron は不使用)。
-- スキーマ反映は `pnpm db:generate:d1` →
-  `wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/<n>.sql`
-  （旧 Neon 用の `scripts/db/*.mjs` は D1 移行で廃止・削除済み）。
-
-## 環境変数
-
-root `.env` を使う（`.env.example` 参照）。本番 Worker 側は Cloudflare Secret が正のソース。
-取込で使う主なもの: `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` / `D1_DATABASE_ID`
-（D1 HTTP 書込）、`WORKER_BASE_URL` / `CRON_SECRET`（Worker トリガ）、
-`YAHOO_PROXY_BASE`（全取込のエッジ経由 Yahoo）、`R2_*`（VWAP の R2 書込）、
-`EDINET_API_KEY` / `NOTION_TOKEN` ほか。
+秘密・環境固有値はrootのprivate `.env`と型付きアクセサで管理し、本番Worker/Actionsは各プラットフォームのSecretsを使用する。スキーマ生成は`pnpm db:generate:d1`、適用は原本・PRE/POSTを確認して行う。

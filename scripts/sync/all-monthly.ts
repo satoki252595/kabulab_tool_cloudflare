@@ -1,12 +1,10 @@
-// Macでの月次・全取込。取得→派生再計算→ローカル要約の順で失敗時は後続停止。
-// 本番ではActionsの月次取得とMacの21時要約jobへ同じ処理を接続している。
+// 月次の優待取得→派生再計算。Mac定期実行は廃止し、要約をここから起動しない。
 import "dotenv/config";
 import { spawnSync } from "node:child_process";
 
 const steps: Array<[string, string, string[]]> = [
   ["優待 取得 (minkabu)", "services/otakara-yutai/data-scripts/fetch-yutai-full.ts", []],
   ["otakara 派生テーブル rebuild (Node → D1 REST)", "scripts/sync/monthly.ts", []],
-  ["優待 ローカル要約 (機械処理・未対応は保留)", "scripts/biztag-local/main.ts", ["run", "yutai-summary"]],
 ];
 
 for (const [label, script, args] of steps) {
