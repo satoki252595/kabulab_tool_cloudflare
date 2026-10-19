@@ -231,6 +231,9 @@ describe("processStock", () => {
     const item = itemOf({ kind: "verify_text", row });
     const repaired = await processStock(item, deps);
     expect(repaired).toMatchObject({ textChecked: true, textMismatch: true, textRepaired: true, outcome: "updated" });
+    expect(repaired.textObservation).toEqual({ source: "notion_current_read", supplementPageId: target.pageId, docId: doc.docId, textPageId: doc.notionDocPageId,
+      notionTextsSha256: hash(TEXT_SECTIONS.map(({ title }) => [title, null])), emptySectionKeys: TEXT_SECTIONS.map(({ key }) => key) });
+    expect(repaired.textObservation!.notionTextsSha256).not.toBe(hash(raw)); // 修復後POSTや原39のSHAへ差し替えない。
     expect(repaired.textEmptySections).toEqual(TEXT_SECTIONS.filter(({ key }) => key !== "business").map(({ title }) => title));
     expect(updated[0].input.texts?.["事業の内容"]).toBe(OKUMA_BUSINESS_TEXT); expect(evidenceCalls[0].block).toBeUndefined(); expect(updated[0].input.upstream).toBeUndefined(); expect(ask).not.toHaveBeenCalled();
     target = { ...target, judgeInput: updated[0].input.judgeInput!, texts: Object.fromEntries(raw.map(([title, text]) => [title, text === null ? "" : text])) };
@@ -242,8 +245,11 @@ describe("processStock", () => {
     expect(held.textEmptySections).toEqual(TEXT_SECTIONS.map(({ title }) => title)); // HOLDでは実GETした現在値だけ。
     target = { ...target, masterLinked: false };
     const sourceCalls = source.mock.calls.length;
-    expect(await processStock({ ...item, row: { ...target, masterLinked: true } }, deps)).toMatchObject({
+    const raced = await processStock({ ...item, row: { ...target, masterLinked: true } }, deps);
+    expect(raced).toMatchObject({
       textChecked: true, qualificationHeld: true, textEmptySections: TEXT_SECTIONS.map(({ title }) => title),
+      textObservation: { source: "notion_current_read", supplementPageId: target.pageId, docId: doc.docId, textPageId: null,
+        notionTextsSha256: hash(TEXT_SECTIONS.map(({ title }) => [title, null])), emptySectionKeys: TEXT_SECTIONS.map(({ key }) => key) },
     });
     expect(source).toHaveBeenCalledTimes(sourceCalls); expect(updated).toHaveLength(0);
   });
