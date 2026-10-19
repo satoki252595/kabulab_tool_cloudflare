@@ -44,6 +44,7 @@ type Doc = NonNullable<LatestDoc["doc"]>;
 /** 完全GETしたNotion列の実値。D1原文/同期receiptのSHAや修復後POSTではない。 */
 export interface TextObservation {
   source: "notion_current_read";
+  supplementPageId: string;
   docId: string | null;
   /** 読取行の同期receiptから得たpointer。未確認ならnullを保持する。 */
   textPageId: string | null;
@@ -239,7 +240,7 @@ async function verifyTexts(item: WorkItem, deps: ProcessDeps): Promise<ProcessOu
   }));
   const currentEmpty = emptySectionsOf(texts);
   const digest = await sha256Hex(JSON.stringify(TEXT_SECTIONS.map(({ title }) => [title, texts[title]])));
-  const textObservation: TextObservation = { source: "notion_current_read", docId: current.docId, textPageId: null,
+  const textObservation: TextObservation = { source: "notion_current_read", supplementPageId: current.pageId, docId: current.docId, textPageId: null,
     notionTextsSha256: digest, emptySectionKeys: TEXT_SECTIONS.filter(({ title }) => texts[title] === null).map(({ key }) => key) };
   try {
     if (JSON.stringify(savedRowGuard(current)) !== JSON.stringify(savedRowGuard(item.row)) || current.masterLinked !== item.row.masterLinked) {

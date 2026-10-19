@@ -544,10 +544,10 @@ describe("runBiztag — 保存済みマスタの参照", () => {
       mechanicalOnly: true, thresholds: { yesMin: 0.8, noMax: 0.2 }, model: CLEF_MODEL });
     expect(summary.textCheckedCodes).toHaveLength(51); expect(summary.textObservations).toHaveLength(50);
     expect(summary.textObservationsOmitted).toBe(1);
-    expect(summary.textObservations![0]).toEqual({ stockCode: rows[0].stockCode, source: "notion_current_read",
+    expect(summary.textObservations![0]).toEqual({ stockCode: rows[0].stockCode, source: "notion_current_read", supplementPageId: rows[0].pageId,
       docId: rows[0].docId, textPageId: null, notionTextsSha256: emptySha, emptySectionKeys: TEXT_SECTIONS.map(({ key }) => key),
       qualificationHeld: true, holdReason: "本文検査中に補足メタ/判定が変更。現在値を保持してHOLD" });
-    expect(summary.textObservations![1]).toMatchObject({ source: "notion_current_read", textPageId: latest[1].doc!.notionDocPageId,
+    expect(summary.textObservations![1]).toMatchObject({ source: "notion_current_read", supplementPageId: rows[1].pageId, textPageId: latest[1].doc!.notionDocPageId,
       notionTextsSha256: emptySha, qualificationHeld: false, holdReason: null });
     expect(Buffer.byteLength(JSON.stringify(summary))).toBeLessThan(128 * 1024);
     expect(notionMocks.readSupplementRowFully).toHaveBeenCalledTimes(51);

@@ -231,7 +231,7 @@ describe("processStock", () => {
     const item = itemOf({ kind: "verify_text", row });
     const repaired = await processStock(item, deps);
     expect(repaired).toMatchObject({ textChecked: true, textMismatch: true, textRepaired: true, outcome: "updated" });
-    expect(repaired.textObservation).toEqual({ source: "notion_current_read", docId: doc.docId, textPageId: doc.notionDocPageId,
+    expect(repaired.textObservation).toEqual({ source: "notion_current_read", supplementPageId: target.pageId, docId: doc.docId, textPageId: doc.notionDocPageId,
       notionTextsSha256: hash(TEXT_SECTIONS.map(({ title }) => [title, null])), emptySectionKeys: TEXT_SECTIONS.map(({ key }) => key) });
     expect(repaired.textObservation!.notionTextsSha256).not.toBe(hash(raw)); // 修復後POSTや原39のSHAへ差し替えない。
     expect(repaired.textEmptySections).toEqual(TEXT_SECTIONS.filter(({ key }) => key !== "business").map(({ title }) => title));
@@ -248,7 +248,7 @@ describe("processStock", () => {
     const raced = await processStock({ ...item, row: { ...target, masterLinked: true } }, deps);
     expect(raced).toMatchObject({
       textChecked: true, qualificationHeld: true, textEmptySections: TEXT_SECTIONS.map(({ title }) => title),
-      textObservation: { source: "notion_current_read", docId: doc.docId, textPageId: null,
+      textObservation: { source: "notion_current_read", supplementPageId: target.pageId, docId: doc.docId, textPageId: null,
         notionTextsSha256: hash(TEXT_SECTIONS.map(({ title }) => [title, null])), emptySectionKeys: TEXT_SECTIONS.map(({ key }) => key) },
     });
     expect(source).toHaveBeenCalledTimes(sourceCalls); expect(updated).toHaveLength(0);
