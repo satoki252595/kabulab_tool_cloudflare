@@ -1,6 +1,6 @@
 # 事業タグ・優待要約のMac定時運用
 
-更新: 2026-10-19。事業タグの唯一の定時writerをApple Silicon Macへ移す。
+更新: 2026-10-20。事業タグの定時writerはApple Silicon Macに固定する。
 適格新規の初回と、最新有報IDまたは既知の実入力SHAが変わった対象だけClef-Flash/MPSを使う。
 同一入力の保存タグは再利用し、旧失敗・不足は従来のkeywords/excludes一致で補完する。
 開始日前の上場を新規AI対象へ広げず、未保存の旧入力SHAは捏造しない。TypeSafeへの自動代替、語彙審査、
@@ -19,7 +19,7 @@ goldenの定期実行、競合判定は再開しない。
 実行コードはCIを確認してmainへmergeした専用runtime worktreeに固定し、
 自動pull/resetや未レビューのPR実行はしない。
 
-専用runtimeの標準位置は、このサービスの`.runtime/mac`とする。
+専用runtimeは、このサービスの`.runtime/mac-main<受入PR>-<日付>`に置く。
 プロジェクト外の一時的なOrca workspaceや削除候補の兄弟worktreeをWorkingDirectoryにしない。
 `.runtime/`はGit対象外だが、`git worktree list`に登録された運用worktreeとして保持する。
 
@@ -31,8 +31,7 @@ LaunchAgent → nix develop --offline → scripts/biztag-local/main.ts run
 Linuxの`catchup.yml`はEDINET/TDnetを継続し、biztagの定期writerを起動しない。
 手動`target=biztag/all`のbiztag部分と、`backfill.yml`の全biztag系は
 checkout/一次データ取得前に明示停止する。MacのwriterへGitHubからジョブを
-転送する仕組みも設けない。株価/macroeconomicsのCloudflare 4 Cronは別の経路であり、
-この設定では変更しない。
+転送する仕組みも設けない。株価・マクロ等のCloudflare起動は[別の定期経路](production-job-inventory.md)である。
 
 ## 競合の機械準備stage（任意・配備は別受入）
 
@@ -82,7 +81,8 @@ nix develop --command sh -c 'uv sync --locked --no-python-downloads --project se
 モデルは`Cloudflare/clef-flash`のrevision `8b2e5fd17c09fd49bc2880b805d5323ec7ff4ff3`。
 全ファイルのサイズ/SHAと専用判定headを`src/shared/clef/manifest.json`で照合する。
 通常起動はモデル取得をせず、MPSが無い・依存版が違う・因果attention検証が失敗した場合は停止する。
-全本文を保ったまま質問だけを決定的に分割し、全分割の16000token上限を推論前に検証する。
+全本文を保ったまま質問だけを決定的に分割し、Clef専用の18,432 token上限を推論前に検証する。
+旧16,000 tokenでの完全な既知拒否は、[固定1社の明示解消契約](test-logs/clef-context-upgrade-20261020.md)だけで扱う。
 単一質問でも上限を超える入力や途中の失敗は、切捨てや別モデルへの切替で補わない。
 
 ```bash

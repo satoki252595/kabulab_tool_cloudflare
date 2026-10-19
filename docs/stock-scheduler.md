@@ -2,7 +2,7 @@
 
 株式日次・マクロ sync の起動時刻を GitHub Actions schedule から Cloudflare Cron
 Trigger へ移す。実実行は従来どおり GitHub Actions (`stock-sync.yml`
-`workflow_dispatch`)。設計は GPT-sol read-only 計画、実装は本 PR。
+`workflow_dispatch`)。予定・担当の全体像は[本番処理一覧](production-job-inventory.md)を参照。
 
 ## 原因
 
