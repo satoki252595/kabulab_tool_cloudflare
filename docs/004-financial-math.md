@@ -136,9 +136,12 @@ DROP 前の全行 (3,759 行 / 3,490 行) は `~/kabulab-cf-backup-20260913/d1-f
 3. シンボル検証: 銘柄コードは共有ヘルパ `src/shared/jpx/stock-code.ts` の
    正準パターン (数字 4 桁 / 数字 3 桁 + 英字 1 文字)、指数は `^XXX` 形式。
    不一致は throw。
-4. **% 値 → decimal 正規化**: Yahoo / DB の `dividend_yield` は % 値 (3.43)
-   保存。`PriceContext.dividendYield` では `/100` して decimal (0.0343) に
+4. **% 値 → decimal 正規化**: DB の `dividend_yield` は会社予想の年間配当 ÷ 株価の
+   % 値 (3.43) 保存 (日次 sync が計算。Yahoo の配当利回りは使わない)。
+   `PriceContext.dividendYield` では `/100` して decimal (0.0343) に
    正規化し、`estimatedDividend = price × dividendYield` で来期配当を推定する。
+   NULL は「未確定」(会社予想を検算できない) で、無配 (0) とは分けて表示する
+   (`dividendStatusOf`)。
 
 ## ルート
 

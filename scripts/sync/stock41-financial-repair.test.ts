@@ -59,7 +59,7 @@ function setup() {
     return { statements, expectedRows };
   };
   const send = vi.fn<FinancialIo["send"]>(async statements => { db.exec("BEGIN"); try { for (const q of statements) db.prepare(q.sql).all(...q.params as SQLInputValue[]); db.exec("COMMIT"); } catch (error) { db.exec("ROLLBACK"); throw error; } });
-  const io: FinancialIo = { read, compile, send, annual: async () => new Map(), probeReceiptAbsent: vi.fn(async () => {}), recordReceipt: vi.fn(async () => {}) };
+  const io: FinancialIo = { read, compile, send, annual: async () => new Map(), dividend: async () => () => ({ kind: "unverified", reason: "no-forecast-row" }), probeReceiptAbsent: vi.fn(async () => {}), recordReceipt: vi.fn(async () => {}) };
   return { db, dir, out: join(dir, "out.json"), io, read, send };
 }
 // Declared protocol annual input, including an unselected scope/null and a future row.
@@ -184,7 +184,7 @@ it.skipIf(!existsSync(join(savedDir, "result.json")))("actual accepted 82 source
   const sources = await loadStock41FinancialSources(savedDir, proxy.origin); expect(sources).toHaveLength(41);
   const actual = await vi.importActual<typeof Daily>("../../src/cron/daily.js"), db = drizzle(async () => { throw Error("offline compiler must execute zero queries"); });
   for (const [i, value] of sources.entries()) {
-    const snapshot = actual.buildStockSnapshot(i + 1, value.code, null, STOCK41_DATE, value.raw, [], value.chart.capture);
+    const snapshot = actual.buildStockSnapshot(i + 1, value.code, null, STOCK41_DATE, value.raw, { kind: "unverified", reason: "no-forecast-row" }, [], value.chart.capture);
     const replay = actual.buildStockSnapshotStatements(db as unknown as Parameters<typeof actual.buildStockSnapshotStatements>[0], snapshot, STOCK41_DATE, { writeAnnual: false, runStartedSec: Math.floor(Date.now() / 1000) });
     expect(replay.statements.every(q => q.params.length <= 100 && !/core_stock_annual_financials|swing_daily_ohlcv|delete /i.test(q.sql))).toBe(true);
   }

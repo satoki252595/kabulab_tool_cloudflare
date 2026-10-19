@@ -2,6 +2,7 @@ import { BASE_PATH } from "../../base-path.js";
 import { layout, h, fmtPct, tip } from "./layout.js";
 import type { GordonResult, TwoStageDcfResult } from "../services/dcf.js";
 import { STOCK_CODE_HTML_PATTERN, STOCK_CODE_ERROR } from "../../../../src/shared/jpx/stock-code.js";
+import type { DividendStatus } from "../services/price-cache.js";
 
 export interface StockContext {
   code: string;
@@ -13,11 +14,12 @@ export interface StockContext {
   /** 配当 CAGR (任意。年度売上だけでは推定できないので null になる場合多い) */
   estimatedGrowth: number | null;
   /**
-   * 無配銘柄かどうか。
-   * - true  = Yahoo の dividendYield が null/0 で配当データなし。Gordon DCF 不適切
-   * - false = 配当データあり (自動推定値で計算可能)
+   * 配当の状態。
+   * - paying       = 会社予想の配当あり (自動推定値で計算可能)
+   * - non-dividend = 会社予想の年間配当が 0 円 (無配)。Gordon DCF 不適切
+   * - unverified   = 配当利回りが未確定 (会社予想を検算できない)。無配とは表示しない
    */
-  isNonDividend: boolean;
+  dividendStatus: DividendStatus;
 }
 
 export interface DcfPageProps {
@@ -69,16 +71,20 @@ export function dcfPage(props: DcfPageProps): string {
          <span class="code">${h(ctx.code)}</span>
          <span class="name">${h(ctx.name)}</span>
          <span class="meta">現在株価: ${fmtPrice(ctx.currentPrice)} 円</span>
-         <span class="meta">配当利回り: ${ctx.isNonDividend ? "<strong>無配</strong>" : fmtPct(ctx.dividendYield, 2)}</span>
+         <span class="meta">配当利回り: ${ctx.dividendStatus === "non-dividend" ? "<strong>無配</strong>" : ctx.dividendStatus === "unverified" ? "<strong>未確定</strong>" : fmtPct(ctx.dividendYield, 2)}</span>
          ${ctx.estimatedDividend !== null ? `<span class="meta">推定来期配当: ${fmtPrice(ctx.estimatedDividend)} 円</span>` : ""}
        </div>`
     : "";
 
   // 無配銘柄警告 (Gordon DCF は配当が前提のため原理的に適用不可)
   const nonDividendWarning =
-    ctx && ctx.isNonDividend
+    ctx && ctx.dividendStatus === "unverified"
+      ? `<div class="notice"><strong>⚠ 配当利回りが未確定</strong> — 会社予想の年間配当を確認できない (決算短信の取り込み前、予想の後に配当修正・株式分割の開示がある等) ため、来期予想配当を自動入力しません。
+       <br>下のフォームで <strong>${tip("来期予想配当", "1株あたりの予想年間配当金額。会社の決算短信や IR の予想を参考に入力。")}</strong>を手動入力してください。
+       </div>`
+      : ctx && ctx.dividendStatus === "non-dividend"
       ? `<div class="notice"><strong>⚠ 無配銘柄</strong> — この銘柄は配当を出していないため、配当割引モデル(Gordon DCF)では理論株価を計算できません。
-       Yahoo Finance のデータ取得時点で配当利回りが取れていない、もしくは 0% の銘柄です。
+       会社予想の年間配当が 0 円の銘柄です。
        <br>もし「将来配当を出すと想定して試算したい」場合は、下のフォームで <strong>${tip("来期予想配当", "1株あたりの予想年間配当金額。会社の IR や四季報の予想を参考に入力。無配銘柄では将来配当を仮定する必要があり、計算結果は仮置きの試算値になる点に注意。")}</strong>を手動入力してください。
        本来 ${tip("FCF (フリーキャッシュフロー)", "営業 CF から投資 CF を引いた残り。配当ではなく FCF を割り引く DCF モデルが無配株では一般的だが、本ツールでは未実装。")} ベースの DCF や PER 比較等、別の評価手法を併用するのが標準です。
        </div>`
@@ -112,8 +118,8 @@ export function dcfPage(props: DcfPageProps): string {
     <span class="hint">銘柄を変えると配当が自動で更新されます。${p.code ? `<a href="${BASE_PATH}/dcf">クリア</a>` : `例: <a href="${BASE_PATH}/dcf?code=7203">7203 トヨタ</a> <a href="${BASE_PATH}/dcf?code=8058">8058 三菱商事</a> <a href="${BASE_PATH}/dcf?code=9432">9432 NTT</a>`}</span>
   </div>
 
-  <details class="advanced span-full" ${ctx && ctx.isNonDividend ? "open" : ""}>
-    <summary>詳細設定 ${ctx && ctx.isNonDividend ? "(無配銘柄)" : "(デフォルトのままで OK)"}</summary>
+  <details class="advanced span-full" ${ctx && ctx.dividendStatus !== "paying" ? "open" : ""}>
+    <summary>詳細設定 ${ctx && ctx.dividendStatus === "non-dividend" ? "(無配銘柄)" : ctx && ctx.dividendStatus === "unverified" ? "(配当利回り未確定)" : "(デフォルトのままで OK)"}</summary>
     <div class="advanced-body">
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
         <div class="form-field">
@@ -124,10 +130,10 @@ export function dcfPage(props: DcfPageProps): string {
           </select>
         </div>
         <div class="form-field">
-          <label>${tip("来期予想配当 (円/株)", "1株あたりの予想年間配当金額。銘柄コードを入れると日次同期の株価断面 (Yahoo 由来の TTM = 過去12ヶ月実績) から推定値を自動入力。会社IRの予想と異なる場合があります。")}${p.expectedDividendAutoFilled ? '<span class="auto-badge">自動</span>' : ""}</label>
+          <label>${tip("来期予想配当 (円/株)", "1株あたりの予想年間配当金額。銘柄コードを入れると、日次同期で保存した会社予想 (決算短信の年間配当予想) を自動入力。予想の後に配当修正・株式分割があった銘柄は自動入力しません。")}${p.expectedDividendAutoFilled ? '<span class="auto-badge">自動</span>' : ""}</label>
           <input type="number" step="0.01" name="expectedDividend"
                  value="${p.expectedDividend !== null && p.expectedDividend > 0 ? h(p.expectedDividend) : ""}"
-                 placeholder="${ctx ? (ctx.isNonDividend ? "無配銘柄: 想定配当を手動入力" : "") : "銘柄コード入力時は自動取得"}"
+                 placeholder="${ctx ? (ctx.dividendStatus === "non-dividend" ? "無配銘柄: 想定配当を手動入力" : ctx.dividendStatus === "unverified" ? "配当利回り未確定: 予想配当を手動入力" : "") : "銘柄コード入力時は自動取得"}"
                  min="0.01">
           <span class="hint">銘柄コード指定時は断面の推定値で自動補完。code 空時のみ手動入力必須。</span>
         </div>

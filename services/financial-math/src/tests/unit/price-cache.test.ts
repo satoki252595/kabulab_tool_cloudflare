@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { normalizeQuote } from "../../services/price-cache.js";
+import { dividendStatusOf, normalizeQuote } from "../../services/price-cache.js";
 
 /**
  * `price-cache.ts` の価格正規化 (% → decimal) の検証。
  *
  * 配当利回り 100倍 バグの再発防止が主目的:
- *   - DB (`core_stock_financials.dividend_yield`) は Yahoo の生値 (% 表現、例: 3.43)
+ *   - DB (`core_stock_financials.dividend_yield`) は会社予想 ÷ 株価 (% 表現、例: 3.43)
  *   - `PriceContext` は decimal (例: 0.0343)
  *   - `estimatedDividend` = price × dividendYield (decimal 前提)
  *
@@ -100,5 +100,13 @@ describe("読み取り面から Yahoo 呼び出しが消えたことを形で固
     ).toEqual([]);
     // 走査が空振りしていないこと (0 件を返すと上の検査が無条件に緑になる)
     expect(readdirSync(join(serviceSrc, "services")).length).toBeGreaterThan(3);
+  });
+});
+
+describe("dividendStatusOf", () => {
+  it("null は未確定、0 は無配、正は配当あり (未確定を無配と表示しない)", () => {
+    expect(dividendStatusOf(null)).toBe("unverified");
+    expect(dividendStatusOf(0)).toBe("non-dividend");
+    expect(dividendStatusOf(1.32)).toBe("paying");
   });
 });

@@ -32,6 +32,10 @@ JPX配当落・権利落等の短期掲載原本は、既存18時 `scheduled-sto
 
 書込はNodeのD1 HTTP経路で、Workerは同じ保存表をbindingで読む。Worker書込adapterや新DDLは追加しない。公開画面は`macro.date`をキーに読むので、当日置換の途中状態がその日付で表示される問題を閉じる。[SQL protocol回帰と実受入の境界](test-logs/sector-daily-atomic-20261018.md)を参照。実D1の新再測定・本番定時の受入は未実施。
 
+## 株式日次の予想配当利回り
+
+通常Node入口`sync:daily:core`のPhase 1で、`jss_financials`のTDnet短信行と`ir_disclosures`の表題を2文で読み、`core_stock_financials.dividend_yield`を会社予想の年間配当÷株価で計算する（`src/shared/indicators/forecast-dividend-yield.ts`）。Yahooの配当利回りは保存しない。短信行なし・予想未定・連結/単体の不一致・後続の短信/配当/分割開示・130日超の古い短信はNULL（未確定）で保存し、Phase 1のログに理由別件数を出す。依存はD1の既存2表だけで、新しい取得・定時・DDLは無い。[監査と件数](test-logs/dividend-yield-audit-20261019.md)。
+
 ## RAW原本の有限継続
 
 `raw_index_backfill.yml`の`execution_revision`は実行する完全40桁commit SHAを指定する。初回の空欄だけそのrunの`github.sha`を採用し、checkout前の形式検査とcheckout後のHEAD一致を依存準備・データ処理より先に行う。通常continuationは実HEADと明示入力の一致を確認し、同SHAを次dispatchへ渡す。これによりrawコード・依存lock・Nix定義を同じcommitから使う。

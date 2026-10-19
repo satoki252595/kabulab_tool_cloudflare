@@ -7,7 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { getTableColumns, getTableName } from "drizzle-orm";
-import { buildStockSnapshot, buildStockSnapshotStatements, createDailyDb, loadJssAnnualMap } from "../../src/cron/daily.js";
+import { buildStockSnapshot, buildStockSnapshotStatements, createDailyDb, loadDividendForecastLookup, loadJssAnnualMap, type DividendForecastLookup } from "../../src/cron/daily.js";
 import * as core from "../../src/shared/db/core-schema.js";
 import * as rsi from "../../services/rsi-screening/src/db/schema.js";
 import * as swing from "../../services/swing-trading/src/db/schema.js";
@@ -56,6 +56,7 @@ export interface FinancialPre {
 }
 export interface FinancialIo {
   annual: () => Promise<Map<string, JssAnnualRow[]>>;
+  dividend: () => Promise<DividendForecastLookup>;
   read: (code: string) => Promise<FinancialPre>;
   compile: (snapshot: Parameters<typeof buildStockSnapshotStatements>[1], runStartedSec: number) => Replay;
   send: (statements: readonly D1BatchStatement[]) => Promise<void>;
@@ -200,7 +201,7 @@ export async function runStock41FinancialRepair(sources: readonly FinancialSourc
   const append = (event: object) => { const fd = openSync(journal, constants.O_APPEND | constants.O_WRONLY); try { writeFileSync(fd, JSON.stringify({ at: new Date().toISOString(), ...event }) + "\n"); fsyncSync(fd); } finally { closeSync(fd); } };
   const applied: string[] = [], held: string[] = [];
   try {
-    await io.probeReceiptAbsent(); const annual = await io.annual();
+    await io.probeReceiptAbsent(); const annual = await io.annual(); const dividendFor = await io.dividend();
     for (const source of sources) {
       const pre = await io.read(source.code);
       assert.ok(Number.isSafeInteger(pre.identity.id) && Number(pre.identity.id) > 0);
@@ -212,7 +213,7 @@ export async function runStock41FinancialRepair(sources: readonly FinancialSourc
       if (!checkOhlcv(pre, source)) { held.push(source.code); append({ phase: "held_existing_ohlcv", code: source.code, pre }); continue; }
       const rows = annual.get(source.code); const eligible = rows === undefined ? [] : rows.filter(row => row.fiscalPeriodEnd <= STOCK41_DATE);
       sameRows(pre.annual, eligible);
-      const snapshot = buildStockSnapshot(Number(pre.identity.id), source.code, pre.identity.sector as string | null, STOCK41_DATE, source.raw, rows === undefined ? [] : rows, source.chart.capture);
+      const snapshot = buildStockSnapshot(Number(pre.identity.id), source.code, pre.identity.sector as string | null, STOCK41_DATE, source.raw, dividendFor(source.code), rows === undefined ? [] : rows, source.chart.capture);
       assert.equal(snapshot.rsiHistoryHold, undefined); assert.equal(snapshot.dataDate, STOCK41_DATE);
       assert.ok(pre.tables.swing_entry_signals.every(row => Number(row.computed_at) < runStartedSec), "newer signals must not be deleted");
       const replay = io.compile(snapshot, runStartedSec); assertReplay(replay, Number(pre.identity.id));
@@ -297,7 +298,7 @@ async function main(): Promise<void> {
   mkdirSync(STOCK41_FINANCIAL_STATE_DIR, { recursive: true, mode: 0o700 });
   assert.equal(realpathSync(STOCK41_FINANCIAL_STATE_DIR), STOCK41_FINANCIAL_STATE_DIR); assert.ok(lstatSync(STOCK41_FINANCIAL_STATE_DIR).isDirectory()); assert.equal(lstatSync(STOCK41_FINANCIAL_STATE_DIR).mode & 0o777, 0o700);
   const report = await runStock41FinancialRepair(sources, STOCK41_FINANCIAL_STATE_DIR, out, {
-    annual: () => loadJssAnnualMap(db, STOCK41_CODES), read: readCurrent, send: createD1HttpBatchSender(),
+    annual: () => loadJssAnnualMap(db, STOCK41_CODES), dividend: () => loadDividendForecastLookup(db, STOCK41_DATE, STOCK41_CODES), read: readCurrent, send: createD1HttpBatchSender(),
     compile: (snapshot, runStartedSec) => buildStockSnapshotStatements(db, snapshot, STOCK41_DATE, { writeAnnual: false, runStartedSec }),
     probeReceiptAbsent: async () => { const backup = await findUniqueBackupChildByTitle({ parentPageId: notionEnv.NOTION_ARCHIVE_PAGE_ID(), title: "一次データ｜stock-sync", kind: "database" }); assert.ok(backup); assert.equal(await queryUniqueRow(backup, { property: "Key", title: { equals: RECEIPT_KEY } }, "financial repair receipt"), null); },
     recordReceipt: async bytes => { const filename = `${RECEIPT_KEY}.json`; const result = await recordPrimaryData({ service: "stock-sync", key: RECEIPT_KEY, source: "Physically custodied same-run Yahoo 5y + QuoteSummary → fixed41 normal snapshot replay", fetchedAt: new Date().toISOString(), metadata: { marketDate: STOCK41_DATE, sourceResultSha256: STOCK41_CAPTURE_RESULT_SHA, selected: 41, annualWrites: 0, ohlcvWrites: 0 }, files: [{ filename, bytes, contentType: "application/json" }], force: false }); assert.equal(result.outcome, "recorded"); assert.equal(result.fileTooLarge, false); await verifyArchivedAttachments(result.pageId, [{ filename, bytes }], "stock41 snapshot receipt"); },
