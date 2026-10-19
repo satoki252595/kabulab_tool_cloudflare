@@ -37,9 +37,20 @@ import { summarizeJudgments, summarizeKeywordMatches, type TagOutcome } from "./
 import type { LatestDoc } from "./source.js";
 import { deriveThemes } from "./themes.js";
 import type { Vocabulary } from "./vocabulary/schema.js";
-import { TEXT_SECTIONS } from "../services/edinet/text-sections.js";
+import { TEXT_SECTIONS, type TextSectionKey } from "../services/edinet/text-sections.js";
 
 type Doc = NonNullable<LatestDoc["doc"]>;
+
+/** 完全GETしたNotion列の実値。D1原文/同期receiptのSHAや修復後POSTではない。 */
+export interface TextObservation {
+  source: "notion_current_read";
+  supplementPageId: string;
+  docId: string | null;
+  /** 読取行の同期receiptから得たpointer。未確認ならnullを保持する。 */
+  textPageId: string | null;
+  notionTextsSha256: string;
+  emptySectionKeys: TextSectionKey[];
+}
 
 export interface ProcessDeps {
   vocab: Vocabulary;
@@ -84,6 +95,7 @@ export interface ProcessOutcome {
   textChecked?: boolean;
   /** 実検査した現在39、または正常全文POST後の空欄。未検査は省略する。 */
   textEmptySections?: string[];
+  textObservation?: TextObservation;
   textMismatch?: boolean;
   textRepaired?: boolean;
   metadataRepaired?: boolean;
@@ -227,26 +239,29 @@ async function verifyTexts(item: WorkItem, deps: ProcessDeps): Promise<ProcessOu
     const value = normalizeSupplementText(current.texts[title]); return [title, value === "" ? null : value];
   }));
   const currentEmpty = emptySectionsOf(texts);
+  const digest = await sha256Hex(JSON.stringify(TEXT_SECTIONS.map(({ title }) => [title, texts[title]])));
+  const textObservation: TextObservation = { source: "notion_current_read", supplementPageId: current.pageId, docId: current.docId, textPageId: null,
+    notionTextsSha256: digest, emptySectionKeys: TEXT_SECTIONS.filter(({ title }) => texts[title] === null).map(({ key }) => key) };
   try {
     if (JSON.stringify(savedRowGuard(current)) !== JSON.stringify(savedRowGuard(item.row)) || current.masterLinked !== item.row.masterLinked) {
       throw new SupplementWriteHeldError("本文検査中に補足メタ/判定が変更。現在値を保持してHOLD");
     }
     const receipt = readTextSyncReceipt(current.judgeInput);
+    if (receipt !== null) textObservation.textPageId = receipt.textPageId;
     if (receipt === null || receipt.docId !== item.doc.docId || receipt.textPageId !== item.doc.notionDocPageId) throw new SupplementWriteHeldError("現在本文検査の同期出典が不一致です");
-    const digest = await sha256Hex(JSON.stringify(TEXT_SECTIONS.map(({ title }) => [title, texts[title]])));
     if (digest === (receipt.notionTextsSha256 === undefined ? receipt.textsSha256 : receipt.notionTextsSha256)) {
       const outcome = await syncMetadata(item, deps);
-      return { ...outcome, textChecked: true, textMismatch: false, textEmptySections: currentEmpty };
+      return { ...outcome, textChecked: true, textMismatch: false, textEmptySections: currentEmpty, textObservation };
     }
     const outcome = await syncTexts({ ...item, repairTextDrift: true }, deps, texts);
     return { ...outcome, textChecked: true, textMismatch: outcome.textMismatch === true,
       textEmptySections: outcome.textChecked && outcome.textEmptySections !== undefined ? outcome.textEmptySections : currentEmpty,
-      textRepaired: outcome.textMismatch === true && !outcome.qualificationHeld && outcome.outcome === "updated" && !deps.dryRun };
+      textRepaired: outcome.textMismatch === true && !outcome.qualificationHeld && outcome.outcome === "updated" && !deps.dryRun, textObservation };
   } catch (error) {
     if (!(error instanceof SupplementWriteHeldError)) throw error;
     return { stockCode: item.stockCode, kind: item.kind, outcome: "skipped", tagStatus: item.row.tagStatus,
       candidateCount: item.row.candidateCount, qualificationHeld: true, error: error.message,
-      textChecked: true, textEmptySections: currentEmpty, ...ZERO_JEV_STATS };
+      textChecked: true, textEmptySections: currentEmpty, textObservation, ...ZERO_JEV_STATS };
   }
 }
 

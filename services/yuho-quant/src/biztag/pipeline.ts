@@ -53,7 +53,7 @@ import { evaluateGolden, goldenItemKey, loadGoldenSet, type GoldenMetrics } from
 import type { BtThresholds } from "./judge.js";
 import { MAX_RETRY_ATTEMPTS, planWork, textVerificationCodes, type WorkItem, type InputReceipt } from "./plan.js";
 import { vocabularyHash } from "./vocabulary/hash.js";
-import { processStock, type ProcessDeps } from "./process.js";
+import { processStock, type ProcessDeps, type TextObservation } from "./process.js";
 import { isPrefilterSection, type PrefilterSectionKey } from "./prefilter.js";
 import { buildReviewPacket, refreshReviewPacketLedger } from "./review.js";
 import { assertLatestDocCurrent, loadLatestDocs, loadNewStockEligibility, type BiztagSourceDb } from "./source.js";
@@ -131,6 +131,9 @@ export interface RunSummary {
   textCheckedCodes?: string[];
   /** textCheckedCodesと同じ実検査母集団の39列別空欄数。非開示の理由を推測しない。 */
   textEmptyCounts?: Record<string, number>;
+  /** 完全GETの実値だけ。通常50社窓は全件保存し、大きな明示scopeは省略数を明示する。 */
+  textObservations?: Array<TextObservation & { stockCode: string; qualificationHeld: boolean; holdReason: string | null }>;
+  textObservationsOmitted?: number;
   /** このrunの有限検査scope。exit0や旧タグ判定率を全補足充足へ転用しない。 */
   fieldCoverage?: { scope: "explicit_codes" | "daily_window"; selectedForTextCheck: number; textChecked: number; textUnchecked: number;
     textMismatched: number; textRepaired: number; metadataRepaired: number; status: "checked_scope_complete" | "partial" | "attention";
@@ -459,6 +462,8 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
   let workBudgetLeft = opts.limit ?? Infinity;
   const checked = new Set<string>(); let textMismatched = 0, textRepaired = 0, metadataRepaired = 0;
   const textEmptyCounts = Object.fromEntries(TEXT_SECTIONS.map(({ title }) => [title, 0]));
+  const textObservations: NonNullable<RunSummary["textObservations"]> = [];
+  let textObservationsOmitted = 0;
   const emptyTagRepair = opts.repairEmptyTags ? { selected: codes!.length,
     eligible: items.filter(item => item.emptyTagRepair).length, rechecked: 0, tagged: 0, allNo: 0,
     uncertain: 0, noCandidates: 0, held: 0, remaining: 0 } : undefined;
@@ -488,6 +493,13 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
         ["sync_metadata", "verify_text", "sync_text"].includes(item.kind) && item.row?.masterLinked !== true)) await loadMaster();
     try {
       const outcome = await processStock(item, deps);
+      if (outcome.textObservation !== undefined) {
+        // ponytail: 既存daily窓と同じ50社を上限にし、2MiBの私有ログ読取枠を増やさない。
+        if (textObservations.length < 50) textObservations.push({ stockCode: item.stockCode, ...outcome.textObservation,
+          qualificationHeld: outcome.qualificationHeld === true,
+          holdReason: outcome.qualificationHeld && outcome.error !== undefined ? outcome.error.slice(0, 300) : null });
+        else textObservationsOmitted++;
+      }
       if (outcome.textChecked && verification.has(item.stockCode)) {
         if (!Array.isArray(outcome.textEmptySections) || new Set(outcome.textEmptySections).size !== outcome.textEmptySections.length ||
             outcome.textEmptySections.some(title => typeof title !== "string" || !Object.hasOwn(textEmptyCounts, title))) throw new Error("実検査39本文の空欄計数が不正です");
@@ -578,6 +590,8 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
       .sort((a, b) => a.stockCode.localeCompare(b.stockCode)),
     textCheckedCodes: [...checked].sort(),
     textEmptyCounts,
+    textObservations,
+    textObservationsOmitted,
     ...(emptyTagRepair === undefined ? {} : { emptyTagRepair }),
     fieldCoverage: { scope: codes === undefined ? "daily_window" : "explicit_codes", selectedForTextCheck: verification.size,
       textChecked: checked.size, textUnchecked: verification.size - checked.size, textMismatched, textRepaired, metadataRepaired,
