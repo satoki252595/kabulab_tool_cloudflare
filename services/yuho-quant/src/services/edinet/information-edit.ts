@@ -10,6 +10,7 @@ import { sha256Hex } from "../../../../../src/shared/sha256.js";
 import { toD1BatchStatements, type createD1HttpBatchSender } from "../../../../../src/shared/db/d1-http-client.js";
 import { readVerifiedDocText } from "../text-backup.js";
 import { notionEnv } from "../../../../../src/shared/notion-archive/env.js";
+import { NotionUnknownResultError } from "../../../../../src/shared/notion-archive/client.js";
 import { readSavedEdinetZip, SavedEdinetZipQualificationError } from "./archive.js";
 import { captureListSnapshot, readListSnapshot, listSnapshotSchema, EdinetListQualificationError, type ListSnapshot } from "./list-snapshot.js";
 import { EdinetListFetchError } from "./client.js";
@@ -39,7 +40,7 @@ export function informationEditMetadata(doc: EdinetDoc): string {
   return encoded(Object.fromEntries(Object.entries(edinetDocSchema.parse(doc)).filter(([k]) => k !== "seqNumber")));
 }
 export function isInformationEdit(doc: EdinetDoc): boolean {
-  return doc.withdrawalStatus === "0" && doc.disclosureStatus === "0" && doc.docInfoEditStatus === "1" &&
+  return doc.withdrawalStatus === "0" && doc.disclosureStatus === "0" && ["1", "2"].includes(String(doc.docInfoEditStatus)) &&
     doc.docTypeCode === "120" && doc.ordinanceCode === "010" && doc.parentDocID === null &&
     ["030000", "030001", "040000", "040001"].includes(String(doc.formCode));
 }
@@ -114,13 +115,19 @@ async function originalList(db: Database, date: string, docID: string, prior: un
     if (list.results.some(d => d.docID === docID && d.docInfoEditStatus === "2")) return { snapshot, list };
   }
   // 日付一覧の取得・物理保存だけ。他銘柄の観測INSERT/ingest/投影は呼ばない。
-  stop(); return captureListSnapshot(date);
+  stop();
+  try { return await captureListSnapshot(date); }
+  catch (error) {
+    if (error instanceof EdinetListFetchError || error instanceof EdinetListQualificationError || error instanceof NotionUnknownResultError) throw error;
+    throw new NotionUnknownResultError("元日付一覧の物理保管が未閉鎖です（再送なし）", { cause: error });
+  }
 }
 
 /** 完了応答unknownはthrowしてcallerのinFlightを残す。既知資格不足だけpendingへ戻す。 */
 export async function requalifyInformationEdit(db: Database, args: { doc: EdinetDoc; source: ListSnapshot;
   stockId: number; stockCode: string; shouldStop: () => boolean; d1HttpBatch?: ReturnType<typeof createD1HttpBatchSender> }): Promise<
   { status: "resolved"; observations: number; reused: boolean } | { status: "held"; reason: string }> {
+  let sendStarted = false;
   const stop = () => { if (args.shouldStop()) throw new Error("EDINET情報修正の処理予算です（再送なし）"); };
   try {
     requireSame(isInformationEdit(args.doc), "取下げ/不開示/未対応の形式や親関係は自動解除しません");
@@ -132,13 +139,14 @@ export async function requalifyInformationEdit(db: Database, args: { doc: Edinet
       .from(observations).where(eq(observations.docId, args.doc.docID)).limit(51);
     requireSame(found.length > 0 && found.length <= 50, "対象文書の観測が不明または有限上限です");
     const held = found.filter(r => r.unresolved === 1);
-    if (held.length === 0) return { status: "resolved", observations: 0, reused: true };
     requireSame(found.some(r => r.sourcePageId === source.pageId.replaceAll("-", "").toLowerCase() &&
       r.seqNumber === args.doc.seqNumber && r.sourceRawSha256 === source.rawSha256), "対象観測の物理原本SHAが不一致です");
+    if (held.length === 0) return { status: "resolved", observations: 0, reused: true };
+    requireSame(args.doc.docInfoEditStatus === "1", "元日付の情報修正行は、修正イベントの完全照合が終わるまでHOLDです");
     for (const row of held) {
       const observed = JSON.parse(row.observationJson) as { doc: unknown; reportedIdentity?: { status: string; ticker: string; edinetCode: string; stockId: number; periodEnd: string } };
       const doc = edinetDocSchema.parse(observed.doc);
-      requireSame(isInformationEdit(doc) && informationEditMetadata(doc) === metadataJson && row.stockId === args.stockId &&
+      requireSame(isInformationEdit(doc) && (doc.docInfoEditStatus === "2" || informationEditMetadata(doc) === metadataJson) && row.stockId === args.stockId &&
         row.periodEnd === args.doc.periodEnd && row.submittedAt !== null && args.doc.submitDateTime !== null &&
         row.submittedAt.getTime() === parseSubmitDateTime(args.doc.submitDateTime).getTime() &&
         observed.reportedIdentity?.status === "qualified_reported_metadata" && observed.reportedIdentity.stockId === args.stockId &&
@@ -159,6 +167,13 @@ export async function requalifyInformationEdit(db: Database, args: { doc: Edinet
     requireSame(old.length === 1 && old[0].docInfoEditStatus === "2" && old[0].withdrawalStatus === "0" && old[0].disclosureStatus === "0", "元提出日の修正前metadata/現行開示資格を確認できません");
     for (const key of ["docID", "edinetCode", "secCode", "JCN", "filerName", "ordinanceCode", "formCode", "docTypeCode", "periodStart", "periodEnd", "submitDateTime", "parentDocID"] as const)
       requireSame(old[0][key] === args.doc[key], "修正前後の形式/主体/FY/業務metadataが異なるためHOLDです");
+    // =2全体を解除しない。実際に全文照合した元snapshot/原行だけを同じ完了batchへ含める。
+    for (const row of held) {
+      const doc = edinetDocSchema.parse(JSON.parse(row.observationJson).doc);
+      if (doc.docInfoEditStatus === "2") requireSame(row.sourcePageId === original.snapshot.pageId.replaceAll("-", "").toLowerCase() &&
+        row.seqNumber === old[0].seqNumber && row.sourceRawSha256 === original.snapshot.rawSha256 && encoded(doc) === encoded(old[0]),
+      "別snapshot/別原行の情報修正状態は未確認のためHOLDです");
+    }
     stop(); const csv = await readSavedEdinetZip(d.docId, 5);
     const csvRows = prior === undefined ? parseEdinetCsvZip(csv.bytes) : undefined;
     if (prior !== undefined) requireSame(typeof prior.requiresXbrl === "boolean", "同入力のtype1必要判定が未保存です");
@@ -193,14 +208,16 @@ export async function requalifyInformationEdit(db: Database, args: { doc: Edinet
       informationEditRowsGuard(db, overseasSalesFacts, eq(overseasSalesFacts.documentId, d.id), before.overseas),
       informationEditRowsGuard(db, textSections, eq(textSections.documentId, d.id), before.text)];
     for (let i = 0; i < rows.length; i += 9) statements.push(db.insert(resolutions).values(rows.slice(i, i + 9)) as never);
-    stop(); if (args.d1HttpBatch !== undefined) await args.d1HttpBatch(toD1BatchStatements(statements));
-    else { const [first, ...rest] = statements; await db.batch([first, ...rest]); }
+    stop();
+    if (args.d1HttpBatch !== undefined) { const batch = toD1BatchStatements(statements); sendStarted = true; await args.d1HttpBatch(batch); }
+    else { const [first, ...rest] = statements; sendStarted = true; await db.batch([first, ...rest]); }
     stop(); const after = await db.select().from(resolutions).where(and(eq(resolutions.docId, d.docId), eq(resolutions.metadataSha256, metadataSha256)));
     for (const row of rows) if (!after.some(saved => encoded(saved) === encoded(row))) throw new Error("情報修正の完了応答/読戻しが不明です（再送なし）");
     return { status: "resolved", observations: rows.length, reused: prior !== undefined };
   } catch (error) {
+    if (sendStarted || error instanceof NotionUnknownResultError) throw error;
     if (error instanceof InformationEditHold || error instanceof SavedEdinetZipQualificationError) return { status: "held", reason: error.message };
     if (error instanceof EdinetListFetchError || error instanceof EdinetListQualificationError) return { status: "held", reason: "元提出日一覧の取得/資格が未成立です" };
-    throw error;
+    return { status: "held", reason: "完了送信前の読取または処理予算が未成立です（次の通常処理で再確認）" };
   }
 }

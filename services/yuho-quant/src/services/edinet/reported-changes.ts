@@ -47,7 +47,7 @@ export function unresolvedReportedObservation(alias: SQL = sql`${table}`): SQL {
     ${alias}.reported_state = 'reported_status_unqualified'
     and json_extract(${alias}.observation_json,'$.doc.withdrawalStatus') = '0'
     and json_extract(${alias}.observation_json,'$.doc.disclosureStatus') = '0'
-    and json_extract(${alias}.observation_json,'$.doc.docInfoEditStatus') = '1'
+    and json_extract(${alias}.observation_json,'$.doc.docInfoEditStatus') in ('1','2')
     then exists(select 1 from ${resolutions} r where r.source_page_id=${alias}.source_page_id
       and r.seq_number=${alias}.seq_number and r.source_raw_sha256=${alias}.source_raw_sha256
       and r.doc_id=${alias}.doc_id and r.observation_json=${alias}.observation_json) else 0 end)`;

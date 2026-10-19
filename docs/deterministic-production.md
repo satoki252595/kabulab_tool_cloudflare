@@ -32,9 +32,9 @@ JPX配当落・権利落等の短期掲載原本は、既存18時 `scheduled-sto
 
 同じdoc/issuer/銘柄/FY・独立有報120・修正前後の同形式と業務metadataを必須とする。元日付の物理snapshotを再利用し、不足時だけ共有`captureListSnapshot`で固定元日付の一覧を取得・物理保管する。その一覧に含まれる他銘柄の変更観測・取込・投影は実行しない。Notionの既存type5を読み、通常CSV判定で受注/海外語がある場合だけ既存type1も要求する。両方なければ`no_order_table`/`no_overseas_table`・全facts0の一致を条件とし、CSVと全文だけで資格化できる。manifestがあれば長さ/SHAと自己整合を照合し、旧manifest不明はproofにも不明のまま残す。通常parser/serializerで再解析して既存受注/海外全facts・本文全索引・所属と7プロパティを含む全文readbackが完全一致した場合だけ、0034の`yuho_edinet_reported_resolutions`へ完了証拠を追記する。金融値や本文のwriterバイパス・上書き・LLMは追加しない。不一致や必要原本不足はHOLDとする。
 
-作業中は共通のHOLDを維持し、既存catchupのinFlight/CASと60通・300秒の開始予算を使う。観測/issuer逆引き/株式/doc/facts/本文索引を同一D1 batchで照合してから、原観測PK/原本SHA/原観測JSON・seqを除くmetadata SHA・完了pinsを保存する。旧観測は変更しない。新たに同じイベントを観測した場合は既存完了のD1・保存ZIP SHA・全文を照合して解決行だけを追加し、同入力を再解析しない。完了送信や読戻しが不明ならinFlightを残して停止し、次回定期が盲目的に再送しない。旧海外/本文backfillにも共有前読取と同batchの保留guardを適用する。
+作業中は共通のHOLDを維持し、既存catchupのinFlight/CASと60通・300秒の開始予算を使う。観測/issuer逆引き/株式/doc/facts/本文索引を同一D1 batchで照合してから、原観測PK/原本SHA/原観測JSON・seqを除くmetadata SHA・完了pinsを保存する。旧観測は変更しない。保存元日付に`=2`観測がある場合も、同じ物理snapshot・元行・主体/FY/形式を照合できた行だけを同batchで解決する。`=2`全体は除外せず、新規解決は`=1`イベントからだけ行う。新たに同じイベントを観測した場合は既存完了のD1・保存ZIP SHA・全文を照合して解決行だけを追加し、同入力を再解析しない。送信前の純読取/予算不足は次回へHOLDし、原本物理保管・完了送信・送信後読戻しが不明ならinFlightを残して停止する。空の読戻しだけで解除しない。旧海外/本文backfillにも共有前読取と同batchの保留guardを適用する。
 
-0034は追加一表・一索引のみで、Workerの共通読取predicateも参照するため、通常の物理PRE/POSTとcatalog確認を伴う本番DDLの受入後にコードを配備する。Node/Actions/SSHはNixと同一lockで、Workerは既存bindingで同じ共有判定を使う。コード試験と、本番metadata取得・対象3776の解決は別の受入である。
+0034は追加一表・一索引のみで、2026-10-20 01:23 JSTに物理PRE/POST・旧catalog不変・新8列/複合PK/2索引（PK自動索引含む）・新行0/既存DML0を本番受入済み。Workerの共通読取predicateも参照するため、このDDL受入をコード配備より先に行う。Node/Actions/SSHはNixと同一lockで、Workerは既存bindingで同じ共有判定を使う。コード試験と、本番metadata取得・対象3776の解決は別の受入である。
 
 ## 株式日次の業種集計
 

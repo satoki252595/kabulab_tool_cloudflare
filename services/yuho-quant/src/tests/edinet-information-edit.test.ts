@@ -14,11 +14,12 @@ import { parseEdinetCsvZip } from "../services/edinet/csv.js";
 import { parseOrderData, RX_ORDER_KEYWORD } from "../services/edinet/order-parser.js";
 import { RX_OVERSEAS_KEYWORD } from "../services/overseas-parser.js";
 import { extractTextSections } from "../services/edinet/text-sections.js";
+import { NotionUnknownResultError } from "../../../../src/shared/notion-archive/client.js";
 
-const io = vi.hoisted(() => ({ original: vi.fn(), saved: vi.fn(), text: vi.fn() }));
+const io = vi.hoisted(() => ({ original: vi.fn(), savedList: vi.fn(), saved: vi.fn(), text: vi.fn() }));
 vi.mock("../services/edinet/list-snapshot.js", async original => ({
   ...await original<typeof import("../services/edinet/list-snapshot.js")>(),
-  captureListSnapshot: io.original, readListSnapshot: async () => (await io.original()).list,
+  captureListSnapshot: io.original, readListSnapshot: io.savedList,
 }));
 vi.mock("../services/edinet/archive.js", async original => ({
   ...await original<typeof import("../services/edinet/archive.js")>(), readSavedEdinetZip: io.saved,
@@ -51,6 +52,7 @@ beforeEach(() => {
   original.snapshot.date = annual.submitDateTime!.slice(0, 10);
   original.snapshot.filename = `edinet-list-${original.snapshot.date}.json.gz`;
   io.original.mockResolvedValue(original);
+  io.savedList.mockResolvedValue(original.list);
   io.text.mockResolvedValue(texts);
   io.saved.mockImplementation(async (_id: string, type: 1 | 5) => {
     const bytes = readFileSync(new URL(type === 1 ? "S100YF41.zip" : "S100YF41-csv.zip", fixture));
@@ -185,5 +187,47 @@ it("a declared no-keyword CSV projection with zero financial facts qualifies wit
     expect(await requalifyInformationEdit(x.db, { ...x.args(), doc: next.list.results[0], source: next.snapshot })).toMatchObject({ status: "resolved", reused: true });
     expect(parseEdinetCsvZip).toHaveBeenCalledTimes(1);
     expect(io.saved.mock.calls.every(([, type]) => type === 5)).toBe(true);
+  } finally { x.sqlite.close(); }
+});
+
+it("pre-send budget/read failure returns a safe HOLD, while an unclosed original archive stays unknown", async () => {
+  const x = await open();
+  try {
+    expect(await requalifyInformationEdit(x.db, { ...x.args(), shouldStop: () => true })).toEqual({ status: "held",
+      reason: "完了送信前の読取または処理予算が未成立です（次の通常処理で再確認）" });
+    io.text.mockRejectedValueOnce(new Error("offline read failure detail must not reach log"));
+    const read = await requalifyInformationEdit(x.db, x.args());
+    expect(read).toEqual({ status: "held", reason: "完了送信前の読取または処理予算が未成立です（次の通常処理で再確認）" });
+    expect(x.sender).not.toHaveBeenCalled();
+    io.original.mockRejectedValueOnce(new Error("offline archive closure incomplete"));
+    await expect(requalifyInformationEdit(x.db, x.args())).rejects.toBeInstanceOf(NotionUnknownResultError);
+    expect(x.sender).not.toHaveBeenCalled();
+    expect(x.sqlite.prepare("SELECT count(*) n FROM yuho_edinet_reported_resolutions").get()).toEqual({ n: 0 });
+  } finally { x.sqlite.close(); }
+});
+
+it("only the physically verified original edit2 observation resolves with its event, then its normal revisit needs no parser", async () => {
+  const x = await open();
+  try {
+    const original = source({ ...annual, seqNumber: 1, docInfoEditStatus: "2", opeDateTime: null }, d.notion_doc_page_id);
+    original.snapshot.date = annual.submitDateTime!.slice(0, 10);
+    original.snapshot.filename = `edinet-list-${original.snapshot.date}.json.gz`;
+    await recordReportedChanges(x.db, original.list, original.snapshot, () => false);
+    x.sqlite.prepare("INSERT INTO yuho_edinet_catchup_progress(scope,date,snapshot) VALUES ('main',?,?)")
+      .run(original.snapshot.date, JSON.stringify(original.snapshot));
+    io.savedList.mockResolvedValue(original.list);
+    const before = x.sqlite.prepare("SELECT * FROM yuho_edinet_reported_changes ORDER BY source_page_id,seq_number").all();
+    expect(await requalifyInformationEdit(x.db, { ...x.args(), doc: original.list.results[0], source: original.snapshot })).toMatchObject({ status: "held" });
+    expect(x.sender).not.toHaveBeenCalled();
+    expect(await requalifyInformationEdit(x.db, x.args())).toEqual({ status: "resolved", observations: 2, reused: false });
+    await expect(assertReportedDocumentUsable(x.db, annual.docID)).resolves.toBeUndefined();
+    expect(x.sqlite.prepare("SELECT * FROM yuho_edinet_reported_changes ORDER BY source_page_id,seq_number").all()).toEqual(before);
+    expect(await requalifyInformationEdit(x.db, { ...x.args(), doc: original.list.results[0], source: original.snapshot })).toEqual({ status: "resolved", observations: 0, reused: true });
+    expect(parseEdinetCsvZip).toHaveBeenCalledTimes(1); expect(io.original).not.toHaveBeenCalled();
+    // A different archived snapshot's status2 is not covered by the proof just accepted.
+    const unrelated = { ...original.snapshot, pageId: "3e1d74ff84cd81aba727edcc78c17285" };
+    await recordReportedChanges(x.db, original.list, unrelated, () => false);
+    expect((await requalifyInformationEdit(x.db, x.args())).status).toBe("held");
+    expect(x.sender).toHaveBeenCalledTimes(1);
   } finally { x.sqlite.close(); }
 });

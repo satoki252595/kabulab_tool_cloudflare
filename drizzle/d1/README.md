@@ -180,7 +180,7 @@ DDL を残しておけば新規 DB は正しい形になり、本番へ誤って
 
 ## 0034 EDINET情報修正の完了台帳
 
-`0034_edinet_reported_resolutions.sql` は一表と `(doc_id, metadata_sha256)` 索引だけを追加する。既存観測をUPDATE/DELETEせず、機械的な全原本/既存値一致を終えた観測PK・原本SHA・原観測JSONと完了pinsを保持する。初期seedは不要。既存表へのDMLはない。本番は未適用であり、通常の物理PRE/POST・既存catalog不変・新8列/複合PK/索引の照合を伴って別途適用する。Workerの共通HOLD読取も表を参照するため、DDL受入をコード配備より先に行う。
+`0034_edinet_reported_resolutions.sql` は一表と `(doc_id, metadata_sha256)` 索引だけを追加する。既存観測をUPDATE/DELETEせず、機械的な全原本/既存値一致を終えた観測PK・原本SHA・原観測JSONと完了pinsを保持する。初期seedは不要。2026-10-20 01:23:06〜01:23:20 JSTに本番適用を受入済み（13.596秒）。通常の物理PRE/POST全文bytes、既存catalog不変、新8列/複合PK/2索引（PK自動索引を含む）、新行0・既存表DML0を確認した。D1は読取6要求＋DDL1、Notion13要求・429/再試行0。コード配備と3776の解決は未受入。Workerの共通HOLD読取も表を参照するため、DDL受入をコード配備より先に行う。
 
 ## CI がドリフトを捕まえる仕組み
 
