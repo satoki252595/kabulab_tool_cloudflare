@@ -40,6 +40,7 @@
     "yuho:backfill:holdings": "tsx services/yuho-quant/data-scripts/backfill-shareholdings.ts",
     "yuho:repair:zip": "tsx services/yuho-quant/data-scripts/repair-zip-archive.ts",
     "biztag": "tsx services/yuho-quant/data-scripts/biztag.ts",
+    "biztag:monthly": "tsx scripts/biztag-local/monthly.ts",
     "ir:backfill": "tsx services/ir-catalog/data-scripts/backfill.ts",
     "notion:update-index": "tsx scripts/notion/update-index.ts",
     "raw:required": "tsx --env-file-if-exists=.env scripts/notion/raw-required.ts",

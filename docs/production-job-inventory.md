@@ -1,6 +1,6 @@
 # 本番定期処理とSSH補完
 
-確認日: 2026-10-20。予定時刻・先行条件・LLM利用の正本は[READMEの定期処理表](../README.md#本番の定期処理先行条件llm利用)。機能・取得元・手動/停止/未実装の全件は[データ一覧](batch-data-inventory.md)。日次の本体はGitHub Actions。Mac定期は廃止し、旧担当機能の移設は未完。SSHのnipogiは有限補完用。
+確認日: 2026-10-20。予定時刻・先行条件・LLM利用の正本は[READMEの定期処理表](../README.md#本番の定期処理先行条件llm利用)。機能・取得元・手動/停止/未実装の全件は[データ一覧](batch-data-inventory.md)。日次の本体はGitHub Actions。Mac自動起動は廃止し、旧担当機能は[月次手動](mac-monthly-manual.md)へ。SSHのnipogiは有限補完用。
 
 ## 起動と担当
 
@@ -13,7 +13,7 @@
 | Actions `catchup.yml` | CF dispatch | TDnet→Node有報・保有明細 | 前段失敗時に後続停止。Linuxのbiztag定期writerは停止 |
 | Actionsの個別schedule | `supply_daily.yml`／`tdnet_hourly.yml`／`edinet_daily.yml`／`master_sync.yml` | 日証金、TDnet速報、財務サマリ、公式提出者マスタ | 各原本の日付・主体・writer契約を検査 |
 | Actionsの監視 | `ops_check.yml`（日次）／`cloud_check.yml`（手動）／CF期限確認 | 鮮度・実run・schema・公開資格・配備 | 監視は取得失敗でも実行。自動的な再取得で埋めない |
-| 旧Mac LaunchAgent | **2labelともdisable＋bootout済み** | 本文補足同期・タグ・競合準備・優待要約は移設未完 | state・未完intent・モデル・原本・旧receiptを保持。自動再開しない |
+| 旧Mac LaunchAgent | **2labelともdisable＋bootout済み** | 本文補足同期・タグ・競合準備・優待要約は月次手動 | state・未完intent・モデル・原本・旧receiptを保持。自動再開しない |
 | SSH nipogi | 対象・入力・期限を固定した手動補完 | 通常CLIによる価格・保有・原本等の不足補完 | kabulab-cf用のSSH日次cronは登録していない。定期writerと競合させない |
 
 GitHubのYAMLは14本、宣言19 jobs。有効13本／18 jobsで、歴史RAW全量用`raw_index_backfill.yml`の1 jobだけ意図的無効。`backfill.yml`・`roa_saved_raw_publish.yml`は手動用で、日次起動ではない。予定と実績の最新確認は[復旧状況](test-logs/recovery-functional-status-20261020.md)を参照。
@@ -24,14 +24,14 @@ GitHubのYAMLは14本、宣言19 jobs。有効13本／18 jobsで、歴史RAW全�
 flowchart LR
   universe[月次 母集団] --> benefits[優待原文]
   benefits --> score[保存財務から再計算]
-  benefits -. 移設待ち .-> summary[優待機械要約 停止]
+  benefits -. 手動 .-> summary[優待機械要約 月次手動]
   prices[当日株式・価格資格] --> sector[33業種の照合]
   sector --> flow[失敗なしの場合だけ業種資金フロー]
   nonYahoo[非価格 非Yahoo取得] --> yahoo[非価格 Yahoo取得]
   yahoo --> join[両lane成功後join]
   source[有報原本・主体] --> body[39本文]
-  body -. 補足同期も移設待ち .-> tags[タグ処理 停止]
-  tags -.-> prep[競合機械準備 停止]
+  body -. 補足同期は月次手動 .-> tags[タグ処理 月次手動]
+  tags -.-> prep[競合機械準備 月次手動]
   jp[予定日に対応する日本市場原本] --> macro[米国側観測との結合]
 ```
 
@@ -54,7 +54,7 @@ nix --extra-experimental-features 'nix-command flakes' develop --offline --no-wr
 | VWAP | `ingest:vwap-daily`／`ingest:vwap-intra`。一般5分足は銘柄＋最大60日。過去の任意時刻は専用の固定対象契約のみ |
 | 信用残 | `ingest:vwap-margin --date=YYYYMMDD`。公開元に残る原本が必要 |
 | Python有報 | Nix内の`pipeline`から`uv run python -m jp_stock_pipeline.jobs.edinet_daily --date YYYY-MM-DD --require-cloud` |
-| 月次 | `sync:universe`→`yutai:fetch`→`sync:monthly:core`。`sync:monthly`は優待取得→再計算だけ。要約は移設待ち |
+| 月次 | `sync:universe`→`yutai:fetch`→`sync:monthly:core`。`sync:monthly`は優待取得→再計算だけ。要約は月次手動 |
 | 保有価格 | `scripts/notion/shareholdings.ts resume-prices <private-output.json>`。通常queue・固定window・原本/basis/主体検査を使用 |
 | 39本文 | `biztag run --mechanical-only --codes=<固定対象> --limit=<同数> --budget-min=<分>`。新規/変更入力の意味判定は保留 |
 

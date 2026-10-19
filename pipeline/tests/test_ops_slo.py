@@ -72,8 +72,6 @@ def _wire(monkeypatch, store: _FakeStore, *modules) -> None:
     # runner は関数内で d1 を import するのでモジュール属性を差し替える
     monkeypatch.setattr(d1_module, "D1Store", factory)
     monkeypatch.setattr(runner, "connect_local_store", lambda *a, **k: None)
-    # R2のMac receiptはtest_local_jobs.pyで別途検証し、ここから外部読取しない。
-    monkeypatch.setattr(ops_check, "check_local_job_receipts", lambda *a, **k: None)
     # 判定の本体テストは一覧を注入する。main() はネットワークへ出さない。
     # raising=False: 関数が無い版では属性を足すだけで、main() はそれを呼ばない。
     monkeypatch.setattr(
@@ -1051,14 +1049,21 @@ class TestOpsCheck:
         after = [s for s in store.write_sql if "jss_dataset_freshness" in s]
         assert len(after) == before, after[before:]
 
-    def test_Mac_receiptの違反も既存ops失敗通知へ渡す(self, monkeypatch, caplog) -> None:
+    @pytest.mark.parametrize("stale", [False, True])
+    def test_廃止したMac日次receiptを読まず他のSLOは維持する(self, monkeypatch, caplog, stale) -> None:
+        from jp_stock_pipeline.cloud_store import local_jobs
+
+        def unexpected_r2(*args, **kwargs):
+            raise AssertionError("廃止したMac日次receiptを読んではならない")
+
+        monkeypatch.setattr(local_jobs, "R2Store", unexpected_r2)
         store = _FakeStore()
-        self._seed_freshness(store)
+        overrides = {"d1_core_stock_financials": ("2026-01-01", 3764, 1)} if stale else None
+        self._seed_freshness(store, overrides=overrides)
         self._seed_probe_ok(store)
         _wire(monkeypatch, store, ops_check)
-        monkeypatch.setattr(ops_check, "check_local_job_receipts", lambda settings, problems: problems.append("Mac biztag: 開始receipt未取得"))
-        assert ops_check.main([], env=dict(_D1_ENV)) == 1
-        assert "Mac biztag" in caplog.text
+        assert ops_check.main([], env=dict(_D1_ENV)) == int(stale)
+        assert "Mac biztag" not in caplog.text
 
 
 class TestD1Capacity:
