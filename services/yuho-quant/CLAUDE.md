@@ -93,6 +93,14 @@ mono-repo CLAUDE.md のルール1/2/3/6 に加え、以下を厳守する(違反
   既存journalと物理PRE/CAS/全POSTを通す。機械専用・dry-runでは推論せずHOLDし、
   旧no/uncertainをキーワードだけで覆さない。全no・要確認・候補語0はタグ付与成功と区別する。
   TypeSafe・語彙審査・競合AIの停止と、無差別全社再判定の禁止は維持する。
+- **2026-10-20の既知入力超過の明示解消**: Clefの上限は18,432token。旧16,000較正の
+  完全な既知拒否に限り、`run --repair-empty-tags --context-upgrade=<旧key>`と固定1code/limit1・
+  明示20分以内budgetで解消できる。同じ全文・順序質問が旧上限ではforward前に拒否され、
+  新上限では全問適合することをnative encodeだけで再現する。旧6ファイル/ACKは不変とし、
+  決定的な別recipe keyを同じjournal rootへ保存する。旧accepted/unknown・入力変更・連鎖は不可。
+  新acceptedは保存再利用のみ、unknownは全体HOLD、通常のPRE/CAS/POSTを維持する。
+  較正の94旧要求＋1新要求の[混合根拠](../../docs/test-logs/clef-context-upgrade-20261020.md)を
+  新しい全量runと混同しない。本文短縮・自動再試行・別stateへの迂回はしない。
 - **AI に事業内容を作文させない・LLM の生文を保存しない**。Notion へ書くのは
   「単語帳の語(ID・名前)」「判定方式(AIは確率と帯、機械はキーワード一致)」「有報からコードで抜き出した原文の文
   (書類ID・会計期末つき)」の3つだけ。jev(判定モデル)の応答からそれ以外の自由文を

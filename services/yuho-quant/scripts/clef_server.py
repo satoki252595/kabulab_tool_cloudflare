@@ -19,6 +19,9 @@ import sys
 MODEL = "Cloudflare/clef-flash"
 REVISION = "8b2e5fd17c09fd49bc2880b805d5323ec7ff4ff3"
 SOURCE_SHA256 = "0e304cf7c6500e8bb59bef7e2afd2c6373f82596dfb3b57d1aa93c175e2dc3a3"
+CONTEXT_UPGRADE_FROM = 16000
+MAX_TOKENS = 18432
+MAX_QUALIFICATION_BYTES = 1024 * 1024
 ID = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
 
 
@@ -153,6 +156,29 @@ def encode_batches(native, processor, max_tokens: int, record: dict):
     if qids != list(record["questions"]):
         raise ValueError("encoded_partition_identity")
     return batches, original_tokens
+
+
+def qualify_context_upgrade(native, processor, request_bytes: bytes, max_tokens: int) -> dict:
+    """Qualify complete ordered inputs by native encoding only; never load or score a model."""
+    if max_tokens != MAX_TOKENS:
+        raise ValueError("context_upgrade_max_tokens")
+    if not request_bytes or len(request_bytes) > MAX_QUALIFICATION_BYTES:
+        raise ValueError("context_upgrade_request_bytes")
+    record = build_record(parse_request(request_bytes.decode("utf-8")))
+    try:
+        encode_batches(native, processor, CONTEXT_UPGRADE_FROM, record)
+    except ClefInputTokenLimitError:
+        pass
+    else:
+        raise ValueError("context_upgrade_old_already_fits")
+    batches, original_tokens = encode_batches(native, processor, max_tokens, record)
+    return {"qualified": True, "fromMaxTokens": CONTEXT_UPGRADE_FROM,
+            "toMaxTokens": max_tokens,
+            "requestSha256": hashlib.sha256(request_bytes).hexdigest(),
+            "originalTokens": original_tokens,
+            "layout": [{"tokens": len(batch.input_ids),
+                        "qids": [question.question_id for question in batch.questions]}
+                       for batch in batches]}
 
 
 def score_request(native, torch, model, processor, max_tokens: int, request: object, diagnostics=None) -> dict:
@@ -310,9 +336,10 @@ def main() -> None:
     parser.add_argument("--revision", required=True, choices=[REVISION])
     parser.add_argument("--max-tokens", required=True, type=int)
     parser.add_argument("--model-path", required=True, type=Path)
+    parser.add_argument("--qualify-context-upgrade", action="store_true")
     args = parser.parse_args()
     verify_python_runtime()
-    if not 1 <= args.max_tokens <= 16000:
+    if not 1 <= args.max_tokens <= MAX_TOKENS:
         raise ValueError("max_tokens")
     path = args.model_path.resolve(strict=True)
     if not path.is_dir() or path.name != args.revision:
@@ -324,6 +351,16 @@ def main() -> None:
     # offline flags also prevent processor lookup from fetching missing files.
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    if args.qualify_context_upgrade:
+        request_bytes = sys.stdin.buffer.read(MAX_QUALIFICATION_BYTES + 1)
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            from transformers import AutoProcessor
+
+            native = load_native(path)
+            processor = AutoProcessor.from_pretrained(path, local_files_only=True)
+            result = qualify_context_upgrade(native, processor, request_bytes, args.max_tokens)
+        print(json.dumps(result, ensure_ascii=False, allow_nan=False), flush=True)
+        return
     with redirect_stdout(sys.stderr):
         import torch
 

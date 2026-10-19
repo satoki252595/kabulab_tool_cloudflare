@@ -184,6 +184,8 @@ describe("runBiztag dry-run スコープ", () => {
     const summary = await runBiztag({ budgetMs: 10_000, codes: [latest.stockCode], limit: 1, mechanicalOnly: true,
       thresholds: { yesMin: 0.8, noMax: 0.2 }, model: CLEF_MODEL });
     expect(summary.qualificationHeld).toEqual([latest.stockCode]);
+    expect(summary.qualificationHeldReasons).toEqual([{ stockCode: latest.stockCode,
+      reason: "有報/本文の欠測HOLDは保持し、現activeの基本メタ欠落だけを独立して機械補完" }]);
     expect(summary.textCheckedCodes).toEqual([]);
     expect(summary.textEmptyCounts).toEqual(Object.fromEntries(TEXT_SECTIONS.map(({ title }) => [title, 0])));
     expect(summary.fieldCoverage).toMatchObject({ selectedForTextCheck: 1, textChecked: 0, textUnchecked: 1,

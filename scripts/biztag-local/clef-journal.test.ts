@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { acknowledgeClefError, createClefJournal, type ClefJournalInput } from "./clef-journal.js";
-import { createClefClient } from "../../src/shared/clef/client.js";
+import { createClefClient, type ClefContextQualification } from "../../src/shared/clef/client.js";
 import { vocabularyHash } from "../../services/yuho-quant/src/biztag/vocabulary/hash.js";
 
 vi.mock("node:fs", async original => {
@@ -33,6 +33,69 @@ function directory(root: string): string { return join(root, "clef-decisions", r
 afterEach(() => { vi.mocked(fsyncSync).mockClear(); for (const p of temporary.splice(0)) rmSync(p, { recursive: true, force: true }); });
 
 describe("normal Clef durable output", () => {
+  // Protocol-only receipt controls; the real native old/new length gate has Python coverage.
+  const oldPins = { ...pins, calibrationSha256: "0d8fac66a12d975e08edceb34a46a1b6c502d58ccfe9654a9d15a434b83c0ce7" };
+  const newPins = { ...pins, calibrationSha256: sha("offline-new-context-calibration-control") };
+  const qualify = (raw: Uint8Array): ClefContextQualification => ({ qualified: true, fromMaxTokens: 16000, toMaxTokens: 18432,
+    requestSha256: sha(raw), originalTokens: 17160, layout: [{ tokens: 17160, qids: fixture.request.questions.map((q: { qid: string }) => q.qid) }] });
+  function rejected(root: string) {
+    const exchange = createClefJournal(root, oldPins)(input);
+    const error = Buffer.from(JSON.stringify({ id: "req-0", error: "clef_contract_or_runtime_error" }) + "\n");
+    exchange.beforeSend(request); exchange.response(error, true);
+    const d = directory(root), key = d.split("/").at(-1)!;
+    acknowledgeClefError(root, key, sha(error));
+    return { d, key, upgrade: { stockCode: input.stockCode, oldKey: key, previousCalibrationSha256: oldPins.calibrationSha256, qualify } };
+  }
+  it("explicit context upgrade keeps old six files, has a stable recipe key, and reuses the complete new result", async () => {
+    const root = state(), { d, upgrade } = rejected(root);
+    const oldSix = Object.fromEntries(readdirSync(d).map(n => [n, readFileSync(join(d, n))]));
+    const exchange = createClefJournal(root, newPins, upgrade)(input);
+    exchange.beforeSend(request); exchange.response(response, true); exchange.accepted(fixture.result);
+    const keys = readdirSync(join(root, "clef-decisions")).sort(); expect(keys).toHaveLength(2);
+    const reused = createClefJournal(root, newPins, upgrade)(input);
+    expect(reused.replay).toEqual(fixture.result); expect(reused.decidedAt).toBe(exchange.decidedAt);
+    expect(() => createClefJournal(root, { ...newPins, calibrationSha256: sha("offline-later-calibration") }, upgrade)(input)).toThrow("differs");
+    expect(() => createClefJournal(root, newPins, { ...upgrade,
+      qualify: raw => ({ ...qualify(raw), originalTokens: 17161 }) })(input)).toThrow("differs");
+    expect(readdirSync(join(root, "clef-decisions")).sort()).toEqual(keys);
+    const spawnFn = vi.fn(() => { throw Error("accepted upgrade must never forward again"); });
+    const client = createClefClient({ pythonBin: "/offline/python", modelPath: "/offline/model", spawnFn });
+    expect(await client.askNoul(input.state, input.questions, reused)).toEqual({ ...fixture.result, reused: true });
+    expect(spawnFn).not.toHaveBeenCalled(); client.close();
+    for (const [name, bytes] of Object.entries(oldSix)) expect(readFileSync(join(d, name))).toEqual(bytes);
+  });
+  it.each(["accepted", "unknown"])("context upgrade cannot admit an old %s request", kind => {
+    const root = state(), exchange = createClefJournal(root, oldPins)(input); exchange.beforeSend(request);
+    if (kind === "accepted") { exchange.response(response, true); exchange.accepted(fixture.result); }
+    const oldKey = directory(root).split("/").at(-1)!, encode = vi.fn(qualify);
+    expect(() => createClefJournal(root, newPins, { stockCode: input.stockCode, oldKey, previousCalibrationSha256: oldPins.calibrationSha256, qualify: encode })(input)).toThrow();
+    expect(encode).not.toHaveBeenCalled(); expect(readdirSync(join(root, "clef-decisions"))).toHaveLength(1);
+  });
+  it("failed upgrade qualification creates no intent; incomplete new recipe remains a global sticky stop", () => {
+    const root = state(), { upgrade } = rejected(root);
+    expect(() => createClefJournal(root, newPins, { ...upgrade, qualify: () => { throw Error("offline encode rejection"); } })(input)).toThrow("encode rejection");
+    expect(readdirSync(join(root, "clef-decisions"))).toHaveLength(1);
+    const exchange = createClefJournal(root, newPins, upgrade)(input); exchange.beforeSend(request);
+    expect(() => createClefJournal(root, newPins, upgrade)(input)).toThrow();
+    expect(() => createClefJournal(root, newPins)({ ...input, stockCode: "OFFLINE_OTHER_STOCK_CONTROL" })).toThrow();
+  });
+  it("nondeterministic qualification fields cannot mint another context recipe key", () => {
+    const root = state(), { d, upgrade } = rejected(root), before = readdirSync(d).map(n => [n, sha(readFileSync(join(d, n)))]);
+    expect(() => createClefJournal(root, newPins, { ...upgrade,
+      qualify: raw => ({ ...qualify(raw), observedAt: new Date().toISOString() }) })(input)).toThrow();
+    expect(readdirSync(join(root, "clef-decisions"))).toHaveLength(1);
+    expect(readdirSync(d).map(n => [n, sha(readFileSync(join(d, n)))])).toEqual(before);
+  });
+  it("a rejected upgrade recipe can be acknowledged without breaking the global key validator; upgrades cannot chain", () => {
+    const root = state(), { key, upgrade } = rejected(root), exchange = createClefJournal(root, newPins, upgrade)(input);
+    const error = Buffer.from(JSON.stringify({ id: "req-0", error: "clef_contract_or_runtime_error" }) + "\n");
+    exchange.beforeSend(request); exchange.response(error, true);
+    const newKey = readdirSync(join(root, "clef-decisions")).find(k => k !== key)!;
+    acknowledgeClefError(root, newKey, sha(error));
+    expect(createClefJournal(root, newPins)({ ...input, stockCode: "OFFLINE_OTHER_STOCK_CONTROL" }).replay).toBeUndefined();
+    expect(() => createClefJournal(root, { ...newPins, calibrationSha256: sha("offline-third-recipe") },
+      { ...upgrade, oldKey: newKey, previousCalibrationSha256: newPins.calibrationSha256 })(input)).toThrow();
+  });
   it("explicit SHA-pinned error ACK permits other inputs but never retries or accepts the rejected input", () => {
     const root = state(), exchange = createClefJournal(root, pins)(input);
     const error = Buffer.from(JSON.stringify({ id: "req-0", error: "clef_contract_or_runtime_error" }) + "\n");

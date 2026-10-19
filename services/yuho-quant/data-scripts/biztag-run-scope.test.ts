@@ -60,3 +60,21 @@ it.each([false, true])("固定finite空タグ再確認を通常writerへ渡す (
   expect(pipeline.run.mock.calls[0][0]).toMatchObject({ codes: ["6103"], limit: 1, repairEmptyTags: true, mechanicalOnly: mechanical, budgetMs: 720_000 });
   expect(writer.mock.calls[0][1]).toBe(mechanical); expect(fetch).not.toHaveBeenCalled();
 });
+
+it.each([
+  ["--codes=6103,6104", "--limit=2", "--budget-min=12"],
+  ["--codes=6103", "--limit=1", "--budget-min=12", "--mechanical-only"],
+  ["--codes=6103", "--limit=1", "--budget-min=12", "--dry-run"],
+  ["--codes=6103", "--limit=1"],
+].map(args => ({ args })))("context upgrade requires one explicit normal repair scope (%j)", async ({ args }) => {
+  process.argv = [argv[0], "biztag.ts", "run", "--repair-empty-tags", `--context-upgrade=${"1".repeat(64)}`, ...args];
+  await expect(import("./biztag.js")).rejects.toThrow(/context-upgrade|repair-empty-tags/);
+  expect(pipeline.run).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+});
+
+it("explicit single-code context upgrade enters the unchanged normal pipeline", async () => {
+  process.argv = [argv[0], "biztag.ts", "run", "--repair-empty-tags", `--context-upgrade=${"1".repeat(64)}`, "--codes=6103", "--limit=1", "--budget-min=12"];
+  await expect(import("./biztag.js")).rejects.toThrow("NORMAL_PIPELINE_INPUT_CAPTURED");
+  expect(pipeline.run.mock.calls[0][0]).toMatchObject({ codes: ["6103"], limit: 1, repairEmptyTags: true, mechanicalOnly: false });
+  expect(fetch).not.toHaveBeenCalled();
+});
