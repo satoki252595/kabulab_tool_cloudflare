@@ -140,6 +140,10 @@
       "kind": "uniform",
       "tag": "personal-only"
     },
+    "yahoo_proxy_cooldown": {
+      "kind": "operational",
+      "tag": "commercial-ok"
+    },
     "yuho_documents": {
       "kind": "uniform",
       "tag": "commercial-ok"
