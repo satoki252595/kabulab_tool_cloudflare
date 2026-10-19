@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createClefJournal, type ClefJournalInput } from "./clef-journal.js";
+import { acknowledgeClefError, createClefJournal, type ClefJournalInput } from "./clef-journal.js";
 import { createClefClient } from "../../src/shared/clef/client.js";
 import { vocabularyHash } from "../../services/yuho-quant/src/biztag/vocabulary/hash.js";
 
@@ -33,6 +33,54 @@ function directory(root: string): string { return join(root, "clef-decisions", r
 afterEach(() => { vi.mocked(fsyncSync).mockClear(); for (const p of temporary.splice(0)) rmSync(p, { recursive: true, force: true }); });
 
 describe("normal Clef durable output", () => {
+  it("explicit SHA-pinned error ACK permits other inputs but never retries or accepts the rejected input", () => {
+    const root = state(), exchange = createClefJournal(root, pins)(input);
+    const error = Buffer.from(JSON.stringify({ id: "req-0", error: "clef_contract_or_runtime_error" }) + "\n");
+    exchange.beforeSend(request); exchange.response(error, true);
+    const d = directory(root), key = d.split("/").at(-1)!;
+    const originals = Object.fromEntries(readdirSync(d).map(name => [name, readFileSync(join(d, name))]));
+    expect(() => createClefJournal(root, pins)({ ...input, stockCode: "OFFLINE_OTHER_STOCK_CONTROL" })).toThrow();
+    expect(() => acknowledgeClefError(root, key, sha(response))).toThrow();
+    expect(existsSync(join(d, "rejected.json"))).toBe(false);
+    acknowledgeClefError(root, key, sha(error));
+    expect(JSON.parse(readFileSync(join(d, "rejected.json"), "utf8"))).toMatchObject({ noReinference: true });
+    expect(existsSync(join(d, "accepted.json"))).toBe(false);
+    for (const [name, raw] of Object.entries(originals)) expect(readFileSync(join(d, name))).toEqual(raw);
+    expect(() => createClefJournal(root, pins)(input)).toThrow("same input HOLD, no reinference");
+    expect(() => acknowledgeClefError(root, key, sha(error))).toThrow("already exists");
+    expect(createClefJournal(root, pins)({ ...input, stockCode: "OFFLINE_OTHER_STOCK_CONTROL" }).replay).toBeUndefined();
+    writeFileSync(join(d, "response.raw"), response);
+    expect(() => createClefJournal(root, pins)({ ...input, stockCode: "OFFLINE_THIRD_STOCK_CONTROL" })).toThrow();
+  });
+  it.each(["partial", "wrong-id", "unknown-error", "send-hash", "fsync"])("%s cannot acknowledge a rejected request or unlock other inputs", fault => {
+    const root = state(), exchange = createClefJournal(root, pins)(input);
+    const error = Buffer.from(JSON.stringify({ id: fault === "wrong-id" ? "req-1" : "req-0",
+      error: fault === "unknown-error" ? "invalid_json_request" : "clef_input_token_limit" }) + "\n");
+    exchange.beforeSend(request); exchange.response(error, true);
+    const d = directory(root), key = d.split("/").at(-1)!;
+    if (fault === "partial") exchange.response(error.subarray(0, 10), false);
+    if (fault === "send-hash") writeFileSync(join(d, "send.json"), JSON.stringify({ at: new Date().toISOString(), requestSha256: sha(error) }));
+    if (fault === "fsync") vi.mocked(fsyncSync).mockImplementationOnce(() => { throw new Error("offline rejected input fsync fault"); });
+    expect(() => acknowledgeClefError(root, key, sha(error))).toThrow();
+    expect(existsSync(join(d, "rejected.json"))).toBe(false);
+    expect(existsSync(join(d, "accepted.json"))).toBe(false);
+    expect(() => createClefJournal(root, pins)({ ...input, stockCode: "OFFLINE_OTHER_STOCK_CONTROL" })).toThrow();
+  });
+  it.each([6, 7])("ACK sync failure at step %s must establish durability again before another forward", step => {
+    const root = state(), exchange = createClefJournal(root, pins)(input);
+    const error = Buffer.from(JSON.stringify({ id: "req-0", error: "clef_input_token_limit" }) + "\n");
+    exchange.beforeSend(request); exchange.response(error, true);
+    const d = directory(root), key = d.split("/").at(-1)!;
+    for (let i = 1; i < step; i++) vi.mocked(fsyncSync).mockImplementationOnce(() => {});
+    vi.mocked(fsyncSync).mockImplementationOnce(() => { throw new Error("offline ACK tail fsync fault"); });
+    expect(() => acknowledgeClefError(root, key, sha(error))).toThrow("ACK tail fsync fault");
+    expect(existsSync(join(d, "rejected.json"))).toBe(true);
+    vi.mocked(fsyncSync).mockImplementationOnce(() => { throw new Error("offline startup durability fault"); });
+    expect(() => createClefJournal(root, pins)({ ...input, stockCode: "OFFLINE_OTHER_STOCK_CONTROL" })).toThrow("startup durability fault");
+    expect(readdirSync(join(root, "clef-decisions"))).toHaveLength(1);
+    expect(() => createClefJournal(root, pins)(input)).toThrow("same input HOLD, no reinference");
+    expect(createClefJournal(root, pins)({ ...input, stockCode: "OFFLINE_OTHER_STOCK_CONTROL" }).replay).toBeUndefined();
+  });
   it("stores exact full request/response privately before acceptance; complete saved output reuses without spawn", async () => {
     const root = state(), journal = createClefJournal(root, pins), exchange = journal(input);
     exchange.beforeSend(request); exchange.response(response, true); exchange.accepted(fixture.result);

@@ -14,7 +14,7 @@ import { appendFileSync, readFileSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createClefJournal } from "../../../scripts/biztag-local/clef-journal.js";
+import { acknowledgeClefError, createClefJournal } from "../../../scripts/biztag-local/clef-journal.js";
 import { reconcileSupplementPreArchive, reconcileAppliedSupplementPublication } from "../../../scripts/biztag-local/publication-journal.js";
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import {
@@ -562,6 +562,15 @@ async function main(): Promise<void> {
     assertTypeSafeEnabled();
   }
   switch (subcommand) {
+    case "acknowledge-clef-error": {
+      const key = arg("journal-key"), sha = arg("response-sha256");
+      if (rest.length !== 2 || key === undefined || sha === undefined) throw new Error("acknowledge-clef-errorにはjournal-key/response-sha256の2引数が必要です");
+      const state = join(dirname(realpathSync(fileURLToPath(new URL("../../../.env", import.meta.url)))), "tmp/biztag-local");
+      acknowledgeClefError(state, key, sha);
+      console.info(JSON.stringify({ status: "known_clef_error_acknowledged", journalKey: key,
+        sameInputReinference: false, modelForwards: 0, businessWrites: 0 }));
+      return;
+    }
     case "reconcile-applied":
       return reconcileAppliedCommand();
     case "run":
@@ -582,7 +591,7 @@ async function main(): Promise<void> {
       return competitorsEvalCommand();
     default:
       console.error(
-        "usage: pnpm biztag <run|reconcile-applied|gate|golden|rollback|packet|stats|competitors|competitors-eval> [options] " +
+        "usage: pnpm biztag <run|acknowledge-clef-error|reconcile-applied|gate|golden|rollback|packet|stats|competitors|competitors-eval> [options] " +
           "(docs/005-yuho-quant-business-tags.md §11・「競合他社」節)"
       );
       process.exit(2);

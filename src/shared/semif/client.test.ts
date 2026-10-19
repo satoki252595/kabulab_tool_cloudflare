@@ -106,6 +106,26 @@ describe("Clef native JSONL boundary", () => {
     } finally { client.close(); }
   });
 
+  it("stderrの分割された安全な失敗型だけ記録し、原文や長すぎる行を破棄する", async () => {
+    const safe = "[clef_server] request_failed class=RuntimeError";
+    const startup = "[clef_server] startup_failed class=ValueError";
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fake = makeFakeServerSpawn({ readyLine: ready, respond: req => {
+      const stderr = fake.children[0].stderr;
+      stderr.emit("data", Buffer.from("request state: private-company-information\n" + safe.slice(0, 20)));
+      stderr.emit("data", Buffer.from(safe.slice(20) + "\n"));
+      stderr.emit("data", Buffer.from("private-source-" + "x".repeat(600)));
+      stderr.emit("data", Buffer.from(safe + "\n" + startup + "\n"));
+      return { id: req.id, error: "clef_contract_or_runtime_error" };
+    } });
+    const client = createClefClient({ pythonBin: "/offline-control/python", modelPath: "/offline-control/clef", spawnFn: fake.spawnFn });
+    try {
+      await expect(client.askNoul("原文", Q)).rejects.toThrow("clef_contract_or_runtime_error");
+      expect(log.mock.calls).toEqual([[safe], [startup]]);
+      expect(fake.writtenRequests).toHaveLength(1);
+    } finally { client.close(); log.mockRestore(); }
+  });
+
   it.each(Object.keys(ready))("native readyの%s不一致は入力送信前に停止", async (key) => {
     const fake = makeFakeServerSpawn({ readyLine: { ...ready, [key]: "mismatch" }, respond: () => "hang" });
     const client = createClefClient({ pythonBin: "/test/python", modelPath: "/test/clef", spawnFn: fake.spawnFn });

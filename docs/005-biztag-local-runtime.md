@@ -1,6 +1,6 @@
 # 事業タグ・優待要約のMac定時運用
 
-更新: 2026-10-18。事業タグの唯一の定時writerをApple Silicon Macへ移す。
+更新: 2026-10-19。事業タグの唯一の定時writerをApple Silicon Macへ移す。
 適格新規の初回と、最新有報IDまたは既知の実入力SHAが変わった対象だけClef-Flash/MPSを使う。
 同一入力の保存タグは再利用し、旧失敗・不足は従来のkeywords/excludes一致で補完する。
 開始日前の上場を新規AI対象へ広げず、未保存の旧入力SHAは捏造しない。TypeSafeへの自動代替、語彙審査、
@@ -164,6 +164,20 @@ JSTへ変換し、再開日へ更新しない。これはモデル出力の受�
 
 既知journalの未完intent、破断/未知応答、書込/fsync失敗、束縛の不一致では自動再推論せず停止する。
 未完記録がある次runも、別銘柄を含め次forwardを開始しない。旧記録は削除・上書きしない。
+完全な要求と同じidの既知エラー応答だけが残り、writerの終端を確認できた場合は、
+通常の排他下で次の明示コマンドを1回だけ使える。指定は保存directory名と実応答のSHAであり、
+値を推測しない。入力・要求・送信記録・応答の全hashと時計を検証し、原本を再fsyncして
+`rejected.json`を追記する。業務書込・推論・再送は0。同じ入力は以降もHOLDし、
+ほかの入力だけが通常処理へ進める。部分応答・未知エラー・不一致・受理済み出力には使えない。
+
+```sh
+nix develop --offline --no-write-lock-file --command env -u NODE_PATH \
+  node --import tsx services/yuho-quant/data-scripts/biztag.ts acknowledge-clef-error \
+  --journal-key=<保存directoryの64桁hash> --response-sha256=<保存response.rawの64桁SHA>
+```
+
+単一質問でも全文が16,000tokenを超える場合は、推論前の専用エラー`clef_input_token_limit`を返す。
+本文の切捨てや候補の推測はせず、この場合も同じ入力を自動再推論しない。
 原文の上限は1file 1MiB、1run 64MiB、保存全体1GiBで、新しい要求の前に6MiBを予約する。
 上限到達はHOLDとして運用者が確認し、無制限保存や自動整理は行わない。
 SemIf/競合判定の既定経路にはこのjournalを接続しない。旧モデルの無記録履歴をClefへ付け替えない。
