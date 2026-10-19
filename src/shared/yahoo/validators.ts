@@ -83,9 +83,9 @@ export const yahooChartResponseSchema = z.object({
 /**
  * QuoteSummary API レスポンス (2026 年時点のフィールド配置)
  *
- *   summaryDetail:          trailingPE, marketCap, dividendYield
- *   defaultKeyStatistics:   priceToBook, trailingEps, bookValue, sharesOutstanding, floatShares
- *   financialData:          returnOnEquity, returnOnAssets, operatingMargins, 株数尺度の照合材料
+ *   summaryDetail:          trailingPE, marketCap, dividendYield, trailingAnnualDividendRate
+ *   defaultKeyStatistics:   priceToBook, trailingEps, bookValue, mostRecentQuarter, sharesOutstanding, floatShares
+ *   financialData:          returnOnEquity, returnOnAssets, operatingMargins, currentPrice, 株数尺度の照合材料
  *   incomeStatementHistory: endDate, totalRevenue  (operatingIncome は空 {})
  */
 export const yahooQuoteSummaryResponseSchema = z.object({
@@ -104,6 +104,7 @@ export const yahooQuoteSummaryResponseSchema = z.object({
                   totalRevenue: rawValueSchema,
                   revenuePerShare: rawValueSchema,
                   operatingMargins: rawValueSchema,
+                  currentPrice: rawValueSchema,
                 })
               )
             ),
@@ -113,6 +114,7 @@ export const yahooQuoteSummaryResponseSchema = z.object({
                   priceToBook: rawValueSchema,
                   trailingEps: rawValueSchema,
                   bookValue: rawValueSchema,
+                  mostRecentQuarter: rawValueSchema,
                   sharesOutstanding: rawValueSchema,
                   floatShares: rawValueSchema,
                 })
@@ -124,6 +126,7 @@ export const yahooQuoteSummaryResponseSchema = z.object({
                   trailingPE: rawValueSchema,
                   marketCap: rawValueSchema,
                   dividendYield: rawValueSchema,
+                  trailingAnnualDividendRate: rawValueSchema,
                 })
               )
             ),
