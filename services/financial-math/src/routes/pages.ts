@@ -6,7 +6,7 @@ import { stocks, stockFinancials } from "../../../../src/shared/db/core-schema.j
 import { dailyOhlcv, stockIndicators } from "../db/swing-readonly.js";
 import { momentumProjection } from "../../../../src/shared/db/projection-schema.js";
 import { decodeCloses } from "../../../../src/shared/indicators/momentum-series.js";
-import { getOhlcvSeries, getPriceContext, type OhlcvBar } from "../services/price-cache.js";
+import { dividendStatusOf, getOhlcvSeries, getPriceContext, type OhlcvBar } from "../services/price-cache.js";
 import { homePage } from "../views/home.js";
 import { dcfPage, type StockContext as DcfStockContext } from "../views/dcf.js";
 import { capmPage, type CapmStockContext } from "../views/capm.js";
@@ -61,8 +61,8 @@ pagesRoute.get("/dcf", zValidator("query", dcfQuerySchema), async (c) => {
     try {
       // core_stock_financials の断面を読む (1414 のような優待なし銘柄も含む)
       const ctx = await getPriceContext(db, code);
-      // 無配銘柄判定: Yahoo の dividendYield が null/0 なら estimatedDividend も null
-      const isNonDividend = ctx.estimatedDividend === null || ctx.estimatedDividend <= 0;
+      // 配当の状態: 無配 (0) と未確定 (null) を分ける。どちらも estimatedDividend は null
+      const dividendStatus = dividendStatusOf(ctx.dividendYield);
       stockContext = {
         code: ctx.code,
         name: ctx.name ?? ctx.code,
@@ -70,12 +70,12 @@ pagesRoute.get("/dcf", zValidator("query", dcfQuerySchema), async (c) => {
         dividendYield: ctx.dividendYield,
         estimatedDividend: ctx.estimatedDividend,
         estimatedGrowth: null,
-        isNonDividend,
+        dividendStatus,
       };
-      if (!isNonDividend && ctx.estimatedDividend !== null) {
+      if (dividendStatus === "paying" && ctx.estimatedDividend !== null) {
         presetDividend = Math.round(ctx.estimatedDividend * 100) / 100;
       }
-      // 無配時は presetDividend は null のまま → input 空欄
+      // 無配・未確定時は presetDividend は null のまま → input 空欄
     } catch (e) {
       // 不正コード / 断面未登録。画面自体は描画するが、**理由は必ず出す**。
       prefillNotice = `銘柄 ${code} のプリフィルができません: ${e instanceof Error ? e.message : String(e)}`;

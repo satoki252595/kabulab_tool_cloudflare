@@ -2,22 +2,24 @@ import { BASE_PATH } from "../../base-path.js";
 import { layout, h, fmtPct, tip } from "./layout.js";
 import type { GordonResult, TwoStageDcfResult } from "../services/dcf.js";
 import { STOCK_CODE_HTML_PATTERN, STOCK_CODE_ERROR } from "../../../../src/shared/jpx/stock-code.js";
+import type { DividendStatus } from "../services/price-cache.js";
 
 export interface StockContext {
   code: string;
   name: string;
   currentPrice: number | null;
   dividendYield: number | null;
-  /** 来期予想配当の自動推定 (price × dividendYield) — null の場合 */
+  /** 来期予想配当の自動推定 (price × dividendYield)。推定できなければ null */
   estimatedDividend: number | null;
   /** 配当 CAGR (任意。年度売上だけでは推定できないので null になる場合多い) */
   estimatedGrowth: number | null;
   /**
-   * 無配銘柄かどうか。
-   * - true  = Yahoo の dividendYield が null/0 で配当データなし。Gordon DCF 不適切
-   * - false = 配当データあり (自動推定値で計算可能)
+   * 配当の状態。
+   * - paying       = 保存された Yahoo 由来の配当利回りが正
+   * - non-dividend = 保存された配当利回りが 0% (無配)。Gordon DCF 不適切
+   * - unverified   = 配当利回りが欠測・不正。無配とは表示しない
    */
-  isNonDividend: boolean;
+  dividendStatus: DividendStatus;
 }
 
 export interface DcfPageProps {
@@ -27,7 +29,7 @@ export interface DcfPageProps {
     /**
      * 来期予想配当 (円/株)。null = 銘柄未指定 or 無配・データなしで未取得。
      * **デフォルト値で勝手に埋めない (CLAUDE.md ルール1)**: 銘柄プリフィル時に
-     * Yahoo 由来の実値が取れたときだけ設定し、それ以外は null のまま。
+     * Yahoo 由来の保存利回りから推定できたときだけ設定し、それ以外は null のまま。
      * View 側は null/0 のときフォーム input を空欄にし、ユーザーに手動入力を促す。
      */
     expectedDividend: number | null;
@@ -69,16 +71,19 @@ export function dcfPage(props: DcfPageProps): string {
          <span class="code">${h(ctx.code)}</span>
          <span class="name">${h(ctx.name)}</span>
          <span class="meta">現在株価: ${fmtPrice(ctx.currentPrice)} 円</span>
-         <span class="meta">配当利回り: ${ctx.isNonDividend ? "<strong>無配</strong>" : fmtPct(ctx.dividendYield, 2)}</span>
+         <span class="meta">配当利回り: ${ctx.dividendStatus === "non-dividend" ? "<strong>無配</strong>" : ctx.dividendStatus === "unverified" ? "<strong>未確定</strong>" : fmtPct(ctx.dividendYield, 2)}</span>
          ${ctx.estimatedDividend !== null ? `<span class="meta">推定来期配当: ${fmtPrice(ctx.estimatedDividend)} 円</span>` : ""}
        </div>`
     : "";
 
-  // 無配銘柄警告 (Gordon DCF は配当が前提のため原理的に適用不可)
+  // 無配・未確定の案内 (Gordon DCF は正の配当が必要)
   const nonDividendWarning =
-    ctx && ctx.isNonDividend
-      ? `<div class="notice"><strong>⚠ 無配銘柄</strong> — この銘柄は配当を出していないため、配当割引モデル(Gordon DCF)では理論株価を計算できません。
-       Yahoo Finance のデータ取得時点で配当利回りが取れていない、もしくは 0% の銘柄です。
+    ctx && ctx.dividendStatus === "unverified"
+      ? `<div class="notice"><strong>⚠ 配当利回りが未確定</strong> — 配当利回りを確認できないため、来期予想配当を自動入力しません。
+       <br>下のフォームで <strong>${tip("来期予想配当", "1株あたりの予想年間配当金額。会社の決算短信や IR の予想を参考に入力。")}</strong>を手動入力してください。
+       </div>`
+      : ctx && ctx.dividendStatus === "non-dividend"
+      ? `<div class="notice"><strong>⚠ 無配銘柄</strong> — 保存された配当利回りが 0% のため、配当割引モデル(Gordon DCF)では理論株価を自動計算できません。
        <br>もし「将来配当を出すと想定して試算したい」場合は、下のフォームで <strong>${tip("来期予想配当", "1株あたりの予想年間配当金額。会社の IR や四季報の予想を参考に入力。無配銘柄では将来配当を仮定する必要があり、計算結果は仮置きの試算値になる点に注意。")}</strong>を手動入力してください。
        本来 ${tip("FCF (フリーキャッシュフロー)", "営業 CF から投資 CF を引いた残り。配当ではなく FCF を割り引く DCF モデルが無配株では一般的だが、本ツールでは未実装。")} ベースの DCF や PER 比較等、別の評価手法を併用するのが標準です。
        </div>`
@@ -98,7 +103,7 @@ export function dcfPage(props: DcfPageProps): string {
   const guideBlock = `
 <div class="guide">
   <p><strong>はじめての方へ</strong></p>
-  <p>銘柄コード (例: 7203 = トヨタ) を入力すると、その会社の${tip("配当利回り", "1株あたりの年間配当 ÷ 株価。現在の株価で買うと年何%もらえるかの利回り。")}や予想配当を自動で取得し、<strong>${tip("理論株価", "「将来この銘柄が生み出す配当を、今の時点での価値に割り引いて合計した金額」。Gordon モデルでは P = 来期配当 ÷ (要求リターン − 配当成長率)。")}</strong>を計算します。</p>
+  <p>銘柄コード (例: 7203 = トヨタ) を入力すると、その会社の${tip("配当利回り", "1株あたりの年間配当 ÷ 株価。現在の株価で買うと年何%もらえるかの利回り。")}から配当の推定値を自動入力し、<strong>${tip("理論株価", "「将来この銘柄が生み出す配当を、今の時点での価値に割り引いて合計した金額」。Gordon モデルでは P = 来期配当 ÷ (要求リターン − 配当成長率)。")}</strong>を計算します。</p>
   <p>現在の株価と比べて<strong>${tip("割安度", "(理論株価 − 現在株価) ÷ 現在株価。プラスなら現在価格が理論値より安く割安、マイナスなら割高。")}</strong>を判定。詳細設定は基本「自動」で構いません。</p>
 </div>
 `;
@@ -112,8 +117,8 @@ export function dcfPage(props: DcfPageProps): string {
     <span class="hint">銘柄を変えると配当が自動で更新されます。${p.code ? `<a href="${BASE_PATH}/dcf">クリア</a>` : `例: <a href="${BASE_PATH}/dcf?code=7203">7203 トヨタ</a> <a href="${BASE_PATH}/dcf?code=8058">8058 三菱商事</a> <a href="${BASE_PATH}/dcf?code=9432">9432 NTT</a>`}</span>
   </div>
 
-  <details class="advanced span-full" ${ctx && ctx.isNonDividend ? "open" : ""}>
-    <summary>詳細設定 ${ctx && ctx.isNonDividend ? "(無配銘柄)" : "(デフォルトのままで OK)"}</summary>
+  <details class="advanced span-full" ${ctx && ctx.dividendStatus !== "paying" ? "open" : ""}>
+    <summary>詳細設定 ${ctx && ctx.dividendStatus === "non-dividend" ? "(無配銘柄)" : ctx && ctx.dividendStatus === "unverified" ? "(配当利回り未確定)" : "(デフォルトのままで OK)"}</summary>
     <div class="advanced-body">
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
         <div class="form-field">
@@ -124,12 +129,12 @@ export function dcfPage(props: DcfPageProps): string {
           </select>
         </div>
         <div class="form-field">
-          <label>${tip("来期予想配当 (円/株)", "1株あたりの予想年間配当金額。銘柄コードを入れると日次同期の株価断面 (Yahoo 由来の TTM = 過去12ヶ月実績) から推定値を自動入力。会社IRの予想と異なる場合があります。")}${p.expectedDividendAutoFilled ? '<span class="auto-badge">自動</span>' : ""}</label>
+          <label>${tip("来期予想配当 (円/株)", "1株あたりの予想年間配当金額。銘柄コードを入れると、日次同期で保存した Yahoo 由来の配当利回りと株価から推定値を自動入力。会社 IR の予想と異なる場合があります。")}${p.expectedDividendAutoFilled ? '<span class="auto-badge">自動</span>' : ""}</label>
           <input type="number" step="0.01" name="expectedDividend"
                  value="${p.expectedDividend !== null && p.expectedDividend > 0 ? h(p.expectedDividend) : ""}"
-                 placeholder="${ctx ? (ctx.isNonDividend ? "無配銘柄: 想定配当を手動入力" : "") : "銘柄コード入力時は自動取得"}"
+                 placeholder="${ctx ? (ctx.dividendStatus === "non-dividend" ? "無配銘柄: 想定配当を手動入力" : ctx.dividendStatus === "unverified" ? "配当利回り未確定: 予想配当を手動入力" : "") : "銘柄コード入力時は自動取得"}"
                  min="0.01">
-          <span class="hint">銘柄コード指定時は断面の推定値で自動補完。code 空時のみ手動入力必須。</span>
+          <span class="hint">銘柄コード指定時は保存された利回りから推定。未確定・無配・銘柄未指定の場合は手動入力してください。</span>
         </div>
         <div class="form-field">
           <label>${tip("要求リターン k (%)", "投資家がこの銘柄に求める年率リターン。CAPM で算出した期待リターンを使うのが標準。デフォルト 7% は東証平均の感覚値。")}</label>
