@@ -17,6 +17,11 @@ import {
   verifyArchivedAttachments,
   type RecordResult,
 } from "../../../../../src/shared/notion-archive/index.js";
+import { findUniqueBackupChildByTitle, queryUniqueRow, readFileManifest, inputFingerprint } from "../../../../../src/shared/notion-archive/archive.js";
+import { notionEnv } from "../../../../../src/shared/notion-archive/env.js";
+import { listPageFiles } from "../../../../../src/shared/notion-archive/page-file.js";
+import { downloadArchivedFile } from "../../../../../src/shared/notion-archive/archived-download.js";
+import { sha256HexBytes } from "../../../../../src/shared/sha256.js";
 
 /** EDINET 書類取得種別 (1=XBRL ZIP / 5=CSV ZIP)。 */
 export type EdinetArchiveDocType = 1 | 5;
@@ -140,6 +145,40 @@ export function edinetArchiveFilename(
   type: EdinetArchiveDocType
 ): string {
   return type === 1 ? `${docID}_xbrl.zip` : `${docID}_csv.zip`;
+}
+
+export class SavedEdinetZipQualificationError extends Error {}
+
+/** 情報修正の再確認用。既存type別原本だけを読み、作成・上書き・別原典取得はしない。 */
+export async function readSavedEdinetZip(docID: string, type: EdinetArchiveDocType) {
+  const dbId = await findUniqueBackupChildByTitle({ parentPageId: notionEnv.NOTION_ARCHIVE_PAGE_ID(),
+    title: "一次データ｜yuho-quant", kind: "database" });
+  if (dbId === null) throw new SavedEdinetZipQualificationError("EDINET保存原本DBがありません");
+  const page = await queryUniqueRow<{ id: string; archived: boolean; in_trash: boolean;
+    parent: { type: string; database_id: string }; properties: { Key: { title: Array<{ type: string; plain_text: string; text: { content: string } }> };
+      Metadata: { rich_text: Array<{ type: string; plain_text: string; text: { content: string } }> } } }>(
+    dbId, { property: "Key", title: { equals: edinetArchiveKey(docID, type) } }, "EDINET保存原本が複数あります");
+  if (!page || page.archived !== false || page.in_trash !== false || page.parent.type !== "database_id" ||
+      page.parent.database_id.replaceAll("-", "") !== dbId.replaceAll("-", "")) throw new SavedEdinetZipQualificationError("EDINET保存原本の所属/状態が不正です");
+  const key = page.properties.Key.title;
+  if (!Array.isArray(key) || key.some(p => p.type !== "text" || p.plain_text !== p.text?.content) ||
+      key.map(p => p.plain_text).join("") !== edinetArchiveKey(docID, type)) throw new SavedEdinetZipQualificationError("EDINET保存原本Keyが不一致です");
+  const parts = page.properties.Metadata.rich_text;
+  if (!Array.isArray(parts) || parts.some(p => p.type !== "text" || typeof p.plain_text !== "string" || p.plain_text !== p.text?.content)) throw new SavedEdinetZipQualificationError("EDINET保存原本metadataが不完全です");
+  const metadata = JSON.parse(parts.map(p => p.plain_text).join("")) as Record<string, unknown>;
+  if (metadata.docID !== docID || metadata.edinetDocType !== type) throw new SavedEdinetZipQualificationError("EDINET保存原本の文書/typeが不一致です");
+  const files = await listPageFiles(page.id, "Files");
+  if (files.length !== 1 || files[0].kind !== "file" || files[0].name !== edinetArchiveFilename(docID, type)) throw new SavedEdinetZipQualificationError("EDINET保存原本の物理添付が不一致です");
+  const bytes = Buffer.from(await downloadArchivedFile(files[0], "EDINET情報修正の保存原本", { maxBytes: 20 * 1024 ** 2 }));
+  const sha256 = await sha256HexBytes(bytes);
+  if (metadata.sourceZIPSHA !== undefined && metadata.sourceZIPSHA !== sha256 ||
+      metadata.sourceZIPBytes !== undefined && metadata.sourceZIPBytes !== bytes.length) throw new SavedEdinetZipQualificationError("EDINET保存原本SHA/長さが不一致です");
+  const manifest = readFileManifest(metadata);
+  if (manifest === "malformed") throw new SavedEdinetZipQualificationError("EDINET保存原本manifestが不正です");
+  if (manifest !== "absent" && (manifest.files.length !== 1 || manifest.files[0].upload !== "uploaded" ||
+      manifest.files[0].originalFilename !== files[0].name || manifest.files[0].byteLength !== bytes.length || manifest.files[0].sha256 !== sha256 ||
+      await inputFingerprint(manifest.files.map(f => ({ filename: f.originalFilename, contentType: f.originalMime, byteLength: f.byteLength, sha256: f.sha256 }))) !== manifest.inputFingerprint)) throw new SavedEdinetZipQualificationError("EDINET保存原本manifestが不一致です");
+  return { pageId: page.id, bytes, sha256, metadata, originalManifest: manifest === "absent" ? "unknown" as const : "known" as const };
 }
 
 /**

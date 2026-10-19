@@ -223,6 +223,9 @@ TABLE_LICENSE: dict[str, TableLicense] = {
     "yuho_edinet_reported_changes": _uniform(
         LicenseTag.COMMERCIAL_OK, "EDINET（金融庁）", f"{_CHILD} / 原一覧の報告状態・親書類ID（関係未資格）"
     ),
+    "yuho_edinet_reported_resolutions": _uniform(
+        LicenseTag.PERSONAL_ONLY, "EDINET＋既存JPX由来マスタ状態", f"{_CHILD} / 情報修正の内部CAS証拠。元マスタの公開制約を継承"
+    ),
     "yuho_edinet_catchup_progress": _operational(
         "EDINET日/文書checkpoint。原本文を持たず、保管参照・SHA・完了/保留状態を保持"
     ),

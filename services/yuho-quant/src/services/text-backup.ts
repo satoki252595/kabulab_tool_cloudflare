@@ -72,6 +72,47 @@ function propertyText(value: unknown): string {
   }).join("");
 }
 
+/** 既存本文の所属・全7プロパティと全文を読む。DB作成/書込はしない。 */
+export async function readVerifiedDocText(args: {
+  dbId: string; rowPageId: string; stockCode: string; docId: string; d1DocumentId: number; fiscalYearEnd: string;
+  textParseStatus: string; sectionCount: number; charCount: number;
+}): Promise<DocTextSection[]> {
+  const { dbId, rowPageId, stockCode, docId, d1DocumentId, fiscalYearEnd, textParseStatus, sectionCount, charCount } = args;
+  const expectedRowId = normalizedId(rowPageId), expectedDbId = normalizedId(dbId);
+  const page = record(await notionRequest<unknown>("GET", `/pages/${rowPageId}`));
+  const parent = record(page.parent);
+  if (page.object !== "page" || normalizedId(page.id) !== expectedRowId ||
+      parent.type !== "database_id" || normalizedId(parent.database_id) !== expectedDbId ||
+      page.archived !== false || page.in_trash !== false) {
+    throw new Error("有報テキストの読み戻しページ所属/状態が不一致");
+  }
+  const properties = record(page.properties);
+  const property = (name: string, type: string) => {
+    const found = record(properties[name]);
+    if (found.type !== type || (found.has_more !== undefined && found.has_more !== false)) {
+      throw new Error("有報テキストの読み戻しプロパティ型/完全性が不正");
+    }
+    return found;
+  };
+  const date = record(property("会計期末", "date").date);
+  if (propertyText(property("文書", "title").title) !== docId ||
+      propertyText(property("銘柄コード", "rich_text").rich_text) !== stockCode ||
+      property("D1文書ID", "number").number !== d1DocumentId ||
+      date.start !== fiscalYearEnd || date.end !== null || date.time_zone !== null ||
+      property("セクション件数", "number").number !== sectionCount ||
+      property("文字数合計", "number").number !== charCount ||
+      record(property("抽出状態", "select").select).name !== textParseStatus) {
+    throw new Error("有報テキストの読み戻し7プロパティが不一致");
+  }
+  const readback = await readStockTextRow(rowPageId, true);
+  if (!Array.isArray(readback) || readback.some((section) => !section ||
+      typeof section.itemName !== "string" || typeof section.sectionKey !== "string" ||
+      typeof section.text !== "string")) {
+    throw new Error("有報テキストの読み戻し本文型が不正");
+  }
+  return readback;
+}
+
 export async function backupDocTextToNotion(args: {
   /** 証券コード4桁 (例 "7203") — 親ページのキー */
   stockCode: string;
@@ -104,38 +145,8 @@ export async function backupDocTextToNotion(args: {
   });
   // ACK や既存 docId の一致だけで D1 ポインタを確定しない。新規・再利用とも
   // 所属/全7プロパティと全文の往復を確認する (不一致を force で直さない)。
-  const expectedRowId = normalizedId(rowPageId), expectedDbId = normalizedId(dbId);
-  const page = record(await notionRequest<unknown>("GET", `/pages/${rowPageId}`));
-  const parent = record(page.parent);
-  if (page.object !== "page" || normalizedId(page.id) !== expectedRowId ||
-      parent.type !== "database_id" || normalizedId(parent.database_id) !== expectedDbId ||
-      page.archived !== false || page.in_trash !== false) {
-    throw new Error("有報テキストの読み戻しページ所属/状態が不一致");
-  }
-  const properties = record(page.properties);
-  const property = (name: string, type: string) => {
-    const found = record(properties[name]);
-    if (found.type !== type || (found.has_more !== undefined && found.has_more !== false)) {
-      throw new Error("有報テキストの読み戻しプロパティ型/完全性が不正");
-    }
-    return found;
-  };
-  const date = record(property("会計期末", "date").date);
-  if (propertyText(property("文書", "title").title) !== docId ||
-      propertyText(property("銘柄コード", "rich_text").rich_text) !== stockCode ||
-      property("D1文書ID", "number").number !== d1DocumentId ||
-      date.start !== fiscalYearEnd || date.end !== null || date.time_zone !== null ||
-      property("セクション件数", "number").number !== sections.length ||
-      property("文字数合計", "number").number !== sections.reduce((total, section) => total + [...section.text].length, 0) ||
-      record(property("抽出状態", "select").select).name !== textParseStatus) {
-    throw new Error("有報テキストの読み戻し7プロパティが不一致");
-  }
-  const readback = await readStockTextRow(rowPageId, true);
-  if (!Array.isArray(readback) || readback.some((section) => !section ||
-      typeof section.itemName !== "string" || typeof section.sectionKey !== "string" ||
-      typeof section.text !== "string")) {
-    throw new Error("有報テキストの読み戻し本文型が不正");
-  }
+  const readback = await readVerifiedDocText({ dbId, rowPageId, stockCode, docId, d1DocumentId, fiscalYearEnd,
+    textParseStatus, sectionCount: sections.length, charCount: sections.reduce((n, section) => n + [...section.text].length, 0) });
   if (readback.length !== sections.length ||
       readback.some((section, index) => section.itemName !== sections[index]!.itemName ||
         section.sectionKey !== sections[index]!.sectionKey || section.text !== sections[index]!.text)) {

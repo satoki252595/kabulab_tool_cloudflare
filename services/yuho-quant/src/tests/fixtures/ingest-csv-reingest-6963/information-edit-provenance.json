@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "purpose": "Actual public EDINET data for an offline information-edit qualification positive control; no live fetch or business operation.",
+  "identity": {
+    "stockCode": "6963",
+    "docId": "S100YF41",
+    "edinetCode": "E01953",
+    "securityCode": "69630",
+    "periodEnd": "2026-03-31",
+    "documentTypeCsvValue": "第三号様式"
+  },
+  "csv": {
+    "fixture": "S100YF41-csv.zip",
+    "sourcePath": "tmp/feature-audit-20261013/direct-roa-fixtures/6963-csv.zip",
+    "sha256": "b1f127e76e1d32fe540b48d3c9c162d2470ff6b7399072b665837472cba34fb0",
+    "bytes": 165644,
+    "members": [
+      {
+        "path": "XBRL_TO_CSV/jpaud-aai-cc-001_E01953-000_2026-03-31_01_2026-06-19.csv",
+        "bytes": 27158
+      },
+      {
+        "path": "XBRL_TO_CSV/jpaud-aar-cn-001_E01953-000_2026-03-31_01_2026-06-19.csv",
+        "bytes": 21262
+      },
+      {
+        "path": "XBRL_TO_CSV/jpcrp030000-asr-001_E01953-000_2026-03-31_01_2026-06-19.csv",
+        "bytes": 954288
+      }
+    ],
+    "embeddedDocId": null,
+    "originalType5HttpReceiptAvailable": false,
+    "identityBoundary": "The CSV has no document-ID row. Issuer/security/form/FY metadata match; native extraction matches all37 qualified S100YF41 sections byte-for-byte and in order. This binds saved content, not a recovered type5 HTTP request/response or archive receipt."
+  },
+  "sections": {
+    "fixture": "sections.json.gz",
+    "gzipSha256": "4518b744b6e8fd93115ab9e5018e90beec1a7abff883fa76dbdc32743e52bf2b",
+    "gzipBytes": 75457,
+    "canonicalJsonSha256": "3837b031b72f9d13c7b9651f6a9d0b41988ca932aa92e44a4b30d15ff726bc34",
+    "canonicalJsonBytes": 279097,
+    "count": 37,
+    "sourcePath": "tmp/feature-audit-20261017/overseas-remaining66-normal-operation-v1/stage-02/apply-v1/POST-capsule.json.gz",
+    "sourceGzipSha256": "b4e0b3cd97bd8baf06b6c643d88b7ddba2bd1a80233b10531cbc586d92a8e12c",
+    "sourceGzipBytes": 1144539,
+    "selector": {
+      "qualified.item.stockCode": "6963",
+      "qualified.item.docId": "S100YF41"
+    },
+    "sourceVerifiedAt": "2026-10-17T09:18:57.264Z",
+    "selectionBoundary": "Only the37 public EDINET sections were copied. No other company, Notion user/page metadata, request record or private body was copied."
+  },
+  "existingSnapshot": {
+    "path": "saved-business.json",
+    "sha256": "f88afe0a4587373e8ecd0d851e25a4ba478e8168e809785c299e7acb7d171038",
+    "sourceType1ZipSha256": "84cc6e927d5d1d282c5bc845b3dbe2c1dbd9bd390291f5dde37ce0f75d4e6fe6"
+  },
+  "verification": {
+    "nativeCsvRows": 1747,
+    "nativeExtractedSections": 37,
+    "all37TextAndOrderExact": true,
+    "all37IndexMetadataExact": true,
+    "sectionKeys": true,
+    "itemNames": true,
+    "elementIds": true,
+    "contextIds": true,
+    "utf16CharCounts": true,
+    "sameBodyPointerAsExistingSnapshot": true,
+    "sectionTextUtf8Bytes": 274807,
+    "sectionTextUtf16CodeUnits": 99840
+  },
+  "testBoundary": "If the test wraps these original bytes in a synthetic HTTP/archive transport, declare that wrapper as a protocol control. Do not assert a newly recovered original type5 HTTP response or production qualification."
+}
