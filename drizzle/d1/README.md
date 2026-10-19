@@ -178,6 +178,10 @@ DDL を残しておけば新規 DB は正しい形になり、本番へ誤って
 落ちて気付ける（無言で通るより良い）。journal には 0010 のエントリを残す。
 手で snapshot を書くと journal との対応が崩れるため。
 
+## 0034 EDINET情報修正の完了台帳
+
+`0034_edinet_reported_resolutions.sql` は一表と `(doc_id, metadata_sha256)` 索引だけを追加する。既存観測をUPDATE/DELETEせず、機械的な全原本/既存値一致を終えた観測PK・原本SHA・原観測JSONと完了pinsを保持する。初期seedは不要。既存表へのDMLはない。本番は未適用であり、通常の物理PRE/POST・既存catalog不変・新8列/複合PK/索引の照合を伴って別途適用する。Workerの共通HOLD読取も表を参照するため、DDL受入をコード配備より先に行う。
+
 ## CI がドリフトを捕まえる仕組み
 
 `.github/workflows/ci.yml` が `pnpm db:generate:d1` を実行し、

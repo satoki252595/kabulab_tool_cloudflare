@@ -18,6 +18,7 @@ import type { Database } from "../../services/yuho-quant/src/db/client.js";
 import { loadIngestCodeToId } from "../shared/db/active-equity.js";
 import { captureListSnapshot, readListSnapshot, EdinetListQualificationError } from "../../services/yuho-quant/src/services/edinet/list-snapshot.js";
 import { buildReportedChanges, recordReportedChanges, reportedStandaloneHold, ReportedDocumentHoldError } from "../../services/yuho-quant/src/services/edinet/reported-changes.js";
+import { requalifyInformationEdit, isInformationEdit } from "../../services/yuho-quant/src/services/edinet/information-edit.js";
 import { enqueueDates, progressQueue, progressContents, progressSummary, saveProgress, jstDate, type PendingDocument } from "../../services/yuho-quant/src/services/edinet/catchup-progress.js";
 import { EdinetListFetchError, EdinetDocumentFetchError } from "../../services/yuho-quant/src/services/edinet/client.js";
 import {
@@ -233,6 +234,10 @@ export async function runYuhoEdinetCatchup(
       // 再観測で既処理文書が消えていても履歴は削除しない。現在対象だけを処理する。
       console.info(`[yuho-edinet] ${date}: 過去完了文書の一覧差分を保持`);
     }
+    // docId完了だけで後続の情報修正を飛ばさない。原観測ごとの完了は共有resolutionで検査する。
+    for (const doc of targets) if (reportedStandaloneHold(doc)) {
+      const index = completed.indexOf(doc.docID); if (index >= 0) completed.splice(index, 1);
+    }
     const remaining = targets.filter((doc) => !completed.includes(doc.docID));
     const edinetToTicker = await loadEdinetTickerMap(db, remaining
       .filter((doc) => isUnassignedEdinetSecCode(doc.secCode) && doc.edinetCode !== null)
@@ -257,6 +262,25 @@ export async function runYuhoEdinetCatchup(
         pending = [...pending.filter((p) => p.docId !== doc.docID), {docId: doc.docID, reason}];
       };
       if (reportedStandaloneHold(doc)) {
+        const stockId = code === null ? undefined : codeToId.get(code);
+        if (isInformationEdit(doc) && code !== null && stockId !== undefined) {
+          attempted++; matched++;
+          row = await saveProgress(db, row, { completedIds: JSON.stringify(completed),
+            pendingIds: JSON.stringify(pending), inFlightDocId: doc.docID });
+          const qualified = await requalifyInformationEdit(db, { doc, source: snapshot, stockId, stockCode: code,
+            shouldStop: overBudget, d1HttpBatch });
+          if (qualified.status === "resolved") {
+            completed.push(doc.docID); pending = pending.filter(p => p.docId !== doc.docID); skippedExisting++;
+            const status = qualified.reused ? "edinet_information_edit:reused" : "edinet_information_edit:resolved";
+            byStatus[status] = (byStatus[status] ?? 0) + 1;
+          } else {
+            putPending("reported_document_state");
+            console.warn(`[yuho-edinet] 情報修正HOLD docID=${doc.docID} reason=${qualified.reason}`);
+          }
+          row = await saveProgress(db, row, { completedIds: JSON.stringify(completed),
+            pendingIds: JSON.stringify(pending), inFlightDocId: null });
+          continue;
+        }
         putPending("reported_document_state");
         continue;
       }

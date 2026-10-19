@@ -11,6 +11,7 @@ export function createReportedSourceTestDb() {
   if(!documentDdl)throw new Error("actual document schema missing");
   sqlite.exec(documentDdl[0]);
   sqlite.exec(readFileSync(new URL("../../../drizzle/d1/0032_edinet_reported_changes.sql", import.meta.url), "utf8"));
+  sqlite.exec(readFileSync(new URL("../../../drizzle/d1/0034_edinet_reported_resolutions.sql", import.meta.url), "utf8"));
   const db = drizzle(async (query, args, method) => {
     const stmt = sqlite.prepare(query);
     const params = args as (string | number | null)[];

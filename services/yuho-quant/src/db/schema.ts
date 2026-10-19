@@ -69,6 +69,21 @@ export const edinetReportedChanges = sqliteTable("yuho_edinet_reported_changes",
   index("yuho_edinet_reported_stock_period_idx").on(t.stockId, t.periodEnd, t.submittedAt),
 ]);
 
+/** 情報修正の完了証拠だけを追記する。原観測は更新せず、未知の完了は解除しない。 */
+export const edinetReportedResolutions = sqliteTable("yuho_edinet_reported_resolutions", {
+  sourcePageId: text("source_page_id").notNull(),
+  seqNumber: integer("seq_number").notNull(),
+  sourceRawSha256: text("source_raw_sha256").notNull(),
+  observationJson: text("observation_json").notNull(),
+  docId: text("doc_id").notNull(),
+  metadataSha256: text("metadata_sha256").notNull(),
+  proofJson: text("proof_json").notNull(),
+  resolvedAt: integer("resolved_at").notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.sourcePageId, t.seqNumber] }),
+  index("yuho_edinet_resolution_input_idx").on(t.docId, t.metadataSha256),
+]);
+
 /**
  * 取り込んだ有価証券報告書 1 通 = 1 行。docId が EDINET 上の一意キーで、
  * これを unique にして冪等な再取り込みを保証する。

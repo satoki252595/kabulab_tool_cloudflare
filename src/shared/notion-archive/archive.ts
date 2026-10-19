@@ -549,7 +549,7 @@ function compareManifestOrder(
  * 入力集合の安定 fingerprint。入力名/MIME/バイト長/SHA の決定順のみから作り、
  * upload 結果 (file_upload id・成否) と時刻は混ぜない。
  */
-async function inputFingerprint(
+export async function inputFingerprint(
   files: ReadonlyArray<{ filename: string; contentType: string; byteLength: number; sha256: string }>
 ): Promise<string> {
   const sorted = [...files].sort(compareManifestOrder);
@@ -578,7 +578,7 @@ function isManifestEntry(v: unknown): v is FileManifestEntry {
 }
 
 /** parsed metadata から manifest を取り出す。absent / malformed を区別する。 */
-function readFileManifest(metadata: Record<string, unknown>): FileManifest | "absent" | "malformed" {
+export function readFileManifest(metadata: Record<string, unknown>): FileManifest | "absent" | "malformed" {
   if (!(FILE_MANIFEST_KEY in metadata)) return "absent";
   const m = metadata[FILE_MANIFEST_KEY] as Record<string, unknown> | null | undefined;
   if (!m || typeof m !== "object") return "malformed";

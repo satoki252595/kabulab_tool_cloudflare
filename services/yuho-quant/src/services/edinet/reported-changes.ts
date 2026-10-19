@@ -1,7 +1,7 @@
 /** 原一覧の報告状態を保持する。親関係だけから金融値を継承/失効しない。 */
 import { and, eq, inArray, sql, type SQL, type AnyColumn } from "drizzle-orm";
 import { SQLiteSyncDialect, type BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
-import { edinetReportedChanges as table } from "../../db/schema.js";
+import { edinetReportedChanges as table, edinetReportedResolutions as resolutions } from "../../db/schema.js";
 import { listSnapshotSchema, type ListSnapshot } from "./list-snapshot.js";
 import { hasAnnualSecuritiesReportForm, isAnnualSecuritiesReport, parseSubmitDateTime, secCodeToTicker, type EdinetDoc, type EdinetListResponse } from "./types.js";
 import { loadEdinetTickerMap } from "./identity.js";
@@ -39,6 +39,18 @@ function reportedState(doc: EdinetDoc): State | null {
 export function reportedStandaloneHold(doc: EdinetDoc): boolean {
   const state = reportedState(doc);
   return state !== null && state !== "unqualified_relation";
+}
+
+/** 原観測と完全一致した完了行だけを除く。取下げ/不開示は解決行で解除しない。 */
+export function unresolvedReportedObservation(alias: SQL = sql`${table}`): SQL {
+  return sql`${alias}.reported_state <> 'unqualified_relation' and not (case when
+    ${alias}.reported_state = 'reported_status_unqualified'
+    and json_extract(${alias}.observation_json,'$.doc.withdrawalStatus') = '0'
+    and json_extract(${alias}.observation_json,'$.doc.disclosureStatus') = '0'
+    and json_extract(${alias}.observation_json,'$.doc.docInfoEditStatus') = '1'
+    then exists(select 1 from ${resolutions} r where r.source_page_id=${alias}.source_page_id
+      and r.seq_number=${alias}.seq_number and r.source_raw_sha256=${alias}.source_raw_sha256
+      and r.doc_id=${alias}.doc_id and r.observation_json=${alias}.observation_json) else 0 end)`;
 }
 
 type QualifiedProjection = { stockId: number; periodEnd: string; submittedAt: Date; ticker: string; edinetCode: string };
@@ -159,7 +171,7 @@ export function reportedDocumentHold(docId: AnyColumn | SQL | string): SQL<numbe
   const target = typeof docId === "string" ? sql`${docId}` : "table" in docId
     ? sql`${docId.table}.${sql.identifier(docId.name)}` : docId;
   return sql<number>`exists (select 1 from ${table} where ${table}.${sql.identifier(table.docId.name)} = ${target}
-    and ${table}.${sql.identifier(table.reportedState.name)} <> 'unqualified_relation')`.mapWith(value => {
+    and ${unresolvedReportedObservation()})`.mapWith(value => {
       if (value !== 0 && value !== 1) throw new Error("EDINET変更観測の資格応答が不明です");
       return value;
     });
@@ -169,7 +181,7 @@ const outerColumn = (column: AnyColumn) => sql`${column.table}.${sql.identifier(
 /** このpredicateのqは、原metadataと通常identityの両mapが一致したimmutable投影だけ。 */
 function qualifiedReportCondition(stockId: SQL): SQL {
   return sql`q.stock_id=${stockId} and q.period_end is not null and q.submitted_at is not null
-    and q.reported_state<>'unqualified_relation'
+    and ${unresolvedReportedObservation(sql`q`)}
     and not exists (select 1 from yuho_documents accepted where accepted.stock_id=q.stock_id
       and accepted.doc_type_code in ('120','130') and accepted.period_end=q.period_end
       and (accepted.submitted_at>q.submitted_at or (accepted.submitted_at=q.submitted_at

@@ -156,6 +156,10 @@
       "kind": "uniform",
       "tag": "commercial-ok"
     },
+    "yuho_edinet_reported_resolutions": {
+      "kind": "uniform",
+      "tag": "personal-only"
+    },
     "yuho_order_facts": {
       "kind": "uniform",
       "tag": "commercial-ok"

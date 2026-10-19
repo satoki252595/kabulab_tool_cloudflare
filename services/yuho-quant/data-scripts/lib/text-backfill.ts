@@ -7,6 +7,7 @@ import { and, eq, inArray, isNull, or, type SQL } from "drizzle-orm";
 import type { Database } from "../../src/db/client.js";
 import { textSections, yuhoDocuments } from "../../src/db/schema.js";
 import type { ExtractedSection } from "../../src/services/edinet/text-sections.js";
+import { reportedDocumentAtomicGuard } from "../../src/services/edinet/reported-changes.js";
 
 function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -83,8 +84,10 @@ export function buildTextBackfillStatements(
     contextId: s.contextId,
     charCount: s.charCount,
   }));
+  // 前読取後に報告HOLDが増えても、同一batchのguardでstatus/索引/pointerを保全する。
   // D1 bind 上限 100: 8 列/行 → 8 行/文 (8×8=64)。
   return [
+    reportedDocumentAtomicGuard(db, target.docId),
     db
       .update(yuhoDocuments)
       .set({ textParseStatus: status, ...(notionDocPageId === undefined ? {} : { notionDocPageId }) })

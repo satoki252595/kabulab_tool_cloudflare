@@ -26,6 +26,16 @@ JPX配当落・権利落等の短期掲載原本は、既存18時 `scheduled-sto
 
 ツール化とWorkers単独での実行は同義ではない。Workersの[Node API対応範囲](https://developers.cloudflare.com/workers/runtime-apis/nodejs/)や[実行制限](https://developers.cloudflare.com/workers/platform/limits/)を踏まえ、Node/Python・大きなファイル・長時間処理はActionsへ置く。Mac専用のMPS/MLXをWorkersや通常Linux runnerで実行できるとは扱わない。
 
+## EDINETの書類情報修正
+
+通常`ingest:yuho-edinet`のpending再確認は、情報修正イベント（`docInfoEditStatus=1`）を対象有報だけで機械再資格化する。[EDINET API仕様書V2 §3-1-6](https://disclosure2dl.edinet-fsa.go.jp/guide/static/disclosure/download/ESE140206.pdf)では、修正は書類に付随するmetadataに対するもので、書類取得APIのファイルは前後で同一である。元提出日一覧の`=2`行には修正前metadataが残る。取下げ・不開示解除や訂正有報の親関係をこの経路で自動適用しない。
+
+同じdoc/issuer/銘柄/FY・独立有報120・修正前後の同形式と業務metadataを必須とする。元日付の物理snapshotを再利用し、不足時だけ共有`captureListSnapshot`で固定元日付の一覧を取得・物理保管する。その一覧に含まれる他銘柄の変更観測・取込・投影は実行しない。Notionの既存type5を読み、通常CSV判定で受注/海外語がある場合だけ既存type1も要求する。両方なければ`no_order_table`/`no_overseas_table`・全facts0の一致を条件とし、CSVと全文だけで資格化できる。manifestがあれば長さ/SHAと自己整合を照合し、旧manifest不明はproofにも不明のまま残す。通常parser/serializerで再解析して既存受注/海外全facts・本文全索引・所属と7プロパティを含む全文readbackが完全一致した場合だけ、0034の`yuho_edinet_reported_resolutions`へ完了証拠を追記する。金融値や本文のwriterバイパス・上書き・LLMは追加しない。不一致や必要原本不足はHOLDとする。
+
+作業中は共通のHOLDを維持し、既存catchupのinFlight/CASと60通・300秒の開始予算を使う。観測/issuer逆引き/株式/doc/facts/本文索引を同一D1 batchで照合してから、原観測PK/原本SHA/原観測JSON・seqを除くmetadata SHA・完了pinsを保存する。旧観測は変更しない。新たに同じイベントを観測した場合は既存完了のD1・保存ZIP SHA・全文を照合して解決行だけを追加し、同入力を再解析しない。完了送信や読戻しが不明ならinFlightを残して停止し、次回定期が盲目的に再送しない。旧海外/本文backfillにも共有前読取と同batchの保留guardを適用する。
+
+0034は追加一表・一索引のみで、Workerの共通読取predicateも参照するため、通常の物理PRE/POSTとcatalog確認を伴う本番DDLの受入後にコードを配備する。Node/Actions/SSHはNixと同一lockで、Workerは既存bindingで同じ共有判定を使う。コード試験と、本番metadata取得・対象3776の解決は別の受入である。
+
 ## 株式日次の業種集計
 
 通常Node入口`sync:daily:core`のPhase 5は、当日行の置換と30日より古い行の掃除を既存`createD1HttpBatchSender`の単一batchで送る。先に全SQL/束縛値を組み立て、1000文/各100bindを検査してから既存期限guardを一度通す。16行チャンク・集計値・順位・90%coverageによる無送信を維持する。結果不明はthrowして止まり、個別文や同じbatchを再送しない。
