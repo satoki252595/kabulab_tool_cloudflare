@@ -172,6 +172,6 @@
 
 ## 月次手動の順序
 
-Mac専用分は[月次手動スクリプト](mac-monthly-manual.md)で、受入済みruntime・既存stateを明示し、通常biztag→設定済みscopeの競合準備→優待機械要約の順に実行する。失敗時は後続STOP、未完intentを維持し再試行しない。既存クラウド月次は毎月10日10:30なので、案内は翌11日09:00 JSTを推奨。メールの繰り返し設定と初回実行は別受入。
+Mac専用分は[月次手動スクリプト](mac-monthly-manual.md)で、受入済みruntime・既存stateを明示し、通常biztag→設定済みscopeの競合準備→優待機械要約の順に実行する。失敗時は後続STOP、未完intentを維持し再試行しない。既存クラウド月次は毎月10日10:30。案内は2026-11-11から毎月11日09:00 JSTのGoogle Calendar予定・開始0分前メール通知として設定を読戻し確認済み。初回メール受信と手動処理成功は未検証。
 
 private証跡は`tmp/feature-audit-20261020/mac-retirement-inventory-v1/`と`local-manual-dependencies-audit-v1/`。停止前snapshotと各disable/bootout1回、postcheck、env/plist保全を記録した。
