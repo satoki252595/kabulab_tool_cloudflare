@@ -1,6 +1,8 @@
-# 事業タグ・優待要約のMac定時運用
+# 旧事業タグ・優待要約のMac定時運用（廃止済み）
 
-更新: 2026-10-20。事業タグの定時writerはApple Silicon Macに固定する。
+更新: 2026-10-20。**Mac定期方式は廃止し、2labelをdisable＋bootout済み。代替定期は未配備。** 以下は旧実装と復元用の記録で、新規install/bootstrapは行わない。[全件一覧と移設境界](batch-data-inventory.md)を参照。
+
+旧事業タグのwriterはApple Silicon Macに固定されていた。
 適格新規の初回と、最新有報IDまたは既知の実入力SHAが変わった対象だけClef-Flash/MPSを使う。
 同一入力の保存タグは再利用し、旧失敗・不足は従来のkeywords/excludes一致で補完する。
 開始日前の上場を新規AI対象へ広げず、未保存の旧入力SHAは捏造しない。TypeSafeへの自動代替、語彙審査、

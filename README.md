@@ -20,8 +20,8 @@
 旧構成 (Vercel Serverless Functions + Neon) から **Cloudflare Workers + Hono** へ移行済み
 (2026-06 確定。経緯は git 履歴)。Worker はサイト配信・取得プロキシと
 **CronによるActionsの起動・結果監視**を担い、読取は **D1 バインディング** (`c.env.DB`) 経由。
-重いデータ取得・加工は **Node/Python (GitHub Actions)**、事業タグ・優待要約は
-**Macの定期実行環境**で行う。NodeのD1書込は `createD1HttpDb` (D1 REST) 経由。
+重いデータ取得・加工は **Node/Python (GitHub Actions)** で行う。
+Macの本文補足同期・タグ・優待要約は2026-10-20に定期を廃止し、移設未完。NodeのD1書込は `createD1HttpDb` (D1 REST) 経由。
 
 データストア:
 
@@ -111,11 +111,11 @@ pnpm db:generate:d1       # D1(SQLite) スキーマ生成 → drizzle/d1/*.sql (
 pnpm sync:daily:core      # core/rsi/swing 日次 (Node → D1 REST。GitHub Actions と同じ本体)
 pnpm sync:daily           # 手動フル日次 (上記 core + VWAP 日足/5分足/信用残高)
 pnpm sync:monthly:core    # otakara 派生テーブル rebuild (Node → D1 REST、Yahoo なし)
-pnpm sync:monthly         # Mac用フル月次 (優待取得 → rebuild → ローカル機械要約。Linuxは下表の3段階)
+pnpm sync:monthly         # 優待取得 → rebuild。Mac要約の起動は除去済み
 pnpm sync:universe        # 東証内国株の母集団 seed (xlsx=Node 専用・月次/復旧時に実行)
 
 # データ取得 (007 VWAP → R2。定期workflowと同じ本体)
-pnpm ingest:vwap-daily    # 全銘柄の日足10年 (未取得はバックフィル, 既存は差分) → R2 daily/{code}.json
+pnpm ingest:vwap-daily    # 日足10年→R2。同session証跡は再利用、未完銘柄は10年系列を全置換
 pnpm ingest:vwap-intra    # 全銘柄の5分足 (直近) を蓄積 → R2 intra/{code}.json
 pnpm ingest:vwap-margin   # JPX公表PDF (信用残高) → R2
 
@@ -125,7 +125,7 @@ pnpm ingest:ir-tdnet      # 原本Notion保管・本文抽出 → D1
 # データ取得 (005 EDINET → D1。Node が共通処理を直接実行)
 pnpm ingest:yuho-edinet   # Node 共通取込 + D1 HTTP atomic sender (EDINET/D1/Notion 設定必須)
 
-# 事業タグ (本番の唯一writerはMac定期環境。原本・本文の準備後に実行)
+# 事業タグ (Mac定期は廃止・移設未完。以下は旧手動入口)
 pnpm biztag run           # 事業タグ判定 (差分処理。詳細は docs/005-yuho-quant-business-tags.md §11)
 ```
 
@@ -137,8 +137,10 @@ pnpm biztag run           # 事業タグ判定 (差分処理。詳細は docs/00
 
 ## 本番の定期処理・先行条件・LLM利用
 
-確認日: **2026-10-20**。時刻は **JST**。Cloudflareが起動・結果監視、Actionsが機械取得、Macが本文・タグと優待要約を担当する。SSHは必要対象の不足補完に使い、日次の重複cronは登録しない。
+確認日: **2026-10-20**。時刻は **JST**。Cloudflareが起動・結果監視、Actionsが機械取得を担当する。**Macの2定期設定は廃止・停止済みで、本文補足同期・タグ・競合準備・優待要約は移設未完**。SSHは不足補完用で日次cronは未登録。
 原本はNotionに物理保管し、構造化データはD1、時系列・実行receiptはR2へ保存する。
+
+**全件は[データ取得・更新・監視の全件一覧](docs/batch-data-inventory.md)**。通常データ40行、資金フロー29取得元、旧Mac内7機能、監視9機能、手動/停止/未実装20項目、本文39項目を列挙する。下表は予定時刻の要約。
 
 | 処理 | 予定時刻・頻度 | 必要な先行条件・順序 | LLM利用（定期実行） |
 | --- | --- | --- | --- |
@@ -150,17 +152,16 @@ pnpm biztag run           # 事業タグ判定 (差分処理。詳細は docs/00
 | 価格依存の業種別資金フロー | 株式同期の成功後、許容失敗もない場合だけ | 当日の必要価格・`core_stocks.sector`。現ハーネスはstock-sync job全体の成功も要求 | なし |
 | 価格非依存の資金フロー28取得元 | 平日18:15、CF起動 | 当日の株式同期は待たず、非Yahoo→Yahoo→両lane成功後join。共有Notion枠未成立のため取得直列を維持 | なし |
 | TDnet・有報の補完 | 平日19:00、CF起動 | 主体・原本を確認→抽出→保存・価格資格。共有保存予算内でTDnet→Node有報、前段失敗で停止 | なし |
-| 事業タグ・39本文・競合の機械準備 | 毎日20:00、Mac LaunchAgent | 有報原本→39本文・根拠→タグ。同一入力の保存判定は再利用。競合準備は有限codes設定時・タグjobの正常終了後 | **例外あり**：適格新規・実入力変更のタグだけローカルClef-Flash。本文・競合準備は不使用 |
+| 事業タグ・39本文の補足同期・競合の機械準備 | **旧20:00、停止・移設未完** | Nodeの有報テキスト抽出自体は継続。補足DB同期と判定は移設待ち | 旧設定では適格新規・実入力変更のタグだけClef。現在は起動しない |
 | EDINET財務サマリ・原本 | 平日21:00 | 指定提出日の公式一覧・主体確認→原本保管→財務抽出。19時Nodeの完了待ちは不要 | なし |
-| 優待要約 | 毎日21:00、Mac LaunchAgent | 保存済み優待原文→機械抽出・契約検証→PRE/CAS/POST。月次スコアの完了待ちは不要 | **標準はなし**。機械未対応は保留。手動の明示`--allow-model`だけ既存MLX |
+| 優待要約 | **旧21:00、停止・移設未完** | 原文の月次取得は継続。要約の定期は移設待ち | 標準はなし。旧手動`--allow-model`のMLXコードは残存 |
 | 鮮度・ジョブ・schema・ライセンス監視 | 毎日23:30 | 現在の保存状態とjob実績。取込失敗でも検査を実施 | なし |
 | 日米マクロ結合 | 火〜土06:00、CFの月〜金21:00 UTC起動 | 対応する予定日の保存済み日本市場原本＋米国側観測→結合。最新値で過去を代用しない | なし |
 | EDINET銘柄マスタ | 毎月1日06:00 | 現在の公式コード表。月次優待処理とは独立して取得可能 | なし |
 | 母集団・優待原文・優待スコア | 毎月10日10:30 | **母集団更新→優待原文取得→スコア再計算**。保存財務が必要。MA乖離比較は財務日と指標日の一致を確認 | なし |
 | TDnet速報・上場状態 | 平日09:00〜19:00毎時 | 公表済み対象日の資料→主体確認・原本保管→構造化 | なし |
 
-「LLM利用」は本番の取得・更新経路を示す。標準は機械処理で、事業タグの適格な新規・変更入力だけローカルClef-Flashを使う。
-優待要約のモデルは手動の明示指定だけで、定期実行の機械未対応分は保留する。
+現行CF／Actionsの定期は機械処理。Clefと優待要約の定期はMac方式とともに停止し、別環境への移設を受入れるまで再開しない。機械未対応分を自動でモデルへ渡さない。
 詳細なworkflow・保存先・SSHの実行コマンド・過去分の制約は[本番定期処理一覧](docs/production-job-inventory.md)を参照。
 
 先行条件は、月次では **母集団→優待原文→スコア再計算**、有報では **原本・主体確認→本文→タグ→競合の機械準備**。
@@ -170,11 +171,11 @@ Notionのレート制御はプロセス内であり、ジョブをまたぐ全�
 
 ### 現在の復旧状況
 
-**定期設定と全データ充足は別です。** 10/20の設定監査では、CFの10 trigger、GitHubの13有効workflow、Macの20/21時calendarに入口の欠落はありません。歴史RAW用workflow1本は意図的に停止しています。自然時刻の成功とデータ保留は[最新の復旧記録](docs/test-logs/recovery-functional-status-20261020.md)・[Issue #348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)で追跡します。
+**定期設定と全データ充足は別です。** CFの10 trigger、GitHubの13有効workflowは継続。Macの20/21時calendarは今回廃止し、代替定期は未配備です。歴史RAW用workflow1本も意図的停止。現設定は[全件一覧](docs/batch-data-inventory.md)、既存データの保留は[最新の復旧記録](docs/test-logs/recovery-functional-status-20261020.md)・[Issue #348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)で追跡します。
 
 | 対象 | 確認済み | 残り・保留 |
 | --- | --- | --- |
-| 通常環境 | 情報修正の共有ハーネス#552を本番配置。Macは同じ受入main・Nix・canonical writer stateで20/21時を設定 | 次の自然calendarは別受入。設定有効だけで全量成功とはしない |
+| 通常環境 | 共有ハーネスを本番配置。Mac定期はdisable＋bootoutし、原本・env・stateを保全 | 本文補足同期・タグ・競合準備・優待要約の移設未完。旧receipt監視も移設対象 |
 | 株価・日足 | 10/19日足固定3,687＝保存3,636＋既知error50＋旧2198結果不明1、未着手0。株式自然runは3,640/3,686成功 | source欠測45・8303旧調整値RSI1。2198の新runは市場原本NULLで取得前保留。旧unknownは保持 |
 | 5分足 | SSH通常5dは02:21:58に閉鎖。3,686社を全処理、未着手/unknown0、10/19有効足あり3,621社 | 取得元不足64社（古い足保持を含む）・構造不正1社。書込ACK3,685は当日充足数ではない |
 | 事業内容・タグ | 空タグの元対象960社を再確認し、227社へタグ付与。4599の入力超過も解消し、要確認として通常保存完了 | 採用なし733・年次原本資格待ち21・現役対象外10。全3タグ空764は00:35のCOUNT。全no・要確認・候補0を肯定タグで埋めない |
@@ -205,7 +206,7 @@ npx wrangler tail                # 本番ログをストリーム
    (`.env` はローカル開発/取込専用で、本番 Worker には読まれない)。Worker は `nodejs_compat` 有効で
    secret を `process.env` 経由でも参照する。
 4. **Workers Cron** — `wrangler.toml` の `[triggers]` でActionsの定時起動と結果監視を行う。
-   重い取得本体はActionsで実行し、Macの2処理はLaunchAgentで定期実行する。利用中のWorkers/D1はPaid枠。
+   重い取得本体はActionsで実行する。旧Macの2処理は廃止・移設未完。利用中のWorkers/D1はPaid枠。
 5. **push→自動デプロイ** — Cloudflare Workers Builds (Git 連携) を接続済み。PRをマージして
    `main` を更新すると自動 build & deploy。main CIと実配備の成功を確認する。
    手順は [docs/deploy-cloudflare.md](./docs/deploy-cloudflare.md)。
@@ -274,9 +275,7 @@ pnpm sync:daily
 ### 優待データ取込パイプライン (002 otakara)
 
 月次のActionsで母集団・優待原文を更新し、保存済み財務からスコアを再計算する。
-要約はMacの毎日21時jobが同じ機械抽出・要約契約・金額検証を使い、変更・未要約分だけ処理する。
-書込前の比較、条件付き更新、保存後の全値照合を行い、機械未対応の条件は旧値を保って保留する。
-手動の明示`--allow-model`だけ既存のローカルMLXを利用できる。定期実行では指定しない。
+要約の旧Mac21時jobは廃止・停止済みで、機械要約も移設未完。移設時は書込前の比較・条件付き更新・保存後の全値照合を維持し、機械未対応は保留する。
 
 ```bash
 # Actions・Linuxでの月次処理 (Nix内。前段失敗時は後続を起動しない)
@@ -284,11 +283,9 @@ pnpm sync:universe
 pnpm yutai:fetch
 pnpm sync:monthly:core
 
-# Mac専用runtimeの通常入口。定期jobと排他・設定を共有する
-pnpm exec tsx --env-file-if-exists=.env scripts/biztag-local/main.ts run yutai-summary
 ```
 
-`pnpm sync:monthly`は優待取得→再計算→Macの要約入口を束ねる。Linuxでは上記3段階を使う。
+`pnpm sync:monthly`は優待取得→再計算だけを束ね、Mac要約を起動しない。母集団更新は上記の別段階。
 旧タスクexport/importは手動用に残るが、定期処理の先行条件にはしない。
 原文・タスク・結果・実行記録はGit対象外へ保存する。
 
