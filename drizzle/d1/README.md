@@ -16,6 +16,18 @@ Cloudflare D1 (`kabulab-cf`) 用のスキーマ生成物。生成は
 
 ## 適用先が 2 系統あることに注意
 
+### 0033 — Yahooプロキシの共有停止期限（2026-10-19 本番適用済み）
+
+`0033_yahoo_proxy_cooldown.sql`は運用用3列・1主キーの表をCREATEし、
+未観測状態`id=1/retry_at_ms=0/upstream_status=NULL`を1行だけ初期化する。
+既存表の金融値・原本・receiptは変更しない。runtimeは欠損行を再作成しない。
+生成DDLに初期行のINSERTを明示追記した。新schemaの通常generateは変更0を確認する。
+
+新コードをmainへマージする前に、固定SQLを本番へ1回だけ適用し、
+既存catalog全同値・新3列・索引追加0・初期1行と共有Notionの物理PRE/POSTを確認する。
+応答不明は再送しない。rollback時も表をDROPしない。
+適用実績・対象範囲・追加コストは[検証記録](../../docs/test-logs/yahoo-shared-cooldown-20261019.md)へ残す。
+
 ### 0032 — EDINETの報告状態観測（2026-10-17 本番schema適用済み）
 
 `0032_edinet_reported_changes.sql`は10列の観測表とdoc/stock-period索引の追加だけ。

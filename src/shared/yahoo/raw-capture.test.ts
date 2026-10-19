@@ -82,8 +82,8 @@ describe("fetchChart onRaw hook", () => {
 
   it("非 ok 応答でも capture してから従来どおり throw する", async () => {
     useProxy();
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("rate limited", { status: 429 })));
-    const seen: YahooChartRawCapture[] = [];
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("rate limited", { status: 429, headers: { "X-Kabulab-Yahoo-Cooldown": "persist-failed" } })));
+    const seen: YahooRawCapture[] = [];
     await expect(
       fetchChart("7203", "5y", {
         onRaw: (c) => {
@@ -93,6 +93,7 @@ describe("fetchChart onRaw hook", () => {
     ).rejects.toThrow(/Chart API HTTP エラー \[7203\]: 429/);
     expect(seen).toHaveLength(1);
     expect(seen[0]?.status).toBe(429);
+    expect(seen[0]?.headers.cooldown).toBe("persist-failed");
     expect(new TextDecoder().decode(seen[0]?.bytes)).toBe("rate limited");
   });
 

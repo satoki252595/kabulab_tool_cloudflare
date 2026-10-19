@@ -62,7 +62,7 @@ export const DEFAULT_RATE_LIMIT_BACKOFF_MS = 15 * 60_000;
  * 短縮はしない。Node recovery は MAX_RECOVERY_BACKOFF_MS の待機予算を
  * 超える期限なら再取得を skip する。非 finite は既定に倒す。
  */
-function rateLimitRetryAt(response: Response): number | null {
+export function rateLimitRetryAt(response: Response): number | null {
   if (response.status !== 429 && response.status !== 503) return null;
 
   const now = Date.now();
@@ -134,6 +134,8 @@ export async function yahooHttpErrorMessage(
       : "yahoo-direct";
   details.push(`source=${source}`);
   if (upstreamStatus) details.push(`yahoo-status=${upstreamStatus}`);
+  const cooldown = response.headers.get("X-Kabulab-Yahoo-Cooldown");
+  if (cooldown !== null) details.push(`proxy-cooldown=${redactYahooDiagnostic(cooldown).slice(0, 40)}`);
   if (source === "ingest-proxy" && cfRay) details.push(`cf-ray=${cfRay}`);
   const retryAt = rateLimitRetryAt(response);
   if (retryAt !== null) details.push(`retry-at-ms=${retryAt}`);
@@ -607,7 +609,7 @@ export interface YahooChartRawCapture {
 /** 同一応答の原文と、body受信完了の実clock。認証headerは収集しない。 */
 export interface YahooRawCapture extends YahooChartRawCapture {
   receivedAt: string;
-  headers: { contentType?: string; upstreamStatus?: string; retryAfter?: string };
+  headers: { contentType?: string; upstreamStatus?: string; retryAfter?: string; cooldown?: string };
 }
 
 export const MAX_YAHOO_RAW_BYTES = 8 * 1024 * 1024;
@@ -652,9 +654,11 @@ function rawCapture(symbol: string, response: Response, bytes: Uint8Array, recei
   const contentType = response.headers.get("Content-Type");
   const upstreamStatus = response.headers.get("X-Kabulab-Yahoo-Status");
   const retryAfter = response.headers.get("Retry-After");
+  const cooldown = response.headers.get("X-Kabulab-Yahoo-Cooldown");
   if (contentType !== null) headers.contentType = contentType;
   if (upstreamStatus !== null) headers.upstreamStatus = upstreamStatus;
   if (retryAfter !== null) headers.retryAfter = retryAfter;
+  if (cooldown !== null) headers.cooldown = cooldown;
   return { symbol, status: response.status, bytes, receivedAt, headers,
     url: redactYahooDiagnostic(response.url) };
 }

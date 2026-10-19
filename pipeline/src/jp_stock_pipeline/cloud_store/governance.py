@@ -149,6 +149,10 @@ TABLE_LICENSE: dict[str, TableLicense] = {
         "JPX 月末銘柄一覧と公式イベントからの派生",
         "src/cron/universe-overlay.ts。base_as_of / held_listing_codes を含むため表全体で継承",
     ),
+    "yahoo_proxy_cooldown": _operational(
+        "src/routes/ingest-proxy.ts の取得停止状態。id/retry_at_ms/upstream_status のみを持ち、"
+        "銘柄・価格・原本文は保持しない"
+    ),
     # --- kabulab-cf 所有の派生断面・時系列（Yahoo 由来）---------------------
     "core_stock_financials": _uniform(LicenseTag.PERSONAL_ONLY, _YAHOO, _CHILD),
     "core_stock_annual_financials": _uniform(LicenseTag.PERSONAL_ONLY, _YAHOO, _CHILD),
