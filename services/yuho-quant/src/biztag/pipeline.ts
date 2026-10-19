@@ -125,6 +125,8 @@ export interface RunSummary {
    */
   billingBlocked: string[];
   qualificationHeld?: string[];
+  /** HOLD対象の既存planner理由。実行時の詳細はfailuresに残し、WorkItemなしの理由は作らない。 */
+  qualificationHeldReasons?: Array<{ stockCode: string; reason: string }>;
   /** このrunで実際に39本文を完全検査した銘柄。旧summaryは省略可能、現在runは常に返す。 */
   textCheckedCodes?: string[];
   /** textCheckedCodesと同じ実検査母集団の39列別空欄数。非開示の理由を推測しない。 */
@@ -543,8 +545,9 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
   }
 
   const elapsedMs = Date.now() - start;
+  const heldCodes = new Set(qualificationHeld);
   if (emptyTagRepair) {
-    emptyTagRepair.held = new Set(qualificationHeld).size;
+    emptyTagRepair.held = heldCodes.size;
     emptyTagRepair.remaining = emptyTagRepair.selected - emptyTagRepair.rechecked - emptyTagRepair.held;
   }
   return {
@@ -569,7 +572,10 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     masterIndexRead: masterIndex !== undefined,
     retryExhausted,
     billingBlocked: [...billingBlocked].sort(),
-    qualificationHeld: [...new Set(qualificationHeld)].sort(),
+    qualificationHeld: [...heldCodes].sort(),
+    qualificationHeldReasons: items.filter(item => heldCodes.has(item.stockCode))
+      .map(({ stockCode, reason }) => ({ stockCode, reason }))
+      .sort((a, b) => a.stockCode.localeCompare(b.stockCode)),
     textCheckedCodes: [...checked].sort(),
     textEmptyCounts,
     ...(emptyTagRepair === undefined ? {} : { emptyTagRepair }),
