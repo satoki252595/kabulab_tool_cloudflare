@@ -8,7 +8,7 @@
 
 | 設定 | 確認結果 |
 |---|---|
-| Cloudflare | main552 `b6cd937edb2c7ea294b84a64af0d1cbec2c7efdd`、build `5225e127-9481-426a-b78c-dde6ac38d63b`、version `cfde0595-e29a-42ab-98b3-1c049fc31158`。01:54 JST配置成功、同じ10 trigger、公開home HTTP200 |
+| Cloudflare | main552は01:54 JST配置・10 trigger・公開home HTTP200。後続#553のmain `079eda9ac291e57327ed600525b7b1da5851676a`も02:22にbuild `bb642ed2-47a0-4c7d-973c-312ee0067ede`／version `56548392-96fe-48d2-a9d9-71dac8be973d`へ配置成功、同じ10 trigger |
 | GitHub Actions | 13 active。`raw_index_backfill.yml`だけ意図的disabled。定期処理の入口に欠落なし。CI・有限backfill・保存RAW公開は定期取得と分ける |
 | Mac | 20時biztag／21時優待。main552への通常`install-next`・新旧plist全比較・loaded/PIDなし・旧receipt不変を確認。変更はWorkingDirectoryだけ、`RunAtLoad=false`。監視期待revisionもACK。次の自然calendarは未受入 |
 | SSH nipogi | canonical cloneはmain552。Nix・通常CLI・lock同一。5分足と有報補完は固定runtimeで実行。CF用の日次cron/timerはなし。既存08時cronは別repoの売買支援用 |
@@ -26,12 +26,23 @@ masterのcronは`timezone: Asia/Tokyo`を明示しており毎月1日06:00 JST�
 | 3776の原本 | S100WZGB正規type5欠測を通常検索で確認。02:05に共有download/archiveでtype5 121,555B・type1 666,008Bだけを復旧。2実体をNotionへ物理保管・全SHA照合。D1文書/進捗不変・LLM0・Notion15・429/再試行0 | 旧onceは保全。入力に原本が揃った後の別phaseだけを実行 |
 | 3776の再資格化 | 02:07の通常shared qualifierは現parserと旧status/抽出元が不一致としてHOLD。progress revision10・inFlight閉鎖、既存文書不変、金融/本文writer0、LLM0、Notion17・429/再試行0 | 自動置換で解除していない。保存原本の現在parserは海外を`geo_present_unstructured`とし、旧`no_overseas_table`と不一致。honbunFile等2項目も異なる。現在採用数値は0だが旧facts全量一致は未証明 |
 | 本文の空欄分類 | 旧7,074セルのうち822は年次/主体資格不足、1は634Aの同じqualified CSVに対象要素なし | 6,251は銘柄別currentmap未保存で未分類。4CSVの標本から全市場非開示と断定しない |
-| 通常の欠測観測 | 銘柄・書類・本文pointer・39列SHA・空欄列を既存の完全GETから保存する修正を別PRで検証 | 処理前Notionの観測でありD1/修復後POSTの証明ではない。新API・再推論は増やさない |
+| 通常の欠測観測 | #553をCI全3成功後main079eda9aへmerge。02:23に634Aを通常mechanical-only CLIで1回実行し、銘柄・補足行/書類/本文pointer・39列SHA・空欄列を保存。exit0、親21.38秒/CLI7.94秒、Notion8・429/再試行0、モデル0、本文/メタ修復0 | 処理前Notionの観測。空はrental_propertyだけで保存同原本にも対象要素なし。D1/修復後POST・全市場の非開示証明に広げない |
 | 不要作業tree | マージ・包含・clean・非稼働を確認した6 worktreeを通常remove。元branch/SHAは保持 | `.runtime`、原本、モデル、実venv、未完作業を一括削除しない |
 
-### SSH 5分足
+### SSH 5分足（最終会計）
 
-01:04:25 JSTからmain550の通常`ingest-intra --range=5d`を実行。母集団は現active普通株3,686で、前日の日足固定3,687とは別。最終受入待ち。書込ACKにはsourceMissingの状態更新を含むため、ACKとerrorを単純加算しない。
+01:04:25〜02:21:58 JST、main550の通常`ingest-intra --range=5d`を通常CLI77分26秒（SSH wrapper約77分33秒）で実行し閉鎖。母集団は現active普通株3,686。前日の日足固定3,687との差は5484（日足だけ）で、集合を混同しない。
+
+| 会計 | 結果 |
+|---|---|
+| 対象outcome | written 3,681＋error 5＝3,686。未着手0・unknown/rejected0・aborted/fatal=false |
+| 実書込ACK | 3,685。written 3,681にsourceMissingの状態CAS4を含む。errorと単純加算しない |
+| 10/19の有効足 | 3,621銘柄 |
+| source_unavailable | 64銘柄。60は古い有効足を含むmerge、4は全行欠損で旧bars保持（5969/6346/7531/9311） |
+| 構造HOLD | 9049はtimestampが配列でなくPUT0。source_unavailable64とは別 |
+| 保管・終了 | raw 123batchが正常帰還（62.72MB→12.97MB）、summaryをNotionへrecorded。Notion621・429/再試行0、exit1は既知5error。親子PIDは終了、rateLimited0 |
+
+当日全銘柄の足が揃ったとは扱わない。古い最新有効足は10/16=41・10/15=15・10/14=5・10/13=1・10/08=1・10/07=1。R2の独立全量再GETは追加せず、通常原本gate・条件付writer ACK・保存summaryの集合を受入範囲とする。
 
 ## データ上の残件
 
@@ -50,6 +61,6 @@ masterのcronは`timezone: Asia/Tokyo`を明示しており毎月1日06:00 JST�
 
 ## 根拠
 
-機械監査の入力・全SHA・実logはprivateな`tmp/feature-audit-20261020/`で保持する。設定監査`production-schedule-mece-audit-v1`、4599独立受入`clef4599-independent-fs-acceptance-v1`、0034受入`edinet-information-edit-schema-v1`、原本/再資格化`edinet3776-normal-once-v1`、空欄分類`blank7074-saved-join-v1`、削除記録`worktree-cleanup-six-v1`。公開可能な結果は本記録と[Issue #348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)に残す。
+機械監査の入力・全SHA・実logはprivateな`tmp/feature-audit-20261020/`で保持する。設定監査`production-schedule-mece-audit-v1`、4599独立受入`clef4599-independent-fs-acceptance-v1`、0034受入`edinet-information-edit-schema-v1`、原本/再資格化`edinet3776-normal-once-v1`、空欄分類`blank7074-saved-join-v1`、通常634A受入`current39-634A-normal-once-v2`、SSH最終`ssh-intra5d-normal-monitor-v1`、削除記録`worktree-cleanup-six-v1`。公開可能な結果は本記録と[Issue #348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)に残す。
 
 過去の対象集合・異なる観測時点は合算しない。[10/18の列別監査](notion-field-coverage-20261018.md)、[10/19の復旧](recovery-functional-status-20261019.md)、[保有価格内訳](holdings-price-requalification-20261018.md)を参照。
