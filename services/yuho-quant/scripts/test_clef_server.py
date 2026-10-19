@@ -11,7 +11,7 @@ import sys
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import clef_server as server
 
@@ -172,6 +172,97 @@ class ProtocolTest(unittest.TestCase):
         self.native.encode_record = encode
         with self.assertRaisesRegex(server.ClefInputTokenLimitError, "input_token_limit"):
             self.score()
+        self.assertEqual(self.forwards, 0)
+
+    def test_context_upgrade_requires_old_rejection_and_new_complete_ordered_fit(self):
+        raw = (json.dumps(self.request, ensure_ascii=False) + "\n").encode()
+        original_encode = self.native.encode_record
+        seen = []
+
+        def encode(tokenizer, record, **kwargs):
+            seen.append(record)
+            self.encoded_tokens = 19000 if len(record["questions"]) == 2 else 17000
+            return original_encode(tokenizer, record, **kwargs)
+
+        self.native.encode_record = encode
+        result = server.qualify_context_upgrade(self.native, self.processor, raw, 18432)
+        self.assertEqual(result, {
+            "qualified": True, "fromMaxTokens": 16000, "toMaxTokens": 18432,
+            "requestSha256": hashlib.sha256(raw).hexdigest(), "originalTokens": 19000,
+            "layout": [{"tokens": 17000, "qids": ["bt.gas"]},
+                       {"tokens": 17000, "qids": ["bt.electric"]}],
+        })
+        self.assertTrue(all(record["state"] == self.request["state"] for record in seen))
+        self.assertEqual(self.encode_kwargs["max_length"], sys.maxsize)
+        self.assertEqual(self.forwards, 0)
+
+    def test_context_upgrade_rejects_old_fit_and_new_overflow_without_forward(self):
+        raw = json.dumps(self.request).encode()
+        for tokens, error, message in [
+            (16000, ValueError, "context_upgrade_old_already_fits"),
+            (18433, server.ClefInputTokenLimitError, "input_token_limit"),
+        ]:
+            self.encoded_tokens = tokens
+            with self.subTest(tokens=tokens), self.assertRaisesRegex(error, message):
+                server.qualify_context_upgrade(self.native, self.processor, raw, 18432)
+        self.assertEqual(self.forwards, 0)
+
+    def test_context_upgrade_stdin_contract_rejects_extra_requests_and_oversize(self):
+        raw = json.dumps(self.request).encode()
+        for data in (b"", raw + raw, b"x" * (1024 * 1024 + 1)):
+            with self.subTest(bytes=len(data)), self.assertRaises(ValueError):
+                server.qualify_context_upgrade(self.native, self.processor, data, 18432)
+        with self.assertRaisesRegex(ValueError, "context_upgrade_max_tokens"):
+            server.qualify_context_upgrade(self.native, self.processor, raw, 16000)
+        self.assertIsNone(self.encode_kwargs)
+        self.assertEqual(self.forwards, 0)
+
+    def test_context_upgrade_cli_verifies_pins_and_encodes_without_model_load_or_forward(self):
+        raw = (json.dumps(self.request, ensure_ascii=False) + "\n").encode()
+        self.encoded_tokens = 17000
+        original_encode = self.native.encode_record
+
+        def noisy_encode(*args, **kwargs):
+            print(self.request["state"])
+            print(self.request["state"], file=sys.stderr)
+            return original_encode(*args, **kwargs)
+
+        self.native.encode_record = noisy_encode
+        stdout, stderr = io.StringIO(), io.StringIO()
+        processor_load = Mock(return_value=self.processor)
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / server.REVISION
+            path.mkdir()
+            argv = ["clef_server.py", "--model", server.MODEL, "--revision", server.REVISION,
+                    "--max-tokens", "18432", "--model-path", str(path),
+                    "--qualify-context-upgrade"]
+            with (
+                patch.object(sys, "argv", argv),
+                patch.object(sys, "stdin", SimpleNamespace(buffer=io.BytesIO(raw))),
+                patch.dict(server.os.environ, {}, clear=True),
+                patch.object(server, "verify_python_runtime") as runtime_check,
+                patch.object(server, "verify_local_model") as model_check,
+                patch.object(server, "verify_mps_causal") as mps_check,
+                patch.object(server, "load_native", return_value=self.native) as native_load,
+                patch.object(self.native, "load_release_model", create=True) as model_load,
+                patch.dict(sys.modules, {"transformers": SimpleNamespace(AutoProcessor=SimpleNamespace(
+                    from_pretrained=processor_load))}),
+                redirect_stdout(stdout), redirect_stderr(stderr),
+            ):
+                server.main()
+            runtime_check.assert_called_once_with()
+            model_check.assert_called_once()
+            self.assertEqual(model_check.call_args.args[0], path.resolve())
+            native_load.assert_called_once_with(path.resolve())
+            processor_load.assert_called_once_with(path.resolve(), local_files_only=True)
+            mps_check.assert_not_called()
+            model_load.assert_not_called()
+        self.assertEqual(len(stdout.getvalue().splitlines()), 1)
+        result = json.loads(stdout.getvalue())
+        self.assertEqual(result["requestSha256"], hashlib.sha256(raw).hexdigest())
+        self.assertEqual(result["layout"], [{"tokens": 17000, "qids": ["bt.gas", "bt.electric"]}])
+        self.assertNotIn(self.request["state"], stdout.getvalue())
+        self.assertEqual(stderr.getvalue(), "")
         self.assertEqual(self.forwards, 0)
 
     def test_partition_runtime_failure_has_no_partial_answer_or_retry(self):

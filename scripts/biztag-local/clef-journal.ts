@@ -7,6 +7,7 @@ import type { JevAskResult, JevNoulQuestion } from "../../src/shared/jev/client.
 import type { LocalDecisionExchange } from "../../src/shared/semif/client.js";
 import type { InputReceipt } from "../../services/yuho-quant/src/biztag/plan.js";
 import { canonicalJson } from "../../services/yuho-quant/src/biztag/vocabulary/hash.js";
+import { validateClefContextQualification, type ClefContextQualification } from "../../src/shared/clef/client.js";
 
 export interface ClefJournalInput {
   stockCode: string; periodEnd: string; receipt: InputReceipt; textsSha256: string;
@@ -15,6 +16,19 @@ export interface ClefJournalInput {
 }
 const FILE_MAX = 1024 * 1024, RUN_MAX = 64 * FILE_MAX, STORE_MAX = 1024 * FILE_MAX;
 const sha = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
+type Pins = { modelManifestSha256: string; calibrationSha256: string };
+interface ContextRecipe { oldKey: string; oldHashes: Record<string, string>; qualification: ClefContextQualification }
+export interface ClefContextUpgrade {
+  stockCode: string; oldKey: string; previousCalibrationSha256: string;
+  qualify: (request: Uint8Array) => ClefContextQualification;
+}
+function journalKey(input: Record<string, unknown>): string {
+  const receipt = input.receipt as InputReceipt;
+  const base = { stockCode: input.stockCode, docId: receipt.docId, sectionsSha256: receipt.sectionsSha256, batchIndex: input.batchIndex };
+  // One context admission per original rejection. Recipe drift must hit the same latch and HOLD.
+  return sha(canonicalJson(input.contextUpgrade === undefined ? base : { ...base,
+    contextUpgrade: { oldKey: (input.contextUpgrade as ContextRecipe).oldKey } }));
+}
 export function syncParent(path: string): void {
   const fd = openSync(dirname(path), "r"); try { fsyncSync(fd); } finally { closeSync(fd); }
 }
@@ -49,8 +63,7 @@ function rejectedInput(directory: string): Record<string, string> {
   const input = values["input.json"], request = values["request.raw"], response = values["response.raw"];
   const receipt = input.receipt as InputReceipt;
   assert.equal(basename(dirname(directory)), "clef-decisions");
-  assert.equal(basename(directory), sha(canonicalJson({ stockCode: input.stockCode,
-    docId: receipt.docId, sectionsSha256: receipt.sectionsSha256, batchIndex: input.batchIndex })));
+  assert.equal(basename(directory), journalKey(input));
   assert.equal(typeof request.id, "string"); assert.match(request.id as string, /^req-[0-9]+$/);
   assert.deepEqual(Object.keys(response).sort(), ["error", "id"]);
   assert.equal(response.id, request.id);
@@ -83,7 +96,7 @@ export function acknowledgeClefError(state: string, key: string, responseSha256:
   syncParent(marker);
 }
 
-export function createClefJournal(state: string, pins: { modelManifestSha256: string; calibrationSha256: string }): (input: ClefJournalInput) => LocalDecisionExchange {
+export function createClefJournal(state: string, pins: Pins, upgrade?: ClefContextUpgrade): (input: ClefJournalInput) => LocalDecisionExchange {
   let written = 0, stored: number | undefined, stopped = false;
   const root = join(state, "clef-decisions");
   const incomplete = (directory: string) => ["response-partial.raw", "partial.json", "unexpected-response.raw"].some(name => existsSync(join(directory, name)));
@@ -136,9 +149,30 @@ export function createClefJournal(state: string, pins: { modelManifestSha256: st
       const questions = Object.entries(input.questions).map(([qid, q]) => {
         assert(q.criteria); return { qid, question: q.instructions, options: [q.criteria.true, q.criteria.false] };
       });
-      const binding = { ...input, questions, ...pins }, bindingRaw = canonicalJson(binding) + "\n";
-      const key = sha(canonicalJson({ stockCode: input.stockCode, docId: input.receipt.docId,
-        sectionsSha256: input.receipt.sectionsSha256, batchIndex: input.batchIndex }));
+      let contextUpgrade: ContextRecipe | undefined;
+      if (upgrade !== undefined) {
+        assert.match(upgrade.oldKey, /^[a-f0-9]{64}$/);
+        assert.match(upgrade.previousCalibrationSha256, /^[a-f0-9]{64}$/);
+        assert.equal(input.stockCode, upgrade.stockCode); assert.equal(input.batchIndex, 0, "context upgrade is one complete request only");
+        const old = join(root, upgrade.oldKey), hashes = rejectedInput(old);
+        const marker = read(join(old, "rejected.json")), ack = jsonLine(marker);
+        assert.equal(ack.noReinference, true); assert.deepEqual(ack.hashes, hashes);
+        const prior = jsonLine(read(join(old, "input.json")));
+        assert.equal(prior.contextUpgrade, undefined, "context upgrade cannot be chained");
+        assert.equal(prior.modelManifestSha256, pins.modelManifestSha256);
+        assert.equal(prior.calibrationSha256, upgrade.previousCalibrationSha256, "context upgrade requires the qualified old16000 calibration");
+        assert.notEqual(prior.calibrationSha256, pins.calibrationSha256, "context upgrade requires the newly qualified calibration");
+        // batchIndex is invocation-local; every semantic/source binding stays exact.
+        for (const key of ["stockCode", "periodEnd", "receipt", "textsSha256", "model", "vocabHash", "state", "questions"] as const) {
+          assert.equal(sha(canonicalJson(prior[key])), sha(canonicalJson(key === "questions" ? questions : input[key])), "context upgrade source/input changed HOLD");
+        }
+        const request = read(join(old, "request.raw"));
+        const qualification = validateClefContextQualification(upgrade.qualify(request), request);
+        assert.deepEqual(rejectedInput(old), hashes); assert.equal(sha(read(join(old, "rejected.json"))), sha(marker));
+        contextUpgrade = { oldKey: upgrade.oldKey, oldHashes: { ...hashes, "rejected.json": sha(marker) }, qualification };
+      }
+      const binding = { ...input, questions, ...pins, ...(contextUpgrade === undefined ? {} : { contextUpgrade }) };
+      const bindingRaw = canonicalJson(binding) + "\n", key = journalKey(binding);
       const directory = join(root, key), path = (name: string) => join(directory, name);
       const qids = questions.map(q => q.qid);
       if (existsSync(directory)) {
