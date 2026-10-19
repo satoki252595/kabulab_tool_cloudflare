@@ -993,6 +993,35 @@ describe.skipIf(!existsSync(FIX_R2_DAILY_7203))("ingest-daily actual same-cached
   });
 });
 
+it("先頭5件以降のHOLD理由もsanitize・上限制限してsummary原本に残し、取得/PUT/exitを変えない", async () => {
+  const codes = ["1444", "1788", "1897", "2136", "2376", "2993"];
+  mockLoadCodes.mockResolvedValue(codes);
+  mockR2Get.mockResolvedValue(null);
+  mockFetchDaily.mockImplementation(async (symbol: string) => ({ bars: [BAR_A], splits: [], proof: { ...FAKE_PROOF, symbol } }));
+  vi.mocked(qualifyDailySourceRange).mockImplementation((fresh) => {
+    throw new Error(`repair HOLD: ${fresh.proof.symbol} https://query1.finance.yahoo.com/private?secret=private-value secret=private-value ${"x".repeat(400)}`);
+  });
+  await main();
+  const body = recordedBody();
+  const outcomes = body.outcomes as Record<string, { status: string; reason: string }>;
+  expect(Object.keys(outcomes)).toHaveLength(6);
+  for (const code of codes) {
+    expect(outcomes[code].status).toBe("error");
+    expect(outcomes[code].reason).toHaveLength(300);
+    expect(outcomes[code].reason).toContain(`Error: repair HOLD: ${code}.T <url> secret=<redacted>`);
+    expect(outcomes[code].reason).not.toContain("private-value");
+    expect(outcomes[code].reason).not.toContain("https://");
+  }
+  expect(localSummaryBody().outcomes).toEqual(outcomes);
+  expect(body).toMatchObject({ written: 0, errors: 6, aborted: false, unknown: [], rejected: [] });
+  expect(mockFetchDaily).toHaveBeenCalledTimes(6);
+  expect(mockRawArchive).toHaveBeenCalledTimes(1);
+  expect(mockRecord).toHaveBeenCalledTimes(1);
+  expect(mockR2Put).not.toHaveBeenCalled();
+  expect(console.error).toHaveBeenCalledTimes(5);
+  expect(process.exitCode).toBe(1);
+});
+
 describe("tenYearRange", () => {
   it("the checked-in workflow shell keeps daily-only codes and all daily/intra stop contracts", () => {
     const result = execFileSync("bash", [fileURLToPath(new URL("./lib/runblock-check.sh", import.meta.url))], {

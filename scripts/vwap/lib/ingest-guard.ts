@@ -586,6 +586,8 @@ export type IngestCodeOutcome = {
   status: IngestOutcomeStatus;
   latestSourceBar: string | number | null;
   bodySha: string | null;
+  /** dailyの失敗理由。URL/secretを除去し300文字以下。旧summary/intraでは省略。 */
+  reason?: string;
   discardedOutOfRange?: DiscardedOutOfRange;
   /** 確定済み保存物でsource前skipした時のみfalse。今回のsource観測とは数えない。 */
   sourceFetched?: false;

@@ -30,6 +30,11 @@ export function tenYearRange(nowIso: string): { from: string; to: string } {
   return tenYearRangeForDate(jstDateSec(Math.floor(ms / 1000)));
 }
 
+/** consoleの先頭5件制限と別に、全銘柄の停止理由をsummaryへ残す。 */
+function failureReason(error: unknown): string {
+  return sanitizeLogText(error instanceof Error ? `${error.name}: ${error.message}` : String(error)).slice(0, 300);
+}
+
 export async function main() {
   // knob は main 内で型付き取得する (未設定・不正値は final catch で exit 2)。
   // 通常値は vwap-ingest.yml・.env.example で明示宣言。黙示既定なし。
@@ -92,7 +97,7 @@ export async function main() {
         fatal = true;
         rawCustodyError = e;
         errors++;
-        outcomes[codes[offset]] = { status: "error", latestSourceBar: null, bodySha: null };
+        outcomes[codes[offset]] = { status: "error", latestSourceBar: null, bodySha: null, reason: failureReason(e) };
         console.error(`daily session refresh STOP: ${sanitizeLogText(e instanceof Error ? e.message : String(e)).slice(0, 200)}`);
         break;
       }
@@ -132,7 +137,7 @@ export async function main() {
           // GET fault は typed family のみ記録する (生 SDK cause を出さない)。
           const text = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
           errors++; if (errors <= 5) console.error(`  ${code}: ${sanitizeLogText(text).slice(0, 200)}`);
-          outcomes[code] = { status: "error", latestSourceBar: null, bodySha: null };
+          outcomes[code] = { status: "error", latestSourceBar: null, bodySha: null, reason: failureReason(e) };
           stopNewWork(code, text);
           return;
         }
@@ -152,7 +157,7 @@ export async function main() {
             }
           } catch (e) {
             errors++; if (errors <= 5) console.error(`  ${code}: ${e}`);
-            outcomes[code] = { status: "error", latestSourceBar: null, bodySha: null };
+            outcomes[code] = { status: "error", latestSourceBar: null, bodySha: null, reason: failureReason(e) };
             return;
           }
         }
@@ -190,7 +195,7 @@ export async function main() {
           // 429/503の初回で全体を中断する。期限や連続数に関係なく同run再取得なし。
           if ((e as { name?: string })?.name === "YahooRateLimitError") {
             rateLimited++; consecRL++;
-            outcomes[code] = { status: "error", latestSourceBar: null, bodySha: null };
+            outcomes[code] = { status: "error", latestSourceBar: null, bodySha: null, reason: failureReason(e) };
             const retryAt = (e as { retryAtMs?: number | null }).retryAtMs;
             if (!aborted) {
               aborted = true;
@@ -199,7 +204,7 @@ export async function main() {
             return;
           }
           errors++; if (errors <= 5) console.error(`  ${code}: ${e}`);
-          outcomes[code] = { status: "error", latestSourceBar: null, bodySha: null };
+          outcomes[code] = { status: "error", latestSourceBar: null, bodySha: null, reason: failureReason(e) };
           return;
         }
         consecRL = 0;                                        // 成功で連続カウントをリセット
@@ -212,7 +217,8 @@ export async function main() {
         if (bad.length > 0) {
           invalid++;
           if (invalid <= 5) console.error(`  ${code}: invalid bars ${JSON.stringify(bad.slice(0, 3))}`);
-          outcomes[code] = { status: "error", latestSourceBar: latest, bodySha: null };
+          outcomes[code] = { status: "error", latestSourceBar: latest, bodySha: null,
+            reason: failureReason(`invalid bars ${JSON.stringify(bad.slice(0, 3))}`) };
           return;
         }
         // whole-post rebuild (repair guard reuse): 明示 10y range 内の旧有効日付は
@@ -234,7 +240,7 @@ export async function main() {
           assertSavedDailyShape(postJson, `daily/${code}.json`, code);
         } catch (e) {
           errors++; if (errors <= 5) console.error(`  ${code}: ${e}`);
-          outcomes[code] = { status: "error", latestSourceBar: latest, bodySha: null };
+          outcomes[code] = { status: "error", latestSourceBar: latest, bodySha: null, reason: failureReason(e) };
           return;
         }
         // range 外旧の破棄は outcome に残す (件数+端。0 件はキーなし)。
@@ -265,14 +271,14 @@ export async function main() {
             // PUT fault は全件 fatal。区別は正直計数する (unknown/rejected/想定外)。
             if (e instanceof R2PutUnknownError) {
               unknownCodes.push(code);
-              outcomes[code] = { status: "unknown", latestSourceBar: latest, bodySha: bodyPin(postJson) };
+              outcomes[code] = { status: "unknown", latestSourceBar: latest, bodySha: bodyPin(postJson), reason: failureReason(e) };
             } else if (e instanceof R2PutRejectedError) {
               rejectedCodes.push(code);
-              outcomes[code] = { status: "error", latestSourceBar: latest, bodySha: bodyPin(postJson) };
+              outcomes[code] = { status: "error", latestSourceBar: latest, bodySha: bodyPin(postJson), reason: failureReason(e) };
             } else {
               const text = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
               errors++; if (errors <= 5) console.error(`  ${code}: ${sanitizeLogText(text).slice(0, 200)}`);
-              outcomes[code] = { status: "error", latestSourceBar: latest, bodySha: bodyPin(postJson) };
+              outcomes[code] = { status: "error", latestSourceBar: latest, bodySha: bodyPin(postJson), reason: failureReason(e) };
             }
             stopNewWork(code, e instanceof Error ? e.message : String(e));
             return;
