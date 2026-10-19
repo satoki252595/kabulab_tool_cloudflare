@@ -22,6 +22,14 @@ SOURCE_SHA256 = "0e304cf7c6500e8bb59bef7e2afd2c6373f82596dfb3b57d1aa93c175e2dc3a
 ID = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
 
 
+class ClefInputTokenLimitError(ValueError):
+    """Complete-input encoding rejected before any model forward call."""
+
+
+def safe_exception_type(error: Exception) -> str:
+    return re.sub(r"[^A-Za-z0-9_]", "_", type(error).__name__)[:64]
+
+
 def verify_python_runtime() -> None:
     """Use the same Nix-backed venv and native MPS path as the calibration."""
     if (
@@ -123,7 +131,7 @@ def encode_batches(native, processor, max_tokens: int, record: dict):
         if original_tokens is None:
             original_tokens = len(encoded.input_ids)
         if not encoded.input_ids:
-            raise ValueError("input_token_limit")
+            raise ClefInputTokenLimitError("input_token_limit")
         if encoded.record_id != part["id"] or len(encoded.questions) != len(part["questions"]):
             raise ValueError("encoded_question_count")
         for question, qid in zip(encoded.questions, part["questions"], strict=True):
@@ -135,7 +143,7 @@ def encode_batches(native, processor, max_tokens: int, record: dict):
             continue
         questions = list(part["questions"].items())
         if len(questions) == 1:
-            raise ValueError("input_token_limit")
+            raise ClefInputTokenLimitError("input_token_limit")
         middle = len(questions) // 2
         pending[0:0] = [
             {**part, "questions": dict(questions[:middle])},
@@ -201,11 +209,12 @@ def handle_request(native, torch, model, processor, max_tokens: int, request: ob
             return score_request(native, torch, model, processor, max_tokens, request, diagnostics)
     except Exception as error:  # noqa: BLE001 — all-or-nothing request boundary
         print(
-            f"[clef_server] request_failed class={type(error).__name__}",
+            f"[clef_server] request_failed class={safe_exception_type(error)}",
             file=sys.stderr,
             flush=True,
         )
-        return {"id": request_id, "error": "clef_contract_or_runtime_error"}
+        return {"id": request_id, "error": "clef_input_token_limit"
+                if isinstance(error, ClefInputTokenLimitError) else "clef_contract_or_runtime_error"}
 
 
 def load_native(path: Path):
@@ -364,7 +373,7 @@ if __name__ == "__main__":
         main()
     except Exception as error:  # noqa: BLE001 — never log model inputs or remote URLs
         print(
-            f"[clef_server] startup_failed class={type(error).__name__}",
+            f"[clef_server] startup_failed class={safe_exception_type(error)}",
             file=sys.stderr,
             flush=True,
         )

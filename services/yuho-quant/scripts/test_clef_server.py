@@ -113,8 +113,28 @@ class ProtocolTest(unittest.TestCase):
 
     def test_overlong_full_encoding_stops_before_forward(self):
         self.encoded_tokens = 16001
-        with self.assertRaisesRegex(ValueError, "input_token_limit"):
+        with self.assertRaisesRegex(server.ClefInputTokenLimitError, "input_token_limit"):
             self.score()
+        self.assertEqual(self.forwards, 0)
+
+    def test_input_limit_has_dedicated_response_only_for_pre_forward_rejection(self):
+        self.encoded_tokens = 16001
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            result = server.handle_request(self.native, self.torch, self.model,
+                                           self.processor, 16000, self.request)
+        self.assertEqual(result, {"id": self.request["id"], "error": "clef_input_token_limit"})
+        self.assertEqual(self.forwards, 0)
+        self.assertNotIn(self.request["state"], stderr.getvalue())
+
+        # Third-party error messages do not qualify the dedicated rejection.
+        def failed(*_args, **_kwargs):
+            raise ValueError("input_token_limit")
+        self.native.encode_record = failed
+        with redirect_stderr(stderr):
+            result = server.handle_request(self.native, self.torch, self.model,
+                                           self.processor, 16000, self.request)
+        self.assertEqual(result, {"id": self.request["id"], "error": "clef_contract_or_runtime_error"})
         self.assertEqual(self.forwards, 0)
 
     def test_question_partition_keeps_full_state_and_preencodes_every_batch(self):
@@ -150,7 +170,7 @@ class ProtocolTest(unittest.TestCase):
             self.encoded_tokens = 500 if list(record["questions"]) == ["bt.gas"] else 16001
             return original_encode(tokenizer, record, **kwargs)
         self.native.encode_record = encode
-        with self.assertRaisesRegex(ValueError, "input_token_limit"):
+        with self.assertRaisesRegex(server.ClefInputTokenLimitError, "input_token_limit"):
             self.score()
         self.assertEqual(self.forwards, 0)
 
@@ -361,7 +381,12 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(result, {"id": "batch.9533", "error": "clef_contract_or_runtime_error"})
         self.assertEqual(stdout.getvalue(), "")
         self.assertNotIn(self.request["state"], stderr.getvalue())
+        self.assertIn("class=RuntimeError", stderr.getvalue())
         self.assertNotIn("answers", result)
+
+    def test_exception_type_is_bounded_and_cannot_inject_diagnostic_lines(self):
+        error = type("Bad\nType " + "x" * 100, (RuntimeError,), {})(self.request["state"])
+        self.assertEqual(server.safe_exception_type(error), ("Bad_Type_" + "x" * 100)[:64])
 
 
 if __name__ == "__main__":
