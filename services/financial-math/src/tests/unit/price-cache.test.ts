@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { normalizeQuote } from "../../services/price-cache.js";
+import { dividendStatusOf, normalizeQuote } from "../../services/price-cache.js";
 
 /**
  * `price-cache.ts` の価格正規化 (% → decimal) の検証。
  *
  * 配当利回り 100倍 バグの再発防止が主目的:
- *   - DB (`core_stock_financials.dividend_yield`) は Yahoo の生値 (% 表現、例: 3.43)
+ *   - DB (`core_stock_financials.dividend_yield`) は Yahoo 由来の保存利回り (% 表現、例: 3.43)
  *   - `PriceContext` は decimal (例: 0.0343)
  *   - `estimatedDividend` = price × dividendYield (decimal 前提)
  *
@@ -25,7 +25,7 @@ describe("normalizeQuote — 配当利回りの % → decimal 正規化", () => 
   });
 
   it("estimatedDividend = price × decimal yield", () => {
-    // トヨタ: 2870 × 0.0343 = 98.4 円/株 (TTM ベース)
+    // トヨタ: 2870 × 0.0343 = 98.4 円/株 (保存利回りからの推定値)
     const r = normalizeQuote({ price: 2870, dividendYield: 3.43 });
     expect(r.estimatedDividend).toBeCloseTo(98.44, 1);
   });
@@ -40,10 +40,12 @@ describe("normalizeQuote — 配当利回りの % → decimal 正規化", () => 
     expect(r.estimatedDividend).toBeCloseTo(637.9, 0);
   });
 
-  it("dividendYield=null は null のまま", () => {
-    const r = normalizeQuote({ price: 1000, dividendYield: null });
-    expect(r.dividendYield).toBeNull();
-    expect(r.estimatedDividend).toBeNull();
+  it("dividendYield の欠測・不正値は null", () => {
+    for (const dividendYield of [null, -1, NaN, Infinity, -Infinity]) {
+      const r = normalizeQuote({ price: 1000, dividendYield });
+      expect(r.dividendYield).toBeNull();
+      expect(r.estimatedDividend).toBeNull();
+    }
   });
 
   it("price=null は estimatedDividend=null", () => {
@@ -100,5 +102,15 @@ describe("読み取り面から Yahoo 呼び出しが消えたことを形で固
     ).toEqual([]);
     // 走査が空振りしていないこと (0 件を返すと上の検査が無条件に緑になる)
     expect(readdirSync(join(serviceSrc, "services")).length).toBeGreaterThan(3);
+  });
+});
+
+describe("dividendStatusOf", () => {
+  it("欠測・不正値は未確定、0 は無配、正は配当あり", () => {
+    for (const dividendYield of [null, -1, NaN, Infinity, -Infinity]) {
+      expect(dividendStatusOf(dividendYield)).toBe("unverified");
+    }
+    expect(dividendStatusOf(0)).toBe("non-dividend");
+    expect(dividendStatusOf(1.32)).toBe("paying");
   });
 });

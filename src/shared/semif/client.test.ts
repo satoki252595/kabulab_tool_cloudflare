@@ -16,7 +16,7 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { createSemifClient, SemifUnavailableError, SEMIF_MODEL, SEMIF_SOURCE_REVISION, SEMIF_MLX_VERSION, SEMIF_MLX_LM_REVISION, type LocalDecisionExchange } from "./client.js";
 import type { JevNoulQuestion } from "../jev/client.js";
-import { createClefClient, CLEF_MODEL, CLEF_MANIFEST } from "../clef/client.js";
+import { createClefClient, CLEF_MODEL, CLEF_MANIFEST, CLEF_MAX_INPUT_TOKENS } from "../clef/client.js";
 
 interface FakeRequest {
   id: string;
@@ -90,7 +90,7 @@ const Q: Record<string, JevNoulQuestion> = {
 
 describe("Clef native JSONL boundary", () => {
   const ready = { ready: true, model: CLEF_MANIFEST.repo, revision: CLEF_MANIFEST.revision,
-    backend: "torch-mps", max_tokens: 16000, source_sha256: CLEF_MANIFEST.source_sha256,
+    backend: "torch-mps", max_tokens: CLEF_MAX_INPUT_TOKENS, source_sha256: CLEF_MANIFEST.source_sha256,
     torch_version: CLEF_MANIFEST.runtime.torch, transformers_version: CLEF_MANIFEST.runtime.transformers,
     safetensors_version: CLEF_MANIFEST.runtime.safetensors };
 
@@ -101,9 +101,30 @@ describe("Clef native JSONL boundary", () => {
     try {
       expect((await client.askNoul("原文", Q)).model).toBe(CLEF_MODEL);
       expect(fake.spawnCalls[0].args.slice(-2)).toEqual(["--model-path", "/test/clef"]);
+      expect(fake.spawnCalls[0].args).toContain("18432");
       await client.askNoul("原文", Q);
       expect(fake.spawnCalls).toHaveLength(1);
     } finally { client.close(); }
+  });
+
+  it("stderrの分割された安全な失敗型だけ記録し、原文や長すぎる行を破棄する", async () => {
+    const safe = "[clef_server] request_failed class=RuntimeError";
+    const startup = "[clef_server] startup_failed class=ValueError";
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fake = makeFakeServerSpawn({ readyLine: ready, respond: req => {
+      const stderr = fake.children[0].stderr;
+      stderr.emit("data", Buffer.from("request state: private-company-information\n" + safe.slice(0, 20)));
+      stderr.emit("data", Buffer.from(safe.slice(20) + "\n"));
+      stderr.emit("data", Buffer.from("private-source-" + "x".repeat(600)));
+      stderr.emit("data", Buffer.from(safe + "\n" + startup + "\n"));
+      return { id: req.id, error: "clef_contract_or_runtime_error" };
+    } });
+    const client = createClefClient({ pythonBin: "/offline-control/python", modelPath: "/offline-control/clef", spawnFn: fake.spawnFn });
+    try {
+      await expect(client.askNoul("原文", Q)).rejects.toThrow("clef_contract_or_runtime_error");
+      expect(log.mock.calls).toEqual([[safe], [startup]]);
+      expect(fake.writtenRequests).toHaveLength(1);
+    } finally { client.close(); log.mockRestore(); }
   });
 
   it.each(Object.keys(ready))("native readyの%s不一致は入力送信前に停止", async (key) => {

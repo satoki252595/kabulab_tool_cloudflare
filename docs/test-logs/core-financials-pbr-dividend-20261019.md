@@ -1,5 +1,10 @@
 # core_stock_financials の PBR・配当利回りの検算（2026-10-19）
 
+この調査は既存Draft #546（head `635a1f962361a6c123cd158bdac3a2737627d999`）の記録を引き継いだ。
+今回の共通取得処理への統合では、未来の四半期末・Date範囲外・4桁暦年外も採用しない回帰を追加した。
+下記10/16の全市場件数は元調査の結果であり、今回の追加全量取得・現本番の再計測ではない。
+Draft #545からはDCFの欠測表示だけも再利用し、会社予想へのデータ定義変更を含めていない。
+
 `core_stock_financials` の `pbr` / `bps` / `dividend_yield` は、日次株式同期（`sync:daily:core` → `src/cron/daily.ts`）が Yahoo QuoteSummary の値を `src/shared/yahoo/client.ts` の `parseQuoteSummaryResponse` で取り出し、そのまま保存していた。
 単位の誤り（%と比率の取り違え）や、分割前の BPS・配当を kabulab 側で使う処理はない。配当利回りは Yahoo の小数（0.0234）を100倍した % 値で保存し、financial-math は100で割って小数に戻す。いずれも単位は一貫している。
 
@@ -36,7 +41,7 @@ Yahoo の `dividendRate` は 3,687 件中 3,675 件で欠損していた。そ�
 
 `src/shared/yahoo/client.ts` に検算できない値を欠損にする guard を足した。推定値で補完はしない（ルール1・2）。
 
-- **BPS/PBR**: `defaultKeyStatistics.mostRecentQuarter` が株価日（chart の dataDate）から 365 日を超えて古いか、欠損している場合は `bps`・`pbr` を null にし、警告ログを出す。
+- **BPS/PBR**: `defaultKeyStatistics.mostRecentQuarter` が有効な暦日で、株価日（chart の dataDate）以前365日以内の時だけ採用する。欠損・未来日付・不正日付では `bps`・`pbr` を null にし、警告ログを出す。
 - **配当利回り**: 同じ応答の実績年間配当（`trailingAnnualDividendRate ÷ financialData.currentPrice`）との比が 0.5〜2 倍の範囲（半減〜倍増）にある場合だけ採用する。実績配当・現在値の欠損、片方だけ 0 の場合も null にする。両方 0 は無配の一致として 0 を保存する。
 
 10/16 原本にこのルールを当てた場合の影響（予測）:
@@ -50,6 +55,20 @@ Yahoo の `dividendRate` は 3,687 件中 3,675 件で欠損していた。そ�
 
 配当利回りの検算相手は、同じ Yahoo の実績配当になる。そのため、2倍以内のずれ（分割を跨いだ配当の取り違えなど）は残る。新ルールで採用されたもののうち、205 件は公式の予想配当と 0.5pt 超ずれている。許容幅を 1.25 倍まで狭めても 106 件残り、正しく見える 522 件まで欠損になる。幅を狭めて解決できる問題ではない。
 
-根本的に解決するには、利回りを公式の予想配当（`jss_financials.dps_forecast`、TDnet 短信・EDINET）÷株価で作る必要がある。ただし予想配当がある銘柄は 2,648/3,687 件にとどまる。TDnet 由来の値（license_tag=`factual-cite`）を公開画面に出せるかの判断も要るため、この PR では扱わない。
+予想配当による利回りへ定義を変えるには、同期間・株数基準と公開資格を満たす予想原本が必要になる。元調査では予想配当がある銘柄は2,648/3,687件にとどまる。既存Draft #545はTDnetだけを選択して公開coreへ保存する一方、license gateがなく、同repoの公開数値を`commercial-ok`に限定する契約と矛盾する。この統合では採用せず、公開資格付きの別検討として保持する。実績配当から予想配当を推定しない。
 
-既存の 10/16 の保存行は書き換えていない。次回の日次同期で新ルールの値に置き換わる。
+既存の10/16や10/19の保存行をこのコード変更で書き換えない。新しい共通parserを使った取得または原本再解析から反映する。待機中の自然18時Actionsもevent時のSHAをcheckoutするため、新しいmainのマージだけで実行コードが切り替わるとは扱わない。原本と当日の金融値の実適用・読戻しは別受入。
+
+追加HTTP・DB要求・一次データ取得・原本の変更・LLM・依存追加は0。既存の新規取得と保存原本再解析は同じ`combineStockRawData`を通り、Notion原本の物理保管はその前に維持する。
+
+## DCFで欠測と無配を区別
+
+従来は配当利回りの欠測まで「無配」と表示していた。GET/POSTの共通分類で欠測・負値・非有限値を未確定、実0を無配、正の値を配当ありと区別する。どちらも自動配当を入れず、手動の試算は維持する。推定値はYahoo由来の保存利回り×株価であり、会社予想の検算済みデータと説明しない。D1読取専用と金融式は維持する。
+
+NixのYahoo関連8suite143件とfinancial-math全10suite151件、全体型検査・変更TSのESLintが成功。欠測/0それぞれのGET表示・POSTエラー・空欄と詳細設定・手動入力の正常計算を既存D1 fixtureで確認した。
+
+## 旧Draft #546の適用範囲（2026-10-20）
+
+旧Draft [#546](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/546)の調査と検算guardは、未来・不正日付の拒否も加えた[#548](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/548)で採用済み。この整理では最新mainを通常mergeし、製品コードと設定をmainに一致させた。旧head `635a1f962361a6c123cd158bdac3a2737627d999`の履歴は残し、`.claude/settings.json`の包括的なツール許可は採用しない。
+
+会社予想配当への定義変更は、同期間・株数基準と公開ライセンスの資格が揃うまで未採用。調査時の全市場件数は過去の観測として保持し、今回のデータ取得・保存値更新・本番反映の実績とは扱わない。

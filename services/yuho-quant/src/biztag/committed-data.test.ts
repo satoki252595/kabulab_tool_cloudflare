@@ -7,7 +7,7 @@ import { evaluateAtThresholds } from "./golden.js";
 import { loadCalibration } from "./thresholds.js";
 import { readFileSync } from "node:fs";
 import { SEMIF_MODEL, SEMIF_HF_MODEL, SEMIF_HF_REVISION, SEMIF_SOURCE_REVISION, SEMIF_MLX_VERSION, SEMIF_MLX_LM_REVISION } from "../../../../src/shared/semif/index.js";
-import { CLEF_MODEL, CLEF_MANIFEST } from "../../../../src/shared/clef/client.js";
+import { CLEF_MODEL, CLEF_MANIFEST, CLEF_MAX_INPUT_TOKENS } from "../../../../src/shared/clef/client.js";
 import { createHash } from "node:crypto";
 
 describe("同梱データ", () => {
@@ -59,7 +59,7 @@ describe("同梱データ", () => {
     expect(calibration.model).toBe(CLEF_MODEL);
     expect(file.runtime).toMatchObject({ hfModel: CLEF_MANIFEST.repo, hfRevision: CLEF_MANIFEST.revision,
       nativeSourceSha256: CLEF_MANIFEST.source_sha256, ...CLEF_MANIFEST.runtime,
-      backend: "torch-mps", quantization: null, maxInputTokens: 16000, base: "Nix" });
+      backend: "torch-mps", quantization: null, maxInputTokens: CLEF_MAX_INPUT_TOKENS, base: "Nix" });
     expect(createHash("sha256").update(readFileSync(new URL("../../local-model/uv.lock", import.meta.url))).digest("hex"))
       .toBe(file.runtime.uvLockSha256);
     expect(createHash("sha256").update(readFileSync(new URL("../../../../src/shared/clef/manifest.json", import.meta.url))).digest("hex"))
@@ -84,8 +84,32 @@ describe("同梱データ", () => {
     expect(actual).toMatchObject({ precisionYes: file.basis.atChosenThresholds.precisionYes,
       recallYes: file.basis.atChosenThresholds.recallYes, mustNotViolations: 0, filterMissRate: 0 });
     expect(actual.precisionYes).toBeGreaterThanOrEqual(0.9);
+    expect(file.calibratedAt).toBe("2026-10-20");
+    expect(CLEF_MAX_INPUT_TOKENS).toBe(18432);
     expect(file.basis.measurement).toMatchObject({ residentProcesses: 1, inferenceRequests: 95,
       nativeForwards: 96, sourceRequests: 0, externalJudgeApiRequests: 0, productionWrites: 0,
       swapIncreaseBytes: 0, localHardwareCostUsd: null });
+    expect(file.basis.measurement).toMatchObject({ scope: "historical-full-gold-16000",
+      measuredAt: "2026-10-14", maxInputTokens: 16000 });
+    const upgrade = file.basis.contextUpgrade;
+    expect(upgrade).toMatchObject({ kind: "mixed-94-reused-plus-one-9434-delta",
+      fromMaxTokens: 16000, toMaxTokens: CLEF_MAX_INPUT_TOKENS, changedCode: "9434",
+      previousCalibrationSha256: "0d8fac66a12d975e08edceb34a46a1b6c502d58ccfe9654a9d15a434b83c0ce7",
+      changedRequests: 1, reusedRequests: 94, changedQuestions: 16, reusedQuestions: 882,
+      changedExpectedPairs: 16, reusedExpectedPairs: 842, notNewWholeGoldRun: true,
+      thresholdsChanged: false, bandChanges: 0, noHoldoutGuarantee: true });
+    expect(upgrade.changedExpectedPairs + upgrade.reusedExpectedPairs).toBe(evaluation.perItem.length);
+    expect(upgrade.changedQuestions + upgrade.reusedQuestions).toBe(file.basis.scoredQuestions);
+    expect(upgrade.measurement).toMatchObject({ scope: "single-9434-request-only-not-whole-gold-or-4599",
+      maxInputTokens: CLEF_MAX_INPUT_TOKENS, inferenceRequests: 1, nativeForwards: 1,
+      swapIncreaseBytes: 0, sourceRequests: 0, externalJudgeApiRequests: 0, productionWrites: 0 });
+    expect(upgrade.measurement.elapsedSeconds).toBeCloseTo(45.308562500002154, 9);
+    expect(evaluation.provenance.contextUpgrade).toEqual(upgrade);
+    expect(evaluation.provenance.historicalFullRun).toMatchObject({ maxInputTokens: 16000,
+      evaluationSha256: upgrade.previousEvaluationSha256,
+      privateEvaluationSha256: upgrade.previousPrivateEvaluationSha256,
+      terminalSha256: evaluation.provenance.terminalSha256 });
+    expect(file.basis.privateEvaluationSha256).toBe(evaluation.privateEvaluationSha256);
+    expect(evaluation.privateEvaluationSha256).toBe("22056afe1067d497b369a94929fd34d4b1a57f3ce82609ef3bf3fafd1db0d762");
   });
 });

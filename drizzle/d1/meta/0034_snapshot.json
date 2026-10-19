@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "222b291f-f7fb-463f-bafc-3268256fd2ea",
-  "prevId": "03394680-5364-4b9b-a7f6-bf950d2636fe",
+  "id": "a4a80ea6-242f-4eb7-a493-18657bfeee59",
+  "prevId": "4d76a213-421a-40ae-87ca-7c0568008d73",
   "tables": {
     "core_stock_annual_financials": {
       "name": "core_stock_annual_financials",
@@ -287,6 +287,50 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}
+    },
+    "yahoo_proxy_cooldown": {
+      "name": "yahoo_proxy_cooldown",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "retry_at_ms": {
+          "name": "retry_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "upstream_status": {
+          "name": "upstream_status",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "yahoo_proxy_cooldown_singleton": {
+          "name": "yahoo_proxy_cooldown_singleton",
+          "value": "\"yahoo_proxy_cooldown\".\"id\" = 1"
+        },
+        "yahoo_proxy_cooldown_deadline": {
+          "name": "yahoo_proxy_cooldown_deadline",
+          "value": "typeof(\"yahoo_proxy_cooldown\".\"retry_at_ms\") = 'integer' AND \"yahoo_proxy_cooldown\".\"retry_at_ms\" >= 0 AND \"yahoo_proxy_cooldown\".\"retry_at_ms\" <= 9007199254740991"
+        },
+        "yahoo_proxy_cooldown_status": {
+          "name": "yahoo_proxy_cooldown_status",
+          "value": "(\"yahoo_proxy_cooldown\".\"retry_at_ms\" = 0 AND \"yahoo_proxy_cooldown\".\"upstream_status\" IS NULL) OR (\"yahoo_proxy_cooldown\".\"retry_at_ms\" > 0 AND \"yahoo_proxy_cooldown\".\"upstream_status\" IS NOT NULL AND \"yahoo_proxy_cooldown\".\"upstream_status\" IN (429, 503))"
+        }
+      }
     },
     "universe_official_events": {
       "name": "universe_official_events",
@@ -983,6 +1027,89 @@
             "seq_number"
           ],
           "name": "yuho_edinet_reported_changes_source_page_id_seq_number_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "yuho_edinet_reported_resolutions": {
+      "name": "yuho_edinet_reported_resolutions",
+      "columns": {
+        "source_page_id": {
+          "name": "source_page_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "seq_number": {
+          "name": "seq_number",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "source_raw_sha256": {
+          "name": "source_raw_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "observation_json": {
+          "name": "observation_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "doc_id": {
+          "name": "doc_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "metadata_sha256": {
+          "name": "metadata_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "proof_json": {
+          "name": "proof_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "resolved_at": {
+          "name": "resolved_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "yuho_edinet_resolution_input_idx": {
+          "name": "yuho_edinet_resolution_input_idx",
+          "columns": [
+            "doc_id",
+            "metadata_sha256"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "yuho_edinet_reported_resolutions_source_page_id_seq_number_pk": {
+          "columns": [
+            "source_page_id",
+            "seq_number"
+          ],
+          "name": "yuho_edinet_reported_resolutions_source_page_id_seq_number_pk"
         }
       },
       "uniqueConstraints": {},

@@ -48,7 +48,9 @@ describe("Yahoo原文batchの物理保管境界", () => {
       events.push("archive"); return { pageId: "p", outcome: "recorded", fileTooLarge: false, manifestMatch: "written" };
     });
     vi.mocked(verifyArchivedAttachments).mockImplementation(async () => { events.push("readback"); });
-    const result = await archiveYahooRawBatch(input([attempt("1301", raw)]));
+    const source = attempt("1301", raw);
+    source.capture.headers.cooldown = "persist-failed";
+    const result = await archiveYahooRawBatch(input([source]));
     events.push("return");
     expect(events).toEqual(["archive", "readback", "return"]);
     const record = vi.mocked(recordPrimaryData).mock.calls[0][0];
@@ -59,6 +61,7 @@ describe("Yahoo原文batchの物理保管境界", () => {
     const wrapper = await body(record);
     const member = wrapper.members[0];
     expect(member.headers.retryAfter).toBe("120");
+    expect(member.headers.cooldown).toBe("persist-failed");
     expect(Uint8Array.from(atob(member.bodyBase64), (c) => c.charCodeAt(0))).toEqual(raw);
     expect(member.sha256).toBe(await sha256HexBytes(raw));
     expect(member.status).toBe(429);

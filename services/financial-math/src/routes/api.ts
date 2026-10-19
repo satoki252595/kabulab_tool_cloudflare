@@ -7,7 +7,7 @@ import { bsFormSchema } from "../validators/black-scholes.js";
 import { calcGordonValue, calcTwoStageDcf } from "../services/dcf.js";
 import { calcBlackScholes, calcImpliedVolatility } from "../services/black-scholes.js";
 import { calcHistoricalVolatility } from "../services/volatility.js";
-import { getOhlcvSeries, getPriceContext } from "../services/price-cache.js";
+import { dividendStatusOf, getOhlcvSeries, getPriceContext } from "../services/price-cache.js";
 import { dcfPage, type StockContext as DcfStockContext } from "../views/dcf.js";
 import { capmPage } from "../views/capm.js";
 import { bsPage, type BsStockContext } from "../views/black-scholes.js";
@@ -77,7 +77,7 @@ apiRoute.post(
         dividendYield: ctx.dividendYield,
         estimatedDividend: ctx.estimatedDividend,
         estimatedGrowth: null,
-        isNonDividend: ctx.estimatedDividend === null || ctx.estimatedDividend <= 0,
+        dividendStatus: dividendStatusOf(ctx.dividendYield),
       };
     } catch (e) {
       // 断面未登録 / 不正コードなどは UI に出して計算は続行
@@ -116,7 +116,7 @@ apiRoute.post(
       ? Math.round(stockEstimatedDividend! * 100) / 100
       : v.expectedDividend ?? 0; // 0 はここに来ない (validator が弾く)
 
-  // 無配 + ユーザー入力なしの早期エラー: code 指定したが断面に配当データがなく、
+  // 無配・未確定 + ユーザー入力なしの早期エラー: code 指定したが推定配当がなく、
   // ユーザーも手動入力していないケース。calcGordonValue が「正の数を」と汎用エラーを
   // 出す前に、より具体的な誘導メッセージを返す。
   if (
@@ -139,7 +139,9 @@ apiRoute.post(
         gordonResult: null,
         twoStageResult: null,
         currentPrice,
-        error: `銘柄 ${v.code} は無配銘柄 (断面に配当利回りなし) のため、Gordon DCF では理論株価を直接算出できません。詳細設定を開いて「来期予想配当」に想定値を手動入力してください (会社 IR の予想配当 / FCF ベース DCF の併用を推奨)。`,
+        error: stockContext?.dividendStatus !== "non-dividend"
+          ? `銘柄 ${v.code} は配当利回りが未確定のため、来期予想配当を自動入力できません。詳細設定を開いて「来期予想配当」に想定する年間配当を手動入力してください。`
+          : `銘柄 ${v.code} は保存された配当利回りが 0% (無配) のため、Gordon DCF では理論株価を直接算出できません。詳細設定を開いて「来期予想配当」に想定値を手動入力してください。`,
       }),
       400
     );

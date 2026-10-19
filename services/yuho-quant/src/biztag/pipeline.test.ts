@@ -38,7 +38,7 @@ const notionMocks = vi.hoisted(() => ({
     ): Promise<SupplementRow[]> => []
   ),
   loadStockMasterIndex: vi.fn(async () => ({ index: new Map<string, string>(), duplicates: new Map<string, string[]>() })),
-  readSupplementRowFully: vi.fn(async (): Promise<SupplementRow> => { throw new Error("test must provide current full39; native forbidden"); }),
+  readSupplementRowFully: vi.fn(async (_pageId: string): Promise<SupplementRow> => { throw new Error("test must provide current full39; native forbidden"); }),
   createSupplementRow: vi.fn(async (_dbId: string, _row: SupplementRowInput) => "new-page"),
   updateSupplementRow: vi.fn(async (_pageId: string, _row: SupplementRowInput) => {}),
   replaceEvidenceBlock: vi.fn(async (_pageId: string, _block: unknown, _input: SupplementRowInput, _expected: Record<string, unknown>, guard: () => Promise<void>) => { await guard(); }),
@@ -184,7 +184,10 @@ describe("runBiztag dry-run スコープ", () => {
     const summary = await runBiztag({ budgetMs: 10_000, codes: [latest.stockCode], limit: 1, mechanicalOnly: true,
       thresholds: { yesMin: 0.8, noMax: 0.2 }, model: CLEF_MODEL });
     expect(summary.qualificationHeld).toEqual([latest.stockCode]);
+    expect(summary.qualificationHeldReasons).toEqual([{ stockCode: latest.stockCode,
+      reason: "有報/本文の欠測HOLDは保持し、現activeの基本メタ欠落だけを独立して機械補完" }]);
     expect(summary.textCheckedCodes).toEqual([]);
+    expect(summary.textObservations).toEqual([]); // 本文未観測のHOLDへdoc/pointer/SHAを作らない。
     expect(summary.textEmptyCounts).toEqual(Object.fromEntries(TEXT_SECTIONS.map(({ title }) => [title, 0])));
     expect(summary.fieldCoverage).toMatchObject({ selectedForTextCheck: 1, textChecked: 0, textUnchecked: 1,
       metadataRepaired: 1, status: "attention", wholeSupplementComplete: false });
@@ -516,6 +519,42 @@ describe("明示finite空事業タグの再確認", () => {
 });
 
 describe("runBiztag — 保存済みマスタの参照", () => {
+  it("実GETした39列だけをHOLD理由付きで最大50社保存し、大きな明示scopeの省略を数える", async () => {
+    // 実goldenの銘柄/書類を使う。39列の空はserialization境界だけの投影で、実開示の判定ではない。
+    const golden: { items: Array<{ code: string; companyName: string; docId: string; periodEnd: string; docTypeCode: "120" | "130" }> } =
+      JSON.parse(readFileSync(new URL("./golden/v1.json", import.meta.url), "utf8"));
+    const selected = [...new Map(golden.items.map(item => [item.code, item])).values()].slice(0, 51);
+    expect(selected).toHaveLength(51);
+    const emptyTexts = Object.fromEntries(TEXT_SECTIONS.map(({ title }) => [title, ""]));
+    const emptySha = createHash("sha256").update(JSON.stringify(TEXT_SECTIONS.map(({ title }) => [title, null]))).digest("hex");
+    const latest: LatestDoc[] = selected.map(item => ({ stockCode: item.code, companyName: item.companyName, sector33: null,
+      doc: { docId: item.docId, docTypeCode: item.docTypeCode, periodEnd: item.periodEnd,
+        submittedAt: "2026-06-25T00:00:00.000Z", notionDocPageId: `text-${item.code}`, textParseStatus: "ok" } }));
+    const rows = latest.map(item => minimalRow({ pageId: `page-${item.stockCode}`, stockCode: item.stockCode,
+      companyName: item.companyName, docId: item.doc!.docId, docType: item.doc!.docTypeCode === "120" ? "有報" : "訂正有報", periodEnd: item.doc!.periodEnd,
+      submittedAt: item.doc!.submittedAt, textStatus: "取得済", tagStatus: "判定済", tagDoc: item.doc!.docId, vocabVersion: "v0",
+      judgeInput: withTextSyncReceipt("保存済み判定", { docId: item.doc!.docId, textPageId: item.doc!.notionDocPageId!, textsSha256: emptySha }) }));
+    vi.mocked(loadLatestDocs).mockResolvedValue(latest);
+    notionMocks.loadSupplementRows.mockImplementation(async (_dbId, _props, opts) => rows.filter(row => opts!.codes!.includes(row.stockCode)));
+    notionMocks.readSupplementRowFully.mockImplementation(async pageId => {
+      const row = rows.find(item => item.pageId === pageId); if (row === undefined) throw new Error("unknown test page");
+      return { ...row, masterLinked: row === rows[0] ? false : row.masterLinked, texts: emptyTexts };
+    });
+    const summary = await runBiztag({ budgetMs: 10_000, codes: selected.map(item => item.code), limit: 51,
+      mechanicalOnly: true, thresholds: { yesMin: 0.8, noMax: 0.2 }, model: CLEF_MODEL });
+    expect(summary.textCheckedCodes).toHaveLength(51); expect(summary.textObservations).toHaveLength(50);
+    expect(summary.textObservationsOmitted).toBe(1);
+    expect(summary.textObservations![0]).toEqual({ stockCode: rows[0].stockCode, source: "notion_current_read", supplementPageId: rows[0].pageId,
+      docId: rows[0].docId, textPageId: null, notionTextsSha256: emptySha, emptySectionKeys: TEXT_SECTIONS.map(({ key }) => key),
+      qualificationHeld: true, holdReason: "本文検査中に補足メタ/判定が変更。現在値を保持してHOLD" });
+    expect(summary.textObservations![1]).toMatchObject({ source: "notion_current_read", supplementPageId: rows[1].pageId, textPageId: latest[1].doc!.notionDocPageId,
+      notionTextsSha256: emptySha, qualificationHeld: false, holdReason: null });
+    expect(Buffer.byteLength(JSON.stringify(summary))).toBeLessThan(128 * 1024);
+    expect(notionMocks.readSupplementRowFully).toHaveBeenCalledTimes(51);
+    expect(notionMocks.readStockTextRow).not.toHaveBeenCalled(); expect(notionMocks.replaceEvidenceBlock).not.toHaveBeenCalled();
+    expect(createClefClient).not.toHaveBeenCalled(); expect(createJevClient).not.toHaveBeenCalled();
+  });
+
   it.each([
     { docId: "TEST_DOC", vocabVersion: "v0", dryRun: false },
     { docId: "TEST_DOC", vocabVersion: "v0", dryRun: true },

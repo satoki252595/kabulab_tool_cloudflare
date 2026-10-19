@@ -14,7 +14,19 @@ import {
   real,
   index,
   uniqueIndex,
+  check,
 } from "drizzle-orm/sqlite-core";
+
+/** Yahooプロキシ全isolateの停止期限。初期行は未観測、実応答ではない。 */
+export const yahooProxyCooldown = sqliteTable("yahoo_proxy_cooldown", {
+  id: integer("id").primaryKey(),
+  retryAtMs: integer("retry_at_ms").notNull(),
+  upstreamStatus: integer("upstream_status"),
+}, table => [
+  check("yahoo_proxy_cooldown_singleton", sql`${table.id} = 1`),
+  check("yahoo_proxy_cooldown_deadline", sql`typeof(${table.retryAtMs}) = 'integer' AND ${table.retryAtMs} >= 0 AND ${table.retryAtMs} <= 9007199254740991`),
+  check("yahoo_proxy_cooldown_status", sql`(${table.retryAtMs} = 0 AND ${table.upstreamStatus} IS NULL) OR (${table.retryAtMs} > 0 AND ${table.upstreamStatus} IS NOT NULL AND ${table.upstreamStatus} IN (429, 503))`),
+]);
 
 /**
  * 銘柄マスタ（共有）

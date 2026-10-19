@@ -287,10 +287,27 @@ describe("fetchStockRawData — PBR/BPS・配当利回りの検算 guard (2026-1
     }
   });
 
-  it("株価日からちょうど365日前の四半期末は採用する", async () => {
-    const row = { ...observed["6871"], mrq: 1760572800 };
+  it.each([
+    ["同日", 1792108800],
+    ["ちょうど365日前", 1760572800],
+  ])("株価日と%sの四半期末は採用する", async (_label, mrq) => {
+    const row = { ...observed["6871"], mrq };
     const result = await read("6871", summary(row), row.price);
     expect({ pbr: result.pbr, bps: result.bps }).toEqual({ pbr: row.pbr, bps: row.bps });
+  });
+
+  it.each([
+    ["未来", Date.parse("2026-10-17T00:00:00Z") / 1000],
+    ["日時範囲外", 1e20],
+    ["暦年範囲外", Date.parse("+010000-01-01T00:00:00Z") / 1000],
+  ])("%sの基準四半期末はBPS/PBRへ採用しない", async (_label, mrq) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const row = { ...observed["6871"], mrq };
+      const result = await read("6871", summary(row), row.price);
+      expect({ pbr: result.pbr, bps: result.bps }).toEqual({ pbr: null, bps: null });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("BPS/PBR の基準四半期末"));
+    } finally { warn.mockRestore(); }
   });
 });
 

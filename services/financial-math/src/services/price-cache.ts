@@ -66,7 +66,7 @@ export interface PriceContext {
   /**
    * 配当利回り — **decimal 表現** (0.0343 = 3.43%)。
    *
-   * DB (`core_stock_financials.dividend_yield`) には Yahoo の生値が
+   * DB (`core_stock_financials.dividend_yield`) には Yahoo 由来の配当利回りが
    * **% 値 (3.43)** で保存されているが、`PriceContext` では `/100` して
    * decimal に正規化する。これで views の `fmtPct(value, 2)` (内部で `value × 100`
    * する関数) と一貫し、`estimatedDividend = price × dividendYield` も正しく動く。
@@ -96,15 +96,24 @@ export function normalizeQuote(row: {
   dividendYield: number | null;
 }): { dividendYield: number | null; estimatedDividend: number | null } {
   // DB は % 値 (3.43) で保存されているため decimal (0.0343) に正規化する
-  // (Yahoo Finance API の生値が % 値で、kabulab 全体の DB がそれを継承している)
   const rawDy = row.dividendYield;
-  const dy = rawDy !== null && Number.isFinite(rawDy) ? rawDy / 100 : null;
+  const dy = rawDy !== null && Number.isFinite(rawDy) && rawDy >= 0 ? rawDy / 100 : null;
   const price = row.price;
   const estimatedDividend =
     price !== null && dy !== null && Number.isFinite(price) && Number.isFinite(dy) && dy > 0
       ? price * dy
       : null;
   return { dividendYield: dy, estimatedDividend };
+}
+
+/**
+ * 保存された配当利回りの状態。欠測・不正値は「未確定」で、無配 (0) とは別。
+ */
+export type DividendStatus = "paying" | "non-dividend" | "unverified";
+
+export function dividendStatusOf(dividendYield: number | null): DividendStatus {
+  if (dividendYield === null || !Number.isFinite(dividendYield) || dividendYield < 0) return "unverified";
+  return dividendYield > 0 ? "paying" : "non-dividend";
 }
 
 /**

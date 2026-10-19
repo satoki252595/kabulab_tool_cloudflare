@@ -17,7 +17,7 @@ import {
 import { activeEquityCondition } from "../../../../src/shared/db/active-equity.js";
 import { yuhoGrowthProjection } from "../../../../src/shared/db/projection-schema.js";
 import { yuhoDocuments, orderFacts, edinetReportedChanges } from "../db/schema.js";
-import { reportedDocumentHold, reportedFinancialSourceHold, reportedGrowthHold, reportedUnrepresentedDocumentHold, REPORTED_DOCUMENT_HOLD_REASON } from "./edinet/reported-changes.js";
+import { reportedDocumentHold, reportedFinancialSourceHold, reportedGrowthHold, reportedUnrepresentedDocumentHold, unresolvedReportedObservation, REPORTED_DOCUMENT_HOLD_REASON } from "./edinet/reported-changes.js";
 
 /** サービスで表示する最大年数 (EDINET 取得可能な過去分の上限と整合) */
 export const MAX_YEARS = 5;
@@ -159,7 +159,7 @@ export async function getOrderTrend(
       parseStatus:sql<string>`'reported_document_hold'`, reportedHold:sql<number>`1`, observedOnly:sql<number>`1`, sortId:sql<number>`0`,
     }).from(edinetReportedChanges).where(and(eq(edinetReportedChanges.stockId,stockId),
       sql`${edinetReportedChanges.periodEnd} is not null and ${edinetReportedChanges.submittedAt} is not null`,
-      sql`${edinetReportedChanges.reportedState}<>'unqualified_relation'`,
+      unresolvedReportedObservation(),
       sql`not exists(select 1 from yuho_documents known where known.doc_id=${edinetReportedChanges.docId})`)))
     .orderBy(desc(sql`period_end`),desc(sql`submitted_at`),desc(sql`sort_id`));
 
