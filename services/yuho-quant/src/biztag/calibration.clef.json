@@ -2,7 +2,7 @@
   "model": "Cloudflare/clef-flash@8b2e5fd1/torch-mps",
   "yesMin": 0.5,
   "noMax": 0.24,
-  "calibratedAt": "2026-10-14",
+  "calibratedAt": "2026-10-20",
   "runtime": {
     "hfModel": "Cloudflare/clef-flash",
     "hfRevision": "8b2e5fd17c09fd49bc2880b805d5323ec7ff4ff3",
@@ -12,7 +12,7 @@
     "safetensors": "0.8.0",
     "backend": "torch-mps",
     "quantization": null,
-    "maxInputTokens": 16000,
+    "maxInputTokens": 18432,
     "batchSize": 20,
     "questionOnlyRepartition": true,
     "uvLockSha256": "77b10208cb0b2b03b8165bbfdd2083d8ddf9a3d6449bb7238b85a5f8fa493300",
@@ -38,7 +38,10 @@
       "sourceRequests": 0,
       "externalJudgeApiRequests": 0,
       "productionWrites": 0,
-      "localHardwareCostUsd": null
+      "localHardwareCostUsd": null,
+      "scope": "historical-full-gold-16000",
+      "measuredAt": "2026-10-14",
+      "maxInputTokens": 16000
     },
     "atChosenThresholds": {
       "precisionYes": 0.9515570934256056,
@@ -84,11 +87,51 @@
       "businessWrites": 0
     },
     "evaluationFile": "golden/evaluation.clef.v1.json",
-    "evaluationSha256": "ebf1d5053dc89c60146e29619e6d7a4deebcee117c37547ab229defb9017d35f",
-    "privateEvaluationSha256": "49cdf56e07ecbe8faf7de9956265f04da68bbfffbee08cfec0784beff5e2192d",
+    "evaluationSha256": "d15deffac4492d5df8cd00c41e2615f476ec74f6493cd7469adc556b29a3b22e",
+    "privateEvaluationSha256": "22056afe1067d497b369a94929fd34d4b1a57f3ce82609ef3bf3fafd1db0d762",
     "why": "事前固定したyes 0.50〜0.99の0.01刻みで、precision>=0.9/mustNot=0のうち再現率を最大化。noはprecision>=0.95/正例の断定的除外<=5%を満たす範囲で最大化。較正集合での値であり独立holdoutや全銘柄精度の保証ではない。",
     "probabilityMeaning": "原本抜粋とtrue/false定義を条件とする専用headのsoftmax。較正済み信頼度を意味しない。",
-    "performance": "旧SemIfの87社実験183.18秒に対して本実験1446.69秒。入力881→898問と方式が異なるため厳密比較ではないが遅延増を隠さない。通常の39列同期は推論0、新規と実入力変更だけに使用し全社定時再判定を行わない。"
+    "performance": "旧16000上限の全量較正（2026-10-14）は95request/96forward、1446.69秒。18432上限で新たに測定したのは9434の1request/1forward・45.309秒だけで、残94requestは同一encoding証跡の保存結果を再利用した混合評価。新しい全量runの速度や4599の資源適格性は主張しない。通常の39列同期は推論0、新規と実入力変更だけに使用し全社定時再判定を行わない。",
+    "contextUpgrade": {
+      "kind": "mixed-94-reused-plus-one-9434-delta",
+      "fromMaxTokens": 16000,
+      "toMaxTokens": 18432,
+      "previousCalibrationSha256": "0d8fac66a12d975e08edceb34a46a1b6c502d58ccfe9654a9d15a434b83c0ce7",
+      "previousEvaluationSha256": "ebf1d5053dc89c60146e29619e6d7a4deebcee117c37547ab229defb9017d35f",
+      "previousPrivateEvaluationSha256": "49cdf56e07ecbe8faf7de9956265f04da68bbfffbee08cfec0784beff5e2192d",
+      "privateEvaluationSha256": "22056afe1067d497b369a94929fd34d4b1a57f3ce82609ef3bf3fafd1db0d762",
+      "comparisonProofSha256": "dac889f5bf432687cb540fa2a67efa296ef682c79f4e6aadb08df5320f795970",
+      "encodingComparisonSha256": "571a7dd21c30e267f9ed5feb979b55f3103dc08ed28e40107f80cd3048e1ee98",
+      "deltaResultSha256": "728b4227408d0b4f6134025604376638afc2250f5d71ea8c2994fffacd5a1d6c",
+      "deltaTerminalSha256": "cd7aa8b0012dea0b63e33c6ede69cbed0bd9306fb0488ee570bed65831b119f8",
+      "changedCode": "9434",
+      "changedRequests": 1,
+      "reusedRequests": 94,
+      "changedCompanies": 1,
+      "reusedCompanies": 86,
+      "changedQuestions": 16,
+      "reusedQuestions": 882,
+      "changedExpectedPairs": 16,
+      "reusedExpectedPairs": 842,
+      "notNewWholeGoldRun": true,
+      "thresholdsChanged": false,
+      "bandChanges": 0,
+      "noHoldoutGuarantee": true,
+      "measurement": {
+        "scope": "single-9434-request-only-not-whole-gold-or-4599",
+        "maxInputTokens": 18432,
+        "inferenceRequests": 1,
+        "nativeForwards": 1,
+        "elapsedSeconds": 45.308562500002154,
+        "peakChildRssBytes": 20898889728,
+        "peakMpsDriverBytes": 25549471744,
+        "swapIncreaseBytes": 0,
+        "sourceRequests": 0,
+        "externalJudgeApiRequests": 0,
+        "productionWrites": 0,
+        "retry": 0
+      }
+    }
   },
   "sources": [
     "https://huggingface.co/Cloudflare/clef-flash/tree/8b2e5fd17c09fd49bc2880b805d5323ec7ff4ff3"
