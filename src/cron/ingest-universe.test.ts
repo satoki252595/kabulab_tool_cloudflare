@@ -244,7 +244,7 @@ describe("TDnet の取込は母集団外の開示を書かず、Notion にも渡
     expect(byStock.rows.map((row) => row.ticker).sort()).toEqual(INGESTED_TICKERS);
   });
 
-  it("保存済みは Notion に渡さず、保持日内の未保存だけを足す", async () => {
+  it("本文終端の保存済みは Notion に渡さず、保持日内の未保存だけを足す", async () => {
     const sec = (days: number) => Math.floor((Date.now() - days * 86_400_000) / 1000);
     const ins = sqlite.prepare(
       `INSERT INTO ir_disclosures
@@ -257,6 +257,7 @@ describe("TDnet の取込は母集団外の開示を書かず、Notion にも渡
       sec(TDNET_PDF_RETAIN_DAYS + 5), "https://example.invalid/old-out.pdf", null
     );
     ins.run(1, "ARCHIVED", "72030", "テスト7203", "保管済み", sec(3), "https://example.invalid/archived.pdf", "page-arch");
+    sqlite.exec("UPDATE ir_disclosures SET pdf_text_status='no_text' WHERE tdnet_id='ARCHIVED'"); // Declared terminal-text protocol.
     vi.mocked(listRange).mockResolvedValue(ALL_CODES.map((code) => tdnetItem(code)));
     vi.mocked(recordPrimaryData).mockResolvedValue({
       pageId: "p1", outcome: "created", fileTooLarge: false,
@@ -400,7 +401,8 @@ describe("TDnet の日次は保持日数内の D1 欠測を母集団内だけ挿
 
 describe("EDINET の取込は母集団外の有報を取り込まない", () => {
   it("runYuhoEdinetCatchup (日次キャッチアップ)", async () => {
-    const docs = ALL_CODES.map((code) => ({
+    const docs = ALL_CODES.map((code, i) => ({
+      seqNumber: i + 1, // Declared list protocol: every official result has a unique integer sequence.
       docID: `S100${code}`,
       secCode: `${code}0`,
       ordinanceCode: "010",

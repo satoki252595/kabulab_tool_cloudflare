@@ -17,25 +17,20 @@ nix develop               # Node 22 + pnpm 9 の dev shell
 pnpm install && pnpm dev  # 依存導入 + ローカル開発サーバー
 pnpm sync:monthly:core    # 手動月次 rebuild (通常は GitHub Actions が実行)
 pnpm yutai:fetch          # 月次Actionsと同じ原文取得・物理保管・取込
-pnpm exec tsx --env-file=.env scripts/biztag-local/main.ts run yutai-summary
-# Mac21時jobと同じ変更・未要約分のローカル要約。private stateは入口で選ぶ。
+pnpm biztag:monthly --runtime .runtime/mac-main554-20261020 --preflight
+# 実処理は docs/mac-monthly-manual.md のコマンドを使う。
 ```
 
-本番の原文取得は毎月10日10:30 JSTのActionsへ接続する。変更・未要約分はMacの
-`com.kabulab-cf.yutai-summary` が毎日21時に最大60件ずつ処理する。Macが稼働して
-いることが必要。既存の固定MLXモデルだけを使い、新規の有料APIへ切り替えない。
+本番の原文取得は毎月10日10:30 JSTのActionsへ接続する。Macの自動起動2本は
+停止済み。変更・未要約分の機械要約は[月次手動](../../docs/mac-monthly-manual.md)で
+最大60群ずつ処理する。標準はモデルなしで、既存MLXは明示`--allow-model`時だけ。
 原文・生成結果を公開ログへ出さず、共有契約の検証・Notion物理照合・銘柄単位の
 原子適用を通す。判定不能は金額NULL・理由つき保留とし、未確定の適用を自動再送しない。
 
-20時の事業タグ・21時の優待要約は、開始/終了の実行receiptを既存vwap R2へ
-CAS保存し全文を読戻す（通常1処理あたり2PUT・3GET）。本文や処理件数は含めない。
-既存`ops_check`が毎日の予定開始から5分・終了30分の窓、未完、実HEADと
-`BIZTAG_LOCAL_ACCEPTED_REVISION`の一致、終了codeを検査し、既存SLO通知へ渡す。
-GitHub SecretにもMac `.env`と同じ承認済みSHA・既存R2資格を登録する。
-code0はプロセス終了の記録であり、データpendingが0という意味ではない。
-Mac停止やmirror失敗はreceipt未取得/未完として検出し、過去の成功で補わない。
-同じ予定時刻の未完runを重複起動で置換しない。前日の未完はprivate stateへ
-全文を保全・照合し、警告を残せた場合だけ次の予定へ進む。
+月次手動では既存runtime・private state・writer排他・未完記録を保全する。
+旧日次receiptは更新せず、その日次期待の監視も廃止済み。有限処理の終了を
+全件充足と扱わず、summaryの残件を確認する。毎月11日09:00 JSTのCalendar
+メール案内は設定済みで、初回は2026-11-11。案内はコマンドを自動実行しない。
 
 原文の権利月は各表の明示範囲を使う。行全体が単一の「金額円相当」と
 独立した末尾「（n月のみ）」である確認済み形式では、その行を表の月の部分集合に

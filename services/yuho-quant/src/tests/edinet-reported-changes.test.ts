@@ -18,11 +18,11 @@ const entries = fixture.entries as Entry[];
 const find = (id: string) => { const entry = entries.find(e => e.original.docID === id); if (!entry) throw new Error("missing real fixture"); return entry; };
 
 beforeEach(() => { vi.resetAllMocks(); });
-async function captured(entry: Entry) {
+async function captured(entry: Entry, related: Entry[] = []) {
   // Original result row is unchanged. This count/clock/archive transport is a declared protocol projection,
   // not a claim that the full retained original HTTP body or real archive ACK is replayed here.
   const raw = new TextEncoder().encode(JSON.stringify({ metadata: { parameter: { date: entry.source.date, type: "2" },
-    status: "200", message: "OK", resultset: { count: 1 } }, results: [entry.original] }));
+    status: "200", message: "OK", resultset: { count: 1 + related.length } }, results: [entry.original, ...related.map(e => e.original)] }));
   vi.mocked(observeDocuments).mockResolvedValue({ date: entry.source.date, httpStatus: 200,
     fetchedAt: `${entry.source.date}T12:00:00.000Z`, bytes: raw });
   vi.mocked(recordPrimaryData).mockResolvedValue({ pageId: entry.source.retainedArchive[0].pageId,
@@ -35,6 +35,35 @@ async function captured(entry: Entry) {
 }
 
 describe("EDINET reported state is distinct from qualified correction effects", () => {
+  it("実8/28の同docID・別seq観測を両方保全し、seq重複と資格の取り違えを拒否する", async () => {
+    const repeated = entries.filter(e => e.original.docID === "S100YXXA");
+    expect(repeated.map(e => e.original.seqNumber)).toEqual([318, 345]);
+    const source = await captured(repeated[0], repeated.slice(1));
+    const { db, sqlite } = createReportedSourceTestDb();
+    expect(await recordReportedChanges(db, source.list, source.snapshot, () => false)).toEqual({observations: 2, held: 2, relations: 0});
+    const saved = sqlite.prepare("select seq_number, doc_id, observation_json from yuho_edinet_reported_changes order by seq_number").all();
+    expect(saved.map(r => [r.seq_number, r.doc_id, JSON.parse(String(r.observation_json)).doc.docInfoEditStatus]))
+      .toEqual([[318, "S100YXXA", "2"], [345, "S100YXXA", "1"]]);
+    const before = sqlite.prepare("select total_changes() as n").get();
+    await recordReportedChanges(db, source.list, source.snapshot, () => false);
+    expect(sqlite.prepare("select total_changes() as n").get()).toEqual(before);
+    await expect(assertReportedDocumentUsable(db, "S100YXXA")).rejects.toThrow(ReportedDocumentHoldError);
+    // Declared qualification projection tests only: metadata belongs to one exact source sequence.
+    const rows = buildReportedChanges(source.list, source.snapshot, new Map([[345, {
+      stockId: 1, ticker: "4323", edinetCode: "E05236", periodEnd: "2026-03-31", submittedAt: new Date("2026-07-03T00:01:00Z"),
+    }]]));
+    expect(rows.map(r => [r.seqNumber, r.stockId])).toEqual([[318, null], [345, 1]]);
+    const duplicate = {...source.list, results: [source.list.results[0], source.list.results[0]]};
+    expect(() => buildReportedChanges(duplicate, source.snapshot)).toThrow("書類ID/順序");
+    // Declared original-row fault: even a normal (unreported) row cannot share the observation sequence.
+    const normalCollision = {...source.list, results: [
+      {...source.list.results[0], docInfoEditStatus: "0"},
+      {...source.list.results[1], seqNumber: source.list.results[0].seqNumber},
+    ]};
+    await expect(recordReportedChanges(db, normalCollision, source.snapshot, () => false)).rejects.toThrow("書類ID/順序");
+    expect(sqlite.prepare("select total_changes() as n").get()).toEqual(before);
+  });
+
   it("the shared real-D1 set read detects only exact held docs and rejects malformed/ambiguous responses", async () => {
     const { db, sqlite } = createReportedSourceTestDb(), source = await captured(find("S100YRSP"));
     await recordReportedChanges(db, source.list, source.snapshot, () => false);

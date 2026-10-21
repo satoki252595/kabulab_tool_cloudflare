@@ -19,6 +19,7 @@ import { assertCorporateEventsShape, assertEventSourceProof, corporateEventPins,
   type CorporateEvents } from "../../../src/shared/yahoo/corporate-events.js";
 import type { DailyBar } from "../../../src/shared/yahoo/client.js";
 import type { IntraRecoveryProof, IntraRecoveryWindow } from "./intra-recovery.js";
+import type { PricePutReadback } from "./r2.js";
 
 export type PricedBar = {
   o: number;
@@ -586,6 +587,8 @@ export type IngestCodeOutcome = {
   status: IngestOutcomeStatus;
   latestSourceBar: string | number | null;
   bodySha: string | null;
+  /** ACK不明後、送信済み価格の全POST状態を1回の完全GETで確認した場合だけ。 */
+  putReadback?: PricePutReadback;
   /** dailyの失敗理由。URL/secretを除去し300文字以下。旧summary/intraでは省略。 */
   reason?: string;
   discardedOutOfRange?: DiscardedOutOfRange;

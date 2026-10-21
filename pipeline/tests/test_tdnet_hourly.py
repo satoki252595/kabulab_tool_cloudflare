@@ -18,10 +18,46 @@ from jp_stock_pipeline.config import load_settings
 from jp_stock_pipeline.jobs import tdnet_hourly as mod
 from jp_stock_pipeline.jobs.runner import JobContext
 from jp_stock_pipeline.licensing import LicenseTag
-from jp_stock_pipeline.models import DisclosureRecord, Provenance, Source
+from jp_stock_pipeline.models import JST, DisclosureRecord, Provenance, Source
 from jp_stock_pipeline.notion.client import NotionClient
 
 UTC = timezone.utc
+
+
+@pytest.mark.parametrize(
+    ("clock", "expected"),
+    [
+        (datetime(2026, 10, 19, 16, 46, tzinfo=UTC), date(2026, 10, 19)),
+        (datetime(2026, 10, 19, 23, 59, 59, tzinfo=UTC), date(2026, 10, 19)),
+        (datetime(2026, 10, 20, 0, 0, tzinfo=UTC), date(2026, 10, 20)),
+        (datetime(2026, 10, 19, 14, 59, 59, tzinfo=UTC), date(2026, 10, 19)),
+        (datetime(2026, 10, 19, 15, 0, tzinfo=UTC), date(2026, 10, 19)),
+        (datetime(2026, 10, 20, 8, 59, 59, tzinfo=JST), date(2026, 10, 19)),
+        (datetime(2026, 10, 20, 9, 0, tzinfo=JST), date(2026, 10, 20)),
+    ],
+)
+def test_default_target_date_preserves_the_delayed_schedule_day(clock, expected):
+    assert mod.default_target_date(clock) == expected
+
+
+def test_default_target_date_rejects_unknown_timezone():
+    with pytest.raises(ValueError, match="タイムゾーン"):
+        mod.default_target_date(datetime(2026, 10, 20, 1, 46))
+
+
+@pytest.mark.parametrize("explicit", [None, date(2026, 10, 16)])
+def test_execute_keeps_explicit_date_or_uses_delayed_schedule_day(monkeypatch, tmp_path, explicit):
+    from unittest.mock import Mock
+
+    clock = datetime(2026, 10, 19, 16, 46, tzinfo=UTC)
+    monkeypatch.setattr(mod, "now_jst", lambda: clock)
+    listing = Mock(side_effect=RuntimeError("stop before source fetch"))
+    monkeypatch.setattr(mod, "_collect", listing)
+    ctx = _ctx(str(tmp_path))
+    ctx.args.date = explicit
+    with pytest.raises(RuntimeError, match="stop before source fetch"):
+        mod.execute(ctx)
+    listing.assert_called_once_with(ctx, explicit if explicit is not None else date(2026, 10, 19))
 
 
 @pytest.mark.parametrize("failure", [mod.FetchError("HTTP 503"), ValueError("invalid response")])

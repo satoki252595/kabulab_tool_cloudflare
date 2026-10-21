@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { R2PutRejectedError, R2PutUnknownError } from "./lib/r2.js";
-import { r2GetVersion, r2Put } from "./lib/r2.js";
+import { r2GetVersion, r2Put, confirmUnknownPricePut } from "./lib/r2.js";
 import { loadCodes } from "./lib/codes.js";
 import { YahooRawTooLargeError, YahooRateLimitError, parseBars5m, describeIntraSource, type YahooRawCapture } from "../../src/shared/yahoo/client.js";
 import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
@@ -21,7 +21,7 @@ const rawHook = vi.hoisted(() => ({ enabled: true, replay: null as Map<string, Y
 
 vi.mock("./lib/r2.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("./lib/r2.js")>();
-  return { ...mod, r2GetVersion: vi.fn(), r2Put: vi.fn(),
+  return { ...mod, r2GetVersion: vi.fn(), r2Put: vi.fn(), confirmUnknownPricePut: vi.fn(async error => { throw error; }),
     retry: <T>(fn: () => Promise<T>, n: number, _base: number, stop?: (error: unknown) => boolean) => mod.retry(fn, n, 1, stop) };
 });
 vi.mock("./lib/codes.js", async (importOriginal) => {
@@ -117,6 +117,8 @@ const SAVED_CWD = process.cwd();
 beforeEach(() => {
   vi.clearAllMocks();
   mockR2Put.mockReset(); mockR2Put.mockResolvedValue(undefined);
+  vi.mocked(confirmUnknownPricePut).mockReset();
+  vi.mocked(confirmUnknownPricePut).mockImplementation(async error => { throw error; });
   vi.spyOn(console, "info").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
   process.argv = ["node", "vitest"];
@@ -399,6 +401,45 @@ describe("ingest-intra main flow", () => {
     expect(outcomes.C.status).toBe("notStarted");
   });
 
+  it("unknown照合中は次PUTを開始せず、完全POST確認だけをsummaryへ区別して通常再開する", async () => {
+    mockLoadCodes.mockResolvedValue(["A", "B", "C"]); mockR2Get.mockResolvedValue(null); mockFetch5m.mockResolvedValue([BAR]);
+    mockR2Put.mockRejectedValueOnce(new R2PutUnknownError("intra/A.json", "InternalError", 500, null));
+    let release!: (proof: Awaited<ReturnType<typeof confirmUnknownPricePut>>) => void;
+    vi.mocked(confirmUnknownPricePut).mockReturnValueOnce(new Promise(resolve => { release = resolve; }));
+    const operation = main();
+    await vi.waitFor(() => expect(confirmUnknownPricePut).toHaveBeenCalledTimes(1));
+    expect(mockR2Put).toHaveBeenCalledTimes(2); expect(mockRecord).not.toHaveBeenCalled();
+    const bodySha256 = createHash("sha256").update(mockR2Put.mock.calls[0][1]).digest("hex");
+    const proof = { putAcknowledgement: "unknown" as const, state: "exact-post-observed" as const,
+      checkedAt: new Date().toISOString(), etag: '"post"', bodyBytes: Buffer.byteLength(mockR2Put.mock.calls[0][1]),
+      bodySha256, metadataSha256: createHash("sha256").update("[]").digest("hex"), contentType: "application/json" as const, complete: true as const };
+    release(proof); await operation;
+    expect(mockR2Put).toHaveBeenCalledTimes(3); expect(process.exitCode).toBe(0);
+    expect(recordedBody()).toMatchObject({ unknown: [], outcomes: { A: { status: "written", bodySha: bodySha256, putReadback: proof }, C: { status: "written" } } });
+  });
+  it("同時2PUTのunknownは両世代のPOST確認が閉じるまで次PUTを開始しない", async () => {
+    mockLoadCodes.mockResolvedValue(["A", "B", "C"]); mockR2Get.mockResolvedValue(null); mockFetch5m.mockResolvedValue([BAR]);
+    for (const code of ["A", "B"]) mockR2Put.mockRejectedValueOnce(new R2PutUnknownError(`intra/${code}.json`, "InternalError", 500, null));
+    type Proof = Awaited<ReturnType<typeof confirmUnknownPricePut>>;
+    const pending: Array<(proof: Proof) => void> = [];
+    vi.mocked(confirmUnknownPricePut).mockImplementation(() => new Promise(resolve => { pending.push(resolve); }));
+    const operation = main();
+    await vi.waitFor(() => expect(pending).toHaveLength(2));
+    const proof = (index: number): Proof => ({ putAcknowledgement: "unknown", state: "exact-post-observed",
+      checkedAt: new Date().toISOString(), etag: `"post-${index}"`, bodyBytes: Buffer.byteLength(mockR2Put.mock.calls[index][1]),
+      bodySha256: createHash("sha256").update(mockR2Put.mock.calls[index][1]).digest("hex"),
+      metadataSha256: createHash("sha256").update("[]").digest("hex"), contentType: "application/json", complete: true });
+    try {
+      pending[0](proof(0));
+      await new Promise(resolve => setTimeout(resolve, 10));
+      expect(mockR2Put).toHaveBeenCalledTimes(2); expect(mockRecord).not.toHaveBeenCalled();
+      pending[1](proof(1)); await operation;
+      expect(mockR2Put).toHaveBeenCalledTimes(3); expect(process.exitCode).toBe(0);
+      expect(recordedBody()).toMatchObject({ unknown: [], outcomes: {
+        A: { status: "written", putReadback: { etag: '"post-0"' } }, B: { status: "written", putReadback: { etag: '"post-1"' } }, C: { status: "written" },
+      } });
+    } finally { pending.forEach((release, index) => release(proof(index))); await operation; }
+  });
   it("custody failure archives current chunk attempts but prevents chunk PUT and next chunk source", async () => {
     (globalThis as { __vwapKnobs?: unknown }).__vwapKnobs = { conc: 2, delayMs: 1, maxRateLimit: 5, keepDays: 365 };
     const codes = Array.from({ length: 31 }, (_, i) => String(1000 + i));

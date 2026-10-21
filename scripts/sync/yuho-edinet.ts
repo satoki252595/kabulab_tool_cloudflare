@@ -50,8 +50,21 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   process.exitCode = 2;
   try {
     process.exitCode = await main();
-  } catch {
-    // 上流例外にキーやURLが含まれ得るため本文を標準出力へ転記しない。
-    console.error("[yuho-edinet] 失敗: 完了せず停止しました（再送なし）");
+  } catch (error) {
+    // 自前の固定文言だけを原因コードにする。任意例外の本文/URL/SQL/bindは出さない。
+    const known = new Map([
+      ["EDINET 未確定 in-flight が残っています。読取照合が必要です (再送なし)。", "checkpoint_inflight"],
+      ["EDINET checkpoint CAS が不一致 (再送なし)", "checkpoint_cas"],
+      ["EDINET checkpoint CAS ACK が不一致 (再送なし)", "checkpoint_ack"],
+      ["EDINET日付一覧の実添付が不一致です。", "snapshot_attachment"],
+      ["EDINET保存日付一覧の取得に失敗しました (再送なし)。", "snapshot_download"],
+      ["EDINET日付一覧gzip SHA不一致。", "snapshot_gzip_sha"],
+      ["EDINET日付一覧原HTTP本文のbytes/SHA不一致。", "snapshot_raw_sha"],
+      ["EDINET保存日付一覧のdate/type/件数が不一致", "snapshot_list"],
+      ["EDINET変更観測の原本/保存内容が不一致です（再送なし）", "reported_observation_mismatch"],
+      ["EDINET変更観測の保存全量が不一致です（再送なし）", "reported_observation_count"],
+    ]);
+    const code = error instanceof Error ? known.get(error.message) : undefined;
+    console.error(`[yuho-edinet] 失敗: code=${code === undefined ? "unknown" : code} 完了せず停止しました（再送なし）`);
   }
 }

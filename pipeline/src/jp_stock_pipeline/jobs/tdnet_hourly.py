@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date
+from datetime import date, datetime, timedelta
 from functools import partial
 
 from ..cloud_store import notion_pages
@@ -18,7 +18,7 @@ from ..collectors import tdnet_official_fallback, tdnet_yanoshin
 from ..convert import convert_artifact, xbrl_to_csv
 from ..http import FetchError, fetch
 from ..licensing import source_license
-from ..models import DisclosureRecord, Provenance, RawArtifact, Source, now_jst
+from ..models import JST, DisclosureRecord, Provenance, RawArtifact, Source, now_jst
 from ..notion import file_upload, upsert
 from ..rawstore import save_raw
 from ..transform import normalize
@@ -151,8 +151,17 @@ def _load_map_guarded(loader, label: str):
         return {}, False
 
 
+def default_target_date(now: datetime) -> date:
+    """9〜19時JSTの予定分が翌朝9時前に遅配されても対象日を進めない。"""
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("TDnet対象日の判定にはタイムゾーン付き実時刻が必要です")
+    return (now.astimezone(JST) - timedelta(hours=9)).date()
+
+
 def execute(ctx: JobContext) -> None:
-    target_date = ctx.args.date or now_jst().date()
+    started = now_jst()
+    target_date = ctx.args.date or default_target_date(started)
+    logger.info("TDnet対象日=%s (実起動=%s)", target_date, started.isoformat())
     batches = _collect(ctx, target_date)
 
     # ① relation マップ(全件・有界)と ④ dedup マップ(対象日のみ)を1回ずつ事前ロード。

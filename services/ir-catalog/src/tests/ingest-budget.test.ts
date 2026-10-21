@@ -217,6 +217,46 @@ describe("ingestBatch の二次予算", () => {
     expect(sqlite.prepare("SELECT * FROM ir_disclosures").all()).toEqual(before);
   });
 
+  it.each([{status:null,insertApplied:false,mismatch:false},{status:"pending",insertApplied:true,mismatch:false},{status:"ok",insertApplied:false,mismatch:false},{status:"pending",insertApplied:true,mismatch:true}])("通常budgetは7日外の本文INSERT未完を保存ページへ限定し、一致INSERT再送0 (%j)", async ({status,insertApplied,mismatch}) => {
+    const db = makeDb(createD1(sqlite));
+    await ingestBatch(db as never, [{...ITEM, pubdate: jstDaysAgo(30)}], {batchKey: "saved", source: "declared ACK fault",
+      archiveToNotion: false, notionByStock: false, codeToId: new Map([["1001", 1]])});
+    sqlite.prepare("UPDATE ir_disclosures SET notion_page_id='existing',pdf_text_status=?").run(status);
+    const id = sqlite.prepare("SELECT id FROM ir_disclosures").get()!.id;
+    const text = "保存済み本文𠮷";
+    if (insertApplied) {
+      sqlite.prepare("INSERT INTO ir_disclosure_texts(disclosure_id,tdnet_id,text,char_count) VALUES(?,?,?,?)").run(id as number,ITEM.id,mismatch ? "既存の別本文" : text,mismatch ? "既存の別本文".length : text.length);
+      sqlite.exec("CREATE TRIGGER prevent_repeat BEFORE INSERT ON ir_disclosure_texts BEGIN SELECT RAISE(ABORT, 'repeat insert'); END;");
+    }
+    vi.mocked(upsertDisclosuresByStock).mockImplementationOnce(async input => {
+      expect(input.rows.map(r=>r.key)).toEqual([ITEM.id]);
+      expect([...input.recoverPdfTextPages!]).toEqual([[ITEM.id,"existing"]]);
+      input.onPagePersisted?.(ITEM.id,"existing");
+      input.onPdfClassified?.(ITEM.id,{sentiment:"unknown",method:null,score:null,text});
+      return {parentDbId:"db1",stocksTouched:1,created:0,updated:0,skippedExisting:1,skippedNoFile:0,rejudged:0,rowErrors:0,reachedDeadline:false,deadlineRemainderKeys:[],skippedNoFileKeys:[]};
+    });
+    const opts = {batchKey:"normal",source:"test",archiveToNotion:false,notionByStock:true,notionByStockBudgetMs:60_000,unsavedLookbackDays:40,codeToId:new Map([["1001",1]])};
+    if (mismatch) {
+      // Declared prior judgment values must stay untouched when source text qualification fails.
+      sqlite.exec("UPDATE ir_disclosures SET pdf_sentiment='positive',pdf_sentiment_method='rule_v1',pdf_sentiment_score=1,pdf_sentiment_at=1");
+      const sentimentSql = "SELECT pdf_sentiment,pdf_sentiment_method,pdf_sentiment_score,pdf_sentiment_at FROM ir_disclosures";
+      const beforeSentiment = sqlite.prepare(sentimentSql).all();
+      const before = sqlite.prepare("SELECT * FROM ir_disclosure_texts").all();
+      await expect(ingestBatch(db as never,[],opts)).rejects.toThrow("上書きなし");
+      expect(sqlite.prepare("SELECT * FROM ir_disclosure_texts").all()).toEqual(before);
+      expect(sqlite.prepare(sentimentSql).all()).toEqual(beforeSentiment);
+      expect(sqlite.prepare("SELECT pdf_text_status FROM ir_disclosures").get()!.pdf_text_status).toBe("pending");
+      expect(recordPrimaryData).not.toHaveBeenCalled();
+      return;
+    }
+    await ingestBatch(db as never,[],opts);
+    expect(sqlite.prepare("SELECT pdf_text_status FROM ir_disclosures").get()!.pdf_text_status).toBe("ok");
+    expect(sqlite.prepare("SELECT text,char_count FROM ir_disclosure_texts").get()).toEqual({text,char_count:text.length});
+    await ingestBatch(db as never,[],opts);
+    expect(upsertDisclosuresByStock).toHaveBeenCalledTimes(1);
+    expect(recordPrimaryData).not.toHaveBeenCalled();
+  });
+
   it("相対予算は二次フェーズ開始から測る (D1 所要に依らない)", async () => {
     const before = Date.now();
     const input = await run({ notionByStockBudgetMs: 60_000 });
@@ -292,7 +332,7 @@ describe("ingestBatch の二次予算", () => {
     sqlite.exec(`CREATE TRIGGER prevent_repeat BEFORE INSERT ON ir_disclosure_texts
       BEGIN SELECT RAISE(ABORT, 'repeat insert'); END;`);
     vi.mocked(upsertDisclosuresByStock).mockImplementationOnce(async (input) => {
-      expect([...input.recoverPdfTextKeys!]).toEqual([ITEM.id]);
+      expect([...input.recoverPdfTextPages!.keys()]).toEqual([ITEM.id]);
       input.onPagePersisted?.(ITEM.id, "existing");
       input.onPdfClassified?.(ITEM.id, {sentiment: "unknown", method: null, score: null, text});
       return {parentDbId: "db1", stocksTouched: 1, created: 0, updated: 0,
@@ -303,7 +343,7 @@ describe("ingestBatch の二次予算", () => {
     expect(sqlite.prepare("SELECT pdf_text_status FROM ir_disclosures").get()!.pdf_text_status).toBe("ok");
     expect(sqlite.prepare("SELECT text,char_count FROM ir_disclosure_texts").get()).toEqual({text, char_count: text.length});
     await resumeNotionByStock(db as never, new Date("2026-09-18T00:00:00+09:00"), new Date("2026-09-19T00:00:00+09:00"));
-    expect([...vi.mocked(upsertDisclosuresByStock).mock.calls[1][0].recoverPdfTextKeys!]).toEqual([]);
+    expect([...vi.mocked(upsertDisclosuresByStock).mock.calls[1][0].recoverPdfTextPages!.keys()]).toEqual([]);
   });
 });
 
@@ -382,7 +422,7 @@ describe("予算付き二次投入の D1 選択", () => {
     );
   }
 
-  it("notion_page_id がある行だけでは Notion を呼ばない", async () => {
+  it("本文終端の notion_page_id がある行だけでは Notion を呼ばない", async () => {
     const db = makeDb(createD1(sqlite));
     const base = {
       batchKey: "saved-only",
@@ -391,7 +431,7 @@ describe("予算付き二次投入の D1 選択", () => {
       codeToId: new Map([["1001", 1]]),
     };
     await ingestBatch(db as never, [ITEM], { ...base, notionByStock: false });
-    sqlite.exec("UPDATE ir_disclosures SET notion_page_id='page-1'");
+    sqlite.exec("UPDATE ir_disclosures SET notion_page_id='page-1',pdf_text_status='no_text'");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       await ingestBatch(db as never, [ITEM], {
@@ -414,6 +454,7 @@ describe("予算付き二次投入の D1 選択", () => {
     insertRaw("ANCIENT", 100, null);
     insertRaw("OUT", 10, null, "99990");
     insertRaw("SAVED", 2, "page-saved");
+    sqlite.exec("UPDATE ir_disclosures SET pdf_text_status='no_text' WHERE tdnet_id='SAVED'");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const db = makeDb(createD1(sqlite));
@@ -436,7 +477,7 @@ describe("予算付き二次投入の D1 選択", () => {
       expect(logged).toContain("archived-skipped-notion-query");
       expect(logged).toContain("SAVED");
       expect(logged).toContain("universe-excluded");
-      expect(logged).toContain("OUT");
+      expect(logged).toContain("OUT"); // Declared contradictory stock_id/code is still rejected after the SQL scope filter.
       expect(logged).not.toContain("ANCIENT");
     } finally {
       warn.mockRestore();

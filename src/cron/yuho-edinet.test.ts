@@ -265,7 +265,7 @@ describe("catchup 応答契約: 実失敗だけ非 2xx", () => {
   });
   it("当日snapshotは翌日に再観測し後発docだけを取り込み、封印後はsource0", async () => {
     const day = "2026-10-04";
-    const firstDoc = annualDoc("7203"), lateDoc = {...annualDoc("7203"), docID: "S1007203LATE"};
+    const firstDoc = annualDoc("7203"), lateDoc = {...annualDoc("7203"), seqNumber: 2, docID: "S1007203LATE"};
     let afterClose = false;
     vi.mocked(listDocuments).mockImplementation(async (date) => ({results: date === day
       ? (afterClose ? [firstDoc, lateDoc] : [firstDoc]) : []}) as never);
@@ -282,7 +282,7 @@ describe("catchup 応答契約: 実失敗だけ非 2xx", () => {
     expect(ingestDocument).toHaveBeenCalledTimes(2);
   });
   it("60件cap後は同snapshotの61件目から再開し、完了doc/日付一覧を再取得しない", async () => {
-    const docs = Array.from({length: 61}, (_, i) => ({...annualDoc("7203"), docID: `S1007203${i}`}));
+    const docs = Array.from({length: 61}, (_, i) => ({...annualDoc("7203"), seqNumber: i + 1, docID: `S1007203${i}`}));
     vi.mocked(listDocuments).mockResolvedValueOnce({results: docs} as never)
       .mockResolvedValue({results: []} as never);
     vi.mocked(ingestDocument).mockResolvedValue({outcome: "ingested", parseStatus: "no_order_table",
@@ -320,7 +320,7 @@ describe("catchup 応答契約: 実失敗だけ非 2xx", () => {
   });
 
   it("既存本文の純不一致は理由付きHOLDとし、完了集合を保持して次文書へ進む", async () => {
-    const docs = ["FIRST", "HOLD", "LAST"].map((suffix) => ({ ...annualDoc("7203"), docID: `S1007203${suffix}` }));
+    const docs = ["FIRST", "HOLD", "LAST"].map((suffix, i) => ({ ...annualDoc("7203"), seqNumber: i + 1, docID: `S1007203${suffix}` }));
     vi.mocked(listDocuments).mockResolvedValueOnce({ results: docs } as never)
       .mockResolvedValue({ results: [] } as never);
     const success = { outcome: "skipped_existing", parseStatus: "no_order_table",
@@ -406,7 +406,7 @@ describe("catchup 応答契約: 実失敗だけ非 2xx", () => {
 
   it("positive: 母集団外あり・失敗なし → errors 空・200", async () => {
     vi.mocked(listDocuments)
-      .mockResolvedValueOnce({ results: [annualDoc("7203"), annualDoc("1208")] } as never)
+      .mockResolvedValueOnce({ results: [annualDoc("7203"), {...annualDoc("1208"), seqNumber: 2}] } as never)
       .mockResolvedValue({ results: [] } as never);
     vi.mocked(ingestDocument).mockResolvedValue({
       outcome: "ingested",

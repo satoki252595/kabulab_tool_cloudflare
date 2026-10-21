@@ -158,8 +158,8 @@ export interface ByStockInput {
    * デフォルト false: 通常 backfill では既存 terminal 行は冪等スキップ。
    */
   rejudgePdf?: boolean;
-  /** D1 本文保存が未完了の既存添付を再抽出する。発行元 PDF は再取得しない。 */
-  recoverPdfTextKeys?: ReadonlySet<string>;
+  /** 本文未完の TDnet ID → D1で既知のNotion pageId。同じ終端保存PDFだけを再抽出する。 */
+  recoverPdfTextPages?: ReadonlyMap<string, string>;
   /**
    * 銘柄 → Notion 会社ページの写し。あるときは銘柄解決の検索/取得を省く。
    * 未指定は従来どおり毎回 Notion で解決する（プロセス内キャッシュのみ）。
@@ -1033,10 +1033,14 @@ async function runUpsertDisclosuresByStock(
     stockCacheLabel = session.stockCache;
     const { childDbId, existing } = session;
       const ex = existing.byKey.get(row.key);
+      const recoverPageId = input.recoverPdfTextPages?.get(row.key);
+      if (recoverPageId !== undefined && (!ex || ex.pageId !== recoverPageId || !isTerminal(ex))) {
+        throw new Error("ir_pdf_recovery_source_unqualified");
+      }
       if (ex && isTerminal(ex)) {
         // 本文保存の中断と再判定は、既に物理保管した同じ PDF から再開する。
         if (ex.status === "uploaded" && ex.hasFile && input.classifyPdf &&
-          (input.rejudgePdf || input.recoverPdfTextKeys?.has(row.key))) {
+          (input.rejudgePdf || recoverPageId !== undefined)) {
           const archivedStarted = performance.now();
           let bytes: Uint8Array;
           try {

@@ -6,7 +6,7 @@ import "dotenv/config";
 // 実行: npx tsx scripts/ingest-intra.ts [--codes=...] [--limit=N] [--range=60d]   KEEP_DAYS=365
 import { fileURLToPath } from "node:url";
 import { fetchBars5m, fetchBars5mWindow, describeIntraSource, YahooIntraSourceUnavailableError, YahooRawTooLargeError, MAX_YAHOO_RAW_BYTES, type YahooRawCapture } from "../../src/shared/yahoo/client.js";
-import { r2GetVersion, r2Put, mapLimit, sleep, retry, R2PutRejectedError, R2PutUnknownError } from "./lib/r2.js";
+import { r2GetVersion, r2Put, confirmUnknownPricePut, mapLimit, sleep, retry, R2PutRejectedError, R2PutUnknownError, type PricePutReadback } from "./lib/r2.js";
 import { assertCodesInUniverse, loadCodes, arg } from "./lib/codes.js";
 import { sharedEnv } from "../../src/shared/env.js";
 import { archiveSummaryOrFatal, assertSavedIntraShape, bodyPin, buildIngestSummary, findInvalidBars, mergeIntraBars, resolveExitCode, resolveRunId, retainIntraSourceStatus, sanitizeLogText, shouldSkipPut, universePin, writeSummaryLocal, type IngestCodeOutcome, type SavedIntra } from "./lib/ingest-guard.js";
@@ -51,6 +51,7 @@ export async function main() {
   let written = 0, empty = 0, errors = 0, rateLimited = 0, invalid = 0, skipped = 0, done = 0;
   let consecRL = 0, aborted = false, fatal = false;
   let rawCustodyError: unknown;
+  let putBarrier: Promise<void> = Promise.resolve();
   const unknownCodes: string[] = [];
   const rejectedCodes: string[] = [];
   const outcomes: Record<string, IngestCodeOutcome> = {};
@@ -217,10 +218,22 @@ export async function main() {
         }
         outcomes[code] = { status: "notStarted", latestSourceBar: latest, bodySha: null };
         writes.push(async () => {
-          if (aborted || fatal) return;
+          for (;;) {
+            const barrier = putBarrier;
+            await barrier;
+            if (aborted || fatal) return;
+            if (barrier === putBarrier) break;
+          }
+          let putReadback: PricePutReadback | undefined;
           try {
             schedule.assertActive();
-            await r2Put(`intra/${code}.json`, payloadJson, observedVersion);
+            putReadback = await r2Put(`intra/${code}.json`, payloadJson, observedVersion)
+              .then(() => undefined, error => {
+                const confirmation = confirmUnknownPricePut(error, `intra/${code}.json`, payloadJson, undefined, schedule.assertActive);
+                // 他の開始済みPUTはsettleさせ、未確定中の次PUTはbarrierで止める。
+                putBarrier = Promise.all([putBarrier, confirmation]).then(() => {}, () => { fatal = true; });
+                return confirmation;
+              });
           } catch (e) {
             // PUT fault は全件 fatal。区別は正直計数する (unknown/rejected/想定外)。
             if (e instanceof R2PutUnknownError) {
@@ -239,6 +252,10 @@ export async function main() {
           }
           written++;
           outcomes[code] = { status: sourceMissing ? "error" : "written", latestSourceBar: latest, bodySha: bodyPin(payloadJson) };
+          if (putReadback !== undefined) {
+            outcomes[code].putReadback = putReadback;
+            console.info(JSON.stringify({ r2PriceWrite: "readback-confirmed", code, putAcknowledgement: "unknown", bodySha256: putReadback.bodySha256 }));
+          }
         });
       }));
       for (let i = captureStart; i < captures.length; i++) rawBytes += captures[i].capture.bytes.length;
