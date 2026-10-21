@@ -169,7 +169,9 @@ try: c.execute('SELECT json_object('+','.join("'k%d',NULL"%i for i in range(17))
 except sqlite3.OperationalError as e: assert 'too many arguments' in str(e)
 print(json.dumps([dict(r) for r in c.execute(p['sql'],p['params'])]))
 `;
-    const child = spawnSync("python3.12", ["-c", program], { input: JSON.stringify({ sql: q.sql, params: q.params, oldFlat, tables: schema.map(table => ({ ...table, rows: s.db.prepare(`SELECT * FROM "${table.name}"`).all() })) }), encoding: "utf8", timeout: 30_000 });
+    // Stdlib SQLite capabilities are asserted below; Node CI does not promise a versioned Python binary.
+    const child = spawnSync("python3", ["-c", program], { input: JSON.stringify({ sql: q.sql, params: q.params, oldFlat, tables: schema.map(table => ({ ...table, rows: s.db.prepare(`SELECT * FROM "${table.name}"`).all() })) }), encoding: "utf8", timeout: 30_000 });
+    expect(child.error).toBeUndefined();
     expect(child.status, child.stderr).toBe(0);
     const pre = parseStock41FinancialPre(JSON.parse(child.stdout));
     expect(pre.tables.swing_stock_indicators[0][appendedReal.name]).toBe(precise);
