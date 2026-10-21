@@ -131,7 +131,7 @@ describe("catchup取得前の起動資格", () => {
   });
 });
 
-it("CF専用入口は旧scheduleなし/main固定/定時54分・手動60分/直列source/Linuxbiztag skipを維持する", () => {
+it("CF専用入口は旧scheduleなし/main固定/定時54分・手動60分/独立source/Linuxbiztag skipを維持する", () => {
   const yml = readFileSync(new URL("../../.github/workflows/catchup.yml", import.meta.url), "utf8");
   expect(yml).not.toMatch(/^ {2}schedule:/m);
   expect(yml).toContain("- scheduled-catchup");
@@ -144,4 +144,19 @@ it("CF専用入口は旧scheduleなし/main固定/定時54分・手動60分/直�
   const biztag = yml.slice(yml.indexOf("  biztag:\n"));
   expect(biztag).not.toContain("scheduled-catchup");
   expect(biztag).toContain("exit 1");
+});
+
+it("TDnet失敗でEDINETをskipせず、共通資格失敗・取消では取得しない", () => {
+  const yml = readFileSync(new URL("../../.github/workflows/catchup.yml", import.meta.url), "utf8");
+  const admission = yml.slice(yml.indexOf("      - name: catchup起動資格"), yml.indexOf("      # 006 TDnet"));
+  expect(admission).toContain("id: admission");
+  expect(admission).toContain("id: storage");
+  const edinet = yml.slice(yml.indexOf("      - name: yuho-quant EDINET catchup"), yml.indexOf("      # 定期ジョブ"));
+  const condition = /if: >-\n([\s\S]*?)\n {8}run:/.exec(edinet)![1].trim().replaceAll(/\s+/g, " ");
+  expect(condition).toBe("!cancelled() && steps.admission.outcome == 'success' && steps.storage.outcome == 'success' && github.event_name == 'workflow_dispatch' && (github.event.inputs.target == 'edinet' || github.event.inputs.target == 'all' || github.event.inputs.target == 'scheduled-catchup')");
+  // 状態関数を含むためGitHubの暗黙success()が付かない。先行失敗を隠す設定も追加しない。
+  expect(yml).not.toContain("continue-on-error:");
+  expect(yml).toContain("if: failure()");
+  expect(yml).not.toContain("Mac LaunchAgent");
+  expect(yml).toContain("docs/mac-monthly-manual.md");
 });

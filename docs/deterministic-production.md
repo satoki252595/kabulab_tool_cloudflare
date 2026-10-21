@@ -2,7 +2,7 @@
 
 更新: 2026-10-20。**Mac定期は廃止・停止済み。旧担当機能は[月次手動](mac-monthly-manual.md)へ**。[取得元・機能の全件一覧](batch-data-inventory.md)を参照。取得・抽出・計算・照合・保存・検証は通常CLIと共有関数を使う。過去分の有限補完も同じparser・保存・停止条件を通す。
 
-予定・担当・先行条件・LLM利用は[README](../README.md#本番の定期処理先行条件llm利用)、workflowとSSHの運用は[本番処理一覧](production-job-inventory.md)、実績と残件は[10/20の復旧状況](test-logs/recovery-functional-status-20261020.md)を正本とする。
+予定・担当・先行条件・LLM利用は[README](../README.md#本番の定期処理先行条件llm利用)、workflowとSSHの運用は[本番処理一覧](production-job-inventory.md)、最新の実稼働は[10/22の確認](test-logs/recovery-functional-status-20261022.md)、以前のデータ残件は[10/20の復旧状況](test-logs/recovery-functional-status-20261020.md)を参照する。
 
 ## 実行場所
 
@@ -26,8 +26,8 @@
 
 1. 一次原本は`src/shared/notion-archive/`経由で物理保管し、実体・全SHA・metadataを検証する。D1へ構造化、R2へ時系列・receiptを保存する。
 2. 主体・書類・期間・最新pointerを確認し、既存writerのPRE/CAS/POSTを通す。株式分割・併合・増資等は法的効力・株数/単位・価格basisが成立したものだけ金融計算へ使う。
-3. Yahoo 429/503は共有期限内の後続取得を止める。D1の期限読取失敗でも上流へ進まない。取得済み原本と未完状態は保持する。
-4. 通信や保存の結果不明はintent/inFlightを残し、自動再送しない。入力や出力名を変えて回避しない。
+3. Yahoo 429/503は共有期限内の後続取得を止める。D1の期限読取失敗でも上流へ進まない。株式は物理照合済みの正常snapshotだけを保存して元の取得停止を返し、全量成功時の集計・掃除へ進まない。
+4. 通信や保存の結果不明はintent/inFlightを残し、自動再送しない。価格PUTだけは同processで送信した全bytes・全metadataを単発の完全GETで確認できた場合に限り、ACK不明の証拠を残して続行する。旧値や照合不能は停止を維持し、過去runのunknownを解除しない。
 5. EDINET情報修正は、修正前後の主体・形式・期末、保存ZIP、通常parserの全factsと全文が完全一致した観測だけを追記台帳で解決する。取下げ・不開示・parser不一致はHOLD。
 6. `exit0`・未処理0・タグ判定済みだけで全データ充足とは扱わない。全no・要確認・候補0・原本なしを分け、予定日・対象集合・結果・欠測理由・receiptで検収する。
 

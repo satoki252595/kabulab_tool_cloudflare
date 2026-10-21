@@ -7,6 +7,7 @@ import {
   r2GetBytesVersion,
   r2Put,
   r2PutBytes,
+  confirmUnknownPricePut,
   R2PutRejectedError,
   R2PutUnknownError,
   type R2ReadOptions,
@@ -37,6 +38,65 @@ const svcError = (name: string, status?: number) =>
     name,
     ...(status === undefined ? {} : { $metadata: { httpStatusCode: status } }),
   });
+
+describe("unknown価格PUTの正のPOST状態照合だけを許可する", () => {
+  const body = '{"code":"3513"}'; // 宣言したtransport control。実市場値ではない。
+  const metadata = { unrelated: "retained", "holdings-price": "qualified-reference" };
+  const native = (overrides: Record<string, unknown> = {}) => ({ ETag: '"native-observed"',
+    ContentLength: Buffer.byteLength(body), ContentType: "application/json", Metadata: metadata,
+    Body: Readable.from([Buffer.from(body)]), $metadata: { httpStatusCode: 200 }, ...overrides });
+  const unknown = () => new R2PutUnknownError("daily/3513.json", "InternalError", 500, svcError("InternalError", 500));
+
+  it("PUT500→全bytes/metadata一致のGET1回だけで閉鎖し、ACK不明をproofへ保持する", async () => {
+    const error = svcError("InternalError", 500), send = vi.spyOn(S3Client.prototype, "send")
+      .mockRejectedValueOnce(error).mockImplementationOnce(async () => native());
+    const assertActive = vi.fn();
+    const result = await r2Put("daily/3513.json", body, '"old-etag"', metadata)
+      .catch(e => confirmUnknownPricePut(e, "daily/3513.json", body, metadata, assertActive));
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send.mock.calls[0][0]).toBeInstanceOf(PutObjectCommand);
+    expect(send.mock.calls[1][0]).toBeInstanceOf(GetObjectCommand);
+    expect((send.mock.calls[1][0] as GetObjectCommand).input).toEqual({ Bucket: "test-bucket", Key: "daily/3513.json" });
+    expect(result).toMatchObject({ putAcknowledgement: "unknown", state: "exact-post-observed", complete: true,
+      etag: '"native-observed"', bodyBytes: Buffer.byteLength(body), contentType: "application/json" });
+    expect(result?.bodySha256).toMatch(/^[a-f0-9]{64}$/); expect(assertActive).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["body", "metadata-missing", "metadata-extra", "content-type", "etag", "truncated", "length", "read-500", "missing"])("%s は元unknownを保持し再送/GET再試行しない", async mode => {
+    const error = unknown(), send = vi.spyOn(S3Client.prototype, "send");
+    if (mode === "read-500") send.mockRejectedValueOnce(svcError("InternalError", 500));
+    else if (mode === "missing") send.mockRejectedValueOnce(svcError("NoSuchKey", 404));
+    else send.mockImplementationOnce(async () => native({
+      ...(mode === "body" ? { Body: Readable.from([Buffer.from(body.replace("3513", "3514"))]) } : {}),
+      ...(mode === "metadata-missing" ? { Metadata: undefined } : {}),
+      ...(mode === "metadata-extra" ? { Metadata: { ...metadata, extra: "unexpected" } } : {}),
+      ...(mode === "content-type" ? { ContentType: "text/plain" } : {}),
+      ...(mode === "etag" ? { ETag: "" } : {}),
+      ...(mode === "truncated" ? { Body: Readable.from([Buffer.from(body.slice(1))]) } : {}),
+      ...(mode === "length" ? { ContentLength: undefined } : {}),
+    }));
+    await expect(confirmUnknownPricePut(error, "daily/3513.json", body, metadata, () => {})).rejects.toBe(error);
+    expect(send).toHaveBeenCalledTimes(1); expect(send.mock.calls[0][0]).toBeInstanceOf(GetObjectCommand);
+  });
+
+  it("metadataの順序と空bagを正規化するが、UTF8復号後の見かけ同値は採用しない", async () => {
+    const send = vi.spyOn(S3Client.prototype, "send").mockImplementationOnce(async () => native({ Metadata: { "holdings-price": metadata["holdings-price"], unrelated: metadata.unrelated } }));
+    await expect(confirmUnknownPricePut(unknown(), "daily/3513.json", body, metadata, () => {})).resolves.toMatchObject({ state: "exact-post-observed" });
+    send.mockImplementationOnce(async () => native({ Metadata: {} }));
+    await expect(confirmUnknownPricePut(unknown(), "intra/3513.json", body, undefined, () => {})).resolves.toMatchObject({ state: "exact-post-observed" });
+    send.mockImplementationOnce(async () => native({ Metadata: undefined, ContentLength: 1, Body: Readable.from([Buffer.from([255])]) }));
+    const error = unknown();
+    await expect(confirmUnknownPricePut(error, "daily/3513.json", "\ufffd", undefined, () => {})).rejects.toBe(error);
+  });
+
+  it.each(["rejected", "other-key", "expired-before", "expired-after"])("%s はPUT成功へ変えず、期限外に新規GETしない", async mode => {
+    const error = mode === "rejected" ? new R2PutRejectedError("daily/3513.json", "PreconditionFailed", 412, null) : unknown();
+    const send = vi.spyOn(S3Client.prototype, "send").mockImplementationOnce(async () => native());
+    const active = vi.fn(() => { if (mode === "expired-before" || mode === "expired-after" && active.mock.calls.length === 3) throw new Error("deadline"); });
+    await expect(confirmUnknownPricePut(error, mode === "other-key" ? "ops/3513.json" : "daily/3513.json", body, metadata, active)).rejects.toBe(error);
+    expect(send).toHaveBeenCalledTimes(mode === "expired-after" ? 1 : 0);
+  });
+});
 
 it("conditional repair preserves the native ETag and propagates a stale precondition failure", async () => {
   const send = vi.spyOn(S3Client.prototype, "send");

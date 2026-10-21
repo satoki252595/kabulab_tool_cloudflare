@@ -72,7 +72,7 @@ function projectionCandidate(doc: EdinetDoc): { ticker: string; periodEnd: strin
 /** 既存issuer逆引きとnormal ingest母集団の両方が一意・一致した候補だけ。追加Notion/sourceは0。 */
 async function qualifyReportedProjections(db: ReportedSourceDb, list: EdinetListResponse, shouldStop: () => boolean) {
   const candidates = list.results.flatMap(doc => { const p = projectionCandidate(doc); return p === null ? [] : [{ doc, ...p }]; });
-  const qualified = new Map<string, QualifiedProjection>();
+  const qualified = new Map<number, QualifiedProjection>();
   if (candidates.length === 0) return qualified;
   const issuers=[...new Set(candidates.map(c=>c.edinetCode))], issuerMap=new Map<string,string>();
   for (let i=0;i<issuers.length;i+=90) {
@@ -94,28 +94,32 @@ async function qualifyReportedProjections(db: ReportedSourceDb, list: EdinetList
   for (const c of candidates) {
     const stock=found.get(c.ticker);
     if (!stock || issuerMap.get(c.edinetCode)!==c.ticker) continue;
-    qualified.set(c.doc.docID,{stockId:stock.id,ticker:c.ticker,edinetCode:c.edinetCode,periodEnd:c.periodEnd,submittedAt:c.submittedAt});
+    qualified.set(c.doc.seqNumber,{stockId:stock.id,ticker:c.ticker,edinetCode:c.edinetCode,periodEnd:c.periodEnd,submittedAt:c.submittedAt});
   }
   return qualified;
 }
 
-export function buildReportedChanges(list: EdinetListResponse, input: ListSnapshot, qualified: ReadonlyMap<string,QualifiedProjection> = new Map()) {
+export function buildReportedChanges(list: EdinetListResponse, input: ListSnapshot, qualified: ReadonlyMap<number,QualifiedProjection> = new Map()) {
   const source = listSnapshotSchema.parse(input);
   if (!source.qualified || source.httpStatus !== 200 || list.metadata.status !== "200" ||
       list.metadata.resultset.count !== list.results.length) throw new Error("EDINET変更観測の原一覧は未資格です");
   const sourcePageId = source.pageId.replaceAll("-", "").toLowerCase();
   const rows: Array<typeof table.$inferInsert> = [];
   const sequences = new Set<number>();
-  const ids = new Set<string>();
   for (const doc of list.results) {
-    const state = reportedState(doc);
-    if (state === null) continue;
-    if (!/^S[0-9A-Z]{7}$/.test(doc.docID) || sequences.has(doc.seqNumber) || ids.has(doc.docID)) {
+    // 資格Mapの観測キーなので、変更行以外も含む元一覧全体で一意性を守る。
+    if (!Number.isSafeInteger(doc.seqNumber) || sequences.has(doc.seqNumber)) {
       throw new Error("EDINET変更観測の書類ID/順序が不正又は重複しています");
     }
-    sequences.add(doc.seqNumber); ids.add(doc.docID);
+    sequences.add(doc.seqNumber);
+    const state = reportedState(doc);
+    if (state === null) continue;
+    if (!/^S[0-9A-Z]{7}$/.test(doc.docID)) {
+      throw new Error("EDINET変更観測の書類ID/順序が不正又は重複しています");
+    }
     // raw-before-parseの保管証拠と同じ原行の投影。原一覧そのものは物理ファイルが正本。
-    const projection=qualified.get(doc.docID);
+    // 同docIDの複数状態も元一覧の別観測。docIDで資格を後勝ち共有しない。
+    const projection=qualified.get(doc.seqNumber);
     const observation = { source: { ...source, pageId: sourcePageId }, doc,
       reportedIdentity: projection === undefined ? {status:"unqualified"} : {status:"qualified_reported_metadata", ...projection},
       state, chainQualification: "unqualified", chainApplication: "not_applied" };

@@ -37,7 +37,7 @@
 | D25 | TDnet当日一覧・開示索引・原本、短信XBRL財務サマリ、公式上場/廃止状態 | 平日09〜19時毎時、Python | 自動。公開資格は原本別 |
 | D26 | IRカタログ全対象登録、タイトル分類、PDF本文・極性、Notion銘柄別反映 | 平日19時、Node catchupの最初 | 自動。辞書/ルール分類でLLMなし |
 | D27 | EDINET提出日一覧・原本CSV/XBRL・財務サマリ | 平日21時、Python。19時Nodeとは独立 | 自動 |
-| D28 | 有報の受注高・受注残高・海外/地域別売上・比率 | D26成功後のNode EDINET、適格原本 | 条件付き自動、構造不明は保留 |
+| D28 | 有報の受注高・受注残高・海外/地域別売上・比率 | D26実行後のNode EDINET。共通資格・保存設定が成功すればD26失敗でも実行 | 条件付き自動、構造不明は保留 |
 | D29 | 有報39本文の構造抽出・D1/Notion有報テキスト保存 | D28と同じ原本、本文原文 | 条件付き自動。補足DBへの同期はM02 |
 | D30 | 有報の情報修正の再資格化 | 通常catchup、主体/form/FY・保存ZIP・全facts/全文完全一致 | 条件付き自動、不一致は保留 |
 | D31 | 有報の保有明細・未完抽出再開、発行済株式数観測 | Node catchup、原本・主体資格 | 条件付き自動。全権利適用の確定ではない |
@@ -102,7 +102,7 @@
 | M03 | keywords/excludes、候補抽出、上流/下流タグ・テーマ導出、同入力判定再利用 | 同上 | なし | 既存no/uncertainを単語一致だけで覆さない |
 | M04 | 適格新規・実入力変更の事業タグClef判定 | 同上 | **あり** | 現行torch-MPS専用でMacの月次手動。モデル約19GB。別ホストへ移設せず既存受入runtimeを使う |
 | M05 | 競合入力・質問・候補の機械準備 | 20時job成功後、設定対象から最大5社 | なし | 現envキーは設定あり。同じMac runtimeのcursor/pendingを再利用。意味判定は行わない |
-| M06 | 優待の機械要約、金額/条件検証、PRE/CAS/POST | 毎日21時、最大60群 | なし | 規則未対応は保留。Mac限定条件は維持し、受入runtimeから直接実行 |
+| M06 | 優待の機械要約、金額/条件検証、PRE/CAS/POST | 旧毎日21時→月次手動、最大60群 | なし | 規則未対応は保留。Mac限定条件は維持し、受入runtimeから直接実行 |
 | M07 | 旧日次の30分期限・R2 receipt（保全）、共有lock・原文/journal | 両処理共通 | なし | 月次はstageごとの独立期限。旧日次receiptは更新せず、既存stateを使う |
 
 根拠: [launcher](../scripts/biztag-local/main.ts)、[OS/lock条件](../scripts/biztag-local/runtime.ts)、[優待CLI](../services/otakara-yutai/data-scripts/summary-local.ts)、[Clef](../services/yuho-quant/scripts/clef_server.py)。優待の定期実行は`--allow-model`なしだった。月次`sync:monthly`からもMac要約stageを除去し、優待取得→再計算だけにする。

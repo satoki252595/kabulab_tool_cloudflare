@@ -105,12 +105,35 @@ describe("適時開示の未知送信は次行の取得を停止", () => {
     const { upsertDisclosuresByStock } = await import("./dataset.js");
     await upsertDisclosuresByStock({service: "test", tagOptions: [], rows: [row],
       classifyPdf: classifier, onPdfClassified: classified,
-      rejudgePdf: mode === "rejudge", recoverPdfTextKeys: new Set([row.key])});
+      rejudgePdf: mode === "rejudge", recoverPdfTextPages: new Map([[row.key, "existing"]])});
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(String(vi.mocked(fetch).mock.calls[0][0])).toBe("https://archive.test/real.pdf");
     expect(uploadFile).not.toHaveBeenCalled();
     expect(classified).toHaveBeenCalledWith(row.key, classification);
     expect(vi.mocked(notionRequest).mock.calls.filter(([m, p]) => m === "PATCH" && p === "/pages/existing")).toHaveLength(mode === "rejudge" ? 1 : 0);
+  });
+
+  it.each(["missing", "different_page", "nonterminal", "unavailable"])("保存本文復旧の %s は上流取得や値補作へ流れない", async (mode) => {
+    const base = vi.mocked(notionRequest).getMockImplementation()!;
+    vi.mocked(notionRequest).mockImplementation(async (method, path, body) => {
+      if (path.endsWith("/query")) return {results: mode === "missing" ? [] : [{
+        id: mode === "different_page" ? "other" : "existing", properties: {
+          "TDnet ID": {rich_text: [{plain_text: row.key}]},
+          "IR資料状態": {select: {name: mode === "nonterminal" ? "error" : mode === "unavailable" ? "unavailable" : "uploaded"}},
+          "IR資料": {files: mode === "unavailable" ? [] : [{name: "real.pdf"}]},
+        },
+      }], has_more: false} as never;
+      return base(method, path, body);
+    });
+    const classified = vi.fn();
+    const {upsertDisclosuresByStock} = await import("./dataset.js");
+    const result = upsertDisclosuresByStock({service: "test", tagOptions: [], rows: [row],
+      classifyPdf: vi.fn(), onPdfClassified: classified, recoverPdfTextPages: new Map([[row.key, "existing"]])});
+    if (mode === "unavailable") expect((await result).skippedExisting).toBe(1);
+    else await expect(result).rejects.toThrow("ir_pdf_recovery_source_unqualified");
+    expect(fetch).not.toHaveBeenCalled(); expect(uploadFile).not.toHaveBeenCalled();
+    expect(classified).not.toHaveBeenCalled();
+    expect(vi.mocked(notionRequest).mock.calls.some(([m,p]) => (m === "POST" && p === "/pages") || m === "PATCH")).toBe(false);
   });
 
   it.each(["multiple", "external", "http", "non_pdf", "http_error", "redirect"])("保管済み PDF の %s は発行元へ切り替えず停止", async (failure) => {
@@ -134,7 +157,7 @@ describe("適時開示の未知送信は次行の取得を停止", () => {
     const classified = vi.fn();
     const { upsertDisclosuresByStock } = await import("./dataset.js");
     await expect(upsertDisclosuresByStock({service: "test", tagOptions: [], rows: [row],
-      classifyPdf: vi.fn(), onPdfClassified: classified, recoverPdfTextKeys: new Set([row.key])})).rejects.toThrow();
+      classifyPdf: vi.fn(), onPdfClassified: classified, recoverPdfTextPages: new Map([[row.key, "existing"]])})).rejects.toThrow();
     expect(classified).not.toHaveBeenCalled();
     expect(uploadFile).not.toHaveBeenCalled();
     expect(vi.mocked(fetch).mock.calls.every(([url]) => String(url).startsWith("https://archive.test/"))).toBe(true);

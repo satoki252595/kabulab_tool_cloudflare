@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       date:
-        description: "対象日 YYYY-MM-DD。空なら定期実行と同じく当日"
+        description: "対象日 YYYY-MM-DD。空ならJST当日、09時前の遅配は前日"
         required: false
         default: ""
 

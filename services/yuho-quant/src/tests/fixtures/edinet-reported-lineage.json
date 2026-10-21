@@ -184,6 +184,84 @@
         "csvFlag": "1",
         "legalStatus": "1"
       }
+    },
+    {
+      "source": {
+        "date": "2026-08-28",
+        "rawSha256": "1150bdd5768c39a782b94799825248e59f31d57253c98bc3629d90e588d34ed8",
+        "rawBytes": 425535,
+        "retainedArchive": [
+          {
+            "pageId": "3eed74ff-84cd-811c-80b8-c74f83095659",
+            "filename": "edinet-list-2026-08-28.json.gz"
+          }
+        ],
+        "selection": "Exact current-service-schema projection from retained raw date list, selected by docID and seqNumber. Other raw properties are omitted; these parsed values are unchanged. Whole-source SHA is not re-derived from this excerpt.",
+        "docId": "S100YXXA",
+        "seqNumber": 318
+      },
+      "original": {
+        "seqNumber": 318,
+        "docID": "S100YXXA",
+        "edinetCode": "E04733",
+        "secCode": null,
+        "JCN": "6140001036809",
+        "filerName": "大松産業株式会社",
+        "ordinanceCode": "010",
+        "formCode": "050000",
+        "docTypeCode": "160",
+        "periodStart": "2025-12-01",
+        "periodEnd": "2026-05-31",
+        "submitDateTime": "2026-08-28 12:08",
+        "docDescription": "半期報告書－第67期(2025/12/01－2026/05/31)",
+        "xbrlFlag": "1",
+        "csvFlag": "1",
+        "withdrawalStatus": "0",
+        "docInfoEditStatus": "2",
+        "disclosureStatus": "0",
+        "parentDocID": null,
+        "opeDateTime": null,
+        "legalStatus": "1"
+      }
+    },
+    {
+      "source": {
+        "date": "2026-08-28",
+        "rawSha256": "1150bdd5768c39a782b94799825248e59f31d57253c98bc3629d90e588d34ed8",
+        "rawBytes": 425535,
+        "retainedArchive": [
+          {
+            "pageId": "3eed74ff-84cd-811c-80b8-c74f83095659",
+            "filename": "edinet-list-2026-08-28.json.gz"
+          }
+        ],
+        "selection": "Exact current-service-schema projection from retained raw date list, selected by docID and seqNumber. Other raw properties are omitted; these parsed values are unchanged. Whole-source SHA is not re-derived from this excerpt.",
+        "docId": "S100YXXA",
+        "seqNumber": 345
+      },
+      "original": {
+        "seqNumber": 345,
+        "docID": "S100YXXA",
+        "edinetCode": "E04733",
+        "secCode": null,
+        "JCN": "6140001036809",
+        "filerName": "大松産業株式会社",
+        "ordinanceCode": "010",
+        "formCode": "050000",
+        "docTypeCode": "160",
+        "periodStart": "2025-12-01",
+        "periodEnd": "2026-11-30",
+        "submitDateTime": "2026-08-28 12:08",
+        "docDescription": "半期報告書－第67期(2025/12/01－2026/11/30)",
+        "xbrlFlag": "1",
+        "csvFlag": "1",
+        "withdrawalStatus": "0",
+        "docInfoEditStatus": "1",
+        "disclosureStatus": "0",
+        "parentDocID": null,
+        "opeDateTime": "2026-08-28 14:27",
+        "legalStatus": "1"
+      }
     }
   ]
 }

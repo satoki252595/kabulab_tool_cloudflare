@@ -1392,6 +1392,7 @@ async function runDailySyncAndRecord(
   const firstCaptures: YahooRawAttempt[] = [];
   const firstMissing: YahooRawMissing[] = [];
   let custodyStop: Error | null = null;
+  let sourceStop: Error | null = null;
   async function capturedSnapshot(target: (typeof targets)[number], attempt: number,
     captures: YahooRawAttempt[], missing: YahooRawMissing[]): Promise<StockSnapshot> {
     const symbol = target.code;
@@ -1419,7 +1420,7 @@ async function runDailySyncAndRecord(
     }
   }
   async function worker(): Promise<void> {
-    while (queue.length > 0 && custodyStop === null) {
+    while (queue.length > 0 && custodyStop === null && sourceStop === null) {
       const target = queue.shift();
       if (!target) break;
       try {
@@ -1427,7 +1428,7 @@ async function runDailySyncAndRecord(
           custodyStop = new Error("Yahooの取得開始期限が株式同期の21UTC期限以後のためSTOPします");
           break;
         }
-        if (custodyStop !== null) break;
+        if (custodyStop !== null || sourceStop !== null) break;
         assertStockDeadline();
         const snap = await capturedSnapshot(target, 0, firstCaptures, firstMissing);
         assertStockDeadline();
@@ -1438,7 +1439,7 @@ async function runDailySyncAndRecord(
           correctionDates: nullCloseDatesByStock.get(target.id),
         });
       } catch (e) {
-        if (isYahooSourceStop(e)) custodyStop = e instanceof Error ? e : new Error(String(e));
+        if (isYahooSourceStop(e)) sourceStop = e instanceof Error ? e : new Error(String(e));
         if (Date.now() >= Date.parse(`${targetDate}T21:00:00Z`)) custodyStop = e instanceof Error ? e : new Error(String(e));
         const msg = rootCauseMessage(e);
         stockStartGate.observeFailure(msg);
@@ -1497,6 +1498,12 @@ async function runDailySyncAndRecord(
   console.info(
     `[sync-daily]   初回当日更新: ${succeeded} / 初回失敗: ${firstPassFailures.length} / RSI履歴HOLD: ${historyHolds.length}`
   );
+  // 429/503は新GETを止める。保管・物理照合済みの正常原本は既存flushで保存し、
+  // 元の取得停止を再throwする。全量完了の集計・掃除・後続jobへは進まない。
+  if (sourceStop !== null) {
+    console.info(`[sync-daily] 取得停止前の保管済み当日更新: ${succeeded} / 未着手: ${queue.length}`);
+    throw sourceStop;
+  }
 
   const recoveryTargets = prioritizeDailyRecoveryFailures(
     marketContext === null ? [] : marketContext.failures,

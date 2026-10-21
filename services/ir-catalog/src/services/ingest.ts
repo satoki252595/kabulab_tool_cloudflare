@@ -62,9 +62,9 @@ export interface IngestOptions {
    */
   notionByStockBudgetMs?: number;
   /**
-   * notion_page_id が空の開示を、公開からこの日数以内まで D1 から足して
-   * 二次投入する。日次 catchup が 7 日窓の外へ落ちた未保存を拾うために使う。
-   * 予算ありの実行では、page id が既にある行は Notion 照会へ渡さない。
+   * 未保存の開示と保存PDFの本文未完を、公開からこの日数以内まで D1 から足す。
+   * 日次 catchup が 7 日窓の外へ落ちた未完を拾うために使う。
+   * 本文終端の保存済み行は Notion 照会へ渡さない。
    */
   unsavedLookbackDays?: number;
   /**
@@ -134,48 +134,22 @@ async function persistNotionPageIds(
 }
 
 /**
- * (tdnet_id → PDF 判定 4 値) を Postgres へバルク書き戻し。
- * `persistNotionPageIds` と同じチャンク VALUES パターン。
- * 判定時刻は実行時刻で統一 (sql`now()`) し再判定検出 (method='rule_v1'
- * AND pdf_sentiment_at < cutoff) のクエリを効かせる。
- */
-async function persistPdfSentiments(
-  db: Database,
-  pdfMap: Map<string, PdfClassification>
-): Promise<void> {
-  const entries = [...pdfMap.entries()].filter(
-    ([k]) => typeof k === "string" && k.length > 0
-  );
-  if (entries.length === 0) return;
-  // D1: per-row update。判定時刻は実行時刻で統一（再判定検出クエリ用）。
-  const now = new Date();
-  for (const [tdnetId, c] of entries) {
-    await db
-      .update(disclosures)
-      .set({
-        pdfSentiment: c.sentiment,
-        pdfSentimentMethod: c.method ?? null,
-        pdfSentimentScore: c.score ?? null,
-        pdfSentimentAt: now,
-      })
-      .where(eq(disclosures.tdnetId, tdnetId));
-  }
-}
-
-/**
  * (tdnet_id → 抽出テキスト) を `ir_disclosure_texts` へ冪等保存する。
  * テキストあり → upsert + pdf_text_status=ok。テキストなし (画像化/
  * 暗号化等で抽出 0 文字) → 行なし + pdf_text_status=no_text。
  * 保存結果不明や対応 D1 行の不存在は throw。別の状態を書いて成功にしない。
+ * 復旧原文を照合した後だけ、同じPDFの判定4列も保存する。
  */
 async function persistPdfTexts(
   db: Database,
-  pdfMap: Map<string, PdfClassification>
+  pdfMap: Map<string, PdfClassification>,
+  recoveryPages: ReadonlyMap<string, string>
 ): Promise<void> {
   const entries = [...pdfMap.entries()].filter(
     ([k]) => typeof k === "string" && k.length > 0
   );
   if (entries.length === 0) return;
+  const judgedAt = new Date();
   for (const [tdnetId, c] of entries) {
     const hit = await db
       .select({ id: disclosures.id, status: disclosures.pdfTextStatus,
@@ -187,6 +161,17 @@ async function persistPdfTexts(
       .limit(1);
     if (hit.length !== 1) throw new Error(`PDF 本文の対応 D1 行がないため停止 tdnetId=${tdnetId}`);
     const disclosureId = hit[0]!.id;
+    const current = hit[0]!;
+    if (recoveryPages.has(tdnetId) && current.text !== null &&
+      (current.text !== c.text || current.charCount !== c.text?.length || current.textTdnetId !== tdnetId)) {
+      throw new Error(`保存PDF本文の復旧が既存D1本文と不一致 (上書きなし) tdnetId=${tdnetId}`);
+    }
+    await db.update(disclosures).set({
+      pdfSentiment: c.sentiment,
+      pdfSentimentMethod: c.method ?? null,
+      pdfSentimentScore: c.score ?? null,
+      pdfSentimentAt: judgedAt,
+    }).where(eq(disclosures.tdnetId, tdnetId));
     if (c.text === null || c.text === undefined || c.text.length === 0) {
       await db
         .update(disclosures)
@@ -195,7 +180,6 @@ async function persistPdfTexts(
       continue;
     }
     // 送信結果不明で中断しても、現在の全文を照合して同じ INSERT を繰り返さない。
-    const current = hit[0]!;
     if (current.text !== c.text || current.charCount !== c.text.length || current.textTdnetId !== tdnetId) await db
       .insert(disclosureTexts)
       .values({
@@ -634,7 +618,7 @@ function hasArchivedPage(pageId: string | null | undefined): boolean {
 
 /**
  * 予算付きの二次投入で Notion へ渡す行。
- * page id がある行は照会しない。遡及で得た未保存は、今回バッチより古くても足す。
+ * 本文まで終端の保存済み行は照会しない。本文未完と遡及未保存は古くても足す。
  * 再判定 (rejudge) のときはバッチをそのまま渡す（保存済み PDF の再読が目的）。
  */
 export function selectNotionArchiveRows(input: {
@@ -681,7 +665,10 @@ async function loadUnsavedDisclosures(
     .where(
       and(
         gte(disclosures.pubdate, cutoff),
-        or(isNull(disclosures.notionPageId), eq(disclosures.notionPageId, ""))
+        sql`${disclosures.stockId} IN (SELECT value FROM json_each(${JSON.stringify([...codeToId.values()])}))`,
+        or(isNull(disclosures.notionPageId), eq(disclosures.notionPageId, ""),
+          isNull(disclosures.pdfTextStatus), eq(disclosures.pdfTextStatus, "pending"),
+          and(eq(disclosures.pdfTextStatus, "ok"), sql`not exists (select 1 from ir_disclosure_texts text where text.disclosure_id = ${disclosures.id})`))
       )
     )
     .orderBy(asc(disclosures.pubdate), asc(disclosures.tdnetId));
@@ -730,11 +717,6 @@ async function archiveDisclosuresByStock(
     }
     const limitToUnsaved = opts.rejudgePdfSentiment !== true
       && (opts.notionByStockBudgetMs !== undefined || opts.unsavedLookbackDays !== undefined);
-    const current = byStockRows.length === 0 ? [] : await db.select({ key: disclosures.tdnetId, pageId: disclosures.notionPageId,
-      status: disclosures.pdfTextStatus, textId: disclosureTexts.id })
-      .from(disclosures).leftJoin(disclosureTexts, eq(disclosureTexts.disclosureId, disclosures.id))
-      .where(sql`${disclosures.tdnetId} IN (SELECT value FROM json_each(${JSON.stringify(byStockRows.map(r => r.key))}))`);
-    const currentByKey = new Map(current.map(r => [r.key, r]));
     let olderUnsaved: ByStockRow[] = [];
     if (opts.unsavedLookbackDays !== undefined) {
       if (opts.codeToId === undefined) {
@@ -747,9 +729,18 @@ async function archiveDisclosuresByStock(
         Date.now()
       );
     }
+    const candidateKeys = [...new Set([...byStockRows, ...olderUnsaved].map(r => r.key))];
+    const current = candidateKeys.length === 0 ? [] : await db.select({ key: disclosures.tdnetId, pageId: disclosures.notionPageId,
+      status: disclosures.pdfTextStatus, textId: disclosureTexts.id })
+      .from(disclosures).leftJoin(disclosureTexts, eq(disclosureTexts.disclosureId, disclosures.id))
+      .where(sql`${disclosures.tdnetId} IN (SELECT value FROM json_each(${JSON.stringify(candidateKeys)}))`);
+    const currentByKey = new Map(current.map(r => [r.key, r]));
+    const recoverable = new Map(current.filter(r => hasArchivedPage(r.pageId) &&
+      (r.status === null || r.status === "pending" || (r.status === "ok" && r.textId === null)))
+      .map(r => [r.key, r.pageId!]));
     const archivedKeys = new Set(
       [...currentByKey.entries()]
-        .filter(([, row]) => hasArchivedPage(row.pageId))
+        .filter(([, row]) => hasArchivedPage(row.pageId) && !recoverable.has(row.key))
         .map(([key]) => key)
     );
     const selected = selectNotionArchiveRows({
@@ -763,8 +754,7 @@ async function archiveDisclosuresByStock(
       return { ...EMPTY_NOTION_BY_STOCK };
     }
     const sentKeys = new Set(selected.rows.map((row) => row.key));
-    const recoverPdfTextKeys = new Set(current.filter(r => sentKeys.has(r.key) && (r.status === null || r.status === "pending" ||
-      (r.status === "ok" && r.textId === null))).map(r => r.key));
+    const recoverPdfTextPages = new Map([...recoverable].filter(([key]) => sentKeys.has(key)));
     // ファイルプロキシ用に (tdnet_id → notion_page_id) を収集して Postgres
     // に書き戻す。upsertDisclosuresByStock は行を create/PATCH した直後に
     // onPagePersisted を呼ぶので、ここで Map に貯めて末尾でバルク UPDATE。
@@ -803,7 +793,7 @@ async function archiveDisclosuresByStock(
       },
       onPdfClassified: (key, c) => pdfMap.set(key, c),
       rejudgePdf: opts.rejudgePdfSentiment ?? false,
-      recoverPdfTextKeys,
+      recoverPdfTextPages,
     });
     notionByStock = {
       stocksTouched: r.stocksTouched,
@@ -819,8 +809,7 @@ async function archiveDisclosuresByStock(
       await persistNotionPageIds(db, pageIdMap);
     }
     if (pdfMap.size > 0) {
-      await persistPdfSentiments(db, pdfMap);
-      await persistPdfTexts(db, pdfMap);
+      await persistPdfTexts(db, pdfMap, recoverPdfTextPages);
     }
   } else if (opts.notionByStock) {
     notionByStock = { ...EMPTY_NOTION_BY_STOCK };

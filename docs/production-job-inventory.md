@@ -10,7 +10,7 @@
 | Actions `stock-sync.yml` | CF dispatch／月次schedule | 株式・金融指標→33業種→条件付き業種資金フロー。別targetでマクロ／月次母集団・優待・再計算 | `stock-sync`と`yahoo-source`。金融資格・保存失敗を後続へ持ち越さない |
 | Actions `vwap-ingest.yml` | CF dispatch／信用残schedule | 日足→5分足、または信用残 | `vwap-ingest`と`yahoo-source`。日足exit2は5分足を開始しない |
 | Actions `moneyflow.yml` | CF dispatch／株式成功後のworkflow_call | 非価格28取得元、または価格依存の業種資金フロー | 2経路のtargetを分離。非Yahoo→Yahoo→成功時のjoin |
-| Actions `catchup.yml` | CF dispatch | TDnet→Node有報・保有明細 | 前段失敗時に後続停止。Linuxのbiztag定期writerは停止 |
+| Actions `catchup.yml` | CF dispatch | TDnet→Node有報・保有明細 | 共通資格・保存設定が成功した場合は、TDnet失敗でも独立したEDINETを実行。取消・資格失敗では停止。Linuxのbiztag定期writerは停止 |
 | Actionsの個別schedule | `supply_daily.yml`／`tdnet_hourly.yml`／`edinet_daily.yml`／`master_sync.yml` | 日証金、TDnet速報、財務サマリ、公式提出者マスタ | 各原本の日付・主体・writer契約を検査 |
 | Actionsの監視 | `ops_check.yml`（日次）／`cloud_check.yml`（手動）／CF期限確認 | 鮮度・実run・schema・公開資格・配備 | 監視は取得失敗でも実行。自動的な再取得で埋めない |
 | 旧Mac LaunchAgent | **2labelともdisable＋bootout済み** | 本文補足同期・タグ・競合準備・優待要約は月次手動 | state・未完intent・モデル・原本・旧receiptを保持。自動再開しない |

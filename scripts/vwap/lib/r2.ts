@@ -52,6 +52,48 @@ export class R2PutUnknownError extends Error {
   }
 }
 
+/** PUTのACKはunknownのまま、同じ価格POST状態を完全GETで確認した証拠。 */
+export interface PricePutReadback {
+  putAcknowledgement: "unknown";
+  state: "exact-post-observed";
+  checkedAt: string;
+  etag: string;
+  bodyBytes: number;
+  bodySha256: string;
+  metadataSha256: string;
+  contentType: "application/json";
+  complete: true;
+}
+
+/**
+ * 価格CLIだけがPUTのcatchから明示使用する。PUT/再送は行わない。
+ * 同processが送った全bytes/全metadata/形式だけを1回読む。旧値・不在・
+ * 読取不明では元unknownを保持し、過去runのunknownをこの入口で解除しない。
+ */
+export async function confirmUnknownPricePut(error: unknown, key: string, body: string,
+  metadata: Record<string, string> | undefined, assertActive: () => void): Promise<PricePutReadback> {
+  if (!(error instanceof R2PutUnknownError) || LOCAL_OUT !== undefined || !/^(?:daily|intra)\/[^/]+\.json$/.test(key)) throw error;
+  const expected = Buffer.from(body, "utf8");
+  // S3のcustom metadataなしは、応答のundefined/空bagを同じ空集合へ正規化する。
+  const canonicalMetadata = (value: Record<string, string> | undefined): string =>
+    JSON.stringify(value === undefined ? [] : Object.entries(value).sort(([a], [b]) => a < b ? -1 : 1));
+  try {
+    assertActive();
+    if (expected.length === 0) throw error;
+    const current = await r2GetBytesVersion(key, sharedEnv.R2_BUCKET(), { singleAttempt: true,
+      maxBytes: expected.length, abortSignal: AbortSignal.timeout(30_000), beforeAttempt: assertActive });
+    assertActive();
+    if (current === null || !expected.equals(current.body) || current.contentType !== "application/json" ||
+        canonicalMetadata(current.metadata) !== canonicalMetadata(metadata)) throw error;
+    return { putAcknowledgement: "unknown", state: "exact-post-observed", checkedAt: new Date().toISOString(),
+      etag: current.etag, bodyBytes: current.body.length, bodySha256: createHash("sha256").update(current.body).digest("hex"),
+      metadataSha256: createHash("sha256").update(canonicalMetadata(current.metadata)).digest("hex"),
+      contentType: "application/json", complete: true };
+  } catch {
+    throw error; // GET失敗や期限切れをPUT拒否/成功へ変えず、同じunknownを返す。
+  }
+}
+
 /** 生 cause から sanitized (code/status) のみ抜く。URL/秘密は文面に出さない。 */
 function r2CauseOf(e: unknown): { code: string; status: number | "none" } {
   const err = e as { name?: unknown; $metadata?: { httpStatusCode?: unknown } } | null;
@@ -159,7 +201,7 @@ function assertMetadata(metadata: unknown): asserts metadata is Record<string, s
 }
 
 /** 原本をUTF-8へ変換せず全bytesで読む。missing/unknown契約はJSON経路と共通。 */
-export async function r2GetBytesVersion(key: string, bucket: string | undefined, opts?: R2ReadOptions): Promise<{ body: Uint8Array; etag: string; metadata?: Record<string, string> } | null> {
+export async function r2GetBytesVersion(key: string, bucket: string | undefined, opts?: R2ReadOptions): Promise<{ body: Uint8Array; etag: string; metadata?: Record<string, string>; contentType?: string } | null> {
   if (opts?.maxBytes !== undefined && (!Number.isSafeInteger(opts.maxBytes) || opts.maxBytes < 1)) throw new Error("R2 read byte budget is invalid");
   if (opts?.onRead !== undefined && opts.maxBytes === undefined) throw new Error("R2 observed read requires a byte budget");
   opts?.abortSignal?.throwIfAborted();
@@ -250,7 +292,8 @@ export async function r2GetBytesVersion(key: string, bucket: string | undefined,
       if (r.Metadata !== undefined) assertMetadata(r.Metadata);
       body = await r.Body.transformToByteArray();
     }
-    return { body, etag, ...(r.Metadata === undefined ? {} : { metadata: r.Metadata }) };
+    return { body, etag, ...(r.Metadata === undefined ? {} : { metadata: r.Metadata }),
+      ...(r.ContentType === undefined ? {} : { contentType: r.ContentType }) };
   } catch (e) {
     const err = e as { name?: unknown; $metadata?: { httpStatusCode?: unknown } };
     if (err?.name === "NoSuchKey" && err?.$metadata?.httpStatusCode === 404) return null;

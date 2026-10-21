@@ -77,11 +77,19 @@ it("actual Node CLI entry cannot report unfinished or rejected work as success",
   const source = readFileSync(new URL("./yuho-edinet.ts", import.meta.url), "utf8");
   const entry = source.slice(source.lastIndexOf(marker));
   expect(entry.startsWith(marker)).toBe(true);
-  for (const [body, exit] of [["await new Promise(() => {});", 2], ["throw new Error('untrusted-secret');", 2], ["return 0;", 0], ["return 1;", 1]] as const) {
+  for (const [body, exit, failureCode] of [
+    ["await new Promise(() => {});", 2, undefined],
+    ["throw new Error('untrusted-secret');", 2, "unknown"],
+    ["throw new Error('EDINET日付一覧gzip SHA不一致。');", 2, "snapshot_gzip_sha"],
+    ["throw new Error('EDINET変更観測の原本/保存内容が不一致です（再送なし）');", 2, "reported_observation_mismatch"],
+    ["throw new Error('EDINET日付一覧gzip SHA不一致。 untrusted-secret');", 2, "unknown"],
+    ["return 0;", 0, undefined], ["return 1;", 1, undefined],
+  ] as const) {
     const code = ts.transpileModule(`import {fileURLToPath} from "node:url"; process.argv[1]=fileURLToPath(import.meta.url); async function main(){${body}} ${entry}`, {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext}}).outputText;
     const child = spawnSync(process.execPath, ["--input-type=module", "-e", code], {encoding: "utf8", timeout: 5000});
     expect(child.error).toBeUndefined();
     expect(child.status).toBe(exit);
     expect(child.stderr).not.toContain("untrusted-secret");
+    if (failureCode !== undefined) expect(child.stderr).toContain(`code=${failureCode} `);
   }
 });

@@ -28,7 +28,7 @@ it("two workers halt new claims, await already-started doc, then reject without 
   const first = new Promise<never>((_, reject) => {fail = reject;});
   const second = new Promise<never>(resolve => {finish = resolve;});
   vi.mocked(listDocuments).mockResolvedValue({metadata: {status: "200", resultset: {count: 3}},
-    results: [1, 2, 3].map(n => ({docID: `control-${n}`, secCode: "72030", ordinanceCode: "010", docTypeCode: "120", formCode: "030000", withdrawalStatus: "0"}))} as never);
+    results: [1, 2, 3].map(n => ({seqNumber: n, docID: `control-${n}`, secCode: "72030", ordinanceCode: "010", docTypeCode: "120", formCode: "030000", withdrawalStatus: "0"}))} as never);
   vi.mocked(ingestDocument).mockReturnValueOnce(first).mockReturnValueOnce(second);
   let settled = false;
   try {

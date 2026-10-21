@@ -137,7 +137,7 @@ pnpm biztag:monthly --runtime .runtime/mac-main554-20261020 --preflight # 月次
 
 ## 本番の定期処理・先行条件・LLM利用
 
-確認日: **2026-10-20**。時刻は **JST**。Cloudflareが起動・結果監視、Actionsが機械取得を担当する。**Macの2自動起動は廃止・停止済み。本文補足同期・タグ・競合準備・優待要約は月1回の案内から手動実行する方式**。SSHは不足補完用で日次cronは未登録。
+確認日: **2026-10-22**。時刻は **JST**。Cloudflareが起動・結果監視、Actionsが機械取得を担当する。**Macの2自動起動は廃止・停止済み。本文補足同期・タグ・競合準備・優待要約は月1回の案内から手動実行する方式**。SSHは不足補完用で日次cronは未登録。
 原本はNotionに物理保管し、構造化データはD1、時系列・実行receiptはR2へ保存する。
 
 **全件は[データ取得・更新・監視の全件一覧](docs/batch-data-inventory.md)**。通常データ40行、資金フロー29取得元、旧Mac内7機能、監視9機能、手動/停止/未実装20項目、本文39項目を列挙する。下表は予定時刻の要約。
@@ -151,7 +151,7 @@ pnpm biztag:monthly --runtime .runtime/mac-main554-20261020 --preflight # 月次
 | 東証33業種の対応 | 株式同期の成功後 | 現workflowは株式成功後。入力はcore銘柄集合＋公式提出者表 | なし |
 | 価格依存の業種別資金フロー | 株式同期の成功後、許容失敗もない場合だけ | 当日の必要価格・`core_stocks.sector`。現ハーネスはstock-sync job全体の成功も要求 | なし |
 | 価格非依存の資金フロー28取得元 | 平日18:15、CF起動 | 当日の株式同期は待たず、非Yahoo→Yahoo→両lane成功後join。共有Notion枠未成立のため取得直列を維持 | なし |
-| TDnet・有報の補完 | 平日19:00、CF起動 | 主体・原本を確認→抽出→保存・価格資格。共有保存予算内でTDnet→Node有報、前段失敗で停止 | なし |
+| TDnet・有報の補完 | 平日19:00、CF起動 | 共通起動資格・保存設定を確認し、予算内でTDnet→Node有報。TDnet失敗でも独立した有報は実行し、共通資格失敗・取消では停止 | なし |
 | 事業タグ・39本文の補足同期・競合の機械準備 | **旧20:00は廃止、月次手動へ** | Nodeの有報テキスト抽出は継続。補足DB同期と判定は月次手動 | 適格新規・実入力変更のタグだけ手動スクリプトでClef |
 | EDINET財務サマリ・原本 | 平日21:00 | 指定提出日の公式一覧・主体確認→原本保管→財務抽出。19時Nodeの完了待ちは不要 | なし |
 | 優待要約 | **旧21:00は廃止、月次手動へ** | 原文の月次取得は継続。要約は月次手動 | 標準はなし。旧手動`--allow-model`のMLXコードは残存 |
@@ -171,7 +171,7 @@ Notionのレート制御はプロセス内であり、ジョブをまたぐ全�
 
 ### 現在の復旧状況
 
-**定期設定と全データ充足は別です。** CFの10 trigger、GitHubの13有効workflowは継続。Macの20/21時calendarは廃止し、専用分は月次手動スクリプトへ変更します。歴史RAW用workflow1本も意図的停止。現設定は[全件一覧](docs/batch-data-inventory.md)、既存データの保留は[最新の復旧記録](docs/test-logs/recovery-functional-status-20261020.md)・[Issue #348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)で追跡します。
+**定期設定と全データ充足は別です。** CFの10 trigger、GitHubの13有効workflowは継続。Macの20/21時calendarは廃止し、専用分は月次手動スクリプトへ変更しました。歴史RAW用workflow1本も意図的停止。10/21の株式429・VWAP保存不明・有報停止と修正範囲は[10/22の稼働確認](docs/test-logs/recovery-functional-status-20261022.md)、現設定は[全件一覧](docs/batch-data-inventory.md)へ記録します。以下は10/20までの修復実績で、現在の全件充足を示す数値ではありません。残件は[Issue #348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)で追跡します。
 
 | 対象 | 確認済み | 残り・保留 |
 | --- | --- | --- |
