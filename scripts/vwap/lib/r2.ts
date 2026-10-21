@@ -103,6 +103,157 @@ function r2CauseOf(e: unknown): { code: string; status: number | "none" } {
   return { code, status };
 }
 
+const R2_PUT_FAILURE_LOG = "[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown]";
+
+/**
+ * PUT 失敗の計測1行。分類・再送・投げる例外は変えない。
+ * 本文が読めなくても、この関数から例外を出さない。
+ */
+function logR2PutFailure(key: string, error: unknown, status: number | "none"): void {
+  const name = readOr("<unreadable>", () => readExceptionName(error));
+  const code = readOr("<unreadable>", () => readExceptionCode(error));
+  const requestId = readOr("<unreadable>", () => readRequestId(error) ?? "");
+  const body = readOr("<unreadable>", () => readPutFailureBodyHead(error));
+  try {
+    const parts = [
+      R2_PUT_FAILURE_LOG,
+      `key=${logToken(key)}`,
+      `status=${logToken(String(status))}`,
+      `name=${logToken(name)}`,
+      `code=${logToken(code)}`,
+    ];
+    if (requestId !== "") parts.push(`requestId=${logToken(requestId)}`);
+    parts.push(`body=${body.replace(/[\r\n\u2028\u2029]/g, " ")}`);
+    console.error(parts.join(" "));
+  } catch {
+    // 計測行の出力失敗は PUT の例外に影響させない。
+  }
+}
+
+function readOr<T>(fallback: T, read: () => T): T {
+  try {
+    return read();
+  } catch {
+    return fallback;
+  }
+}
+
+function readExceptionName(error: unknown): string {
+  if (error === null || typeof error !== "object") return "none";
+  const name = (error as { name?: unknown }).name;
+  return typeof name === "string" && name.length > 0 ? name : "none";
+}
+
+/** Node の `code` と S3/R2 XML の `Code` は同じ例外の別綴り。無いときは none。name では埋めない。 */
+function readExceptionCode(error: unknown): string {
+  if (error === null || typeof error !== "object") return "none";
+  const record = error as { code?: unknown; Code?: unknown };
+  if (typeof record.code === "string" && record.code.length > 0) return record.code;
+  if (typeof record.Code === "string" && record.Code.length > 0) return record.Code;
+  return "none";
+}
+
+function readRequestId(error: unknown): string | undefined {
+  if (error === null || typeof error !== "object") return undefined;
+  const record = error as {
+    RequestId?: unknown;
+    $metadata?: { requestId?: unknown; extendedRequestId?: unknown } | null;
+    $response?: { headers?: unknown } | null;
+  };
+  const metadata = record.$metadata;
+  if (metadata !== null && typeof metadata === "object") {
+    if (typeof metadata.requestId === "string" && metadata.requestId.length > 0) return metadata.requestId;
+    if (typeof metadata.extendedRequestId === "string" && metadata.extendedRequestId.length > 0) return metadata.extendedRequestId;
+  }
+  const header = requestIdHeader(record.$response);
+  if (header !== undefined) return header;
+  if (typeof record.RequestId === "string" && record.RequestId.length > 0) return record.RequestId;
+  return undefined;
+}
+
+function requestIdHeader(response: { headers?: unknown } | null | undefined): string | undefined {
+  if (response === null || response === undefined || typeof response !== "object") return undefined;
+  const headers = response.headers;
+  if (headers === null || typeof headers !== "object") return undefined;
+  for (const [name, value] of Object.entries(headers as Record<string, unknown>)) {
+    if (name.toLowerCase() === "x-amz-request-id" && typeof value === "string" && value.length > 0) return value;
+  }
+  return undefined;
+}
+
+function readPutFailureBodyHead(error: unknown): string {
+  const read = readPutFailureBody(error);
+  if (read.kind === "unreadable") return "<unreadable>";
+  if (read.kind === "absent") return "<absent>";
+  const collapsed = read.text.replace(/[\r\n\u2028\u2029]+/g, " ");
+  const redacted = redactDiagnostic(collapsed.length > 8192 ? collapsed.slice(0, 8192) : collapsed);
+  const head = Array.from(redacted).slice(0, 300).join("");
+  return head.trim().length > 0 ? head : "<absent>";
+}
+
+/** `$response.body` → 例外の raw body → message。各読み取りの例外は次のソースへ進め、全部失敗したときだけ unreadable。 */
+function readPutFailureBody(error: unknown): { kind: "text"; text: string } | { kind: "absent" } | { kind: "unreadable" } {
+  if (error === null || typeof error !== "object") return { kind: "absent" };
+  let unreadable = false;
+  for (const read of [responseBodyText, rawBodyText, messageText]) {
+    try {
+      const text = read(error);
+      if (text !== undefined && text.length > 0) return { kind: "text", text };
+    } catch {
+      unreadable = true;
+    }
+  }
+  return unreadable ? { kind: "unreadable" } : { kind: "absent" };
+}
+
+function responseBodyText(error: object): string | undefined {
+  const response = (error as { $response?: { body?: unknown } | null }).$response;
+  if (response === null || typeof response !== "object") return undefined;
+  return textOf(response.body);
+}
+
+function rawBodyText(error: object): string | undefined {
+  return textOf((error as { body?: unknown }).body);
+}
+
+function messageText(error: object): string | undefined {
+  const message = (error as { message?: unknown }).message;
+  return typeof message === "string" && message.length > 0 ? message : undefined;
+}
+
+function textOf(value: unknown): string | undefined {
+  if (typeof value === "string") return value.length > 0 ? value : undefined;
+  if (value instanceof Uint8Array) {
+    if (value.byteLength === 0) return undefined;
+    return new TextDecoder("utf-8", { fatal: false }).decode(value.subarray(0, 8192));
+  }
+  if (value instanceof ArrayBuffer) return textOf(new Uint8Array(value));
+  return undefined;
+}
+
+/** 計測文面だけ。sanitizeLogText と同じ URL / secret= 除去に、認証ヘッダー・署名・アクセスキーを足す。 */
+function redactDiagnostic(value: string): string {
+  let out = value
+    .replace(/https?:\/\/\S+/g, "<url>")
+    .replace(/secret\s*=\s*\S+/gi, "secret=<redacted>")
+    .replace(/(?:authorization|x-amz-security-token|x-amz-credential|x-amz-signature|x-amz-algorithm)\s*[:=]\s*\S+/gi, "<redacted>")
+    .replace(/X-Amz-(?:Signature|Credential|Security-Token|Algorithm)=[^&\s]+/gi, "<redacted>")
+    .replace(/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, "<redacted>");
+  try {
+    for (const secret of [sharedEnv.R2_ACCESS_KEY_ID(), sharedEnv.R2_SECRET_ACCESS_KEY()]) {
+      if (secret.length >= 8) out = out.split(secret).join("<redacted>");
+    }
+  } catch {
+    // 計測の秘匿置換だけ。鍵が読めなくても本文の残りは出す。
+  }
+  return out;
+}
+
+function logToken(value: string): string {
+  const redacted = redactDiagnostic(value).replace(/[\s\u0000-\u001f]+/g, "");
+  return redacted.length > 0 ? redacted : "none";
+}
+
 /**
  * 明示拒否 (適用なし確定) の判定。412 前提失敗と retry 不能な確定 4xx のみ。
  * 408/429 (retryable)・5xx・status なしは適用有無が曖昧なため unknown。
@@ -152,6 +303,7 @@ export async function r2PutBytes(key: string, body: Uint8Array, observedVersion:
     }), { abortSignal: AbortSignal.timeout(60_000) });
   } catch (e) {
     const { code, status } = r2CauseOf(e);
+    logR2PutFailure(key, e, status);
     if (isExplicitRejection(code, status)) throw new R2PutRejectedError(key, code, status, e);
     throw new R2PutUnknownError(key, code, status, e);
   }
@@ -161,6 +313,7 @@ export async function r2PutBytes(key: string, body: Uint8Array, observedVersion:
   const statusOk = typeof status === "number" && Number.isFinite(status) && status >= 200 && status < 300;
   const etagOk = typeof etag === "string" && etag.length > 0;
   if (!statusOk || !etagOk) {
+    logR2PutFailure(key, res, typeof status === "number" && Number.isFinite(status) ? status : "none");
     // 成功 schema を満たさない応答は結果不明 (known 失敗にしない)。
     throw new R2PutUnknownError(key, "bad-response", statusOk ? (status as number) : "none", {
       statusType: typeof status,

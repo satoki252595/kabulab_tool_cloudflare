@@ -234,6 +234,132 @@ describe("r2Put contract (1 attempt, no retry)", () => {
     );
   });
 
+  it("PUT failure logs one incident line and still throws the same error", async () => {
+    const body = `<Error><Code>SlowDown</Code>${"😀".repeat(301)}</Error>`;
+    const sdk = Object.assign(new Error("https://secret.example/leak?X-Amz-Signature=abcdef"), {
+      name: "InternalError",
+      code: "SlowDown",
+      $metadata: { httpStatusCode: 500, requestId: "req-abc" },
+      $response: {
+        headers: { "content-type": "application/xml", authorization: "Bearer test-secret", "x-amz-request-id": "req-header" },
+        body: new TextEncoder().encode(body),
+      },
+    });
+    const send = vi.spyOn(S3Client.prototype, "send").mockRejectedValueOnce(sdk);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const error = await r2Put("daily/7203.json", "{}", '"observed"').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(R2PutUnknownError);
+    expect(error).toMatchObject({ cause: sdk });
+    expect((error as Error).message).toContain("cause=InternalError/500");
+    expect((error as Error).message).not.toContain("https://");
+    expect(send).toHaveBeenCalledTimes(1);
+    const lines = logged.mock.calls.map((call) => String(call[0])).filter((line) => line.startsWith("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown]"));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^\[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown\] key=daily\/7203\.json status=500 name=InternalError code=SlowDown requestId=req-abc body=/);
+    const loggedBody = lines[0].slice(lines[0].indexOf(" body=") + " body=".length);
+    expect(Array.from(loggedBody)).toHaveLength(300);
+    expect(loggedBody.startsWith("<Error><Code>SlowDown</Code>")).toBe(true);
+    expect(lines[0]).not.toMatch(/[\r\n]/);
+    for (const secret of ["https://", "abcdef", "Bearer", "test-secret", "test-access", "application/xml", "req-header"]) {
+      expect(lines[0]).not.toContain(secret);
+    }
+  });
+
+  it("redacts signed URL, auth header, and access keys in the message head", async () => {
+    const sdk = Object.assign(new Error(
+      `see secret=private-value https://acct.r2.cloudflarestorage.com/b/k?X-Amz-Signature=deadbeef Authorization: Bearer test-secret id=test-access AKIAIOSFODNN7EXAMPLE\nnext`,
+    ), { name: "TimeoutError" });
+    vi.spyOn(S3Client.prototype, "send").mockRejectedValueOnce(sdk);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(r2Put("daily/7203.json", "{}", null)).rejects.toBeInstanceOf(R2PutUnknownError);
+    const line = logged.mock.calls.map((call) => String(call[0])).find((item) => item.startsWith("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown]"));
+    expect(line).toBe("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown] key=daily/7203.json status=none name=TimeoutError code=none body=see secret=<redacted> <url> <redacted> <redacted> id=<redacted> <redacted> next");
+    expect(line).not.toContain("private-value");
+  });
+
+  it("uses the XML Code when the exception has no string code", async () => {
+    const sdk = Object.assign(new Error("ignored"), {
+      name: "UnknownError",
+      Code: "InternalError",
+      $response: { body: "", headers: { "X-Amz-Request-Id": "xml-req" } },
+    });
+    vi.spyOn(S3Client.prototype, "send").mockRejectedValueOnce(sdk);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(r2Put("intra/7203.json", "{}", null)).rejects.toBeInstanceOf(R2PutUnknownError);
+    const line = logged.mock.calls.map((call) => String(call[0])).find((item) => item.startsWith("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown]"));
+    expect(line).toBe("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown] key=intra/7203.json status=none name=UnknownError code=InternalError requestId=xml-req body=ignored");
+  });
+
+  it("a throwing response body falls through to a redacted message and still throws unknown", async () => {
+    const sdk = Object.assign(new Error("https://secret.example/x?k=LEAK"), {
+      name: "InternalError",
+      code: "ECONNRESET",
+      $metadata: { httpStatusCode: 500, requestId: "req-keep" },
+    });
+    Object.defineProperty(sdk, "$response", { get() { throw new Error("body boom"); } });
+    vi.spyOn(S3Client.prototype, "send").mockRejectedValueOnce(sdk);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const error = await r2Put("daily/7203.json", "{}", null).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(R2PutUnknownError);
+    expect((error as Error).cause).toBe(sdk);
+    const line = logged.mock.calls.map((call) => String(call[0])).find((item) => item.startsWith("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown]"));
+    expect(line).toBe("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown] key=daily/7203.json status=500 name=InternalError code=ECONNRESET requestId=req-keep body=<url>");
+    expect(line).not.toContain("LEAK");
+  });
+
+  it("marks the body unreadable when every source throws, without changing the PUT error", async () => {
+    const sdk = Object.assign(new Error("placeholder"), { name: "TimeoutError", $metadata: { httpStatusCode: 500 } });
+    Object.defineProperty(sdk, "$response", { get() { throw new Error("body boom"); } });
+    Object.defineProperty(sdk, "body", { get() { throw new Error("raw boom"); } });
+    Object.defineProperty(sdk, "message", { get() { throw new Error("message boom"); } });
+    vi.spyOn(S3Client.prototype, "send").mockRejectedValueOnce(sdk);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(r2Put("daily/7203.json", "{}", null)).rejects.toBeInstanceOf(R2PutUnknownError);
+    const line = logged.mock.calls.map((call) => String(call[0])).find((item) => item.startsWith("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown]"));
+    expect(line).toBe("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown] key=daily/7203.json status=500 name=TimeoutError code=none requestId=<unreadable> body=<unreadable>");
+  });
+
+  it("logs an explicit rejection without turning it into unknown", async () => {
+    const sdk = svcError("PreconditionFailed", 412);
+    vi.spyOn(S3Client.prototype, "send").mockRejectedValueOnce(sdk);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const error = await r2Put("daily/7203.json", "{}", null).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(R2PutRejectedError);
+    expect(error).not.toBeInstanceOf(R2PutUnknownError);
+    const line = logged.mock.calls.map((call) => String(call[0])).find((item) => item.startsWith("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown]"));
+    expect(line).toBe("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown] key=daily/7203.json status=412 name=PreconditionFailed code=none body=PreconditionFailed");
+  });
+
+  it("logs a resolved response that misses the success schema", async () => {
+    vi.spyOn(S3Client.prototype, "send").mockImplementationOnce(async () => ({
+      ETag: "",
+      $metadata: { httpStatusCode: 200, requestId: "req-bad" },
+    }));
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(r2Put("daily/7203.json", "{}", null)).rejects.toBeInstanceOf(R2PutUnknownError);
+    const line = logged.mock.calls.map((call) => String(call[0])).find((item) => item.startsWith("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown]"));
+    expect(line).toBe("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown] key=daily/7203.json status=200 name=none code=none requestId=req-bad body=<absent>");
+  });
+
+  it("a failing incident log does not change the thrown PUT error", async () => {
+    vi.spyOn(S3Client.prototype, "send").mockRejectedValueOnce(svcError("TimeoutError"));
+    vi.spyOn(console, "error").mockImplementation(() => { throw new Error("log failed"); });
+    await expect(r2Put("daily/7203.json", "{}", null)).rejects.toBeInstanceOf(R2PutUnknownError);
+  });
+
+  it("does not emit the incident line for success, pre-send rejection, or GET faults", async () => {
+    const send = vi.spyOn(S3Client.prototype, "send");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const incident = () => logged.mock.calls.map((call) => String(call[0])).filter((line) => line.startsWith("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown]"));
+    send.mockImplementationOnce(async () => okPut());
+    await r2Put("daily/7203.json", "{}", null);
+    await expect(r2Put("daily/7203.json", "{}", " ")).rejects.toThrow("observed ETag");
+    send.mockRejectedValueOnce(svcError("Forbidden", 403));
+    await expect(r2GetVersion("daily/7203.json")).rejects.toThrow();
+    expect(incident()).toEqual([]);
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
   it("messages carry sanitized code/status only, no raw cause text", async () => {
     const send = vi.spyOn(S3Client.prototype, "send");
     send.mockRejectedValueOnce(
