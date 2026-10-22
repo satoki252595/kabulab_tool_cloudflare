@@ -102,6 +102,7 @@ export async function archiveYahooRawBatch(input: YahooRawBatchInput): Promise<{
       if (c.headers.upstreamStatus !== undefined) headers.upstreamStatus = c.headers.upstreamStatus;
       if (c.headers.retryAfter !== undefined) headers.retryAfter = c.headers.retryAfter;
       if (c.headers.cooldown !== undefined) headers.cooldown = c.headers.cooldown;
+      // age / cfCacheStatus は失敗ログ専用。保管 gzip の中身は変えない。
       members.push({ api: item.api, attempt: item.attempt, symbol: c.symbol,
         status: c.status, receivedAt: c.receivedAt, url: redactYahooDiagnostic(c.url), headers,
         byteLength: c.bytes.length, sha256: await sha256HexBytes(c.bytes), bodyBase64: toBase64(c.bytes) });

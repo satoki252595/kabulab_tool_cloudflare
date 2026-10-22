@@ -105,6 +105,28 @@ describe("fetchChart onRaw hook", () => {
     expect(fetchFn).toHaveBeenCalledTimes(1);
     expect(chart.ohlcv).toHaveLength(2);
   });
+
+  it("Age と CF-Cache-Status は同じ応答から診断用に通し、token 以外の原文は残さない", async () => {
+    useProxy();
+    const seen: YahooRawCapture[] = [];
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(chartJson()), {
+      status: 200,
+      headers: { Age: "18", "CF-Cache-Status": "HIT" },
+    })));
+    await fetchChart("7203", "5y", { onRaw: (capture) => { seen.push(capture); } });
+    expect(seen[0]?.headers.age).toBe("18");
+    expect(seen[0]?.headers.cfCacheStatus).toBe("HIT");
+
+    seen.length = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(chartJson()), {
+      status: 200,
+      headers: { Age: "12; secret-token", "CF-Cache-Status": "HIT secret" },
+    })));
+    await fetchChart("7203", "5y", { onRaw: (capture) => { seen.push(capture); } });
+    expect(seen[0]?.headers.age).toBe("bad");
+    expect(seen[0]?.headers.cfCacheStatus).toBe("bad");
+    expect(JSON.stringify(seen[0]?.headers)).not.toContain("secret");
+  });
 });
 
 describe("fetchChart previousClose (explicit-only)", () => {

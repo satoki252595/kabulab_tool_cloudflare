@@ -609,7 +609,18 @@ export interface YahooChartRawCapture {
 /** 同一応答の原文と、body受信完了の実clock。認証headerは収集しない。 */
 export interface YahooRawCapture extends YahooChartRawCapture {
   receivedAt: string;
-  headers: { contentType?: string; upstreamStatus?: string; retryAfter?: string; cooldown?: string };
+  headers: {
+    contentType?: string;
+    upstreamStatus?: string;
+    retryAfter?: string;
+    cooldown?: string;
+    /**
+     * 診断専用 (INC-20261014)。同じ Response から読むだけで追加リクエストはしない。
+     * 形が cache token でない値は原文を残さず "bad"。保管 gzip へはコピーしない。
+     */
+    age?: string;
+    cfCacheStatus?: string;
+  };
 }
 
 export const MAX_YAHOO_RAW_BYTES = 8 * 1024 * 1024;
@@ -649,16 +660,26 @@ async function readRawBytes(response: Response, symbol: string): Promise<Uint8Ar
   return bytes;
 }
 
+/** Age / CF-Cache-Status の診断値。token 以外は原文を持たない。 */
+function diagnosticCacheToken(value: string | null): string | undefined {
+  if (value === null) return undefined;
+  return /^[A-Za-z0-9._-]{1,32}$/.test(value) ? value : "bad";
+}
+
 function rawCapture(symbol: string, response: Response, bytes: Uint8Array, receivedAt: string): YahooRawCapture {
   const headers: YahooRawCapture["headers"] = {};
   const contentType = response.headers.get("Content-Type");
   const upstreamStatus = response.headers.get("X-Kabulab-Yahoo-Status");
   const retryAfter = response.headers.get("Retry-After");
   const cooldown = response.headers.get("X-Kabulab-Yahoo-Cooldown");
+  const age = diagnosticCacheToken(response.headers.get("Age"));
+  const cfCacheStatus = diagnosticCacheToken(response.headers.get("CF-Cache-Status"));
   if (contentType !== null) headers.contentType = contentType;
   if (upstreamStatus !== null) headers.upstreamStatus = upstreamStatus;
   if (retryAfter !== null) headers.retryAfter = retryAfter;
   if (cooldown !== null) headers.cooldown = cooldown;
+  if (age !== undefined) headers.age = age;
+  if (cfCacheStatus !== undefined) headers.cfCacheStatus = cfCacheStatus;
   return { symbol, status: response.status, bytes, receivedAt, headers,
     url: redactYahooDiagnostic(response.url) };
 }

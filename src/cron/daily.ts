@@ -66,6 +66,7 @@ import { collectOfficialRightsCustody, type OfficialRightsCustody } from "./righ
 import { diagnoseConfirmedCloses, selectConfirmedCloses } from "./macro-session.js";
 import { captureMacroJpLeg, loadMacroJpLeg, macroJpCacheKey, type MacroJpLeg, type MacroJpLegStore } from "./macro-jp-leg.js";
 import { formatConfirmedHoldDiag, formatNullBandHoldLog, formatStockSessionDiag } from "./inc-financials-stale-diag.js";
+import { finishNullBarsSummaryLine, logFreshCloseNullBars, startNullBarsRun } from "./inc-stock-sync-null-bars-diag.js";
 
 // core スキーマ (共有。日次 sync が更新)
 import * as coreSchema from "../shared/db/core-schema.js";
@@ -1205,6 +1206,7 @@ export async function runDailySync(
   const mode: PriceSyncBatchMode = options.stocksOnly === true ? "stocks" : "daily";
   const corporateDiagnostics: NonNullable<PriceSyncBatchInput["corporateDiagnostics"]> = [];
   const officialRightsCustody: OfficialRightsCustody[] = [];
+  startNullBarsRun();
   try {
     return await runDailySyncAndRecord(
       db,
@@ -1218,6 +1220,12 @@ export async function runDailySync(
   } catch (e) {
     await recordPriceSyncFailureSafely(e, mode, startedAtMs, corporateDiagnostics, officialRightsCustody);
     throw e;
+  } finally {
+    try {
+      console.info(finishNullBarsSummaryLine());
+    } catch {
+      // 集計ログの失敗で同期の戻り値・例外を置き換えない
+    }
   }
 }
 
@@ -2022,6 +2030,18 @@ export function buildStockSnapshot(
       }));
     } catch {
       // 理由ログの失敗は無視する (挙動不変)
+    }
+    try {
+      // 取得済み原文の欠測内訳 (INC-20261014)。判定・例外文は変えない。追加取得はしない。
+      logFreshCloseNullBars({
+        code,
+        expectedDate,
+        bytes: chartRaw?.bytes,
+        headers: chartRaw?.headers,
+        bars: raw.ohlcv,
+      });
+    } catch {
+      // 診断ログの失敗は無視する (挙動不変)。実日足未取得の例外は変えない。
     }
     throw new Error(`${code}: 対象 ${expectedDate} の実日足が未取得です。古い日の指標を書き直しません。`);
   }
