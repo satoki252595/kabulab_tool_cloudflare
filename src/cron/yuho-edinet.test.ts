@@ -14,6 +14,7 @@ import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { ROOT } from "../shared/db/tests/source-scan.js";
 import { INSTRUMENT_TYPES } from "../shared/jpx/instrument-type.js";
 import { enqueueDates } from "../../services/yuho-quant/src/services/edinet/catchup-progress.js";
+import * as reportedChanges from "../../services/yuho-quant/src/services/edinet/reported-changes.js";
 import { listDocuments, EdinetListFetchError, EdinetDocumentFetchError } from "../../services/yuho-quant/src/services/edinet/client.js";
 import { captureListSnapshot, EdinetListQualificationError } from "../../services/yuho-quant/src/services/edinet/list-snapshot.js";
 import { ingestDocument } from "../../services/yuho-quant/src/services/ingest.js";
@@ -115,14 +116,15 @@ const annualDoc = (code: string) => ({
   filerName: `テスト${code}`,
 });
 
-async function runCatchup(now?: Date, priceLoader?: HoldingPriceSourceLoader, deadlineMs?: number) {
+async function runCatchup(now?: Date, priceLoader?: HoldingPriceSourceLoader, deadlineMs?: number, sourceStartDeadlineMs?: number) {
   // 本体は sleep を挟む (60 日分)。setTimeout だけ偽物にして進める。
   vi.useFakeTimers({ toFake: now ? ["setTimeout", "Date"] : ["setTimeout"] });
   if (now) vi.setSystemTime(now);
   const info = vi.spyOn(console, "info").mockImplementation(() => {});
   const err = vi.spyOn(console, "error").mockImplementation(() => {});
   try {
-    const running = runYuhoEdinetCatchup(db as unknown as YuhoDatabase, undefined, undefined, priceLoader, deadlineMs);
+    const running = runYuhoEdinetCatchup(db as unknown as YuhoDatabase, undefined, undefined, priceLoader, deadlineMs,
+      sourceStartDeadlineMs === undefined ? undefined : { observeIssuedShares: true, sourceStartDeadlineMs });
     const settled = running.then(value => ({value}), error => ({error}));
     await vi.runAllTimersAsync();
     const outcome = await settled;
@@ -175,6 +177,54 @@ describe("catchup 応答契約: 実失敗だけ非 2xx", () => {
     expect(listDocuments).not.toHaveBeenCalled(); expect(resumePendingShareholdings).not.toHaveBeenCalled();
     expect(sqlite.prepare("SELECT COUNT(*) AS n FROM yuho_edinet_catchup_progress").get()?.n).toBe(0);
   });
+  it("定時の新規開始期限は有効なhard内だけ許可し、無効予算はDB/source前に拒否する", async () => {
+    const now = Date.now(), deadline = now + 30 * 60_000;
+    for (const [soft, hard] of [[NaN, deadline], [Infinity, deadline], [now - 1, deadline], [deadline + 1, deadline], [deadline - 1, undefined]]) {
+      await expect(runYuhoEdinetCatchup(db as unknown as YuhoDatabase, undefined, undefined, undefined, hard,
+        { observeIssuedShares: true, sourceStartDeadlineMs: soft })).rejects.toThrow("新規開始予算");
+    }
+    expect(listDocuments).not.toHaveBeenCalled(); expect(resumePendingShareholdings).not.toHaveBeenCalled();
+    expect(sqlite.prepare("SELECT COUNT(*) AS n FROM yuho_edinet_catchup_progress").get()?.n).toBe(0);
+  });
+  it.each([[undefined, 1], [20 * 60_000, 2]] as const)("既定5分と明示した残時間予算%sを分け、開始済文書はsoft後も閉鎖する", async (budget, expected) => {
+    const now = new Date("2026-10-14T10:20:00Z"), deadline = now.getTime() + 30 * 60_000;
+    const docs = [annualDoc("7203"), { ...annualDoc("7203"), seqNumber: 2, docID: "S1007204" }];
+    vi.mocked(listDocuments).mockResolvedValueOnce({ results: docs } as never).mockResolvedValue({ results: [] } as never);
+    const success = { outcome: "ingested", parseStatus: "no_order_table", overseasParseStatus: "no_overseas_table", textParseStatus: "ok" } as never;
+    vi.mocked(ingestDocument).mockImplementationOnce(async () => { vi.setSystemTime(now.getTime() + 6 * 60_000); return success; })
+      .mockResolvedValue(success);
+    const result = await runCatchup(now, undefined, deadline, budget === undefined ? undefined : now.getTime() + budget);
+    expect(result.ingested).toBe(expected); expect(ingestDocument).toHaveBeenCalledTimes(expected);
+    const firstDate = vi.mocked(listDocuments).mock.calls[0][0];
+    const row = sqlite.prepare("SELECT completed_ids,in_flight_doc_id FROM yuho_edinet_catchup_progress WHERE date=?").get(firstDate);
+    expect(JSON.parse(row?.completed_ids as string)).toEqual(docs.slice(0, expected).map(doc => doc.docID));
+    expect(row?.in_flight_doc_id).toBeNull();
+  });
+  it("softに達した原本観測はhardまでINSERT/読戻しを閉じ、次の日付を開始しない", async () => {
+    const now = new Date("2026-10-14T10:20:00Z"), soft = now.getTime() + 60_000, hard = soft + 10 * 60_000;
+    vi.mocked(listDocuments).mockResolvedValue({ results: [{ ...annualDoc("7203"), docID: "S100YRSP", docTypeCode: "160", withdrawalStatus: "1" }] } as never);
+    const original = reportedChanges.recordReportedChanges;
+    const observe = vi.spyOn(reportedChanges, "recordReportedChanges").mockImplementationOnce(async (...args) => {
+      vi.setSystemTime(soft + 1);
+      expect(args[3]()).toBe(false);
+      return original(...args);
+    });
+    try {
+      const result = await runCatchup(now, undefined, hard, soft);
+      expect(result.byStatus["edinet_reported:observations"]).toBe(1);
+      expect(result.reachedCap).toBe(true); expect(listDocuments).toHaveBeenCalledTimes(1);
+      expect(checkDocsCustody).not.toHaveBeenCalled(); expect(ingestDocument).not.toHaveBeenCalled();
+      expect(sqlite.prepare("SELECT COUNT(*) AS n FROM yuho_edinet_catchup_progress WHERE in_flight_doc_id IS NOT NULL").get()?.n).toBe(0);
+    } finally { observe.mockRestore(); }
+  });
+  it("終端の残り5分以下ではL2/別価格phaseを開始せず、未完理由を残す", async () => {
+    const now = new Date("2026-10-14T10:00:00Z"), deadline = now.getTime() + 5 * 60_000;
+    vi.mocked(listDocuments).mockResolvedValue({ results: [] } as never);
+    const result = await runCatchup(now, vi.fn(), deadline);
+    expect(rebuildYuhoGrowthProjection).not.toHaveBeenCalled(); expect(resumePendingShareholdingsPrices).not.toHaveBeenCalled();
+    expect(result.byStatus).toMatchObject({ "time_budget:projection_deferred": 1, "time_budget:holdings_price_deferred": 1 });
+    expect(catchupHttpStatus(result)).toBe(500);
+  });
   it("source前の保存保有明細再開が締切へ到達したら一覧/進捗/L2/価格を開始しない", async () => {
     const now = new Date("2026-10-14T10:00:00Z"), deadline = now.getTime() + 1000;
     vi.mocked(resumePendingShareholdings).mockImplementationOnce(async (args) => {
@@ -187,12 +237,23 @@ describe("catchup 応答契約: 実失敗だけ非 2xx", () => {
     expect(sqlite.prepare("SELECT COUNT(*) AS n FROM yuho_edinet_catchup_progress").get()?.n).toBe(0);
   });
   it("L2が絶対締切へ到達した場合は別300秒の価格phaseを開始せず未完にする", async () => {
-    const now = new Date("2026-10-14T10:00:00Z"), deadline = now.getTime() + 60_000;
+    const now = new Date("2026-10-14T10:00:00Z"), deadline = now.getTime() + 6 * 60_000;
     vi.mocked(listDocuments).mockResolvedValue({ results: [] } as never);
     vi.mocked(rebuildYuhoGrowthProjection).mockImplementationOnce(async () => { vi.setSystemTime(deadline); return { stocks: 0 } as never; });
     const result = await runCatchup(now, vi.fn(), deadline);
     expect(rebuildYuhoGrowthProjection).toHaveBeenCalled(); expect(resumePendingShareholdingsPrices).not.toHaveBeenCalled();
     expect(result.reachedCap).toBe(true); expect(catchupHttpStatus(result)).toBe(500);
+  });
+  it("価格の新規処理は300秒以内でもhardの1分前に止め、残件を未完にする", async () => {
+    const now = new Date("2026-10-14T10:00:00Z"), deadline = now.getTime() + 6 * 60_000;
+    vi.mocked(listDocuments).mockResolvedValue({ results: [] } as never);
+    vi.mocked(resumePendingShareholdingsPrices).mockImplementationOnce(async args => {
+      vi.setSystemTime(deadline - 60_001); expect(args.shouldStop()).toBe(false);
+      vi.setSystemTime(deadline - 60_000); expect(args.shouldStop()).toBe(true);
+      return { usedRows: 0, resumed: 0, held: 0, pending: true };
+    });
+    const result = await runCatchup(now, vi.fn(), deadline);
+    expect(result.byStatus["holdings_price:pending"]).toBe(1); expect(result.reachedCap).toBe(true);
   });
   it("締切中のdoc未知結果はinFlightを残し次runも同doc/sourceを再送しない", async () => {
     const now = new Date("2026-10-14T10:00:00Z"), deadline = now.getTime() + 60_000;

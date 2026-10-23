@@ -112,6 +112,11 @@ afterEach(() => {
 });
 
 describe("runSpec", () => {
+  it.each([undefined, Date.parse("2026-10-16T14:40:00.000Z")])("deadline %s は定時だけresolveへ第3引数で渡す", async deadlineMs => {
+    const {runSpec}=await import("./run-spec.js"),{spec}=makeSpec();const resolve=vi.spyOn(spec,"resolve");const context=ctx();
+    await runSpec(spec,{...context,...(deadlineMs===undefined?{}:{deadlineMs})});
+    expect(resolve.mock.calls[0]).toEqual(deadlineMs===undefined?[context.now,false]:[context.now,false,deadlineMs]);
+  });
   it("未保管のキー: 取得 → 先に一次データを実体保管 → 観測ログへ配列順に upsert", async () => {
     const { runSpec } = await import("./run-spec.js");
     const { spec, fetchImpl } = makeSpec();

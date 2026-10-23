@@ -9,7 +9,7 @@
  * (src/shared/notion-archive/moneyflow.test.ts の env 差し替えパターンと同じ)。
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SOURCES, classifyRunStatus, parseAsOfArg, parseOnlyArg, sectorMarketCapSkipDetail, sectorTurnoverRange, verifySectorTurnoverResult } from "./ingest.js";
@@ -84,6 +84,22 @@ describe("normal mainのlane分離とqueue後の実期限", () => {
     const { main } = await import("./ingest.js");
     await expect(main()).rejects.toThrow("23:40");
     expect(catalog).not.toHaveBeenCalled(); expect(runSpec).not.toHaveBeenCalled(); expect(existsSync(path)).toBe(false);
+  });
+  it.each(["quality", "unknown"])("非Yahooの%s終了を保存summaryで区別し、unknownを後続資格にしない", async mode => {
+    vi.resetModules(); vi.stubEnv("GITHUB_RUN_ID","38879272134"); vi.stubEnv("GITHUB_RUN_ATTEMPT","1");
+    const path=join(dir,`${mode}.json`),output=join(dir,`${mode}-output`);writeFileSync(output,"");vi.stubEnv("GITHUB_OUTPUT",output);
+    process.argv=[...originalArgv,"--only=global-indices,coingecko-global","--lane=non-yahoo",`--summary=${path}`];
+    const {NotionUnknownResultError}=await import("../../src/shared/notion-archive/client.js");
+    const failure=mode==="unknown"?new NotionUnknownResultError("declared mutation unknown"):new Error("declared source503");
+    vi.doMock("./lib/run-spec.js",()=>({runSpec:vi.fn().mockRejectedValue(failure)}));
+    vi.doMock("../../src/shared/notion-archive/index.js",async original=>({...await original<typeof import("../../src/shared/notion-archive/index.js")>(),
+      ensureIndicatorDefsDb:vi.fn(async()=>({dbId:"defs"})),upsertIndicatorDef:vi.fn(async()=>({pageId:"def"})),
+      ensureRunLogDb:vi.fn(async()=>({dbId:"logs"})),recordRunLog:vi.fn(async()=>({pageId:"log"}))}));
+    vi.spyOn(console,"info").mockImplementation(()=>undefined);vi.spyOn(console,"error").mockImplementation(()=>undefined);
+    const {main}=await import("./ingest.js");
+    if(mode==="unknown") {await expect(main()).rejects.toBe(failure);expect(existsSync(path)).toBe(false);expect(readFileSync(output,"utf8")).toBe("");}
+    else {await main();expect(process.exitCode).toBe(1);expect(JSON.parse(readFileSync(path,"utf8")).outcomes).toMatchObject([{source:"coingecko-global",ok:false}]);expect(readFileSync(output,"utf8")).toBe("summary_closed=true\n");rmSync(path);}
+    rmSync(output);
   });
   it("stock後sector-turnoverは固定as-of/4指標順/原本relation NULLを変えず共通batchへ渡す", async () => {
     vi.resetModules();

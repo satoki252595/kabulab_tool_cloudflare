@@ -696,7 +696,7 @@ describe("SCHEDULED_DATE 検証 (CF scheduler 経由の一致確認のみ)", () 
   });
 
   it("一致すれば通常フローへ進む (検証のみ・日付を上書きしない)", async () => {
-    // system time 2026-09-28T17:13Z → targetDate 2026-09-28。
+    vi.setSystemTime(new Date("2026-09-28T09:10:00.000Z")); // 定時18:10 JST、対象日は不変。
     process.env.SCHEDULED_DATE = "2026-09-28";
     process.env.STOCK_SYNC_TARGET = "scheduled-stocks";
     vi.mocked(fetchChart).mockImplementation(chartWithRaw(chart("2026-09-25")));
@@ -726,6 +726,15 @@ describe("SCHEDULED_DATE 検証 (CF scheduler 経由の一致確認のみ)", () 
       expect(fetchChart).not.toHaveBeenCalled();
       expect(calls).toEqual([]);
     }
+  });
+
+  it("定時stocksが20時を過ぎてqueueから出た場合は原本取得/金融保存を開始しない", async () => {
+    vi.setSystemTime(new Date("2026-09-28T11:00:00.001Z"));
+    process.env.SCHEDULED_DATE = "2026-09-28"; process.env.STOCK_SYNC_TARGET = "scheduled-stocks";
+    const { db, calls } = recordingDb();
+    await expect(runDailySync(db, { stocksOnly: true, jpLegStore: emptyJpStore })).rejects.toThrow("18:00〜20:00");
+    expect(fetchChart).not.toHaveBeenCalled(); expect(fetchStockRawData).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
   });
 
   it("手動 stocks の日付未指定は現契約どおり素通りする", async () => {

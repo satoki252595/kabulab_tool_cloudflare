@@ -1,19 +1,22 @@
-# 平日 9:00-19:00 JST 毎時 (DESIGN.md §8.2)。cron は UTC 表記
+# 平日09〜19時JST毎時にCFが起動。対象日は予定slotから固定する。
 name: tdnet_hourly
 
 on:
-  schedule:
-    - cron: "0 0-10 * * 1-5"
   workflow_dispatch:
     inputs:
       date:
         description: "対象日 YYYY-MM-DD。空ならJST当日、09時前の遅配は前日"
         required: false
         default: ""
+      scheduled_at:
+        description: "CF専用の予定UTC時刻 YYYY-MM-DDTHH:mm:00Z。手動実行は空"
+        type: string
+        default: ""
 
 concurrency:
   group: tdnet_hourly
   cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: read
@@ -49,6 +52,7 @@ jobs:
           # 手動実行で日付を指定したときだけ使う。inputs をシェルへ直接展開しない
           # （値は環境変数で渡し、下で形式を検査する）。定期実行では空。
           TARGET_DATE: ${{ inputs.date }}
+          SCHEDULED_AT: ${{ inputs.scheduled_at }}
         run: |
           set -euo pipefail
           args=()
@@ -56,6 +60,7 @@ jobs:
             [[ "$TARGET_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "::error::date は YYYY-MM-DD で指定する"; exit 1; }
             args=(--date "$TARGET_DATE")
           fi
+          if [ -n "${SCHEDULED_AT:-}" ]; then args+=(--scheduled-at "$SCHEDULED_AT"); fi
           nix develop -c bash -c 'cd pipeline && uv run python -m jp_stock_pipeline.jobs.tdnet_hourly --require-cloud "$@"' _ "${args[@]}"
 
       - name: 失敗したら Issue を立てる

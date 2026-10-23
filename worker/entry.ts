@@ -10,6 +10,7 @@
 // を担う。Workers Paid 上でも全銘柄の取得・計算は既存 Node 経路を継続し、
 // scheduled 処理は R2 + GitHub API による起動と結果確認のみとする。
 import app from "../src/index.js";
+import { handleTimedScheduled, isTimedCron } from "../src/scheduler/timed.js";
 import {
   handleStockScheduled,
   type ScheduledControllerLike,
@@ -20,5 +21,5 @@ import {
 export default {
   fetch: app.fetch,
   scheduled: (controller: ScheduledControllerLike, env: SchedulerEnv) =>
-    handleStockScheduled(controller, env),
+    isTimedCron(controller.cron) ? handleTimedScheduled(controller, env) : handleStockScheduled(controller, env),
 };

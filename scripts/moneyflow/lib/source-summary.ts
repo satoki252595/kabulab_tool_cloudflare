@@ -33,8 +33,58 @@ export function moneyflowScheduledWindow(plannedDate: string, nowMs: number): { 
   if (!/^\d{4}-\d{2}-\d{2}$/.test(plannedDate) || !Number.isFinite(floor) || new Date(floor).toISOString().slice(0, 10) !== plannedDate || [0, 6].includes(new Date(floor).getUTCDay())) {
     throw new Error("moneyflow joinの予定日が不正です");
   }
-  if (!Number.isFinite(nowMs) || nowMs < floor || nowMs > cutoff) throw new Error("moneyflow joinの実23:40期限外です");
+  if (!Number.isFinite(nowMs) || nowMs < floor || nowMs >= cutoff) throw new Error("moneyflow joinの実23:40期限外です");
   return { floor, cutoff };
+}
+
+/** 定時laneだけのHTTP期限。待機後のNotion/Yahoo送信も元signalと共に止める。 */
+export function installMoneyflowDeadline(date: string): () => void {
+  const { cutoff } = moneyflowScheduledWindow(date, Date.now());
+  const nativeFetch = globalThis.fetch, signal = AbortSignal.timeout(cutoff - Date.now());
+  const guarded: typeof fetch = (input, init) => {
+    moneyflowScheduledWindow(date, Date.now());
+    const original = init?.signal !== undefined ? init.signal : input instanceof Request ? input.signal : undefined;
+    return nativeFetch(input, { ...init, signal: original ? AbortSignal.any([original, signal]) : signal });
+  };
+  globalThis.fetch = guarded;
+  return () => { if (globalThis.fetch === guarded) globalThis.fetch = nativeFetch; };
+}
+
+interface SummaryContext {
+  requested: readonly string[]; all: readonly string[]; runId: string; nowMs: number; dryRun: boolean;
+  floor?: number; cutoff?: number;
+}
+
+function qualifySummary(raw: unknown, options: SummaryContext, allowKnownFailures: boolean): MoneyflowSummary {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("moneyflow summary objectがありません");
+  const s = raw as MoneyflowSummary;
+  if (s.version !== 1 || s.runId !== options.runId || (s.lane !== "non-yahoo" && s.lane !== "yahoo") ||
+      s.dryRun !== options.dryRun || (options.floor !== undefined && s.dryRun) ||
+      !Array.isArray(s.requestedSources) || JSON.stringify(s.requestedSources) !== JSON.stringify(options.requested) ||
+      !Array.isArray(s.only) || JSON.stringify(s.only) !== JSON.stringify(moneyflowLaneSources(options.requested, options.all, s.lane)) ||
+      !Array.isArray(s.outcomes) || s.outcomes.length !== s.only.length ||
+      typeof s.notion !== "object" || s.notion === null ||
+      [s.notion.requests, s.notion.rateLimited, s.notion.transientRetries].some(n => !Number.isSafeInteger(n) || n < 0)) {
+    throw new Error("moneyflow summaryのrun/lane/source集合が一致しません");
+  }
+  const started = isoMs(s.startedAt), done = isoMs(s.finishedAt);
+  if (done < started || done > options.nowMs || (options.floor !== undefined && started < options.floor) ||
+      (options.cutoff !== undefined && done >= options.cutoff)) throw new Error("moneyflow summaryの実開始/完了時計が期限外です");
+  for (let i = 0; i < s.outcomes.length; i++) {
+    const outcome = s.outcomes[i];
+    if (outcome === null || typeof outcome !== "object" || outcome.source !== s.only[i] ||
+        (outcome.ok !== true && !(allowKnownFailures && outcome.ok === false)) ||
+        typeof outcome.detail !== "string" || outcome.detail.trim() === "") throw new Error("moneyflow sourceに欠落/重複/失敗があります");
+  }
+  return s;
+}
+
+/** 正常に閉じた非Yahoo全sourceだけが次laneを許可する。失敗は最終joinで失敗のまま。 */
+export function qualifyMoneyflowPredecessor(options: Omit<SummaryContext, "floor" | "cutoff"> & { summary: unknown; plannedDate?: string }): void {
+  if (!/^[1-9]\d*\.[1-9]\d*$/.test(options.runId) || !Number.isFinite(options.nowMs)) throw new Error("moneyflow predecessorのrun/clockが不正です");
+  const window = options.plannedDate === undefined ? {} : moneyflowScheduledWindow(options.plannedDate, options.nowMs);
+  const summary = qualifySummary(options.summary, { ...options, ...window }, true);
+  if (summary.lane !== "non-yahoo") throw new Error("moneyflow predecessorは非Yahoo laneだけです");
 }
 
 /** 同runの実summaryを照合するだけ。欠落・片側失敗を補完して成功にしない。 */
@@ -53,22 +103,10 @@ export function joinMoneyflowSummaries(options: {
   let finished = -Infinity;
   let notionRequests = 0;
   for (const raw of options.summaries) {
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("moneyflow summary objectがありません");
-    const s = raw as MoneyflowSummary;
-    if (s.version !== 1 || s.runId !== options.runId || (s.lane !== "non-yahoo" && s.lane !== "yahoo") ||
-        lanes.has(s.lane) || s.dryRun !== options.dryRun || (floor !== undefined && s.dryRun) ||
-        !Array.isArray(s.requestedSources) || JSON.stringify(s.requestedSources) !== JSON.stringify(options.requested) ||
-        !Array.isArray(s.only) || JSON.stringify(s.only) !== JSON.stringify(moneyflowLaneSources(options.requested, options.all, s.lane)) ||
-        !Array.isArray(s.outcomes) || s.outcomes.length !== s.only.length ||
-        typeof s.notion !== "object" || s.notion === null ||
-        [s.notion.requests, s.notion.rateLimited, s.notion.transientRetries].some(n => !Number.isSafeInteger(n) || n < 0)) {
-      throw new Error("moneyflow summaryのrun/lane/source集合が一致しません");
-    }
+    const s = qualifySummary(raw, { ...options, floor, cutoff }, false);
+    if (lanes.has(s.lane)) throw new Error("moneyflow summaryのrun/lane/source集合が一致しません");
     lanes.add(s.lane);
-    const started = isoMs(s.startedAt), done = isoMs(s.finishedAt);
-    if (done < started || done > options.nowMs || (floor !== undefined && started < floor) || (cutoff !== undefined && done > cutoff)) {
-      throw new Error("moneyflow summaryの実開始/完了時計が期限外です");
-    }
+    const done = isoMs(s.finishedAt);
     finished = Math.max(finished, done);
     notionRequests += s.notion.requests;
     for (let i = 0; i < s.outcomes.length; i++) {

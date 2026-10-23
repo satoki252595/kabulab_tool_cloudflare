@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { assertStockSyncDeadline, assertStockSyncStart, stockSyncRunDate } from "./stock-sync-window.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { assertStockSyncDeadline, assertStockSyncStart, installStockSyncDeadline, scheduledStockSyncWindow, stockSyncRunDate } from "./stock-sync-window.js";
+
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("通常株式UTC対象日と実clockの窓", () => {
   it("JST翌未開場でもUTC対象日を変えず、正常runと保存原本に同じ窓を適用する", () => {
@@ -18,5 +20,30 @@ describe("通常株式UTC対象日と実clockの窓", () => {
     expect(() => assertStockSyncStart(Date.parse("2026-10-14T06:30:00.000Z"))).not.toThrow();
     expect(() => assertStockSyncStart(Date.parse("2026-10-14T21:00:00.000Z"))).toThrow("翌06:00 JST基準");
     expect(() => assertStockSyncDeadline("2026-10-14", Date.parse("2026-10-14T21:00:00.000Z"))).toThrow("21:00 UTC期限");
+  });
+  it("定時だけ18〜20時に受付し、210分を残した23:30で新規保存を止める", () => {
+    const date = "2026-10-14", window = scheduledStockSyncWindow(date);
+    expect(window.deadline - window.latestStart).toBe(210 * 60_000);
+    for (const now of [window.start, window.latestStart]) expect(() => assertStockSyncStart(now, date)).not.toThrow();
+    for (const now of [window.start - 1, window.latestStart + 1, NaN]) expect(() => assertStockSyncStart(now, date)).toThrow();
+    expect(() => assertStockSyncDeadline(date, window.deadline - 1, true)).not.toThrow();
+    expect(() => assertStockSyncDeadline(date, window.deadline, true)).toThrow("23:30");
+    for (const date of ["2026-02-30", "2026-10-17", ""]) expect(() => scheduledStockSyncWindow(date)).toThrow();
+  });
+  it("実期限直前のHTTPは元signalを保持し、期限端では次の取得/保存を送らない", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const date = "2026-10-14", deadline = scheduledStockSyncWindow(date).deadline;
+    vi.setSystemTime(deadline - 10_000);
+    const native = vi.fn<typeof fetch>(async () => new Response("accepted")); vi.stubGlobal("fetch", native);
+    const restore = installStockSyncDeadline(date), original = new AbortController();
+    try {
+      await fetch("https://example.invalid", { signal: original.signal });
+      expect(native).toHaveBeenCalledTimes(1);
+      original.abort(); expect(native.mock.calls[0][1]?.signal?.aborted).toBe(true);
+      vi.setSystemTime(deadline);
+      expect(() => fetch("https://example.invalid", { method: "POST" })).toThrow("23:30");
+      expect(native).toHaveBeenCalledTimes(1);
+    } finally { restore(); }
+    expect(globalThis.fetch).toBe(native);
   });
 });

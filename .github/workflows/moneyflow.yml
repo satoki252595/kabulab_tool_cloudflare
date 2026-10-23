@@ -105,6 +105,7 @@ on:
 concurrency:
   group: moneyflow-ingest
   cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: read
@@ -138,6 +139,8 @@ jobs:
     # Yahooを呼ばない27sourceは、株式/VWAPの全量jobを待たない。
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    outputs:
+      summary_closed: ${{ steps.non-yahoo.outputs.summary_closed }}
     env:
       NOTION_MAX_RPS: "1.0"
     steps:
@@ -153,6 +156,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: moneyflow ingest (non-yahoo)
+        id: non-yahoo
         run: |
           args=(--lane=non-yahoo --summary=.moneyflow-summaries/non-yahoo.json)
           if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
@@ -162,6 +166,7 @@ jobs:
           pnpm ingest:moneyflow -- "${args[@]}"
 
       - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() && steps.non-yahoo.outputs.summary_closed == 'true' }}
         with:
           name: moneyflow-non-yahoo-${{ github.run_attempt }}
           path: .moneyflow-summaries/non-yahoo.json
@@ -178,6 +183,7 @@ jobs:
 
   ingest-yahoo:
     needs: ingest-non-yahoo
+    if: ${{ !cancelled() && needs.ingest-non-yahoo.outputs.summary_closed == 'true' }}
     # 非Yahoo完了後に取得。sector-turnover/非Yahoo subsetはYahoo排他を取得しない。
     concurrency:
       group: ${{ (inputs.only == '' || inputs.only == 'independent' || contains(inputs.only, 'global-indices')) && 'yahoo-source' || 'moneyflow-non-yahoo-join' }}
@@ -195,9 +201,13 @@ jobs:
           node-version-file: .node-version
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          name: moneyflow-non-yahoo-${{ github.run_attempt }}
+          path: .moneyflow-summaries
       - name: moneyflow ingest (yahoo)
         run: |
-          args=(--lane=yahoo --summary=.moneyflow-summaries/yahoo.json)
+          args=(--lane=yahoo --summary=.moneyflow-summaries/yahoo.json --predecessor-summary=.moneyflow-summaries/non-yahoo.json)
           if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
           if [ -n "$SOURCE_SELECTION" ]; then args+=("--only=$SOURCE_SELECTION"); fi
           if [ -n "$TRADE_DATE" ]; then args+=("--as-of=$TRADE_DATE"); fi
@@ -220,6 +230,7 @@ jobs:
   join:
     # 取得は直列。全取得元の成功判定は別jobで両laneの正常完了を待つ。
     needs: [ingest-non-yahoo, ingest-yahoo]
+    if: ${{ !cancelled() && needs.ingest-non-yahoo.outputs.summary_closed == 'true' && needs.ingest-yahoo.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

@@ -52,7 +52,7 @@ import {
   type JssAnnualRow,
 } from "../shared/db/jss-financials.js";
 import { sharedEnv } from "../shared/env.js";
-import { assertStockSyncDeadline, assertStockSyncStart, stockSyncRunDate } from "../shared/stock-sync-window.js";
+import { assertStockSyncDeadline, assertStockSyncStart, stockSyncDeadline, stockSyncRunDate } from "../shared/stock-sync-window.js";
 import {
   ensurePriceSyncDb,
   recordPriceSyncLog,
@@ -1244,15 +1244,16 @@ async function runDailySyncAndRecord(
   const { runDate: targetDate, runMonday } = runDateKeys(startedAt);
   // CF scheduler 経由の run は予定日と対象日の一致を fetch 前に検証する。
   assertScheduledDate(targetDate);
+  const scheduledStocks = sharedEnv.STOCK_SYNC_TARGET() === "scheduled-stocks";
   if (sharedEnv.STOCK_SYNC_TARGET() === "scheduled-stocks" && jpLegStore === undefined) {
     throw new Error("定時株式同期にはJP leg保存接続が必須です");
   }
   const rawRunId = priceSyncBatchRunId(startedAt);
   const assertStockDeadline = () => {
-    assertStockSyncDeadline(targetDate, Date.now());
+    assertStockSyncDeadline(targetDate, Date.now(), scheduledStocks);
   };
   // 価格・母集団とも開始窓と予定日・書込み期限は守る。
-  assertStockSyncStart(startedAt);
+  assertStockSyncStart(startedAt, scheduledStocks ? targetDate : undefined);
   // 母集団は価格取得とは独立して更新する。N225 の欠測で上場廃止の適用を止めない。
   // HOLD 残があれば不完全失敗を throw し、株価 fetch へ進まない。
   const overlay = await ensureUniverseOverlay(db, {
@@ -1382,7 +1383,7 @@ async function runDailySyncAndRecord(
   const queue = [...targets];
   const firstPassFailures: DailyRecoveryFailure<(typeof targets)[number]>[] =
     [];
-  const stockStartGate = createDailyStockStartGate(STOCK_START_INTERVAL_MS, Date.parse(`${targetDate}T21:00:00Z`));
+  const stockStartGate = createDailyStockStartGate(STOCK_START_INTERVAL_MS, stockSyncDeadline(targetDate, scheduledStocks));
   let succeeded = 0; // 当日金融・短期指標の更新数。全機能成功数は履歴HOLDを後で差し引く。
 
   // 年次は月曜 UTC の run でのみ書く (L-49)。年 1 回変わるものに毎日
@@ -1433,7 +1434,7 @@ async function runDailySyncAndRecord(
       if (!target) break;
       try {
         if (!await stockStartGate.wait()) {
-          custodyStop = new Error("Yahooの取得開始期限が株式同期の21UTC期限以後のためSTOPします");
+          custodyStop = new Error("Yahooの取得開始期限が株式同期の実締切以後のためSTOPします");
           break;
         }
         if (custodyStop !== null || sourceStop !== null) break;
@@ -1448,7 +1449,7 @@ async function runDailySyncAndRecord(
         });
       } catch (e) {
         if (isYahooSourceStop(e)) sourceStop = e instanceof Error ? e : new Error(String(e));
-        if (Date.now() >= Date.parse(`${targetDate}T21:00:00Z`)) custodyStop = e instanceof Error ? e : new Error(String(e));
+        if (Date.now() >= stockSyncDeadline(targetDate, scheduledStocks)) custodyStop = e instanceof Error ? e : new Error(String(e));
         const msg = rootCauseMessage(e);
         stockStartGate.observeFailure(msg);
         firstPassFailures.push({ target, error: msg });
@@ -1520,7 +1521,7 @@ async function runDailySyncAndRecord(
   let recoveredStocks = 0;
   const recoveryAttempts = new Map<string, number>();
   const recoveryDeadlineMs = Math.min(startedAt + RECOVERY_TIME_BUDGET_MS,
-    Date.parse(`${targetDate}T21:00:00Z`));
+    stockSyncDeadline(targetDate, scheduledStocks));
   const recovery = await recoverTransientDailyFailures(
     recoveryTargets,
     async (recoveryTarget) => {
@@ -1588,7 +1589,7 @@ async function runDailySyncAndRecord(
         }
         recoveredStocks++;
       } catch (error) {
-        if (Date.now() >= Date.parse(`${targetDate}T21:00:00Z`)) custodyStop = error instanceof Error ? error : new Error(String(error));
+        if (Date.now() >= stockSyncDeadline(targetDate, scheduledStocks)) custodyStop = error instanceof Error ? error : new Error(String(error));
         // 2 パス目も 429 を尊重する (L-57)。初回と同じゲートへ観測を流す。
         stockStartGate.observeFailure(rootCauseMessage(error));
         throw error;
@@ -1714,9 +1715,9 @@ async function runDailySyncAndRecord(
 
   const elapsedSec = (Date.now() - startedAt) / 1000;
   if (marketContextOk === undefined) throw new Error("マクロ同期結果を確認できません");
-  if (Date.now() >= Date.parse(`${targetDate}T21:00:00Z`)) {
+  if (Date.now() >= stockSyncDeadline(targetDate, scheduledStocks)) {
     throw new Error(
-      `株式同期が ${targetDate} の翌06:00 JST基準を超えました。` +
+      `株式同期が ${targetDate} の${scheduledStocks ? "23:30 JST期限" : "翌06:00 JST基準"}を超えました。` +
       "基準後の値は過去レポートに使えません。日次レポートの欠損と同期遅延を確認してください。"
     );
   }

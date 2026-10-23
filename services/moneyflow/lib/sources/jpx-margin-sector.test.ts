@@ -10,7 +10,8 @@ import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as r2 from "../../../../scripts/vwap/lib/r2.js";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import * as coreSchema from "../../../../src/shared/db/core-schema.js";
 import { JPX_33_SECTORS } from "../sector-names.js";
@@ -19,11 +20,31 @@ import {
   buildMarginSectorInput,
   loadMarginSectorMaps,
   parseMarginSectorInput,
+  resolveMarginSectorBatch,
 } from "./jpx-margin-sector.js";
 import {
   synthSectorFixture,
   synthSnapshot,
 } from "./margin-sector-fixture.js";
+
+describe("定時snapshot SDK読取の期限", () => {
+  afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
+  it("index読取後に23:40へ達したら次snapshotを開始せず、native guard/signalを伝える", async () => {
+    const deadline=Date.parse("2026-10-16T14:40:00.000Z");vi.useFakeTimers({toFake:["Date"]});vi.setSystemTime(deadline-1000);
+    const get=vi.spyOn(r2,"r2GetVersion").mockImplementation(async(key,options)=>{
+      expect(key).toBe("margin/dates.json");expect(options?.singleAttempt).toBe(true);
+      expect(options?.abortSignal).toBeInstanceOf(AbortSignal);expect(options?.beforeAttempt).toBeTypeOf("function");
+      await options?.beforeAttempt?.();vi.setSystemTime(deadline);return {body:'["2026-09-28"]',etag:"declared-index"};
+    });
+    await expect(resolveMarginSectorBatch(deadline)).rejects.toThrow("新規IO期限");
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+  it("手動は旧r2Getを保ち、定時SDK制約を混入させない", async () => {
+    const old=vi.spyOn(r2,"r2Get").mockResolvedValue(null),bounded=vi.spyOn(r2,"r2GetVersion");
+    await expect(resolveMarginSectorBatch()).rejects.toThrow("初回取込");
+    expect(old).toHaveBeenCalledWith("margin/dates.json");expect(bounded).not.toHaveBeenCalled();
+  });
+});
 
 describe("buildMarginSectorInput", () => {
   it("coverage を正しく分類する (matched/除外5種/重複/未分類)", () => {

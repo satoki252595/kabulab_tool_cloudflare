@@ -29,6 +29,13 @@ export function parseShard(args: readonly string[]): ShardOpts | undefined {
 export async function main(args = process.argv.slice(2)): Promise<0 | 1> {
   const deadline = validateCatchupLaunch("edinet");
   const shard = parseShard(args);
+  // 定時だけ残時間を使う。最後の10分は開始済unitの閉鎖・checkpoint/L2/価格に残す。
+  const sourceStartDeadlineMs = deadline === undefined ? undefined : deadline - 10 * 60_000;
+  if (sourceStartDeadlineMs !== undefined && Date.now() >= sourceStartDeadlineMs) {
+    console.info("[yuho-edinet]", JSON.stringify({ status: "deferred_time_budget", sourceStarted: false,
+      sourceStartDeadlineMs, deadlineMs: deadline, complete: false }));
+    return 1;
+  }
   // 全必須設定を最初の読取・取得・書込より前に検査。Worker/cron 認証は不要。
   yuhoEnv.EDINET_API_KEY();
   notionEnv.NOTION_TOKEN();
@@ -40,7 +47,8 @@ export async function main(args = process.argv.slice(2)): Promise<0 | 1> {
   const db = createD1HttpDb(yuhoSchema) as unknown as Database;
   const sender = createD1HttpBatchSender();
   const loader = shard ? undefined : createHoldingPriceSourceLoader();
-  const result = await runYuhoEdinetCatchup(db, shard, sender, loader, deadline, { observeIssuedShares: true });
+  const result = await runYuhoEdinetCatchup(db, shard, sender, loader, deadline,
+    sourceStartDeadlineMs === undefined ? { observeIssuedShares: true } : { observeIssuedShares: true, sourceStartDeadlineMs });
   assertCatchupDeadline(deadline);
   console.info("[yuho-edinet]", JSON.stringify(result));
   return catchupHttpStatus(result) === 200 ? 0 : 1;

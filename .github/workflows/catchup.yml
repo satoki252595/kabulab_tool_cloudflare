@@ -50,8 +50,9 @@ jobs:
   catchup:
     if: "!cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs.target != 'biztag'"
     runs-on: ubuntu-latest
-    # 初回資格<=19:05、job開始<=初回資格。54分で19:59までに外部cancelする。
-    # 手動targetは従来60分。CPUbusyもNode内timerに頼らない。
+    # 初回資格<=19:05。hard19:53は最も早いjob外部終了19:54より1分前。
+    # EDINETは残時間から新規開始予算を計算し、最後の10分を閉鎖/後処理へ残す。
+    # 手動targetは従来60分。新retry/外部timeout延長はしない。
     timeout-minutes: ${{ github.event.inputs.target == 'scheduled-catchup' && 54 || 60 }}
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

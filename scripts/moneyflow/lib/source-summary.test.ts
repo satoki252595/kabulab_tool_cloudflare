@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SOURCES, indicatorsForSources, parseOnlyArg } from "../ingest.js";
-import { joinMoneyflowSummaries, moneyflowLaneSources, moneyflowScheduledWindow, type MoneyflowSummary } from "./source-summary.js";
+import { installMoneyflowDeadline, joinMoneyflowSummaries, moneyflowLaneSources, moneyflowScheduledWindow, qualifyMoneyflowPredecessor, type MoneyflowSummary } from "./source-summary.js";
+
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 const requested = parseOnlyArg(["--only=independent"], SOURCES);
 const date = "2026-10-16", nowMs = Date.parse(`${date}T14:00:00.000Z`);
@@ -64,6 +66,7 @@ describe("同runのmoneyflow source集合join", () => {
     }
   });
   it("実23:40超・queue後の期限切れ・別日/不正clockを拒否する", () => {
+    expect(() => moneyflowScheduledWindow(date, Date.parse(`${date}T14:40:00.000Z`))).toThrow();
     expect(() => moneyflowScheduledWindow(date, Date.parse(`${date}T14:40:00.001Z`))).toThrow();
     expect(() => moneyflowScheduledWindow("2026-02-30", nowMs)).toThrow();
     expect(() => moneyflowScheduledWindow("2026-10-17", Date.parse("2026-10-17T10:00:00.000Z"))).toThrow();
@@ -72,5 +75,27 @@ describe("同runのmoneyflow source集合join", () => {
       const b = summary("yahoo"); b.finishedAt = clock;
       expect(() => join([summary("non-yahoo"), b])).toThrow();
     }
+  });
+  it("既知のsource失敗で完全閉鎖した非Yahooだけを後続に許可し、最終joinは失敗を保持する", () => {
+    const a = summary("non-yahoo"); a.outcomes[0].ok = false; a.outcomes[0].detail = "declared upstream503";
+    const qualify = (s: unknown) => qualifyMoneyflowPredecessor({ summary:s, requested, all:SOURCES,
+      runId:"38879272134.1", plannedDate:date, nowMs, dryRun:false });
+    expect(() => qualify(a)).not.toThrow();
+    expect(() => join([a,summary("yahoo")])).toThrow("欠落/重複/失敗");
+    for (const value of [undefined, {}, { ...a, runId:"38879272134.2" }, { ...a, outcomes:a.outcomes.slice(1) },
+      { ...a, outcomes:[{...a.outcomes[0],ok:"unknown"},...a.outcomes.slice(1)] }, summary("yahoo")]) expect(() => qualify(value)).toThrow();
+  });
+  it("source内で締切を跨いでも次のHTTPを送らず、元のabort signalを保持する", async () => {
+    vi.useFakeTimers({toFake:["Date"]}); vi.setSystemTime(`${date}T14:39:59.000Z`);
+    const native = vi.fn<typeof fetch>(async()=>new Response("ack")); vi.stubGlobal("fetch",native);
+    const restore = installMoneyflowDeadline(date), original = new AbortController();
+    try {
+      await fetch("https://example.invalid",{signal:original.signal});
+      original.abort(); expect(native.mock.calls[0][1]?.signal?.aborted).toBe(true);
+      vi.setSystemTime(`${date}T14:40:00.000Z`);
+      expect(()=>fetch("https://example.invalid",{method:"POST"})).toThrow("23:40");
+      expect(native).toHaveBeenCalledTimes(1);
+    } finally { restore(); }
+    expect(globalThis.fetch).toBe(native);
   });
 });

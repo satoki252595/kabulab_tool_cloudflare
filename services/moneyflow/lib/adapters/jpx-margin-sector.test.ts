@@ -6,7 +6,8 @@
  * key 契約 (公表日のみ設定・33 行衝突なし) は validateDrafts + observationKey
  * の一意性で検証する。R2/D1/JPX への取得はしない。
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as source from "../sources/jpx-margin-sector.js";
 import { observationKey } from "../../../../src/shared/notion-archive/index.js";
 import { validateDrafts } from "../source-spec.js";
 import { buildMarginSectorInput } from "../sources/jpx-margin-sector.js";
@@ -21,6 +22,15 @@ import {
 } from "./jpx-margin-sector.js";
 
 const KEY = "jpx-margin-sector-2026-09-28";
+
+it("定時の明示deadlineをSDK loaderへ同値で渡す", async()=>{
+  const deadline=Date.parse("2026-10-16T14:40:00.000Z"),failure=new Error("declared loader boundary");
+  const loader=vi.spyOn(source,"resolveMarginSectorBatch").mockRejectedValue(failure);
+  try {
+    await expect(marginSectorSpec.resolve(new Date("2026-10-16T09:15:00.000Z"),false,deadline)).rejects.toBe(failure);
+    expect(loader).toHaveBeenCalledWith(deadline);
+  } finally {loader.mockRestore();}
+});
 
 function specFiles() {
   const { rows, tickerSector, master } = synthSectorFixture();
