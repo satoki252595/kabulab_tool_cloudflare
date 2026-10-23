@@ -9,6 +9,7 @@ import { yuhoEnv } from "../../services/yuho-quant/src/env.js";
 import { notionEnv } from "../../src/shared/notion-archive/env.js";
 import { createHoldingPriceSourceLoader } from "./holdings-price-sources.js";
 import { sharedEnv } from "../../src/shared/env.js";
+import * as launch from "./catchup-launch.js";
 vi.mock("../../src/shared/db/d1-http-client.js", () => ({createD1HttpDb: vi.fn(), createD1HttpBatchSender: vi.fn()}));
 vi.mock("../../src/cron/yuho-edinet.js", async () => ({...await vi.importActual<typeof import("../../src/cron/yuho-edinet.js")>("../../src/cron/yuho-edinet.js"), runYuhoEdinetCatchup: vi.fn()}));
 vi.mock("../../services/yuho-quant/src/env.js", () => ({yuhoEnv: {EDINET_API_KEY: vi.fn()}}));
@@ -16,8 +17,30 @@ vi.mock("../../src/shared/notion-archive/env.js", () => ({notionEnv: {NOTION_TOK
 vi.mock("./holdings-price-sources.js", () => ({createHoldingPriceSourceLoader: vi.fn(() => vi.fn())}));
 vi.mock("../../src/shared/env.js", () => ({sharedEnv: {R2_ACCOUNT_ID: vi.fn(), R2_ACCESS_KEY_ID: vi.fn(), R2_SECRET_ACCESS_KEY: vi.fn(), R2_BUCKET: vi.fn()}}));
 beforeEach(() => vi.resetAllMocks());
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => { vi.unstubAllEnvs(); vi.useRealTimers(); vi.restoreAllMocks(); });
 describe("direct Node catchup", () => {
+  it("定時は19:53までの残時間から10分を終端へ残し、19:43以降は取得・設定前に延期する", async () => {
+    const deadline = Date.parse("2026-10-14T10:53:00Z");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(deadline - 30 * 60_000);
+    vi.spyOn(launch, "validateCatchupLaunch").mockReturnValue(deadline);
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    const db = {}, sender = vi.fn(), loader = Object.assign(vi.fn(), { currentSnapshotId: vi.fn(async () => null) });
+    vi.mocked(createD1HttpDb).mockReturnValue(db as never);
+    vi.mocked(createD1HttpBatchSender).mockReturnValue(sender);
+    vi.mocked(createHoldingPriceSourceLoader).mockReturnValue(loader);
+    vi.mocked(runYuhoEdinetCatchup).mockResolvedValue({ listErrors: [], ingestErrors: [], reachedCap: true, pendingDocuments: 0 } as never);
+    expect(await main([])).toBe(1);
+    expect(runYuhoEdinetCatchup).toHaveBeenCalledWith(db, undefined, sender, loader, deadline,
+      { observeIssuedShares: true, sourceStartDeadlineMs: deadline - 10 * 60_000 });
+    vi.clearAllMocks();
+    vi.setSystemTime(deadline - 10 * 60_000);
+    expect(await main([])).toBe(1);
+    expect(console.info).toHaveBeenCalledWith("[yuho-edinet]", JSON.stringify({ status: "deferred_time_budget", sourceStarted: false,
+      sourceStartDeadlineMs: deadline - 10 * 60_000, deadlineMs: deadline, complete: false }));
+    expect(createD1HttpDb).not.toHaveBeenCalled(); expect(runYuhoEdinetCatchup).not.toHaveBeenCalled();
+    expect(yuhoEnv.EDINET_API_KEY).not.toHaveBeenCalled(); expect(createHoldingPriceSourceLoader).not.toHaveBeenCalled();
+  });
   it("obsolete scheduled runtime stops before source, configuration or DB", async () => {
     vi.stubEnv("GITHUB_EVENT_NAME", "schedule");
     await expect(main([])).rejects.toThrow("旧catchup schedule");

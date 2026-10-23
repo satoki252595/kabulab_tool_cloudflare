@@ -92,6 +92,37 @@ describe("normal unknown source isolation", () => {
     expect(await resumePendingShareholdings(options)).toMatchObject({ usedRows: 0, resumed: 0, held: 1, pending: true, unknownSources: [{ reasonCode: "unknown_source_isolated" }] });
     expect(unknownGets).toBe(2); expect(listPageFiles).not.toHaveBeenCalled(); expect(mutations).toEqual([]);
   });
+  it("soft後は次の実sourceを開始せず、完了sourceとunknown保護POSTだけをhardまで閉じる", async () => {
+    const snapshot = JSON.parse(readFileSync(new URL("../../../services/yuho-quant/src/tests/fixtures/holdings-owner-quarantine/snapshot.json", import.meta.url), "utf8"));
+    const next = structuredClone(snapshot.expectedSource);
+    // Actual208A completed source: only its checkpoint is projected into the normal resume queue.
+    next.properties["保有明細状態"].select.name = "再開待ち";
+    const checkpoint = info(next); checkpoint.sourceNextHoldingOffset = 0;
+    next.properties["保有明細再開情報"].rich_text = rt(JSON.stringify(checkpoint));
+    const nextBefore = structuredClone(next), unknownBefore = structuredClone(unknown);
+    let softReached = false;
+    const original = vi.mocked(notionRequest).getMockImplementation()!;
+    vi.mocked(notionRequest).mockImplementation(async (method, path, body, requestOptions) => {
+      const response = await original(method, path, body, requestOptions);
+      const properties = (body as { properties?: Record<string, { select?: { name?: string } }> } | undefined)?.properties;
+      if (method === "PATCH" && properties?.["保有明細状態"]?.select?.name === "明細原本照合済") softReached = true;
+      if (method === "POST" && path.endsWith("/query") &&
+        (body as { filter?: { select?: { equals?: string } } }).filter?.select?.equals === "再開待ち") {
+        return { object: "list", results: [structuredClone(healthy), structuredClone(next)], has_more: false, next_cursor: null } as never;
+      }
+      return response;
+    });
+    const native = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(Uint8Array.from(bytes("1897-S100XT0W.zip"))));
+    try {
+      const result = await resumePendingShareholdings({ ...options, shouldStop: () => softReached, hardDeadlineReached: () => false });
+      expect(softReached).toBe(true);
+      expect(result).toMatchObject({ usedRows: 8, resumed: 1, held: 1, pending: true });
+      expect(healthy.properties["保有明細状態"].select.name).toBe("明細原本照合済");
+      expect(unknownGets).toBe(2); expect(unknown).toEqual(unknownBefore); expect(next).toEqual(nextBefore);
+      expect(listPageFiles).toHaveBeenCalledTimes(1); expect(native).toHaveBeenCalledTimes(1);
+      expect(mutations).toHaveLength(2); expect(mutations.every(v => sameId(v.path.split("/").at(-1)!, healthy.id))).toBe(true);
+    } finally { native.mockRestore(); }
+  });
   it.each(["missing-info", "invalid-doc", "invalid-code", "unbound-issuer", "wrong-manifest", "missing-facts", "wrong-key", "overflow", "too-many", "duplicate", "collision", "network"])("%s stops before any other writer", async change => {
     fault = change;
     if (change === "missing-info") delete unknown.properties["保有明細再開情報"];

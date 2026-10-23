@@ -26,7 +26,7 @@ on:
           - monthly
           - all
       scheduled_date:
-        description: "CF scheduler が渡す予定UTC日 (YYYY-MM-DD)。定時stocks/context用"
+        description: "CF予定UTC日。stocksは実18〜20時開始/23:30新規IO締切、contextは既存朝窓"
         type: string
         default: ""
 

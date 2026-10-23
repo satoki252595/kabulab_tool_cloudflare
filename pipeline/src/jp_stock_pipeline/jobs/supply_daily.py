@@ -23,6 +23,7 @@ from ..licensing import LicenseTag
 from ..models import Provenance, Source, SupplyRecord, now_jst
 from ..rawstore import save_raw
 from .runner import JobContext, apply_limit, build_parser, main_exit, run_job
+from .scheduled import add_scheduled_argument, assert_scheduled_io, scheduled_target
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,7 @@ _LATEST_COLUMNS = (
 
 def _fetch_and_store(ctx: JobContext, name: str, datatype: str):
     """CSV を取得し ⑤原本として保存する。原本が残らなければ None。"""
+    assert_scheduled_io(ctx.args, now_jst())
     content = jsf.fetch_csv(name)
     artifact = save_raw(
         content,
@@ -160,6 +162,7 @@ def _latest_row(record: SupplyRecord, r2_key: str) -> list:
 
 def execute(ctx: JobContext) -> None:
     fetched_at = now_jst()
+    scheduled_target(JOB_NAME, ctx.args, fetched_at)
     by_code: dict[str, dict[str, list[dict]]] = {}
     latest: list[SupplyRecord] = []
 
@@ -216,6 +219,7 @@ def execute(ctx: JobContext) -> None:
 
     def _write_one(code: str) -> tuple[str, str | None, str | None]:
         """(code, key, error) を返す。例外はスレッド内で捕まえて呼び出し側へ渡す。"""
+        assert_scheduled_io(ctx.args, now_jst())
         try:
             return code, upsert_supply_series(
                 store, code, by_code[code], updated=fetched_at.date()
@@ -243,6 +247,7 @@ def execute(ctx: JobContext) -> None:
         for r in pick_primary_rows(latest)
         if r.code in keys
     ]
+    assert_scheduled_io(ctx.args, now_jst())
     try:
         written = cloud.d1.upsert(
             "jss_supply_latest", list(_LATEST_COLUMNS), rows_to_write,
@@ -255,7 +260,8 @@ def execute(ctx: JobContext) -> None:
 
 
 def main(argv: list[str] | None = None, *, env: dict[str, str] | None = None) -> int:
-    parser = build_parser("日証金の貸借取引データ → ⑧'需給 (毎営業日 12:00 JST)")
+    parser = build_parser("日証金の貸借取引データ → ⑧'需給 (毎営業日 12:17 JST)")
+    add_scheduled_argument(parser)
     return run_job(JOB_NAME, execute, argv, parser=parser, env=env)
 
 

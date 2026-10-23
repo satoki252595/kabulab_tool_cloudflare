@@ -49,9 +49,14 @@ import {
 describe("定時VWAPは同頻度CF one-shotで開始/終了窓を検査", () => {
   const date = "2026-10-14", start = Date.parse(`${date}T08:00:00.000Z`);
   const jobs = (): RunJob[] => [{ name: "ingest", run_id: 101, status: "completed", conclusion: "success", steps: [
-    { name: "VWAP daily + intra → R2", status: "completed", conclusion: "success", started_at: `${date}T08:01:00.000Z`, completed_at: `${date}T14:30:00.000Z` },
+    { name: "VWAP daily + intra → R2", status: "completed", conclusion: "success", started_at: `${date}T08:01:00.000Z`, completed_at: `${date}T10:00:00.000Z` },
     { name: "VWAP intra backfill → R2", status: "completed", conclusion: "skipped", completed_at: null },
     { name: "VWAP margin (daily) → R2", status: "completed", conclusion: "skipped", completed_at: null },
+    { name: "定時日足の同run受付記録を保存", status: "completed", conclusion: "success", completed_at: `${date}T10:00:01.000Z` },
+  ] }, { name: "ingest-intra", run_id: 101, status: "completed", conclusion: "success", steps: [
+    { name: "VWAP scheduled intra → R2", status: "completed", conclusion: "success", started_at: `${date}T12:00:00.000Z`, completed_at: `${date}T14:00:00.000Z` },
+  ] }, { name: "scheduled-result", run_id: 101, status: "completed", conclusion: "success", steps: [
+    { name: "VWAP scheduled result", status: "completed", conclusion: "success", started_at: `${date}T14:01:00.000Z`, completed_at: `${date}T14:30:00.000Z` },
   ] }];
   it("月水金17時と期限照会を識別し、別曜日/10分遅配はPOST/claim0", async () => {
     expect(routeCron(VWAP_DISPATCH_CRON)).toBe("vwap-dispatch");
@@ -126,6 +131,16 @@ describe("定時VWAPは同頻度CF one-shotで開始/終了窓を検査", () => 
     for (const index of [0, 1, 2]) {
       const bad = jobs(); bad[0].steps![index].conclusion = index === 0 ? "failure" : "success";
       expect(() => evaluateVwapReadcheck(bad, date)).toThrow();
+    }
+    for (const mutate of [
+      (j: RunJob[]) => { j[1].steps![0].started_at = `${date}T09:59:59Z`; },
+      (j: RunJob[]) => { j[2].steps![0].started_at = `${date}T13:59:59Z`; },
+      (j: RunJob[]) => { j[2].steps![0].completed_at = `${date}T14:30:00.001Z`; },
+      (j: RunJob[]) => { j[0].steps![3].conclusion = "failure"; },
+      (j: RunJob[]) => { j[1].conclusion = "failure"; },
+      (j: RunJob[]) => { j.pop(); },
+    ]) {
+      const bad = jobs(); mutate(bad); expect(() => evaluateVwapReadcheck(bad, date)).toThrow();
     }
     expect(() => evaluateVwapReadcheck([...jobs(), ...jobs()], date)).toThrow("一意");
   });
@@ -279,7 +294,7 @@ describe("catchup専用定時入口", () => {
   const jobs = (): RunJob[] => [{ name: "catchup", run_id: 101, status: "completed", conclusion: "success", steps: [
     { name: "catchup起動資格", status: "completed", conclusion: "success", completed_at: `${date}T10:01:00Z` },
     { name: "ir-catalog TDnet catchup", status: "completed", conclusion: "success", completed_at: `${date}T10:10:00Z` },
-    { name: "yuho-quant EDINET catchup (受注 + 海外売上)", status: "completed", conclusion: "success", completed_at: `${date}T10:59:00Z` },
+    { name: "yuho-quant EDINET catchup (受注 + 海外売上)", status: "completed", conclusion: "success", completed_at: `${date}T10:54:00Z` },
   ] }, { name: "biztag", run_id: 101, status: "completed", conclusion: "skipped" }];
 
   it("市場休場に依存せずmainの新targetを1回POSTし専用receipt/readcheckを使う", async () => {
@@ -299,7 +314,7 @@ describe("catchup専用定時入口", () => {
     expect(puts[0].key).toBe(catchupReceiptKey(date));
     const check = Date.parse(`${date}T11:05:00Z`);
     expect(await handleStockScheduled({ cron: CATCHUP_READCHECK_CRON, scheduledTime: check }, env, { fetchFn, nowMs: check + 30_000 }))
-      .toEqual({ tdnetCompletedAt: `${date}T10:10:00Z`, edinetCompletedAt: `${date}T10:59:00Z` });
+      .toEqual({ tdnetCompletedAt: `${date}T10:10:00Z`, edinetCompletedAt: `${date}T10:54:00Z` });
     expect(await bucket.get(receiptKey(date))).toBeNull();
   });
   it("ACK unknownはclaimedを保ち二重POSTせず、誤cron/期限超過も拒否する", async () => {
@@ -321,12 +336,12 @@ describe("catchup専用定時入口", () => {
     expect(calls).toEqual([]);
   });
   it("source skip/部分成功/重複/時刻逆転/別日/Linuxbiztag実行を成功にしない", () => {
-    expect(evaluateCatchupReadcheck(jobs(), date).edinetCompletedAt).toBe(`${date}T10:59:00Z`);
+    expect(evaluateCatchupReadcheck(jobs(), date).edinetCompletedAt).toBe(`${date}T10:54:00Z`);
     for (const index of [0, 1, 2]) for (const conclusion of ["skipped", "failure", null]) {
       const bad = jobs(); bad[0].steps![index].conclusion = conclusion;
       expect(() => evaluateCatchupReadcheck(bad, date)).toThrow();
     }
-    for (const at of ["2026-09-22T10:59:00Z", `${date}T10:59:00.001Z`, `${date}T10:09:00Z`, null]) {
+    for (const at of ["2026-09-22T10:54:00Z", `${date}T10:54:00.001Z`, `${date}T10:09:00Z`, null]) {
       const bad = jobs(); bad[0].steps![2].completed_at = at;
       expect(() => evaluateCatchupReadcheck(bad, date)).toThrow();
     }

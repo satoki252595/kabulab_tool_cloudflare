@@ -34,6 +34,7 @@ from ..transform import normalize
 from ..transform.direct_roa import _dei
 from ..transform.direct_roa_table import has_roa_table_candidate
 from .runner import JobContext, apply_limit, build_parser, main_exit, run_job
+from .scheduled import add_scheduled_argument, assert_scheduled_io, scheduled_target
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +132,7 @@ def _fetch_financial_tidy(
     tidy 変換の失敗では原本を失わない: convert_status=失敗 を記録して
     原本はそのまま ⑤ アップロードに進める (§5.2「変換失敗時も原本保存は成立」)。
     """
+    assert_scheduled_io(ctx.args, now_jst())
     if csv_flag == "1":
         artifact = edinet.fetch_document(
             ctx.settings, doc_id, 5, code=code, data_date=data_date
@@ -227,6 +229,7 @@ def _roa_table_original(
         edinet_code=issuer, fiscal_period_end=before.fiscal_period_end,
     )
     if full is None:
+        assert_scheduled_io(ctx.args, now_jst())
         full = edinet.fetch_document(
             ctx.settings, doc_id, 1, code=artifact.scope, data_date=artifact.data_date
         )
@@ -278,6 +281,7 @@ def load_issuer_codelist(ctx: JobContext, not_before: date) -> RawArtifact:
     """通常の保存loader→明示不足時だけ公式1 ZIP→共通物理archive。"""
     artifact = saved_edinet.read_saved_codelist(ctx.client, ctx.settings, not_before=not_before)
     if artifact is None:
+        assert_scheduled_io(ctx.args, now_jst())
         artifact = edinet_codelist.fetch_codelist(ctx.settings)
         artifact.notion_page_id = ctx.upload_raw(artifact)
     if artifact.notion_page_id is None:
@@ -374,6 +378,7 @@ def _process_document(
     # 一覧に未提供と明示された PDF は要求しない。通信・保管失敗は続行しない。
     pdf_flag = doc.get("pdfFlag")
     if pdf_flag == "1":
+        assert_scheduled_io(ctx.args, now_jst())
         pdf_artifact = edinet.fetch_document(
             ctx.settings, doc_id, 2, code=code, data_date=data_date
         )
@@ -424,6 +429,7 @@ def _process_document(
             existing_page_id=existing_pid, page_resolved=disc_resolved,
         )
     # ④ を Notion とローカルへ独立に書く（双方向フェールセーフ）
+    assert_scheduled_io(ctx.args, now_jst())
     if not ctx.persist(
         record,
         notion_write,
@@ -434,6 +440,7 @@ def _process_document(
     # ⑧ XBRL 全ファクト（定性 textBlock 含む）をローカル専用ストアへミラー（§7.1）。
     # Notion ③ は要約のみのため、有報の非構造化情報はここに保持する。ベストエフォート。
     if tidy is not None and tidy_artifact is not None:
+        assert_scheduled_io(ctx.args, now_jst())
         ctx.mirror_xbrl_facts(tidy, tidy_artifact)
 
     # ③ 財務サマリ (有報は既定で本決算、四半期は tidy の DEI から導出)
@@ -454,6 +461,7 @@ def _process_document(
         # ctx.persist(...)` の形だと、Cloudflare への書き込みを「raise の次の行」に
         # 足すと到達不能になり、外側インデントに足すと fin=None を踏む。
         if fin is not None:
+            assert_scheduled_io(ctx.args, now_jst())
             if not ctx.persist(
                 fin,
                 lambda: upsert.upsert_financial_summary(
@@ -464,6 +472,7 @@ def _process_document(
                 raise RuntimeError(f"③ を Notion/ローカル両系統に書けず: {doc_id}")
             # Cloudflare 正本 (D1 jss_financials)。器だけあって 0 行だった表への
             # 唯一の writer。⑤原本とは raw_sha256 で結ぶ。
+            assert_scheduled_io(ctx.args, now_jst())
             ctx.cloud_financial_summary(
                 fin, doc_id=doc_id, raw_sha256=tidy_artifact.sha256
             )
@@ -486,7 +495,8 @@ def default_target_date(now: datetime) -> date:
 
 def execute(ctx: JobContext) -> None:
     started = now_jst()
-    target_date = ctx.args.date or default_target_date(started)
+    planned_date = scheduled_target(JOB_NAME, ctx.args, started)
+    target_date = planned_date if planned_date is not None else ctx.args.date or default_target_date(started)
     logger.info(
         "対象日 %s (起動 %s JST / 指定=%s)",
         target_date.isoformat(), started.isoformat(timespec="seconds"),
@@ -504,6 +514,7 @@ def execute(ctx: JobContext) -> None:
         sha_map = None
 
     # 1-4. 書類一覧取得・原本⑤UL（本番共通 strict: Notion⑤未保管で中止 §8.1-4）
+    assert_scheduled_io(ctx.args, now_jst())
     list_artifact, docs = edinet.list_documents(ctx.settings, target_date)
     json_to_parquet.convert_artifact(list_artifact, "json")
     list_page_id = ctx.upload_raw(list_artifact, sha_map=sha_map, sha_map_date=target_date)
@@ -563,6 +574,7 @@ def execute(ctx: JobContext) -> None:
 
     excluded_nonlisted = 0
     for doc in targets:
+        assert_scheduled_io(ctx.args, now_jst())
         try:
             outcome = _process_document(
                 ctx, doc, list_page_id,
@@ -636,6 +648,7 @@ def _load_map_guarded(loader, label: str):
 
 def main(argv: list[str] | None = None, *, env: dict[str, str] | None = None) -> int:
     parser = build_parser("EDINET当日書類 → ③④⑤ (毎営業日21:00 JST)")
+    add_scheduled_argument(parser)
     parser.add_argument(
         "--kabumcp-cache-dir", type=Path, default=None,
         help="永続化済み type5 CSV ZIP を kabuMCP 用キャッシュへ追加（既定OFF・上書き禁止）",

@@ -29,9 +29,9 @@ import "dotenv/config";
  * しない。upsertObservation は「期間|指標キー|区分」で冪等なので再実行しても安全)。
  */
 import { fileURLToPath } from "node:url";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { moneyflowLaneSources, moneyflowScheduledWindow, type MoneyflowLane, type MoneyflowSummary } from "./lib/source-summary.js";
+import { installMoneyflowDeadline, moneyflowLaneSources, moneyflowScheduledWindow, qualifyMoneyflowPredecessor, type MoneyflowLane, type MoneyflowSummary } from "./lib/source-summary.js";
 import { notionStats } from "../../src/shared/notion-archive/client.js";
 import {
   ensureIndicatorDefsDb,
@@ -569,11 +569,12 @@ const RUNNERS: Record<Phase1Source, () => Promise<RunOutcome>> = {
   "sector-turnover": runSectorTurnover,
 };
 
-async function runSource(source: string, now: Date): Promise<RunOutcome> {
+async function runSource(source: string, now: Date, deadlineMs?: number): Promise<RunOutcome> {
   if (isPhase1Source(source)) return RUNNERS[source]();
   const spec = SPEC_SOURCES.find((s) => s.name === source);
   if (!spec) throw new Error(`取得元「${source}」の定義が見つかりません`);
-  const detail = await runSpec(spec, { dryRun: DRY_RUN, now, indicatorPageId: requireIndicatorPageId });
+  const detail = await runSpec(spec, { dryRun: DRY_RUN, now, indicatorPageId: requireIndicatorPageId,
+    ...(deadlineMs === undefined ? {} : { deadlineMs }) });
   return { source, ok: true, detail };
 }
 
@@ -615,12 +616,24 @@ export async function main(): Promise<void> {
       (LANE !== undefined && (!summaryPath || !/^[1-9]\d*\.[1-9]\d*$/.test(runId)))) {
     throw new Error("分割moneyflowにはlane/summary/同Actions run IDが必要です");
   }
+  const predecessorArgs = process.argv.filter(x => x.startsWith("--predecessor-summary="));
+  if (predecessorArgs.length > 1 || (predecessorArgs.length > 0 && LANE !== "yahoo")) throw new Error("moneyflow predecessorはYahoo lane専用です");
+  if (scheduledDate !== undefined && LANE === "yahoo" && predecessorArgs.length !== 1) throw new Error("定時Yahoo laneには同runの閉鎖済みpredecessorが必要です");
+  if (predecessorArgs.length === 1) qualifyMoneyflowPredecessor({
+    summary: JSON.parse(readFileSync(predecessorArgs[0].slice(22), "utf8")), requested: REQUESTED, all: SOURCES,
+    runId, plannedDate: scheduledDate, nowMs: Date.now(), dryRun: DRY_RUN,
+  });
+  const restore = scheduledDate === undefined ? undefined : installMoneyflowDeadline(scheduledDate);
+  try {
   const saveSummary = (outcomes: readonly RunOutcome[]) => {
     if (summaryPath === undefined || LANE === undefined) return;
+    if (scheduledDate !== undefined) moneyflowScheduledWindow(scheduledDate, Date.now());
     const summary: MoneyflowSummary = { version: 1, runId, lane: LANE, requestedSources: REQUESTED,
       only: ONLY, dryRun: DRY_RUN, startedAt, finishedAt: new Date().toISOString(), outcomes, notion: notionStats() };
     mkdirSync(dirname(summaryPath), { recursive: true });
     writeFileSync(summaryPath, JSON.stringify(summary), { flag: "wx", mode: 0o600, flush: true });
+    const output = sharedEnv.GITHUB_OUTPUT();
+    if (LANE === "non-yahoo" && output !== undefined) appendFileSync(output, "summary_closed=true\n");
   };
   if (ONLY.length === 0) { saveSummary([]); return; }
   if (!DRY_RUN) {
@@ -647,7 +660,7 @@ export async function main(): Promise<void> {
   for (const source of ONLY) {
     if (scheduledDate !== undefined) moneyflowScheduledWindow(scheduledDate, Date.now());
     try {
-      outcomes.push(await runSource(source, now));
+      outcomes.push(await runSource(source, now, scheduledDate === undefined ? undefined : moneyflowScheduledWindow(scheduledDate, Date.now()).cutoff));
     } catch (error) {
       // 結果不明や設定不備では、後続sourceの取得・書込も止める。
       if (error instanceof NotionUnknownResultError || error instanceof NotionConfigError) throw error;
@@ -669,6 +682,7 @@ export async function main(): Promise<void> {
   const failedCount = await writeRunLog(ONLY, outcomes, failures);
   saveSummary(outcomes);
   if (failedCount > 0) process.exitCode = 1;
+  } finally { restore?.(); }
 }
 
 // CLI として直接実行された場合のみ main() を走らせる (import だけでは走らない —

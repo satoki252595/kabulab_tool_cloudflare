@@ -38,7 +38,7 @@ export function assertCatchupInvocation(part: CatchupPart, eventName: string | u
   const cutoff = Date.parse(`${date}T${CATCHUP_JOIN_CUTOFF_TIME}`);
   const day = new Date(floor);
   if (!Number.isFinite(floor) || day.toISOString().slice(0, 10) !== date || day.getUTCDay() === 0 || day.getUTCDay() === 6 || nowMs < floor || nowMs >= cutoff || (part === "all" && nowMs > floor + 5 * 60_000)) {
-    throw new Error("catchupの予定日/平日/19:00〜19:05初回/19:58:30後続窓が一致しません（再送なし）");
+    throw new Error("catchupの予定日/平日/19:00〜19:05初回/19:53後続窓が一致しません（再送なし）");
   }
   return cutoff;
 }
@@ -59,7 +59,7 @@ export function installCatchupDeadline(deadlineMs: number): () => void {
     return nativeFetch(input, { ...init, signal: originalSignal ? AbortSignal.any([originalSignal, deadlineSignal]) : deadlineSignal });
   };
   globalThis.fetch = guardedFetch;
-  // CPU/S3/長いRetry-Afterの外部終了はscheduled job54分が担当する。
+  // hard19:53は最も早い外部終了19:54より前。CPU/S3/長い待機の最終境界はjob54分。
   return () => { if (globalThis.fetch === guardedFetch) globalThis.fetch = nativeFetch; };
 }
 

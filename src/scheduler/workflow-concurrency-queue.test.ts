@@ -15,9 +15,13 @@ const WORKFLOWS = new URL("../../.github/workflows/", import.meta.url);
 
 /** pending を後着で置換しうる workflow。queue: max だけがドキュメント上の回避。 */
 const MUST_KEEP_PENDING = [
-  ["vwap-ingest.yml", "vwap-ingest"],
+  ["vwap-ingest.yml", "${{ (inputs.target == 'scheduled-margin' || inputs.target == 'margin') && 'vwap-margin' || 'vwap-ingest' }}"],
   ["stock-sync.yml", "stock-sync"],
   ["catchup.yml", "catchup"],
+  ["moneyflow.yml", "moneyflow-ingest"],
+  ["supply_daily.yml", "supply_daily"],
+  ["tdnet_hourly.yml", "tdnet_hourly"],
+  ["edinet_daily.yml", "edinet_daily"],
 ] as const;
 
 type WorkflowConcurrency = {

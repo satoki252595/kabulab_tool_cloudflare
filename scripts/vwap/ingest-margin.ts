@@ -12,8 +12,39 @@ import {
   fetchDailyMargin,
 } from "../../services/vwap-analysis/lib/margin.js";
 import { validateDailyMarginSnapshot } from "../../services/vwap-analysis/lib/margin-daily.js";
-import { r2Get, r2GetVersion, r2Put } from "./lib/r2.js";
+import { r2GetVersion, r2Put } from "./lib/r2.js";
 import { sanitizeLogText } from "./lib/ingest-guard.js";
+
+export function scheduledMarginWindow(date: string) {
+  const start = Date.parse(`${date}T08:00:00.000Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(start) ||
+      new Date(start).toISOString().slice(0, 10) !== date || [0, 6].includes(new Date(start).getUTCDay())) {
+    throw new Error("信用残の予定日は実在する平日が必要です");
+  }
+  return { start, latestStart: start + 10 * 60_000, deadline: start + 30 * 60_000 };
+}
+
+function marginDeadline(argv: readonly string[]) {
+  const args = argv.filter(arg => arg.startsWith("--scheduled-date="));
+  if (args.length > 1) throw new Error("信用残の予定日が重複しています");
+  if (args.length === 0) return { assertActive() {}, restore() {}, readOptions: undefined };
+  if (parseDateArg(argv) !== undefined) throw new Error("定時信用残で手動基準日は指定できません");
+  const window = scheduledMarginWindow(args[0].slice(17)), admittedAt = Date.now();
+  if (admittedAt < window.start || admittedAt > window.latestStart) throw new Error("信用残の開始は予定日17:00〜17:10 JSTです（取得前停止）");
+  const assertActive = () => {
+    if (Date.now() < admittedAt || Date.now() >= window.deadline) throw new Error("信用残の17:30 JST新規IO期限です");
+  };
+  assertActive();
+  const nativeFetch = globalThis.fetch, signal = AbortSignal.timeout(window.deadline - Date.now());
+  const guarded: typeof fetch = (input, init) => {
+    assertActive();
+    const original = init?.signal !== undefined ? init.signal : input instanceof Request ? input.signal : undefined;
+    return nativeFetch(input, { ...init, signal: original ? AbortSignal.any([original, signal]) : signal });
+  };
+  globalThis.fetch = guarded;
+  return { assertActive, restore() { if (globalThis.fetch === guarded) globalThis.fetch = nativeFetch; },
+    readOptions: { singleAttempt: true, beforeAttempt: assertActive, abortSignal: signal } };
+}
 
 /** `--date=YYYYMMDD` (基準日) をパースする純関数。未指定なら undefined (最新)。 */
 export function parseDateArg(argv: readonly string[]): string | undefined {
@@ -97,14 +128,18 @@ export function planDailyMarginPuts(
 }
 
 export async function main(): Promise<void> {
+  const guard = marginDeadline(process.argv.slice(2));
+  try {
   const requested = parseDateArg(process.argv.slice(2));
+  guard.assertActive();
   const data = await fetchDailyMargin(requested);
   // 全 PUT (R2) より前に検証する — 保管失敗時の部分保存を防ぐため。
   validateDailyMarginSnapshot(data.snapshot);
   const basis = data.snapshot.basisDate;
 
   // dates.json を snapshot 含む全 PUT より前に read/validate する。
-  const datesVersion = await r2GetVersion("margin/dates.json");
+  guard.assertActive();
+  const datesVersion = await r2GetVersion("margin/dates.json", guard.readOptions);
   const savedRaw = datesVersion === null ? null : datesVersion.body;
   const saved: unknown = savedRaw === null ? [] : JSON.parse(savedRaw);
   if (!Array.isArray(saved)) {
@@ -113,6 +148,7 @@ export async function main(): Promise<void> {
   const merged = mergeDailyMarginDates(saved, basis);
 
   const input = dailyMarginArchiveInput(data);
+  guard.assertActive();
   const archived = await recordPrimaryData(input);
   // first は完全保管を要求する。metadata-only (上限超過) は STOP。
   if (archived.fileTooLarge) {
@@ -129,7 +165,8 @@ export async function main(): Promise<void> {
 
   const snapshotKey = `margin/daily/${basis}.json`;
   const snapshotJson = JSON.stringify({ ...data.snapshot, rawPageId: archived.pageId });
-  const snapshotVersion = await r2GetVersion(snapshotKey);
+  guard.assertActive();
+  const snapshotVersion = await r2GetVersion(snapshotKey, guard.readOptions);
   const existingSnapshot = snapshotVersion === null ? null : snapshotVersion.body;
   const { putSnapshot, putDates } = planDailyMarginPuts(existingSnapshot, snapshotJson, saved, merged);
   if (!putSnapshot && !putDates) {
@@ -139,16 +176,22 @@ export async function main(): Promise<void> {
     return;
   }
   if (putSnapshot) {
+    guard.assertActive();
     await r2Put(snapshotKey, snapshotJson, snapshotVersion === null ? null : snapshotVersion.etag);
-    const readback = await r2Get(snapshotKey);
+    guard.assertActive();
+    const readbackVersion = await r2GetVersion(snapshotKey, guard.readOptions);
+    const readback = readbackVersion === null ? null : readbackVersion.body;
     if (readback !== snapshotJson) {
       throw new Error(`margin R2 readback 不一致: ${snapshotKey}`);
     }
   }
   if (putDates) {
     const datesJson = JSON.stringify(merged);
+    guard.assertActive();
     await r2Put("margin/dates.json", datesJson, datesVersion === null ? null : datesVersion.etag);
-    const datesReadback = await r2Get("margin/dates.json");
+    guard.assertActive();
+    const datesReadbackVersion = await r2GetVersion("margin/dates.json", guard.readOptions);
+    const datesReadback = datesReadbackVersion === null ? null : datesReadbackVersion.body;
     if (datesReadback !== datesJson) {
       throw new Error("margin dates.json readback 不一致");
     }
@@ -156,6 +199,7 @@ export async function main(): Promise<void> {
   console.info(
     `margin daily ingest: basis=${basis} pub=${data.snapshot.publicationDate} rows=${data.snapshot.rows.length} page=${archived.pageId}`
   );
+  } finally { guard.restore(); }
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

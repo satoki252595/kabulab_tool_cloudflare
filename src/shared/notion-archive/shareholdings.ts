@@ -1649,7 +1649,7 @@ async function assertNoUnknownHoldingPeriod(source: ShareholdingsSource, archive
 }
 
 /** EDINET完了checkpointとは独立した既知HOLDだけを再開し、資格済み未知sourceは隔離して保持する。 */
-export async function resumePendingShareholdings(args: { sourceDb: ReportedSourceDb; maxRows: number; shouldStop: () => boolean; observeIssuedShares?: true }): Promise<{
+export async function resumePendingShareholdings(args: { sourceDb: ReportedSourceDb; maxRows: number; shouldStop: () => boolean; hardDeadlineReached?: () => boolean; observeIssuedShares?: true }): Promise<{
   usedRows: number; resumed: number; held: number; pending: boolean; unknownSources?: UnknownHoldingsSource[];
 }> {
   assert.ok(Number.isSafeInteger(args.maxRows) && args.maxRows >= 0 && args.maxRows <= 100);
@@ -1706,7 +1706,9 @@ export async function resumePendingShareholdings(args: { sourceDb: ReportedSourc
     else { result.held++; result.pending = true; }
   }
   for (const page of protectedPages) {
-    assert(!args.shouldStop(), "結果未確定sourceの保護POST確認前に時間予算を超えました");
+    // 新sourceは上のsoft guardで止め、開始済publisher後の保護POST照合はhardまで閉じる。
+    assert(!(args.hardDeadlineReached === undefined ? args.shouldStop() : args.hardDeadlineReached()),
+      "結果未確定sourceの保護POST確認前に時間予算を超えました");
     assertSameHoldingPage(await notionRequest<HoldingPage>("GET", `/pages/${page.id}`, undefined, { singleAttempt: true }), page);
   }
   return unknownSources.length === 0 ? result : { ...result, unknownSources };

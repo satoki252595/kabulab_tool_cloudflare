@@ -520,9 +520,6 @@ class TestWorkflowCrons:
 
     EXPECTED = {
         "master_sync": "0 6 1 * *",
-        "tdnet_hourly": "0 0-10 * * 1-5",
-        "edinet_daily": "0 12 * * 1-5",
-        "supply_daily": "17 3 * * 1-5",
     }
 
     @pytest.mark.parametrize("name", sorted(EXPECTED))
@@ -540,6 +537,22 @@ class TestWorkflowCrons:
             assert re.search(r'timezone:\s*["\']?Asia/Tokyo["\']?', live)
         assert "workflow_dispatch" in text  # 手動実行可
         assert f"jp_stock_pipeline.jobs.{name}" in text
+
+    @pytest.mark.parametrize(("name", "cron"), [
+        ("tdnet_hourly", "0 0-10 * * MON-FRI"),
+        ("edinet_daily", "0 12 * * MON-FRI"),
+        ("supply_daily", "17 3 * * MON-FRI"),
+    ])
+    def test_cf_dispatch_replaces_native_schedule_and_passes_planned_slot(self, name, cron):
+        text = _workflow_text(name)
+        live = "\n".join(line for line in text.splitlines() if not line.strip().startswith("#"))
+        assert not re.search(r"^\s+schedule:", live, re.MULTILINE)
+        assert "workflow_dispatch:" in live and "scheduled_at:" in live
+        assert "SCHEDULED_AT: ${{ inputs.scheduled_at }}" in live
+        assert 'args+=(--scheduled-at "$SCHEDULED_AT")' in live
+        assert f"jp_stock_pipeline.jobs.{name}" in live
+        scheduler = (REPO_ROOT / "src/scheduler/timed.ts").read_text()
+        assert re.search(r'cron:\s*"' + re.escape(cron) + r'"[^\n]+workflow:\s*"' + name + r'\.yml"', scheduler)
 
     def test_ci_runs_pytest(self):
         text = _workflow_text("ci")

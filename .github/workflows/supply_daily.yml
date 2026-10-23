@@ -1,18 +1,18 @@
-# 毎営業日 12:17 JST (日証金の確報は 11 時頃公表。1 時間強の余裕を取る)。cron は UTC 表記。
-# 分を 17 にしているのは、毎時0分が最も混雑して GitHub のスケジュール遅延が大きいため
-# (edinet_daily で +3.5h〜+9.5h の遅延を実測した)。
-# なお本ジョブのデータ基準日は CSV 内の「申込日」から取るので、起動が遅延しても
-# 基準日はずれない。
+# 毎営業日12:17 JSTにCFが起動。予定日を固定し、CSVの申込日は原本から読む。
 name: supply_daily
 
 on:
-  schedule:
-    - cron: "17 3 * * 1-5"
   workflow_dispatch:
+    inputs:
+      scheduled_at:
+        description: "CF専用の予定UTC時刻 YYYY-MM-DDTHH:mm:00Z。手動実行は空"
+        type: string
+        default: ""
 
 concurrency:
   group: supply_daily
   cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: read
@@ -44,7 +44,12 @@ jobs:
           R2_BUCKET_RAW: ${{ secrets.R2_BUCKET_RAW }}
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CF_D1_DATABASE_ID: ${{ secrets.CF_D1_DATABASE_ID }}
-        run: nix develop -c bash -c 'cd pipeline && uv run python -m jp_stock_pipeline.jobs.supply_daily --require-cloud'
+          SCHEDULED_AT: ${{ inputs.scheduled_at }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [ -n "${SCHEDULED_AT:-}" ]; then args+=(--scheduled-at "$SCHEDULED_AT"); fi
+          nix develop -c bash -c 'cd pipeline && uv run python -m jp_stock_pipeline.jobs.supply_daily --require-cloud "$@"' _ "${args[@]}"
 
       - name: 失敗したら Issue を立てる
         if: failure()

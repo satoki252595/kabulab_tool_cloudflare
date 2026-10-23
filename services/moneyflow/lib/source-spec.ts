@@ -66,7 +66,7 @@ export interface MoneyflowSourceSpec {
   /** この取得元が観測ログへ書く指標 (「資金フロー｜指標定義」へ同期する)。 */
   indicators: readonly IndicatorDefInput[];
   /** 今回の対象バッチを決める。dryRun=true は解決時の原本保管も送信しない。 */
-  resolve(now: Date, dryRun?: boolean): Promise<ResolvedBatch>;
+  resolve(now: Date, dryRun?: boolean, deadlineMs?: number): Promise<ResolvedBatch>;
   /** key とファイルのバイト列から観測行を作る純関数。 */
   toObservations(input: { key: string; files: readonly SpecFile[] }): ObservationDraft[];
 }

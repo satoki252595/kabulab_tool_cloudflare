@@ -23,6 +23,7 @@ from ..notion import file_upload, upsert
 from ..rawstore import save_raw
 from ..transform import normalize
 from .runner import JobContext, apply_limit, build_parser, main_exit, run_job
+from .scheduled import add_scheduled_argument, assert_scheduled_io, scheduled_target
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ def _collect(ctx: JobContext, target_date: date) -> list[tuple[RawArtifact, list
 
     返り値: [(原本, records, doc_id→XBRL URL), ...]（公式は1ページ=1原本 §5.1）
     """
+    assert_scheduled_io(ctx.args, now_jst())
     target = target_date.strftime("%Y%m%d")
     artifact, records = tdnet_yanoshin.list_disclosures(
         ctx.settings, target, limit=YANOSHIN_LIMIT
@@ -75,6 +77,7 @@ def _process_financial_xbrl(
     master_resolved=True のとき master_id(事前①マップ由来)を ③ relation に使い、
     内部の find_stock_master_page(① per-record 検索)を省く (§8.3)。
     """
+    assert_scheduled_io(ctx.args, now_jst())
     resp = fetch(xbrl_url)
     artifact = save_raw(
         resp.content,
@@ -129,6 +132,7 @@ def _process_financial_xbrl(
             )
     # ③ を Notion とローカルへ独立に書く（双方向フェールセーフ）。両系統失敗は
     # 呼び出し側 (execute) が「短信XBRL→③失敗」として記録する。
+    assert_scheduled_io(ctx.args, now_jst())
     if not ctx.persist(
         fin,
         lambda: upsert.upsert_financial_summary(ctx.client, ctx.settings, fin, master_id),
@@ -137,6 +141,7 @@ def _process_financial_xbrl(
         raise RuntimeError(f"③ を Notion/ローカル両系統に書けず: {record.doc_id}")
     # Cloudflare 正本 (D1 jss_financials)。fin is None は上で return 済み。
     # TDnet 由来なので行の license_tag は factual-cite (§2.1)。
+    assert_scheduled_io(ctx.args, now_jst())
     ctx.cloud_financial_summary(
         fin, doc_id=record.doc_id, raw_sha256=artifact.sha256
     )
@@ -160,7 +165,8 @@ def default_target_date(now: datetime) -> date:
 
 def execute(ctx: JobContext) -> None:
     started = now_jst()
-    target_date = ctx.args.date or default_target_date(started)
+    planned_date = scheduled_target(JOB_NAME, ctx.args, started)
+    target_date = planned_date if planned_date is not None else ctx.args.date or default_target_date(started)
     logger.info("TDnet対象日=%s (実起動=%s)", target_date, started.isoformat())
     batches = _collect(ctx, target_date)
 
@@ -204,6 +210,7 @@ def execute(ctx: JobContext) -> None:
             )
 
         for record in apply_limit(records, ctx.args.limit):
+            assert_scheduled_io(ctx.args, now_jst())
             record.provenance.raw_page_id = raw_page_id
             # ① relation 解決: 事前マップ優先(miss は relation 欠落のみ=benign)、未取得時は
             # per-record 検索へ degrade。検索失敗も relation 無しで本体は書く(§3-2)。
@@ -231,6 +238,7 @@ def execute(ctx: JobContext) -> None:
                     page_resolved=disc_resolved,
                 )
             # ④ を Notion とローカルへ独立に書く（双方向フェールセーフ）
+            assert_scheduled_io(ctx.args, now_jst())
             if ctx.persist(
                 record,
                 notion_write,
@@ -244,6 +252,7 @@ def execute(ctx: JobContext) -> None:
             # 上場廃止/新規上場 開示は ① のライフサイクル状態へ反映 (§ Phase3)。
             # 事前①マップ由来の master_id を渡し、内部の ① 検索を省く。
             if record.doc_type in upsert.LIFECYCLE_DOC_TYPES:
+                assert_scheduled_io(ctx.args, now_jst())
                 if not ctx.persist_lifecycle(
                     record,
                     lambda rec=record, mid=master_id, mr=master_resolved: (
@@ -339,6 +348,7 @@ def _resolve_master(
 
 def main(argv: list[str] | None = None, *, env: dict[str, str] | None = None) -> int:
     parser = build_parser("TDnet適時開示 → ④ (+短信XBRL→③) (平日9-19時毎時)")
+    add_scheduled_argument(parser)
     return run_job(JOB_NAME, execute, argv, parser=parser, env=env)
 
 

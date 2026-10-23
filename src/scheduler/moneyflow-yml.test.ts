@@ -14,7 +14,10 @@ it("両producerは旧rateで直列取得し、別joinが同run両summaryの正�
   expect(second).toContain("'yahoo-source' || 'moneyflow-non-yahoo-join'");
   expect(second).toContain("--lane=yahoo");
   expect(second).toContain("moneyflow-yahoo-${{ github.run_attempt }}");
-  expect(second).not.toContain("actions/download-artifact");
+  expect(second).toContain("actions/download-artifact");
+  expect(second).toContain("--predecessor-summary=.moneyflow-summaries/non-yahoo.json");
+  expect(second).toContain("needs.ingest-non-yahoo.outputs.summary_closed == 'true'");
+  expect(first).toContain("steps.non-yahoo.outputs.summary_closed == 'true'");
   expect(join).toContain("needs: [ingest-non-yahoo, ingest-yahoo]");
   expect(join).toContain("moneyflow-non-yahoo-${{ github.run_attempt }}");
   expect(join).toContain("moneyflow-yahoo-${{ github.run_attempt }}");

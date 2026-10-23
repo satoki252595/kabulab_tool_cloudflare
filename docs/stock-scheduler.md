@@ -19,7 +19,7 @@ Trigger へ移す。実実行は従来どおり GitHub Actions (`stock-sync.yml`
 
 ## 設計
 
-CF cron 8 本 (`wrangler.toml` `[triggers]`、曜日は `MON-FRI` 名前指定。
+CF cron 14 本 (`wrangler.toml` `[triggers]`、曜日は `MON-FRI` 名前指定。
 CF の数字曜日は 1=日曜で GitHub と違うため):
 
 | cron (UTC) | 処理 (`src/scheduler/stock.ts`) |
@@ -31,7 +31,12 @@ CF の数字曜日は 1=日曜で GitHub と違うため):
 | `15 9 * * MON-FRI` | `moneyflow.yml` に `only=independent` をdispatch。株価・JPX休場に依存しない取得元 |
 | `45 14 * * MON-FRI` | 専用moneyflow receiptのrun・ingest step成功と同日09:15〜14:40完了を検証 |
 | `0 10 * * MON-FRI` | `catchup.yml`の`scheduled-catchup`をdispatch。19:00 JST、TDnet→EDINETの順で実行 |
-| `5 11 * * MON-FRI` | 専用catchup receiptのrun・両source成功とLinux biztag skip、19:59 JSTまでの完了を検証 |
+| `5 11 * * MON-FRI` | 専用catchup receiptのrun・両source成功とLinux biztag skip、19:54 JSTまでの完了を検証 |
+| `0 8 * * MON,WED,FRI` / `35 14 * * MON,WED,FRI` | VWAP日足・5分足の起動 / 期限確認 |
+| `17 3 * * MON-FRI` | Python日証金。`scheduled_at`を渡す |
+| `0 0-10 * * MON-FRI` | Python TDnet。各時間slotの`scheduled_at`を渡す |
+| `0 12 * * MON-FRI` | Python EDINET。`scheduled_at`を渡す |
+| `0 8 * * MON-FRI` | 信用残。`scheduled-margin`と`scheduled_date`を渡す |
 
 2026-10-09 に株式 dispatch を `13 17`（02:13 JST）から `0 9`（18:00 JST）へ移した。
 02:13 JST は、取引日 D の ^N225 日足 close が null になる時間帯（D 23:30 JST 以降。
@@ -92,7 +97,7 @@ CF version`ac3d1414-d93f-43fa-99da-89411874025a`を配置し、同じ10trigger�
 - 新 dispatch target `scheduled-stocks` は株式 only。株式成功後のmoneyflowは
   `sector-turnover`だけを連鎖する。他の取得元は独立CF起動が担当し、株式停止で止めない。
 - 独立moneyflowは非Yahoo27取得元とYahoo1取得元を別jobで取得し、joinは両jobの
-  成功を待つ。ジョブ間の共有Notion枠が未成立のため、取得順は非Yahoo→Yahooを維持する。
+  結果を閉鎖してから進み、joinは両lane成功を待つ。既知のsource失敗だけならYahooは続け、不明結果では停止する。ジョブ間の共有Notion枠が未成立のため、取得順は非Yahoo→Yahooを維持する。
   Yahoo共通排他と各Notion枠1.6/1.0 RPSは保持し、全体の2.9 RPS保証とは扱わない。両laneの同run・同attempt・
   全source・実期限を共有検証し、readcheckも両producerと後続joinの3job成功を要求する。
   片側失敗・結果不明・欠落summaryは全体成功にせず、LLMは使用しない。
@@ -126,12 +131,12 @@ TDnet一覧は40日前〜当日の41暦日を1回ずつ読み、一次原文の�
 二次12分予算、EDINETの300秒/60通と別価格300秒予算、通常380ms間隔を維持する。
 二次の予算打切りを全IRの保存完了と呼ばず、EDINETのcap/保留は非0終了する。
 
-初回の起動資格は同日19:00〜19:05だけ。後続EDINETは同日19:58:30まで参加できる。
+初回の起動資格は同日19:00〜19:05だけ。後続EDINETは原本閉鎖などの終端10分を残す範囲だけ新規文書へ進み、同日19:53:00で停止する。
 Node入口は全fetchに元のsignalと絶対期限の両方を渡し、期限後の追加送信を拒否する。
-AWS SDKのR2読取は既存のタイムアウトとjob停止の対象で、全通信の19:58:30終了を保証するものではない。
+AWS SDKのR2読取は既存のタイムアウトとjob停止の対象で、全通信の19:53:00終了を保証するものではない。
 TDnetの既absolute deadlineとEDINETの各phaseにも締切を伝播し、本文・原本の照合は減らさない。
 定時targetだけGitHub job予算を**54分**にする。job開始は初回資格より前なので、
-自動cancel期限は遅くとも19:59になる。手動tdnet/edinet/allは従来60分。
+19時開始なら自動cancel期限は19:54になる。19:53に新規処理・書込を停止して終了用の余裕を残す。手動tdnet/edinet/allは従来60分。
 これは完了率やremote rollbackの保証ではなく、不明結果は既CAS/inFlightを残して停止する。
 Node子watchdogや新しいrate基盤は追加しない。
 
@@ -168,8 +173,9 @@ Linux biztagの一意skipを要求する。今日の未観測runや歴史的成�
 
 - Workers Paid で運用する。scheduled は全銘柄の処理を行わず、日次
   各dispatchの R2 2 PUT + GitHub 1 POST と、各readcheckの R2 1 GET + Jobs API
-  読取のみ。開示移行後の8cronは平日約22日で約176回/月、正常な4dispatchのR2計176 writeと
-  4readcheckの88 readが目安 (重複・失敗時とJobs API分頁・既存workloadは別計数)。
+  読取のみ。追加4系統は既存原本取得の起動元を置換し、全市場の再取得や定期回数を増やさない。
+  正常な追加dispatchは平日1日14回（TDnet11回と他3回）、R2は各2 PUT、GitHubは各1 POST。
+  duplicate/失敗/既存workloadは別計数。VWAPの段階分離は日足以外の環境準備1回と結果集計jobを追加するが、取得銘柄数・取得間隔・原本再送は増やさない。新しい定期監視は追加しない。
   cron 変更の伝播には最大 15 分かかる。
 - 休場: [JPX公式](https://www.jpx.co.jp/corporate/about-jpx/calendar/)と
   [NYSE公式](https://www.nyse.com/trade/hours-calendars)の2026/2027公表休業日を
@@ -216,3 +222,27 @@ rows_written=0、SQL20.73ms。OHLCV全走査やR2列挙は追加しない。
 既存pending runをcancelする既定動作を防ぐ。同時取得は従来どおり1 jobだけ。
 [GitHub公式仕様](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idconcurrency)
 に従い、最大100件のpendingを受け付ける。時刻窓を満たせないrunを成功に変える設定ではない。
+
+## 取得処理の時刻契約
+
+2026-10-23改定。すべてJST。CFの起動受付と、Actions待機・Nix準備後のCLI受付は別に判定する。
+Python3系統と信用残のCF dispatchは予定分から5分以内だけ。同じ日時slotはR2 claim→POST1回→CASで固定し、結果不明時は再POSTしない。
+
+| 処理 | CLIの新規開始 | 新規取得・保存の締切 | 対象日と先行関係 |
+|---|---|---|---|
+| 日証金 | 12:17〜同日22:00未満 | 同日23:00未満 | 予定JST日。CSV内の基準日は変更しない |
+| TDnet速報 | 各09〜19時slotから60分未満 | そのslotから90分未満 | 予定JST日。遅配を別日へ読み替えない |
+| Python EDINET | 21:00〜翌19:00未満 | 翌21:00未満 | 予定JST日の提出資料。19時Nodeと独立 |
+| 信用残 | 17:00〜17:10 | 17:30 | 専用排他。原本の対象日・公表日を保持 |
+| VWAP日足→5分足 | 日足17:00〜17:10、5分足は同run/attemptの受付を継承 | 同日23:30 | 日足の既知閉鎖exit0/1後だけ5分足。段階間でYahoo排他を解放 |
+| 株式 | 18:00〜20:00 | 同日23:30 | Yahoo共通排他内。日付・分割単位・原本保管の資格を維持 |
+| 独立資金フロー | 18:15以降、同日締切前 | 同日23:40 | 非Yahoo結果を閉じてからYahoo。既知失敗でも独立sourceは進めるが、join成功には全source成功が必要 |
+| Node開示補完 | 19:00〜19:05 | 新規文書は終端10分を残して開始、19:53で停止 | TDnet→EDINET。job予算54分、期限確認の完了上限19:54。手動/Workerの既定5分は維持 |
+
+締切は新しい通信・レコード保存の開始条件であり、開始済みHTTPのremote rollbackは保証しない。
+原本保存の未完intent・CAS不明・失敗は保持し、後続へ成功として渡さない。
+予定日時は処理対象日の固定に使い、原本の日付・実観測時刻・最初のreceiptを置換しない。
+GitHubの待ち行列は処理能力の保証ではない。Yahooは並列化せず、段階間の占有を短くする。
+各jobのNotion pacingも全process共通のレート保証ではないため、追加の全量取得・自動再送は行わない。
+
+根拠（2026-10-23確認）: [GitHub scheduleの遅配](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)、[GitHub concurrencyの待機規則](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)、[Cloudflare CronのUTC時計・伝播時間](https://developers.cloudflare.com/workers/configuration/cron-triggers/)。

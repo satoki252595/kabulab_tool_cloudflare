@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { assertCatchupCodeLease, assertCatchupInvocation, installCatchupDeadline } from "./catchup-launch.js";
+import { CATCHUP_JOIN_CUTOFF_TIME, CATCHUP_COMPLETION_CUTOFF_TIME } from "../../src/scheduler/stock.js";
 
 const date = "2026-10-14";
 const now = Date.parse(`${date}T10:00:10Z`);
@@ -78,19 +79,23 @@ it("実fetchのheaders受信後に止まったbodyも絶対締切で中断する
 });
 
 describe("catchup取得前の起動資格", () => {
-  it("6境界:初回19時/5分境界と後続締切を分け、scheduled54分は19:59までにcancelする", () => {
+  it("6境界:初回19時/5分境界と後続19:53を分け、最早外部終了19:54より前に閉じる", () => {
     const floor = Date.parse(`${date}T10:00:00Z`);
+    const cutoff = Date.parse(`${date}T${CATCHUP_JOIN_CUTOFF_TIME}`);
     const initial = (clock: number) => assertCatchupInvocation("all", "workflow_dispatch", event(), clock);
     expect(() => initial(floor - 1)).toThrow();
     expect(() => initial(floor)).not.toThrow();
     expect(() => initial(floor + 5 * 60_000)).not.toThrow();
     expect(() => initial(floor + 5 * 60_000 + 1)).toThrow();
-    expect(() => assertCatchupInvocation("edinet", "workflow_dispatch", event(), floor + 58.5 * 60_000 - 1)).not.toThrow();
-    expect(() => assertCatchupInvocation("edinet", "workflow_dispatch", event(), floor + 58.5 * 60_000)).toThrow();
+    expect(assertCatchupInvocation("edinet", "workflow_dispatch", event(), cutoff - 1)).toBe(cutoff);
+    expect(() => assertCatchupInvocation("edinet", "workflow_dispatch", event(), cutoff)).toThrow();
     const yml = readFileSync(new URL("../../.github/workflows/catchup.yml", import.meta.url), "utf8");
     const match = /timeout-minutes: \$\{\{ github.event.inputs.target == 'scheduled-catchup' && (\d+) \|\| (\d+) \}\}/.exec(yml);
     expect(match).not.toBeNull();
     const minutes = Number(match![1]);
+    expect(cutoff).toBe(floor + 53 * 60_000);
+    expect(cutoff + 60_000).toBe(floor + minutes * 60_000);
+    expect(Date.parse(`${date}T${CATCHUP_COMPLETION_CUTOFF_TIME}`)).toBe(cutoff + 60_000);
     // job開始<=初回資格。最新許可資格をjob開始と置いても19:59がcancel上限。
     expect(floor + 5 * 60_000 + minutes * 60_000).toBe(Date.parse(`${date}T10:59:00Z`));
     expect(Number(match![2])).toBe(60);
@@ -114,10 +119,10 @@ describe("catchup取得前の起動資格", () => {
     for (const bad of [undefined, null, [], {}, { inputs: [] }, event("biztag"), event("unknown"), { inputs: { target: undefined } }, event("scheduled-catchup", "2026-02-30"), event("scheduled-catchup", "2026-10-17")]) {
       expect(() => assertCatchupInvocation("all", "workflow_dispatch", bad, now)).toThrow();
     }
-    for (const clock of [NaN, now - 20_000, Date.parse(`${date}T10:58:30Z`), Date.parse("2026-10-15T10:00:00Z")]) {
+    for (const clock of [NaN, now - 20_000, Date.parse(`${date}T10:53:00Z`), Date.parse("2026-10-15T10:00:00Z")]) {
       expect(() => assertCatchupInvocation("all", "workflow_dispatch", event(), clock)).toThrow();
     }
-    expect(() => assertCatchupInvocation("edinet", "workflow_dispatch", event(), Date.parse(`${date}T10:58:29.999Z`))).not.toThrow();
+    expect(() => assertCatchupInvocation("edinet", "workflow_dispatch", event(), Date.parse(`${date}T10:52:59.999Z`))).not.toThrow();
     expect(() => assertCatchupInvocation("all", "workflow_dispatch", event(), Date.parse(`${date}T10:05:00.001Z`))).toThrow();
   });
   it("実TDnet CLIの旧scheduleはsource/configより前に停止する", () => {

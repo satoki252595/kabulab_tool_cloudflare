@@ -110,11 +110,19 @@ export async function runYuhoEdinetCatchup(
   d1HttpBatch?: ReturnType<typeof createD1HttpBatchSender>,
   holdingPriceSourceLoader?: HoldingPriceSourceLoader,
   deadlineMs?: number,
-  producer?: { observeIssuedShares: true }
+  producer?: { observeIssuedShares: true; sourceStartDeadlineMs?: number }
 ): Promise<YuhoEdinetResult> {
   const startedAt = Date.now();
   if (deadlineMs !== undefined && (!Number.isSafeInteger(deadlineMs) || startedAt >= deadlineMs)) throw new Error("EDINET catchupの絶対締切が不正または超過しました");
   const pastDeadline = () => deadlineMs !== undefined && Date.now() >= deadlineMs;
+  const sourceStartDeadlineMs = producer?.sourceStartDeadlineMs === undefined
+    ? startedAt + TIME_BUDGET_MS : producer.sourceStartDeadlineMs;
+  if (!Number.isSafeInteger(sourceStartDeadlineMs) || sourceStartDeadlineMs <= startedAt ||
+    producer?.sourceStartDeadlineMs !== undefined && (deadlineMs === undefined || sourceStartDeadlineMs > deadlineMs)) {
+    throw new Error("EDINET新規開始予算が不正または不足しています（取得前停止）");
+  }
+  // 定時のL2/価格phaseは残り5分を必要とする。価格内部の開始期限はhardの1分前。
+  const canStartFinalization = () => deadlineMs === undefined || Date.now() < deadlineMs - TIME_BUDGET_MS;
 
   // 進捗 checkpoint (1/5): 各 await 直前に入口だけ出す。前段の完了は次の
   // checkpoint (または末尾の完了 summary) の到達で判る。日付・件数・docID
@@ -137,9 +145,10 @@ export async function runYuhoEdinetCatchup(
   const listErrors: string[] = [];
   const ingestErrors: string[] = [];
 
-  const overBudget = () => Date.now() - startedAt > TIME_BUDGET_MS || pastDeadline();
+  const overBudget = () => Date.now() >= sourceStartDeadlineMs || pastDeadline();
   const recordChanges = async (list: Parameters<typeof recordReportedChanges>[1], snapshot: Parameters<typeof recordReportedChanges>[2]) => {
-    const observed = await recordReportedChanges(db, list, snapshot, overBudget);
+    // 開始済の原本観測INSERTをsoft期限で切らず、hard期限まで閉鎖をawaitする。
+    const observed = await recordReportedChanges(db, list, snapshot, pastDeadline);
     for (const [key, count] of Object.entries(observed)) {
       if (count > 0) byStatus[`edinet_reported:${key}`] = (byStatus[`edinet_reported:${key}`] ?? 0) + count;
     }
@@ -148,8 +157,8 @@ export async function runYuhoEdinetCatchup(
   // shard同時実行は保有明細writerを競合させないため、定期main runだけが再開する。
   const holdingsBudget = { remainingRows: 100 };
   let holdingsPending = false;
-  if (!shard) {
-    const resumed = await resumePendingShareholdings({ sourceDb: db, maxRows: holdingsBudget.remainingRows, shouldStop: overBudget,
+  if (!shard && !overBudget()) {
+    const resumed = await resumePendingShareholdings({ sourceDb: db, maxRows: holdingsBudget.remainingRows, shouldStop: overBudget, hardDeadlineReached: pastDeadline,
       observeIssuedShares: producer?.observeIssuedShares });
     holdingsBudget.remainingRows -= resumed.usedRows;
     holdingsPending = resumed.pending || resumed.held > 0;
@@ -160,6 +169,9 @@ export async function runYuhoEdinetCatchup(
       for (const source of resumed.unknownSources) console.warn("[yuho-edinet] 保有明細source隔離", JSON.stringify(source));
     }
     if (resumed.pending) byStatus["holdings:pending"] = 1;
+  } else if (!shard) {
+    holdingsPending = true;
+    byStatus["time_budget:holdings_source_deferred"] = 1;
   }
   if (pastDeadline()) throw new Error("EDINET catchupの絶対締切です（既保管結果を保持・再送なし）");
 
@@ -234,6 +246,8 @@ export async function runYuhoEdinetCatchup(
       // 再観測で既処理文書が消えていても履歴は削除しない。現在対象だけを処理する。
       console.info(`[yuho-edinet] ${date}: 過去完了文書の一覧差分を保持`);
     }
+    // 原本観測の閉鎖後にsoftへ達したら、次の主体/本文custody照会も始めない。
+    if (overBudget()) { reachedCap = true; break; }
     // docId完了だけで後続の情報修正を飛ばさない。原観測ごとの完了は共有resolutionで検査する。
     for (const doc of targets) if (reportedStandaloneHold(doc)) {
       const index = completed.indexOf(doc.docID); if (index >= 0) completed.splice(index, 1);
@@ -268,7 +282,7 @@ export async function runYuhoEdinetCatchup(
           row = await saveProgress(db, row, { completedIds: JSON.stringify(completed),
             pendingIds: JSON.stringify(pending), inFlightDocId: doc.docID });
           const qualified = await requalifyInformationEdit(db, { doc, source: snapshot, stockId, stockCode: code,
-            shouldStop: overBudget, d1HttpBatch });
+            shouldStop: pastDeadline, d1HttpBatch });
           if (qualified.status === "resolved") {
             completed.push(doc.docID); pending = pending.filter(p => p.docId !== doc.docID); skippedExisting++;
             const status = qualified.reused ? "edinet_information_edit:reused" : "edinet_information_edit:resolved";
@@ -383,25 +397,32 @@ export async function runYuhoEdinetCatchup(
   // 拾う。手動バックフィル直後は次回定時まで画面が古いまま)。
   let projectionStocks = 0;
   if (pastDeadline()) reachedCap = true;
-  if (!shard && listErrors.length === 0 && !pastDeadline()) {
+  if (!shard && listErrors.length === 0 && canStartFinalization()) {
     // 進捗 checkpoint (5/5): L2 投影再生成の入口。完了は末尾 summary の 投影= で判る。
     console.info(`[yuho-edinet] 投影再生成 開始`);
     const proj = await rebuildYuhoGrowthProjection(db);
     projectionStocks = proj.stocks;
+  } else if (!shard && !canStartFinalization()) {
+    reachedCap = true;
+    byStatus["time_budget:projection_deferred"] = 1;
   }
 
   // 原本/進捗/L2を先に確定する。Nodeの保存価格loaderだけを注入し、WorkerへS3/fsを持ち込まない。
   // 価格は別100明細/116chunk/256MiB/300秒。sourceの残枠・失敗状態を変更しない。
   if (pastDeadline()) reachedCap = true;
-  if (!shard && holdingPriceSourceLoader && !pastDeadline()) {
+  if (!shard && holdingPriceSourceLoader && canStartFinalization()) {
     const priceStarted = Date.now();
     const prices = await resumePendingShareholdingsPrices({ sourceDb: db, maxRows: 100,
-      shouldStop: () => Date.now() - priceStarted > TIME_BUDGET_MS || pastDeadline(),
+      shouldStop: () => Date.now() - priceStarted > TIME_BUDGET_MS ||
+        (deadlineMs !== undefined && Date.now() >= deadlineMs - 60_000),
       budget: { remainingChunks: 116, remainingBytes: 256 * 1024 * 1024 }, loadSources: holdingPriceSourceLoader });
     if (prices.resumed > 0) byStatus["holdings_price:resumed"] = prices.resumed;
     if (prices.held > 0) byStatus["holdings_price:requires_review"] = prices.held;
     if (prices.pending) byStatus["holdings_price:pending"] = 1;
     reachedCap = reachedCap || prices.pending || prices.held > 0;
+  } else if (!shard && holdingPriceSourceLoader) {
+    reachedCap = true;
+    byStatus["time_budget:holdings_price_deferred"] = 1;
   }
 
   if (pastDeadline()) reachedCap = true;

@@ -325,9 +325,9 @@ function fail(msg: string): never {
   throw new Error(msg);
 }
 
-async function resolve(_now: Date): Promise<{ key: string; fetch: () => Promise<FetchedBatch> }> {
+async function resolve(_now: Date, _dryRun?: boolean, deadlineMs?: number): Promise<{ key: string; fetch: () => Promise<FetchedBatch> }> {
   // 基準日は R2 の実 latest から決める (price 最新日/as-of は使わない)。
-  const { key, basisDate, snapshotJson, snapshot, mapping } = await resolveMarginSectorBatch();
+  const { key, basisDate, snapshotJson, snapshot, mapping } = await resolveMarginSectorBatch(deadlineMs);
   const names = marginSectorFilenames(basisDate);
   const mappingJson = JSON.stringify(mapping);
   const batch: FetchedBatch = {

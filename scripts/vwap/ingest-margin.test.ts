@@ -12,6 +12,7 @@ import {
   mergeDailyMarginDates,
   parseDateArg,
   planDailyMarginPuts,
+  scheduledMarginWindow,
 } from "./ingest-margin.js";
 
 describe("parseDateArg", () => {
@@ -90,9 +91,11 @@ describe("main (検証 → 原本保管 → 実体確認 → R2 PUT の順序)",
     vi.resetModules();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   interface RunOpts {
+    argv?: string[];
     archiveImpl?: () => Promise<unknown>;
     /** r2 の初期内容。 */
     seed?: Record<string, string>;
@@ -112,7 +115,7 @@ describe("main (検証 → 原本保管 → 実体確認 → R2 PUT の順序)",
 
   async function runMain(opts: RunOpts = {}) {
     vi.resetModules();
-    process.argv = ["node", "ingest-margin.js"];
+    process.argv = ["node", "ingest-margin.js", ...(opts.argv ?? [])];
     const order: string[] = [];
     const data = {
       snapshot: {
@@ -128,12 +131,13 @@ describe("main (検証 → 原本保管 → 実体確認 → R2 PUT の順序)",
       pdfBytes: PDF,
       pdfUrl: "https://www.jpx.co.jp/x.pdf",
     };
+    const fetchDailyMargin = vi.fn(async () => data);
     vi.doMock("../../services/vwap-analysis/lib/margin.js", async (importOriginal) => {
       const actual =
         await importOriginal<typeof import("../../services/vwap-analysis/lib/margin.js")>();
       return {
         ...actual,
-        fetchDailyMargin: vi.fn(async () => data),
+        fetchDailyMargin,
         dailyMarginArchiveInput: vi.fn(
           () => ({ key: "k", files: [{ filename: FILENAME }] }) as never
         ),
@@ -194,8 +198,28 @@ describe("main (検証 → 原本保管 → 実体確認 → R2 PUT の順序)",
     }
     const infoCalls = info.mock.calls.map((c) => String(c[0]));
     info.mockRestore();
-    return { order, r2Put, recordPrimaryData, infoCalls, data, rejected };
+    return { order, r2Put, recordPrimaryData, fetchDailyMargin, infoCalls, data, rejected };
   }
+
+  it("CF予定日は平日17〜17:10受付/17:30終了。遅配は原本・保存を始めない", async () => {
+    const date="2026-10-22",window=scheduledMarginWindow(date);
+    expect(window.latestStart-window.start).toBe(600_000);expect(window.deadline-window.start).toBe(1_800_000);
+    for(const date of ["2026-02-30","2026-10-24",""]) expect(()=>scheduledMarginWindow(date)).toThrow();
+    vi.useFakeTimers({toFake:["Date"]});vi.setSystemTime(window.latestStart+1);
+    const result=await runMain({argv:[`--scheduled-date=${date}`]});
+    expect(result.rejected).toBeInstanceOf(Error);expect(result.fetchDailyMargin).not.toHaveBeenCalled();
+    expect(result.recordPrimaryData).not.toHaveBeenCalled();expect(result.r2Put).not.toHaveBeenCalled();
+  });
+
+  it("保管待機中に17:30へ達したら次の添付HTTP/R2 PUTを送らず、既存原本日付を変えない", async () => {
+    const date="2026-10-22";vi.useFakeTimers({toFake:["Date"]});vi.setSystemTime(`${date}T08:00:00.000Z`);
+    const result=await runMain({argv:[`--scheduled-date=${date}`],archiveImpl:async()=>{
+      vi.setSystemTime(`${date}T08:30:00.000Z`);return {pageId:"p1",fileTooLarge:false};
+    }});
+    expect(result.rejected).toMatchObject({message:expect.stringContaining("17:30")});
+    expect(result.r2Put).not.toHaveBeenCalled();expect(fetch).not.toHaveBeenCalled();
+    expect(result.data.snapshot).toMatchObject({basisDate:"2026-09-28",publicationDate:"2026-09-29"});
+  });
 
   it("原本保管が全 R2 PUT より先、dates.json は全 PUT より先に読む", async () => {
     const { order, rejected, r2Put } = await runMain({

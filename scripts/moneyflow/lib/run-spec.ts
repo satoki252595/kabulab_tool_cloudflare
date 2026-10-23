@@ -41,6 +41,8 @@ import {
 export interface SpecRunContext {
   dryRun: boolean;
   now: Date;
+  /** 定時laneの絶対IO期限。SDK読取を持つresolveへ明示伝播する。 */
+  deadlineMs?: number;
   /** 指標キー → 「資金フロー｜指標定義」のページ ID (未同期なら throw する実装を渡す)。 */
   indicatorPageId(key: string): string;
 }
@@ -116,7 +118,8 @@ function parseAndValidate(
  * 取得元 1 件を実行し、取込ログ用の詳細文を返す。失敗は throw (呼び出し側で集計)。
  */
 async function runSpecInner(spec: MoneyflowSourceSpec, ctx: SpecRunContext): Promise<string> {
-  const resolved = await spec.resolve(ctx.now, ctx.dryRun);
+  const resolved = ctx.deadlineMs === undefined ? await spec.resolve(ctx.now, ctx.dryRun) :
+    await spec.resolve(ctx.now, ctx.dryRun, ctx.deadlineMs);
   const key = resolved.key;
 
   if (ctx.dryRun) {

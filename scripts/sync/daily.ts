@@ -26,6 +26,7 @@ import { rootCauseMessage } from "../../src/shared/errors.js";
 import { r2GetVersion, r2Put } from "../vwap/lib/r2.js";
 import type { MacroJpLegStore } from "../../src/cron/macro-jp-leg.js";
 import { notionStats } from "../../src/shared/notion-archive/client.js";
+import { assertStockSyncDeadline, assertStockSyncStart, installStockSyncDeadline, stockSyncDeadline } from "../../src/shared/stock-sync-window.js";
 
 const MAX_CODES_PER_ERROR = 50;
 const MAX_ERROR_GROUPS = 20;
@@ -76,7 +77,23 @@ async function main(): Promise<void> {
     console.info("[sync-context] 完了 (株式全量同期は対象外)");
     return;
   }
-  const result = await runDailySync(db, { stocksOnly: true, jpLegStore });
+  let restore: (() => void) | undefined;
+  if (sharedEnv.STOCK_SYNC_TARGET() === "scheduled-stocks") {
+    const date = sharedEnv.SCHEDULED_DATE();
+    if (date === undefined) throw new Error("定時株式にはSCHEDULED_DATEが必須です");
+    assertStockSyncStart(Date.now(), date);
+    restore = installStockSyncDeadline(date);
+    const assertActive = () => assertStockSyncDeadline(date, Date.now(), true);
+    jpLegStore.get = key => {
+      assertActive();
+      return r2GetVersion(key, { singleAttempt: true, beforeAttempt: assertActive,
+        abortSignal: AbortSignal.timeout(stockSyncDeadline(date, true) - Date.now()) });
+    };
+    jpLegStore.put = (key, body, version) => { assertActive(); return r2Put(key, body, version); };
+  }
+  let result;
+  try { result = await runDailySync(db, { stocksOnly: true, jpLegStore }); }
+  finally { restore?.(); }
 
   if (result.failures.length > 0) {
     printFailureSummary(result.failures);

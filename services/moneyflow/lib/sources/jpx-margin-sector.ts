@@ -32,7 +32,7 @@ import {
   type MarginDailyRow,
   type MarginDailySnapshot,
 } from "../../../../services/vwap-analysis/lib/margin-daily.js";
-import { r2Get } from "../../../../scripts/vwap/lib/r2.js";
+import { r2Get, r2GetVersion } from "../../../../scripts/vwap/lib/r2.js";
 import {
   JPX_33_SECTORS,
   MONEYFLOW_UNCLASSIFIED_SECTOR,
@@ -564,14 +564,23 @@ const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
  * resolve の本体 (impure: R2 + D1)。実 latest 基準日を R2 から決め
  * (price 最新日/as-of は使わない)、snapshot を replay して mapping を固定する。
  */
-export async function resolveMarginSectorBatch(): Promise<{
+export async function resolveMarginSectorBatch(deadlineMs?: number): Promise<{
   key: string;
   basisDate: string;
   snapshotJson: string;
   snapshot: MarginDailySnapshot;
   mapping: MarginSectorInput;
 }> {
-  const datesRaw = await r2Get("margin/dates.json");
+  const read = deadlineMs === undefined ? r2Get : async (key: string) => {
+    const assertActive = () => {
+      if (!Number.isSafeInteger(deadlineMs) || Date.now() >= deadlineMs) throw new Error("信用業種snapshotのmoneyflow新規IO期限です");
+    };
+    assertActive();
+    const value = await r2GetVersion(key, { singleAttempt: true, beforeAttempt: assertActive,
+      abortSignal: AbortSignal.timeout(deadlineMs - Date.now()) });
+    return value === null ? null : value.body;
+  };
+  const datesRaw = await read("margin/dates.json");
   if (datesRaw === null) fail("R2 margin/dates.json がありません (日次信用残の初回取込がまだです)");
   const dates: unknown = JSON.parse(datesRaw);
   if (!Array.isArray(dates) || dates.length === 0) fail("R2 margin/dates.json が空です");
@@ -581,7 +590,7 @@ export async function resolveMarginSectorBatch(): Promise<{
   const basisDate = [...(dates as string[])].sort().at(-1) as string;
 
   const snapshotKey = `margin/daily/${basisDate}.json`;
-  const snapshotJson = await r2Get(snapshotKey);
+  const snapshotJson = await read(snapshotKey);
   if (snapshotJson === null) fail(`R2 ${snapshotKey} がありません (dates.json と不整合のため STOP)`);
   const snapshot = JSON.parse(snapshotJson) as MarginDailySnapshot;
   if (snapshot.format !== MARGIN_DAILY_FORMAT) fail(`snapshot の形式タグが未知です: ${String(snapshot.format)}`);
