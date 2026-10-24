@@ -1,0 +1,24 @@
+# 補足39本文の有限・読取専用診断
+
+`audit:supplement:texts` は、明示した1〜50銘柄について**現在の補足39列**と、同じ最新有報の**保存済みtype5 CSV**を機械照合する。修復・モデル判定・EDINETからの新規取得は行わない。通常の夜間処理へCSV再解析を追加せず、初回分類や限定診断に使用する。
+
+```bash
+nix develop -c pnpm audit:supplement:texts --codes=6963 --budget-min=3 --max-requests=100 --out-dir=tmp/supplement-text-audit-6963
+```
+
+リポジトリルートの`.env`をCLI起動時に明示ロードする。通常の型付きD1/Notion設定と、既存の補足DB・有報テキストDBが必要。`--out-dir`は毎回新しいディレクトリを指定し、原文入りの`report.json`は0700ディレクトリ・0600ファイルで保存する。stdoutは件数とreport SHAだけ。reportやログをGit・公開artifactへ追加しない。
+
+対象コードをSQLへ渡してから文書metadataを読み、共有の現役・最新有報・reported-HOLD資格を用いる。補足の全長property pagination、旧判定入力内と新独立列の本文receiptを共通helperで読み、doc/pointerを照合する。保存原本は共有`readSavedEdinetZip`で所属・物理添付・全文SHA/長さ・存在するmanifestを確認し、主体・期末・提出日時metadataが一致する場合だけ通常CSVパーサへ渡す。現pointerの7プロパティと保存全文も通常readerで照合する。最後に最新docと現在39列を再読し、途中変更を時点差として保持する。これは有限の逐次観測であり、全DBの原子的snapshotではない。
+
+| 区分 | 確認したこと | 空欄を埋めたか |
+|---|---|---|
+| `matched` | 同じ適格原本・保存本文にある値と現在値が一致 | いいえ、既存値の照合だけ |
+| `source_value_missing_in_notion` | 同じ適格原本に値があり、現在の補足セルが空 | いいえ、機械修復候補 |
+| `source_target_absent` | 同じ適格CSVの全行に、通常パーサが対象とする要素/ラベルがない | いいえ。PDF/XBRL全体の非開示を証明しない |
+| `source_or_identity_insufficient` | 原本/主体/最新有報/同期来歴の資格が足りない | いいえ、根拠不足を保持 |
+| `time_difference` | doc/pointerの世代差、または診断中の最新doc/現在値の変更 | いいえ、別時点を混ぜない |
+| `unverified` | 読取失敗、候補要素はあるが抽出値なし、保存本文と現パーサの差、非空不同など | いいえ、原因未確定を保持 |
+
+HTTPはNotionのGET/読取query/search、Notion-hosted添付GET、D1の単一SELECTだけを送信直前に許可する。時間・要求数の上限到達では未着手コードをreportへ残す。`cellCounts`は全観測セル、`blankCounts`は現在空欄のセルだけの区分件数。既知分類が付いてもデータ充足とは数えない。未確認・時点差・不足・修復候補がある実行はexit1、引数/出力先などの起動失敗はexit2。
+
+10/20の旧7,074空欄のうち6,251セルは、当時のper-code doc/SHA/空欄mapが残っていない。その個別対応を現在の再読から逆算しない。新しい診断のコード・doc・pointer・39列SHA・原本SHA・観測時刻を別の母集団として保存する。既存根拠は[10/20復旧記録](test-logs/recovery-functional-status-20261020.md)を参照。本CLIの本番実行・現在件数は、実行後の私有reportと別の受入記録で確定する。
