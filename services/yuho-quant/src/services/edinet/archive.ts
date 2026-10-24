@@ -56,7 +56,7 @@ export interface DocCustody {
 /** 1 回の OR 照会に入れる最大通数 (2 key/通で 40 key。照会上限 41 内)。 */
 const CUSTODY_CHUNK_DOCS = 20;
 
-function custodyOf(
+export function custodyOf(
   rows: Map<string, { fileCount: number; metadata: Record<string, unknown> }>,
   docID: string
 ): DocCustody {
@@ -148,6 +148,8 @@ export function edinetArchiveFilename(
 }
 
 export class SavedEdinetZipQualificationError extends Error {}
+/** Only a zero-row exact typed-key query in the existing canonical DB is missing. */
+export class SavedEdinetZipMissingError extends SavedEdinetZipQualificationError {}
 
 /** 情報修正の再確認用。既存type別原本だけを読み、作成・上書き・別原典取得はしない。 */
 export async function readSavedEdinetZip(docID: string, type: EdinetArchiveDocType) {
@@ -158,7 +160,8 @@ export async function readSavedEdinetZip(docID: string, type: EdinetArchiveDocTy
     parent: { type: string; database_id: string }; properties: { Key: { title: Array<{ type: string; plain_text: string; text: { content: string } }> };
       Metadata: { rich_text: Array<{ type: string; plain_text: string; text: { content: string } }> } } }>(
     dbId, { property: "Key", title: { equals: edinetArchiveKey(docID, type) } }, "EDINET保存原本が複数あります");
-  if (!page || page.archived !== false || page.in_trash !== false || page.parent.type !== "database_id" ||
+  if (page === null) throw new SavedEdinetZipMissingError("EDINET保存原本のtype別行がありません");
+  if (page.archived !== false || page.in_trash !== false || page.parent.type !== "database_id" ||
       page.parent.database_id.replaceAll("-", "") !== dbId.replaceAll("-", "")) throw new SavedEdinetZipQualificationError("EDINET保存原本の所属/状態が不正です");
   const key = page.properties.Key.title;
   if (!Array.isArray(key) || key.some(p => p.type !== "text" || p.plain_text !== p.text?.content) ||

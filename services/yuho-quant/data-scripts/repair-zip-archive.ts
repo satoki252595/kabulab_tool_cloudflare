@@ -6,7 +6,8 @@ import { pathToFileURL } from "node:url";
 import { eq } from "drizzle-orm";
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import { stocks } from "../../../src/shared/db/core-schema.js";
-import { recordEdinetZip } from "../src/services/edinet/archive.js";
+import { recordEdinetZip, readSavedEdinetZip, SavedEdinetZipMissingError, custodyOf, edinetArchiveKey,
+  type EdinetArchiveDocType } from "../src/services/edinet/archive.js";
 import { edinetArchiveMetadata } from "../src/services/edinet/archive-metadata.js";
 import { listSnapshotSchema, readListSnapshot, type ListSnapshot } from "../src/services/edinet/list-snapshot.js";
 import { loadEdinetTickerMap } from "../src/services/edinet/identity.js";
@@ -66,9 +67,26 @@ export function qualifyZipRepairSource(doc: EdinetDoc, row: SavedDocument, snaps
     sourceListSnapshot: snapshot, repairedBy: "source-qualified-zip-repair-v1" };
 }
 
+type NativeMetadata = ReturnType<typeof edinetArchiveMetadata>;
+type SavedZip = Awaited<ReturnType<typeof readSavedEdinetZip>>;
+function assertReusableZip(saved: SavedZip, native: NativeMetadata, type: EdinetArchiveDocType) {
+  requireSource(saved.originalManifest === "known", "existing_archive_manifest_unqualified");
+  requireSource(saved.metadata.edinetDocType === type && Object.entries(native).every(([key, value]) => saved.metadata[key] === value),
+    "existing_archive_metadata_mismatch");
+}
 // Every physical archive failure stops the whole finite run, including ordinary type5/type1 and readback unknowns.
-async function archive(input: Parameters<typeof recordEdinetZip>[0]) {
-  try { return await recordEdinetZip(input); }
+async function archive(input: Parameters<typeof recordEdinetZip>[0], native: NativeMetadata) {
+  try {
+    const result = await recordEdinetZip(input);
+    // A row appearing after the missing-key qualification must satisfy the same reuse contract.
+    if (result.outcome === "skipped_existing") {
+      const saved = await readSavedEdinetZip(input.docID, input.type);
+      assertReusableZip(saved, native, input.type);
+      if (typeof input.metadata.xbrlUnavailable === "boolean") requireSource(saved.metadata.xbrlUnavailable === input.metadata.xbrlUnavailable,
+        "existing_archive_nonprovision_mismatch");
+    }
+    return result;
+  }
   catch (cause) { throw new EdinetDocumentArchiveError({ cause }); }
 }
 
@@ -94,40 +112,74 @@ export async function repairZipArchives(options: ReturnType<typeof zipRepairArgu
     await assertReportedDocumentUsable(db, docId);
     qualified.push({ doc: candidates[0], metadata });
   }
-  const tally = { recorded: 0, skipped_existing: 0, edinet_not_found: 0 };
+  // Validate every existing type of every selected document before the first SOURCE request.
+  const stored = new Map<string, Map<EdinetArchiveDocType, SavedZip>>();
+  for (const { doc, metadata } of qualified) {
+    const zips = new Map<EdinetArchiveDocType, SavedZip>(), native = edinetArchiveMetadata(doc, metadata.periodEnd);
+    for (const type of [5, 1] as const) {
+      let saved: SavedZip;
+      try { saved = await readSavedEdinetZip(doc.docID, type); }
+      catch (error) { if (error instanceof SavedEdinetZipMissingError) continue; throw error; }
+      assertReusableZip(saved, native, type);
+      zips.set(type, saved);
+    }
+    stored.set(doc.docID, zips);
+  }
+  const tally = { recorded: 0, skipped_existing: 0, reused_existing_types: 0, not_applicable_types: 0, edinet_not_found: 0 };
   for (const { doc, metadata } of qualified) {
     // A changed/withdrawn observation arriving during qualification must not be ignored.
     await assertReportedDocumentUsable(db, doc.docID);
-    let csvZip: Awaited<ReturnType<typeof downloadDocument>>;
-    try { csvZip = await downloadDocument(doc.docID, 5); }
-    catch (error) {
-      if (!(error instanceof EdinetNotFoundError)) throw error;
-      tally.edinet_not_found += 1; continue; // client already physically archived the known HTTP404
+    const zips = stored.get(doc.docID)!;
+    const custody = custodyOf(new Map([...zips].map(([type, saved]) => [edinetArchiveKey(doc.docID, type),
+      { fileCount: 1, metadata: saved.metadata }])), doc.docID);
+    tally.reused_existing_types += zips.size;
+    if (custody.t1 === "not-applicable") tally.not_applicable_types += 1;
+    if (custody.t5 === "complete" && custody.t1 !== "missing") { tally.skipped_existing += 1; continue; }
+    const native = edinetArchiveMetadata(doc, metadata.periodEnd);
+    let csvZip: Awaited<ReturnType<typeof downloadDocument>> | undefined = zips.get(5)?.bytes;
+    if (csvZip === undefined) {
+      try { csvZip = await downloadDocument(doc.docID, 5); }
+      catch (error) {
+        if (!(error instanceof EdinetNotFoundError)) throw error;
+        tally.edinet_not_found += 1; continue; // client physically archived the known HTTP404
+      }
     }
     const csvFetchedAt = new Date().toISOString();
     let xbrlZip: Awaited<ReturnType<typeof downloadDocument>> | null = null;
     let xbrlFetchedAt: string | null = null;
-    try { xbrlZip = await downloadDocument(doc.docID, 1); xbrlFetchedAt = new Date().toISOString(); }
-    catch (error) {
-      if (!(error instanceof EdinetNotFoundError)) {
-        // Close already received CSV before stopping a known type1 source failure. Archive unknown stops immediately.
-        if (error instanceof EdinetDocumentFetchError) await archive({ service: "yuho-quant", docID: doc.docID, type: 5,
-          zip: csvZip, source: `EDINET API v2 /documents/${doc.docID}?type=5`, fetchedAt: csvFetchedAt,
-          metadata: { ...metadata, ingestPhase: "partial-source", failedType: 1 }, force: false });
-        throw error;
+    let xbrlUnavailable = custody.t1 === "not-applicable";
+    if (custody.t1 === "missing") {
+      try { xbrlZip = await downloadDocument(doc.docID, 1); xbrlFetchedAt = new Date().toISOString(); }
+      catch (error) {
+        if (!(error instanceof EdinetNotFoundError)) {
+          // Already qualified CSV is reused; close only a newly received CSV after known type1 source failure.
+          if (error instanceof EdinetDocumentFetchError && custody.t5 === "missing") await archive({ service: "yuho-quant", docID: doc.docID, type: 5,
+            zip: csvZip, source: `EDINET API v2 /documents/${doc.docID}?type=5`, fetchedAt: csvFetchedAt,
+            metadata: { ...metadata, ingestPhase: "partial-source", failedType: 1 }, force: false }, native);
+          throw error;
+        }
+        // Do not overwrite an existing CSV solely to add a new non-provision marker.
+        if (custody.t5 === "complete") { tally.edinet_not_found += 1; continue; }
+        xbrlUnavailable = true;
       }
     }
-    const completeMetadata = { ...metadata, xbrlUnavailable: xbrlZip === null };
-    const r5 = await archive({ service: "yuho-quant", docID: doc.docID, type: 5, zip: csvZip,
-      source: `EDINET API v2 /documents/${doc.docID}?type=5`, fetchedAt: csvFetchedAt, metadata: completeMetadata, force: false });
-    let r1Outcome = "skipped_no_xbrl";
+    const completeMetadata = { ...metadata, xbrlUnavailable };
+    let recorded = false;
+    if (custody.t5 === "missing") {
+      const r5 = await archive({ service: "yuho-quant", docID: doc.docID, type: 5, zip: csvZip,
+        source: `EDINET API v2 /documents/${doc.docID}?type=5`, fetchedAt: csvFetchedAt, metadata: completeMetadata, force: false }, native);
+      recorded = r5.outcome === "recorded";
+      if (r5.outcome === "skipped_existing") tally.reused_existing_types += 1;
+      if (xbrlUnavailable) tally.not_applicable_types += 1;
+    }
     if (xbrlZip !== null) {
       requireSource(xbrlFetchedAt !== null, "xbrl_clock_missing");
       const r1 = await archive({ service: "yuho-quant", docID: doc.docID, type: 1, zip: xbrlZip,
-        source: `EDINET API v2 /documents/${doc.docID}?type=1`, fetchedAt: xbrlFetchedAt, metadata: completeMetadata, force: false });
-      r1Outcome = r1.outcome;
+        source: `EDINET API v2 /documents/${doc.docID}?type=1`, fetchedAt: xbrlFetchedAt, metadata: completeMetadata, force: false }, native);
+      recorded = recorded || r1.outcome === "recorded";
+      if (r1.outcome === "skipped_existing") tally.reused_existing_types += 1;
     }
-    tally[r5.outcome === "recorded" || r1Outcome === "recorded" ? "recorded" : "skipped_existing"] += 1;
+    tally[recorded ? "recorded" : "skipped_existing"] += 1;
   }
   return tally;
 }
