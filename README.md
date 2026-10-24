@@ -174,6 +174,8 @@ Notionのレート制御はプロセス内であり、ジョブをまたぐ全�
 
 ### 現在の復旧状況
 
+10/25の[完了条件と残件](docs/work-plans/production-completion-20261025.md)に、追加改修・データ不足・本番受入をまとめています。
+
 **定期設定と全データ充足は別です。** CFの14 trigger、GitHubの13有効workflowは継続。Macの20/21時calendarは廃止し、専用分は月次手動スクリプトへ変更しました。歴史RAW用workflow1本も意図的停止。10/21の株式429・VWAP保存不明・有報停止と修正範囲は[10/22の稼働確認](docs/test-logs/recovery-functional-status-20261022.md)、現設定は[全件一覧](docs/batch-data-inventory.md)へ記録します。以下は10/20までの修復実績で、現在の全件充足を示す数値ではありません。残件は[Issue #348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)で追跡します。
 
 | 対象 | 確認済み | 残り・保留 |
