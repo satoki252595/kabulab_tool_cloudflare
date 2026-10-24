@@ -15,6 +15,7 @@
  *   - 記録 metadata は DBid 非依存。
  */
 import { DatabaseSync } from "node:sqlite";
+import { NotionUnknownResultError } from "../../../../src/shared/notion-archive/client.js";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -381,14 +382,15 @@ describe("missing-docs raw-before-DB 契約", () => {
     }
   });
 
-  it("記録失敗は DB 旧値のまま tally.error (batch 0・text 0)", async () => {
+  it.each([5, 1])("type%s保管unknownは旧DB維持で停止し、次docを開始しない", async (failedType) => {
     const restore = silenceConsole();
     const { sqlite, db } = setupDb();
     try {
       setupParserBridges();
       const { deps, record, sender, backup, tally } = setupDeps(sqlite);
+      const unknown = new NotionUnknownResultError("declared offline archive ACK unknown");
       record.mockImplementation(async (args) => {
-        if (args.type === 1) throw new Error("notion down (t1)");
+        if (args.type === failedType) throw unknown;
         return {
           pageId: "page-t5",
           outcome: "recorded",
@@ -396,13 +398,16 @@ describe("missing-docs raw-before-DB 契約", () => {
           manifestMatch: "written",
         } as const;
       });
-      await processMissingDoc(
-        db,
-        deps,
-        { doc: annualDoc("S100MISF1"), stockId: 11, force: false }
-      );
+      const nextDocument = vi.fn();
+      const error = await (async () => {
+        await processMissingDoc(db, deps, { doc: annualDoc("S100MISF1"), stockId: 11, force: false });
+        nextDocument();
+        await processMissingDoc(db, deps, { doc: annualDoc("S100MISF2"), stockId: 11, force: false });
+      })().then(() => null, error => error);
+      expect(error).toBeInstanceOf(EdinetDocumentArchiveError); expect(error.cause).toBe(unknown);
+      expect(nextDocument).not.toHaveBeenCalled();
       expect(tally).toEqual({ error: 1 });
-      expect(record.mock.calls.length).toBe(2);
+      expect(record.mock.calls.length).toBe(failedType === 5 ? 1 : 2);
       expect(sender.mock.calls.length).toBe(0);
       expect(backup.mock.calls.length).toBe(0);
       expect(
@@ -412,6 +417,28 @@ describe("missing-docs raw-before-DB 契約", () => {
       sqlite.close();
       restore();
     }
+  });
+
+  it("本文保管unknownは先行batch後のpointerと後続docを進めない", async () => {
+    const restore = silenceConsole();
+    const { sqlite, db } = setupDb();
+    try {
+      setupParserBridges();
+      vi.mocked(extractTextSections).mockReturnValue([{ sectionKey: "business", elementId: "declared-offline-control",
+        itemName: "事業の内容", contextId: "CurrentYearDuration", text: "declared offline text transport control", charCount: 39 }]);
+      const { deps, backup, sender, tally } = setupDeps(sqlite);
+      const unknown = new NotionUnknownResultError("declared offline text ACK unknown");
+      backup.mockRejectedValueOnce(unknown);
+      const nextDocument = vi.fn();
+      await expect((async () => {
+        await processMissingDoc(db, deps, { doc: annualDoc("S100MTXT1"), stockId: 11, force: false });
+        nextDocument();
+      })()).rejects.toBe(unknown);
+      expect(nextDocument).not.toHaveBeenCalled(); expect(sender).toHaveBeenCalledTimes(1);
+      expect(tally).toEqual({ error: 1 });
+      expect(sqlite.prepare("SELECT notion_doc_page_id FROM yuho_documents WHERE doc_id='S100MTXT1'").get())
+        .toEqual({ notion_doc_page_id: null });
+    } finally { sqlite.close(); restore(); }
   });
 
   it("T1 未提供 (型付き 404) のみ T5 単独で進み、xbrlUnavailable を残す", async () => {

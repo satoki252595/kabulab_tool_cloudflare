@@ -21,6 +21,7 @@ import {
 import { EdinetNotFoundError, EdinetDocumentFetchError, EdinetDocumentArchiveError } from "../../src/services/edinet/client.js";
 import { reportedDocumentMetadata, reportedStandaloneHold, assertReportedDocumentUsable, ReportedDocumentHoldError, reportedDocumentAtomicGuard } from "../../src/services/edinet/reported-changes.js";
 import { edinetArchiveMetadata } from "../../src/services/edinet/archive-metadata.js";
+import { NotionUnknownResultError } from "../../../../src/shared/notion-archive/client.js";
 import { parseEdinetCsvZip } from "../../src/services/edinet/csv.js";
 import {
   parseOrderData,
@@ -343,7 +344,7 @@ export async function processMissingDoc(
 
     // type 別 key で各実体を記録する (共通契約)。各 key の既存は
     // recordPrimaryData 側で冪等スキップし、Type5 済みは Type1 を抑止しない。
-    // DB batch より先に置く: 記録に失敗したら D1 は旧値のまま残り再実行できる。
+    // DB batch より先に置く: 保管未確定はD1旧値を保ち、照合まで次の通へ進めない。
     const submittedAt = parseSubmitDateTime(doc.submitDateTime);
     const metadata = {
       ...sourceMetadata,
@@ -355,19 +356,21 @@ export async function processMissingDoc(
       textParseStatus, textSectionCount: sections.length,
       xbrlUnavailable,
     };
-    await deps.recordEdinetZip({
-      service: "yuho-quant", docID: doc.docID, type: 5, zip: csvZip,
-      source: `EDINET API v2 /documents/${doc.docID}?type=5`,
-      fetchedAt: csvFetchedAt, metadata,
-    });
-    if (xbrlZip) {
-      if (xbrlFetchedAt === null) throw new Error("XBRL受信完了時刻がありません");
+    try {
       await deps.recordEdinetZip({
-        service: "yuho-quant", docID: doc.docID, type: 1, zip: xbrlZip,
-        source: `EDINET API v2 /documents/${doc.docID}?type=1`,
-        fetchedAt: xbrlFetchedAt, metadata,
+        service: "yuho-quant", docID: doc.docID, type: 5, zip: csvZip,
+        source: `EDINET API v2 /documents/${doc.docID}?type=5`,
+        fetchedAt: csvFetchedAt, metadata,
       });
-    }
+      if (xbrlZip) {
+        if (xbrlFetchedAt === null) throw new Error("XBRL受信完了時刻がありません");
+        await deps.recordEdinetZip({
+          service: "yuho-quant", docID: doc.docID, type: 1, zip: xbrlZip,
+          source: `EDINET API v2 /documents/${doc.docID}?type=1`,
+          fetchedAt: xbrlFetchedAt, metadata,
+        });
+      }
+    } catch (cause) { throw new EdinetDocumentArchiveError({cause}); }
 
     // 親文書と受注/海外を先行atomic保存。本文ありの旧text索引/statusは
     // Notion verify後のpointer同梱batchまで保持する (ingest.tsと同一)。失敗は外の catch で tally.error に計上し非 0 終了する
@@ -433,6 +436,7 @@ export async function processMissingDoc(
           }
         }
       } catch (e) {
+        if (e instanceof NotionUnknownResultError) throw e;
         console.warn(`[missing] notion text backup 失敗 ${tag}: ${(e as Error).message}`);
         deps.tally("notion_text_error");
       }
@@ -440,7 +444,7 @@ export async function processMissingDoc(
     deps.tally("ingested");
   } catch (e) {
     deps.tally("error");
+    if (e instanceof NotionUnknownResultError || e instanceof EdinetDocumentFetchError || e instanceof EdinetDocumentArchiveError) throw e;
     console.warn(`[missing] 失敗 ${tag}: ${(e as Error).message}`);
-    if (e instanceof EdinetDocumentFetchError || e instanceof EdinetDocumentArchiveError) throw e;
   }
 }

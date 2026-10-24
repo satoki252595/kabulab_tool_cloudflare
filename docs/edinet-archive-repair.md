@@ -16,7 +16,7 @@ nix develop -c pnpm yuho:repair:zip --doc=S100YF41 --source-snapshot=tmp/edinet-
 
 `--force`は受け付けない。既存type別keyは通常の冪等処理へ渡すが、`skipped_existing`はmetadata欠落の修復証明ではない。既存行が不完全なら、所属/状態・旧metadata・実ZIPを限定読取で特定してから別途判断する。今回の契約修正は既存metadataの一括補記や所属付替えをしない。終了後は[補足39本文の読取診断](supplement-text-audit.md)など、実際のconsumerの厳格資格で受け入れる。
 
-通常type5/type1と途中CSV保管の**すべて**で、保管/readbackの例外は次の通へ進まず停止する。保管結果不明を既知失敗へ読み替えない。同じCLIを自動再送せず、旧ログ・receipt・既存rawを保持して送信結果を照合する。EDINETの既知404はclientで原HTTP本文を保管した後だけ未提供件数に計上し、架空ZIPや空本文で成功にしない。
+通常type5/type1と途中CSV保管の**すべて**で、保管/readbackの例外は次の通へ進まず停止する。有限欠測補完も同じ保管停止を守り、本文保管の型付き結果不明は後続やpointerの成功へ進めない。保管結果不明を既知失敗へ読み替えない。同じCLIを自動再送せず、旧ログ・receipt・既存rawを保持して送信結果を照合する。EDINETの既知404はclientで原HTTP本文を保管した後だけ未提供件数に計上し、架空ZIPや空本文で成功にしない。
 
 ## receiptがない場合の最小取得
 
@@ -43,9 +43,9 @@ JS
 
 | コード / docID | 保存根拠と次の操作 | 未完の境界 |
 |---|---|---|
-| 6963 / S100YF41 | 提出日2026-06-19。保存済み旧type1 ZIPと生の`secCode=69630`・期首2025-04-01あり。適格な同日一覧receiptで新CLIを有限実行する候補 | scope3はtyped原本の所属/状態guardで停止。行不在・parent/status不正の内訳はまだ未確定。旧bare-keyはtype5完成証明にしない |
-| 2683 / S100Y5OG | 提出日2026-05-22、`secCode=26830`・期首2025-03-01。同様に当日だけのreceiptを使う | 同上。旧ZIPはXBRLでありCSV提供の証明ではない |
-| 3840 / S100YKGU | 提出日2026-06-25、`secCode=38400`・期首2025-04-01。同様に当日だけのreceiptを使う | 同上。法的issuer不一致や原本永久消失は証明されていない |
+| 6963 / S100YF41 | 提出日2026-06-19。保存済み旧type1 ZIPと生の`secCode=69630`・期首2025-04-01あり。適格な同日一覧receiptで新CLIを有限実行する候補 | scope3はtyped原本の所属/状態guardで停止。続く限定読取では現canonical DBのactive type5 keyを未検出。過去のarchived/削除は未測定。旧bare-keyはtype5完成証明にしない |
+| 2683 / S100Y5OG | 提出日2026-05-22、`secCode=26830`・期首2025-03-01。同様に当日だけのreceiptを使う | 同上（active type5 key未検出）。旧ZIPはXBRLでありCSV提供の証明ではない |
+| 3840 / S100YKGU | 提出日2026-06-25、`secCode=38400`・期首2025-04-01。同様に当日だけのreceiptを使う | 同上（active type5 key未検出）。法的issuer不一致や原本永久消失は証明されていない |
 | 3776 / S100WZGB | 同issuer E05494・FY2025-12-31の情報修正。通常catchupの既存`requalifyInformationEdit`だけが、原一覧/観測・現issuer・全facts/本文・保存type1/5を同値照合して解決する | 保存済み資格記録は通常parserの既存status/抽出元不一致でHOLD。単純ZIP修復、`--force`、観測削除では解除しない。通常CLIに任意1code指定はなく、限定実施が必要なら同じ関数へ明示原観測を渡す既存経路を用いる |
 
 旧`backfill-overseas.ts`の新規ダウンロード枝は、生の一次一覧metadataを持たない。D1から補作して厳格本文readerに適格とすることはできない。本手順や通常取込が保存する一次metadataと混同しない。保存済み原本を読む既存海外補完経路、通常reader、issuer/HOLD/unknown guardは変更しない。
