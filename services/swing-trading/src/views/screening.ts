@@ -115,8 +115,8 @@ export function screeningPage(props: ScreeningPageProps): string {
   </div>
 
   <div class="notice">
-    <strong>④ 需給 (信用倍率)</strong> は <a href="https://finance.matsui.co.jp/ranking-credit-unpurchased/index" target="_blank" rel="noopener">松井証券</a> で、
-    <strong>⑤ カタリスト (決算カレンダー)</strong> は <a href="https://kabuyoho.jp/calender" target="_blank" rel="noopener">株予報</a> で手動確認を推奨。
+    <strong>④ ${termTip("需給（買残高と出来高の比率）", "信用買い残高（未返済の信用買いの株数）を出来高（売買された株数）と比べる指標。対象日・出来高の集計期間を確認します。本画面では自動判定しません。")}</strong> は対象日・集計期間を確認し、手動で判断してください。<a href="https://finance.matsui.co.jp/ranking-credit-unpurchased/index" target="_blank" rel="noopener">松井証券の信用買残情報</a>は参考資料です。<br>
+    <strong>⑤ ${termTip("カタリスト（2週間以内）", "株価が動くきっかけとなる材料。今後2週間以内の決算・レーティング・自社株買い・政策などの公表内容や予定を確認します。本画面では自動判定しません。")}</strong> は決算・レーティング・自社株買い・政策などを手動確認してください。<a href="https://kabuyoho.jp/calender" target="_blank" rel="noopener">株予報の決算予定</a>はその一部です。
   </div>
 
   <div class="section-label">CANDIDATES / 条件通過銘柄</div>
