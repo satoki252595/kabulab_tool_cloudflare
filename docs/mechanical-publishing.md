@@ -52,6 +52,16 @@ nix develop --offline --no-write-lock-file --command env -u NODE_PATH pnpm publi
 
 既存privateなcanonical stateとkernel lockの下で旧FS journal全件を検証し、全completion SHAと旧優待cursor SHAをimmutable baselineへ保存する。旧優待cursorは同じbytesを共有cursorへ移す。初回共有keyが既存/不明なら再初期化しない。途中PUT不明でも再実行しない。
 
+初回が固定STOPで終わり送信段階も不明な場合、通常初期化を再実行しない。operatorが旧runtime/全writer停止・canonical closureと旧優待cursor・account/bucketを確認した後だけ、失敗ログSHA付きの明示fenceを使える。元の`shared-publishing-initialize.log`は所有者の通常ファイル・0600・64KiB以内・固定STOP1件・指定SHA一致が必要で、上書きしない。
+
+```sh
+umask 077
+set -C
+nix develop --offline --no-write-lock-file --command env -u NODE_PATH pnpm publishing:initialize --fence-unconfirmed-initialization --failed-log-sha256=<保全した元ログのSHA256> >../../tmp/biztag-local/shared-publishing-initialization-fence.log 2>&1
+```
+
+同canonical kernel lockの下で資格化した新baseline/cursorのexact bytes・SHA・fence ownerを固定私有intentへ`wx`保存し、file/parent fsync後だけ同じ`writer.json`を`If-None-Match:*`で先に確保する。完全GETでfenceを確認した後、baseline/cursorを同値だけ再利用または条件付き作成し、自分のfence bytes/ETagへのCASでownerを閉じる。旧late writerも同keyの条件付き作成なので412となる。旧writer先勝・fence応答不明・cursor不同は停止し、既存intentがあれば再実行しない。通常初期化も同じintentがあれば共有storeの生成前に拒否し、別modeで迂回しない。通常writerは変更しない。旧unknownの成功/失敗を断定せず、原本・未参照baselineも保持する。受入理由は「旧authorityを同gateで隔離した移行」であり、404や新observedAtだけによる再初期化ではない。[R2の条件付き書込とnegative read](https://developers.cloudflare.com/r2/reference/consistency/)。
+
 5. GitHub secretsを同じcanonical設定から登録/照合する。値はGit/ログへ書かない。
 
 | 用途 | 既存secret名 |
