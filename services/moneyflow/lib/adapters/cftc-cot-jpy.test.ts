@@ -9,6 +9,7 @@ import {
   isMoneyflowRequirement,
 } from "../../../../src/shared/notion-archive/moneyflow.js";
 import {
+  MoneyflowNotYetPublishedError,
   validateDrafts,
   type ObservationDraft,
   type SpecFile,
@@ -459,12 +460,24 @@ describe.skipIf(!hasFixture)(
         expect(drafts).toHaveLength(10);
       });
 
-      it("次の回の公表時刻を過ぎても応答が古いままなら「未公表」として throw する", async () => {
-        stubFetch();
+      it("次の回の公表時刻を過ぎても応答が古いままなら原本付きのtyped未公表となり、前期を採用しない", async () => {
+        const urls = stubFetch();
         // 2026-10-03T00:00Z = 米国東部時間 2026-10-02(金) 20:00 → 基準日 2026-09-29 の回が出ているはず
-        await expect(
-          cftcCotJpySpec.resolve(new Date("2026-10-03T00:00:00Z")),
-        ).rejects.toThrow(/まだ公表されていません/);
+        const error = await cftcCotJpySpec.resolve(new Date("2026-10-03T00:00:00Z")).catch(error => error);
+        expect(error).toBeInstanceOf(MoneyflowNotYetPublishedError);
+        expect(error.reason).toEqual({ code: "not_yet_published", period: "2026-W40", expectedAsOfDate: "2026-09-29",
+          expectedReleaseDate: "2026-10-02", latestPublishedAsOfDate: "2026-09-22" });
+        expect(error.primary.files[0].bytes).toEqual(new Uint8Array(readFileSync(FIXTURE)));
+        expect(urls).toHaveLength(1);
+      });
+
+      it.each(["http", "parse", "empty"])("%s障害を未公表へ丸めない", async fault => {
+        const bytes = readFileSync(FIXTURE);
+        vi.stubGlobal("fetch", vi.fn(async () => new Response(fault === "empty" ? "[]" : fault === "parse" ? bytes.subarray(0, 10) : bytes,
+          { status: fault === "http" ? 503 : 200 })));
+        const error = await cftcCotJpySpec.resolve(new Date("2026-10-03T00:00:00Z")).catch(error => error);
+        expect(error).toBeInstanceOf(Error);
+        expect(error).not.toBeInstanceOf(MoneyflowNotYetPublishedError);
       });
     });
   },

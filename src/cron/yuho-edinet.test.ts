@@ -22,6 +22,7 @@ import { ExistingTextReadbackMismatchError } from "../../services/yuho-quant/src
 import { rebuildYuhoGrowthProjection } from "../../services/yuho-quant/src/services/projection.js";
 import { checkDocsCustody } from "../../services/yuho-quant/src/services/edinet/archive.js";
 import { resumePendingShareholdings, resumePendingShareholdingsPrices, type HoldingPriceSourceLoader } from "../shared/notion-archive/shareholdings.js";
+import type { ShareholdingsNotApplicable } from "../../services/yuho-quant/src/services/edinet/shareholdings.js";
 import type { Database as YuhoDatabase } from "../../services/yuho-quant/src/db/client.js";
 import {
   catchupHttpStatus,
@@ -56,7 +57,8 @@ vi.mock("../../services/yuho-quant/src/services/edinet/list-snapshot.js", async 
 vi.mock("../../services/yuho-quant/src/services/ingest.js", () => ({
   ingestDocument: vi.fn(),
 }));
-vi.mock("../shared/notion-archive/shareholdings.js", () => ({
+vi.mock("../shared/notion-archive/shareholdings.js", async original => ({
+  ...await original<typeof import("../shared/notion-archive/shareholdings.js")>(),
   resumePendingShareholdings: vi.fn(async () => ({ usedRows: 0, resumed: 0, held: 0, pending: false })),
   resumePendingShareholdingsPrices: vi.fn(async () => ({ usedRows: 0, resumed: 0, held: 0, pending: false })),
 }));
@@ -300,6 +302,25 @@ describe("catchup 応答契約: 実失敗だけ非 2xx", () => {
     expect(vi.mocked(ingestDocument).mock.calls[0][1].holdingsBudget).toEqual({ remainingRows: 70 });
     expect(result.byStatus["holdings:resumed"]).toBe(1);
     expect(catchupHttpStatus(result)).toBe(500);
+  });
+  it.each(["explicit", "held", "missing-proof", "null-proof", "empty-proof", "invalid-hash", "pending"])("新規保有明細%sは型付き不該当だけを未完から分離", async kind => {
+    const proof = JSON.parse(readFileSync(join(ROOT, "services/yuho-quant/src/tests/fixtures/holdings-absence-cli/provenance.json"), "utf8")).items[0].notApplicable as ShareholdingsNotApplicable;
+    vi.mocked(listDocuments).mockResolvedValueOnce({ results: [annualDoc("7203")] } as never).mockResolvedValue({ results: [] } as never);
+    vi.mocked(ingestDocument).mockResolvedValue({ outcome: "ingested", parseStatus: "no_order_table", overseasParseStatus: "no_overseas_table", textParseStatus: "no_text_sections",
+      holdings: { status: "held", parsed: 0, reason: "原本診断", ...(kind === "held" ? {} : { reasonCode: "explicit_not_applicable" }),
+        ...(kind === "missing-proof" ? {} : { notApplicable: kind === "null-proof" ? null : kind === "empty-proof" ? {} : kind === "invalid-hash" ? { ...proof, zipSha256: "invalid" } : proof }),
+        ...(kind === "pending" ? { pending: true } : {}) } } as never);
+    const result = await runCatchup(new Date("2026-10-14T10:00:00Z"));
+    expect(result.byStatus[kind === "explicit" ? "holdings:explicit_not_applicable" : "holdings:held"]).toBe(1);
+    expect(catchupHttpStatus(result)).toBe(kind === "explicit" ? 200 : 500);
+  });
+  it("旧不該当の再資格件数だけなら未完にならず、実HOLD併存なら未完を維持", async () => {
+    vi.mocked(listDocuments).mockResolvedValue({ results: [] } as never);
+    vi.mocked(resumePendingShareholdings).mockResolvedValueOnce({ usedRows: 0, resumed: 0, held: 0, pending: false, explicitNotApplicable: 1 });
+    const result = await runCatchup(new Date("2026-10-14T10:00:00Z"));
+    expect(result.byStatus["holdings:explicit_not_applicable"]).toBe(1); expect(catchupHttpStatus(result)).toBe(200);
+    vi.mocked(resumePendingShareholdings).mockResolvedValueOnce({ usedRows: 0, resumed: 0, held: 1, pending: false, explicitNotApplicable: 1 });
+    expect(catchupHttpStatus(await runCatchup(new Date("2026-10-14T10:00:00Z")))).toBe(500);
   });
   it("資格済みの未知sourceは要確認を表示し、別会社の一覧・取込・L2は続ける", async () => {
     const unknown = { archivePageId: "3fbd74ff-84cd-81b8-9ffb-ede100e5ad51",

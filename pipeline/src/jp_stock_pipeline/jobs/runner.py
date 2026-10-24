@@ -37,6 +37,9 @@ logger = logging.getLogger(__name__)
 STATUS_SUCCESS = "成功"
 STATUS_PARTIAL = "一部失敗"
 STATUS_FAILURE = "失敗"
+STATUS_OBSERVED_EMPTY = "成功（観測時点0件）"
+STATUS_OUTSIDE_SCOPE = "成功（対象外確認済み）"
+VERIFIED_ZERO_STATUSES = frozenset({STATUS_OBSERVED_EMPTY, STATUS_OUTSIDE_SCOPE})
 
 
 @dataclass
@@ -47,6 +50,7 @@ class JobContext:
     processed: int = 0
     failed: int = 0
     failed_codes: list[str] = field(default_factory=list)
+    verified_zero_status: str | None = None
     local: LocalStore | None = None  # dual-write 先 (未設定/接続不可なら None)
     cloud: "CloudSink | None" = None  # Cloudflare 正本 (未設定なら None)
     mirror_failed: int = 0  # ローカルミラー失敗数 (片系統失敗はジョブ成否に影響させない)
@@ -61,6 +65,12 @@ class JobContext:
         self.failed += 1
         self.failed_codes.append(code)
         logger.warning("失敗: %s %s", code, reason)
+
+    def confirm_zero_work(self, status: str) -> None:
+        """構造検証・原本保管・対象選択を完了した取得元だけが呼ぶ。"""
+        if status not in VERIFIED_ZERO_STATUSES:
+            raise ValueError("検証済み0件の理由が不正です")
+        self.verified_zero_status = status
 
     # --- Notion ↔ ローカル PostgreSQL の双方向フェールセーフ dual-write --------
     # 方針: Notion とローカルは独立に書き込み、片方の系統が失敗してももう片方は
@@ -289,6 +299,8 @@ def _status(ctx: JobContext, crashed: bool) -> str:
     if crashed or ctx.cloud_failed:
         return STATUS_FAILURE
     if ctx.failed == 0:
+        if ctx.processed == 0 and ctx.verified_zero_status in VERIFIED_ZERO_STATUSES:
+            return ctx.verified_zero_status
         return STATUS_SUCCESS
     if ctx.processed > 0:
         return STATUS_PARTIAL
@@ -404,7 +416,7 @@ def run_job(
         "%s: %s (processed=%d failed=%d %.1fs)",
         job_name, status, ctx.processed, ctx.failed, duration,
     )
-    return 0 if status == STATUS_SUCCESS else 1
+    return 0 if status == STATUS_SUCCESS or status in VERIFIED_ZERO_STATUSES else 1
 
 
 def parse_codes_arg(args: argparse.Namespace) -> list[str] | None:

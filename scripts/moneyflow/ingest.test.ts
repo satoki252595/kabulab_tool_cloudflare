@@ -49,6 +49,7 @@ describe("normal mainのlane分離とqueue後の実期限", () => {
   afterEach(() => {
     process.argv = [...originalArgv]; process.exitCode = undefined;
     vi.doUnmock("../../src/shared/notion-archive/index.js"); vi.doUnmock("./lib/run-spec.js");
+    vi.doUnmock("./lib/archived-files.js");
     vi.unstubAllEnvs(); vi.useRealTimers(); vi.restoreAllMocks(); vi.resetModules();
   });
   it("非Yahoo mainは同じrunSpecで選択sourceだけを処理し、実summaryを残す", async () => {
@@ -98,8 +99,53 @@ describe("normal mainのlane分離とqueue後の実期限", () => {
     vi.spyOn(console,"info").mockImplementation(()=>undefined);vi.spyOn(console,"error").mockImplementation(()=>undefined);
     const {main}=await import("./ingest.js");
     if(mode==="unknown") {await expect(main()).rejects.toBe(failure);expect(existsSync(path)).toBe(false);expect(readFileSync(output,"utf8")).toBe("");}
-    else {await main();expect(process.exitCode).toBe(1);expect(JSON.parse(readFileSync(path,"utf8")).outcomes).toMatchObject([{source:"coingecko-global",ok:false}]);expect(readFileSync(output,"utf8")).toBe("summary_closed=true\n");rmSync(path);}
+    else {await main();expect(process.exitCode).toBe(1);expect(JSON.parse(readFileSync(path,"utf8")).outcomes).toMatchObject([{source:"coingecko-global",ok:false}]);
+      expect(console.info).toHaveBeenCalledWith(expect.stringContaining('"failedSources": 1'));
+      expect(console.info).toHaveBeenCalledWith(expect.stringContaining('"notYetPublishedSources": 0'));
+      expect(readFileSync(output,"utf8")).toBe("summary_closed=true\n");rmSync(path);}
     rmSync(output);
+  });
+  it.each(["not-yet-published", "custody-unknown"])("実CFTC未公表の%sを通常mainから保管・summaryへ渡し、観測成功にはしない", async mode => {
+    vi.resetModules(); vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime("2026-10-03T00:00:00Z");
+    vi.stubEnv("GITHUB_RUN_ID", "38879272134"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
+    const path = join(dir, `${mode}.json`), output = join(dir, `${mode}-output`);
+    writeFileSync(output, ""); vi.stubEnv("GITHUB_OUTPUT", output);
+    process.argv = [...originalArgv, "--only=cftc-cot-jpy", "--lane=non-yahoo", `--summary=${path}`];
+    vi.doUnmock("./lib/run-spec.js");
+    const { NotionUnknownResultError } = await import("../../src/shared/notion-archive/client.js");
+    const unknown = new NotionUnknownResultError("CFTC custody result unknown");
+    const recordPrimaryData = vi.fn(async () => ({ pageId: "primary-cftc", outcome: "recorded", fileTooLarge: false }));
+    if (mode === "custody-unknown") recordPrimaryData.mockRejectedValueOnce(unknown);
+    const recordRunLog = vi.fn(), upsertObservationBatch = vi.fn();
+    vi.doMock("../../src/shared/notion-archive/index.js", async original => ({
+      ...await original<typeof import("../../src/shared/notion-archive/index.js")>(),
+      ensureIndicatorDefsDb: vi.fn(async () => ({ dbId: "defs" })), upsertIndicatorDef: vi.fn(async () => ({ pageId: "def" })),
+      ensureRunLogDb: vi.fn(async () => ({ dbId: "logs" })), recordRunLog, recordPrimaryData, upsertObservationBatch,
+    }));
+    const verifyArchivedAttachments = vi.fn();
+    vi.doMock("./lib/archived-files.js", async original => ({ ...await original<object>(), verifyArchivedAttachments }));
+    const bytes = readFileSync(new URL("../../services/moneyflow/lib/sources/fixtures/public/cftc-cot-jpy/cftc-cot-jpy-legacy-futures-only.json", import.meta.url));
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(bytes));
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { main } = await import("./ingest.js");
+    if (mode === "custody-unknown") {
+      await expect(main()).rejects.toBe(unknown);
+      expect(existsSync(path)).toBe(false); expect(readFileSync(output, "utf8")).toBe(""); expect(recordRunLog).not.toHaveBeenCalled();
+    } else {
+      await main();
+      expect(process.exitCode).toBe(1);
+      expect(JSON.parse(readFileSync(path, "utf8")).outcomes).toMatchObject([{ source: "cftc-cot-jpy", ok: false,
+        reason: { code: "not_yet_published", period: "2026-W40", expectedAsOfDate: "2026-09-29", expectedReleaseDate: "2026-10-02", latestPublishedAsOfDate: "2026-09-22" } }]);
+      expect(recordRunLog).toHaveBeenCalledWith("logs", expect.objectContaining({ status: "失敗", successCount: 0, failedCount: 1 }));
+      expect(info).toHaveBeenCalledWith(expect.stringContaining('"notYetPublishedSources": 1'));
+      expect(info).toHaveBeenCalledWith(expect.stringContaining('"failedSources": 0'));
+      expect(info).toHaveBeenCalledWith(expect.stringContaining('"complete": false'));
+      expect(readFileSync(output, "utf8")).toBe("summary_closed=true\n");
+      expect(verifyArchivedAttachments).toHaveBeenCalledTimes(1); rmSync(path);
+    }
+    expect(fetch).toHaveBeenCalledTimes(1); expect(upsertObservationBatch).not.toHaveBeenCalled();
+    expect(recordPrimaryData).toHaveBeenCalledTimes(1); rmSync(output);
   });
   it("stock後sector-turnoverは固定as-of/4指標順/原本relation NULLを変えず共通batchへ渡す", async () => {
     vi.resetModules();

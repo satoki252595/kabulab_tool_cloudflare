@@ -38,7 +38,10 @@ beforeEach(() => {
       return { object: "list", results: [], has_more: false, next_cursor: null } as never;
     }
     if (method === "GET" && path === `/databases/${"d".repeat(32)}`) return { properties: Object.fromEntries(["保有明細", "保有価格"].flatMap(phase => [
-      [`${phase}状態`, { type: "select" }], [`${phase}理由`, { type: "rich_text" }], [`${phase}再開情報`, { type: "rich_text" }],
+      [`${phase}状態`, { type: "select", select: { options: (phase === "保有明細"
+        ? ["再開待ち", "要確認", "実行中（結果未確定）", "明細原本照合済", "原本明示不該当"]
+        : ["再開待ち", "要確認", "実行中（結果未確定）", "価格照合完了"]).map((name, index) => ({ id: `${phase}-${index}`, name, color: "default" })) } }],
+      [`${phase}理由`, { type: "rich_text" }], [`${phase}再開情報`, { type: "rich_text" }],
     ])) } as never;
     if (path !== `/pages/${archivePageId}`) throw new Error(`unexpected protocol request ${method} ${path}`);
     if (method === "PATCH") page.properties = { ...page.properties as object, ...protocolProperties((body as { properties: Record<string, unknown> }).properties) };

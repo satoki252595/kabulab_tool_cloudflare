@@ -79,6 +79,7 @@ import {
   type ArchivedRecord,
 } from "./lib/archived-files.js";
 import { runSpec } from "./lib/run-spec.js";
+import { MoneyflowNotYetPublishedError } from "../../services/moneyflow/lib/source-spec.js";
 import { SPEC_SOURCES } from "./sources.js";
 
 /** Phase 1 (R1 東証33業種) の取得元。個別の runner 関数で実装している。 */
@@ -202,11 +203,7 @@ const ONLY: readonly string[] = LANE === undefined ? REQUESTED : moneyflowLaneSo
 /** producer の実 tradingDate の固定入力 (--as-of)。未指定は当日 UTC (手動実行の既存挙動)。 */
 const AS_OF: string | null = parseAsOfArg(process.argv);
 
-interface RunOutcome {
-  source: string;
-  ok: boolean;
-  detail: string;
-}
+type RunOutcome = MoneyflowSummary["outcomes"][number];
 
 /** 指標キー→Notion ページ ID のキャッシュ (1 実行内で使い回す)。 */
 const indicatorPageIds = new Map<string, string>();
@@ -674,13 +671,23 @@ export async function main(): Promise<void> {
       // 結果不明や設定不備では、後続sourceの取得・書込も止める。
       if (error instanceof NotionUnknownResultError || error instanceof NotionConfigError) throw error;
       const message = rootCauseMessage(error);
-      console.error(`[moneyflow:${source}] エラー: ${message}`);
-      outcomes.push({ source, ok: false, detail: message });
+      if (error instanceof MoneyflowNotYetPublishedError) {
+        console.warn(`[moneyflow:${source}] not_yet_published ${error.reason.period}: ${message}`);
+        outcomes.push({ source, ok: false, detail: message, reason: error.reason });
+      } else {
+        console.error(`[moneyflow:${source}] エラー: ${message}`);
+        outcomes.push({ source, ok: false, detail: message });
+      }
       failures.push(`${source}: ${message}`);
     }
   }
 
-  console.info(JSON.stringify({ dryRun: DRY_RUN, only: ONLY, outcomes }, null, 2));
+  console.info(JSON.stringify({ dryRun: DRY_RUN, only: ONLY, outcomes,
+    successSources: outcomes.filter(o => o.ok).length,
+    notYetPublishedSources: outcomes.filter(o => o.reason?.code === "not_yet_published").length,
+    failedSources: outcomes.filter(o => !o.ok && o.reason === undefined).length,
+    complete: outcomes.every(o => o.ok),
+  }, null, 2));
 
   if (DRY_RUN) {
     saveSummary(outcomes);

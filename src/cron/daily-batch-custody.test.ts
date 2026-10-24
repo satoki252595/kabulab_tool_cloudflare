@@ -97,10 +97,10 @@ afterEach(() => {
 });
 
 describe("categorizeSyncFailure", () => {
-  it("実 reason から4分類する (一律 genuine にしない)", () => {
+  it("原本未提供・通信・保存等を区別し、無約定や真正欠損を推測しない", () => {
     expect(
       categorizeSyncFailure("1301: 対象 2026-09-28 の実日足が未取得です。古い日の指標を書き直しません。")
-    ).toBe("genuine_source_gap");
+    ).toBe("source_unavailable");
     expect(
       categorizeSyncFailure("1909.T: 最新終値 16280000512 が meta 価格 3700 と10倍超乖離し出来高がありません。応答全体を採用しません。")
     ).toBe("priceguard");
@@ -155,7 +155,7 @@ describe("buildPriceSyncBatch", () => {
     const body = decodeFile(buildPriceSyncBatch(batchInput({ failures })));
     expect(body.failures).toHaveLength(25);
     expect(body.failures[24]).toEqual(failures[24]);
-    expect(body.categories).toMatchObject({ genuine_source_gap: 25 });
+    expect(body.categories).toMatchObject({ source_unavailable: 25 });
   });
 
   it("例外時は件数/日付 null・元例外保持・収集中断を明示する", () => {
@@ -442,7 +442,7 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
     };
     expect(body.failures).toHaveLength(2);
     expect(body.failures.map((f) => f.code).sort()).toEqual(["1301", "1332"]);
-    expect(body.categories).toMatchObject({ genuine_source_gap: 2 });
+    expect(body.categories).toMatchObject({ source_unavailable: 2 });
   });
 
   it("完了保管 fileTooLarge→例外同キー skip でも保管成功を偽らない (元例外で非0)", async () => {

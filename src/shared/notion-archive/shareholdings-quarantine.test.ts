@@ -28,6 +28,7 @@ const base = new URL("../../../services/yuho-quant/src/tests/fixtures/holdings-o
 const bytes = (name: string) => readFileSync(new URL(name === "208A-S100Z0JO.zip" ? "../holdings-largest-holder/208A-S100Z0JO.zip" : name, base));
 const fixture = JSON.parse(bytes("snapshot.json").toString());
 // Declared current-server schema projection; original snapshot bytes/SHA and business values are unchanged.
+fixture.sourceSchema.properties["保有明細状態"].select.options.push({ id: "protocol-explicit-not-applicable", name: "原本明示不該当", color: "default" });
 fixture.schema.properties["価格状態"].formula.expression = 'if(prop("価格照合済"), "期末参考時価（期末株数×採用終値）", "未取得（価格・通貨・株数単位の照合未成立）")';
 for (const part of fixture.schema.description) { part.plain_text = HOLDINGS_DESCRIPTION; part.text.content = HOLDINGS_DESCRIPTION; }
 const sha = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
