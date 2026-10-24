@@ -8,11 +8,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { eq } from "drizzle-orm";
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
+import { sharedEnv } from "../../../src/shared/env.js";
 import { parseStockCode } from "../../../src/shared/jpx/stock-code.js";
 import { findUniqueBackupChildByTitle } from "../../../src/shared/notion-archive/archive.js";
 import { notionRequest, notionStats } from "../../../src/shared/notion-archive/client.js";
-import { notionEnv } from "../../../src/shared/notion-archive/env.js";
-import { loadSupplementRows, normalizeSupplementText, readSupplementRowFully, SUPPLEMENT_DB_TITLE, type SupplementRow } from "../../../src/shared/notion-archive/stock-supplement.js";
+import { NotionConfigError, notionEnv } from "../../../src/shared/notion-archive/env.js";
+import { loadSupplementRows, normalizeSupplementText, readSupplementRowFully, SUPPLEMENT_DB_TITLE, SUPPLEMENT_PROPS, type SupplementRow } from "../../../src/shared/notion-archive/stock-supplement.js";
 import { installCatchupDeadline } from "../../../scripts/sync/catchup-launch.js";
 import { loadLatestDocs, type BiztagSourceDb, type LatestDoc } from "../src/biztag/source.js";
 import { hasUsableText, rowTextSyncReceipt } from "../src/biztag/plan.js";
@@ -30,6 +31,43 @@ type Document = typeof schema.yuhoDocuments.$inferSelect;
 type CellReason = "matched" | "source_value_missing_in_notion" | "source_target_absent" | "source_or_identity_insufficient" | "time_difference" | "unverified";
 class AuditObservationChangedError extends Error {}
 class AuditBodyDifferenceError extends Error {}
+type AuditStage = "configuration" | "d1_latest" | "notion_database" | "notion_schema" | "existing_schema_missing" | "notion_rows" | "code_admission" |
+  "notion_current39" | "d1_source_document" | "notion_saved_zip" | "notion_source_body" | "verify_current_snapshot";
+class AuditConfigurationError extends Error {
+  constructor(readonly keys: string[]) { super("audit_configuration_invalid"); }
+}
+class AuditSchemaMissingError extends Error {
+  constructor(readonly keys: string[]) { super("audit_existing_schema_missing"); }
+}
+export function assertAuditSupplementSchema(properties: Record<string, { id: string }>) {
+  const missing = Object.entries(SUPPLEMENT_PROPS).filter(([, title]) => typeof properties[title]?.id !== "string" || properties[title].id.length === 0).map(([key]) => key);
+  missing.push(...TEXT_SECTIONS.filter(s => typeof properties[s.title]?.id !== "string" || properties[s.title].id.length === 0).map(s => `text:${s.key}`));
+  if (missing.length > 0) throw new AuditSchemaMissingError(missing);
+}
+/** Validate typed accessors before the first HTTP; never print values or create missing configuration. */
+export function auditConfiguration() {
+  const invalid: string[] = [];
+  const read = (key: string, getter: () => string | undefined) => {
+    try { return getter(); } catch { invalid.push(key); return undefined; }
+  };
+  for (const key of ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "D1_DATABASE_ID"] as const) read(key, sharedEnv[key]);
+  for (const key of ["NOTION_TOKEN", "NOTION_ARCHIVE_PAGE_ID"] as const) read(key, notionEnv[key]);
+  const supplementId = read("NOTION_STOCK_SUPPLEMENT_DB_ID", notionEnv.NOTION_STOCK_SUPPLEMENT_DB_ID);
+  const parentPageId = supplementId === undefined ? read("NOTION_STOCK_INFO_PAGE_ID", notionEnv.NOTION_STOCK_INFO_PAGE_ID) : undefined;
+  const textDbId = read("NOTION_YUHO_TEXT_DB_ID", notionEnv.NOTION_YUHO_TEXT_DB_ID);
+  if (invalid.length > 0) throw new AuditConfigurationError(invalid);
+  return { supplementId, parentPageId, textDbId: textDbId! };
+}
+/** Finite stage/code only. Raw error messages can contain URLs, SQL or credentials. */
+export function auditFailure(stage: AuditStage, error: unknown) {
+  if (error instanceof AuditConfigurationError) return { stage, code: "configuration_invalid", configKeys: error.keys };
+  if (error instanceof AuditSchemaMissingError) return { stage: "existing_schema_missing" as const, code: "required_properties_missing", propertyKeys: error.keys };
+  const codes = { audit_deadline: "deadline_exceeded", audit_request_limit: "request_limit",
+    audit_source_get_forbidden: "read_only_guard", audit_mutation_forbidden: "read_only_guard", audit_notion_write_forbidden: "read_only_guard",
+    audit_d1_write_forbidden: "read_only_guard", audit_post_forbidden: "read_only_guard" } as Record<string, string>;
+  const guarded = error instanceof assert.AssertionError && Object.hasOwn(codes, error.message) ? codes[error.message] : undefined;
+  return { stage, code: guarded === undefined ? error instanceof NotionConfigError ? "read_contract_invalid" : "read_failed" : guarded };
+}
 const normalize = (value: string | null) => { const v = normalizeSupplementText(value); return v === "" ? null : v; };
 function texts39(values: ReadonlyArray<{ sectionKey: string; text: string }>): Record<string, string | null> {
   const result = Object.fromEntries(TEXT_SECTIONS.map(s => [s.title, null])) as Record<string, string | null>;
@@ -123,6 +161,7 @@ export async function auditOne(latest: LatestDoc, row: SupplementRow, dependenci
   let sourceProof: { pageId: string; zipSha256: string; byteLength: number; originalManifest: Source["originalManifest"];
     metadataSha256: string; all39Sha256: string; sections: ReturnType<typeof extractTextSections> } | null = null;
   let blocked: "time_difference" | "source_or_identity_insufficient" | "unverified" | undefined, detail: string | null = null;
+  let stage: AuditStage = "d1_source_document", failure: ReturnType<typeof auditFailure> | null = null;
   let pointer: string | null = null, syncDocId: string | null = null;
   try { const receipt = rowTextSyncReceipt(row); if (receipt !== null) { pointer = receipt.textPageId; syncDocId = receipt.docId; } }
   catch { /* No invented receipt; exact source/body evidence below is still required. */ }
@@ -136,18 +175,21 @@ export async function auditOne(latest: LatestDoc, row: SupplementRow, dependenci
   } else {
     try {
       const documents = await dependencies.readDocument(); assert(documents.length === 1, "document_not_unique");
+      stage = "notion_saved_zip";
       const saved = await dependencies.readSource(latest.doc.docId, 5);
       source = qualifyAuditSource(latest, documents[0], saved);
       sourceProof = { pageId: saved.pageId, zipSha256: saved.sha256, byteLength: saved.bytes.length, originalManifest: saved.originalManifest,
         metadataSha256: sha(JSON.stringify(saved.metadata)), all39Sha256: digest(source.texts), sections: source.sections };
+      stage = "notion_source_body";
       const body = await dependencies.readBody({ dbId: dependencies.textDbId, rowPageId: latest.doc.notionDocPageId,
         stockCode: latest.stockCode, docId: latest.doc.docId, d1DocumentId: documents[0].id, fiscalYearEnd: latest.doc.periodEnd,
         textParseStatus: "ok", sectionCount: source.sections.length, charCount: source.sections.reduce((n, s) => n + [...s.text].length, 0) });
       if (JSON.stringify(body.map(s => [s.sectionKey, s.itemName, s.text])) !== JSON.stringify(source.sections.map(s => [s.sectionKey, s.itemName, s.text]))) {
         throw new AuditBodyDifferenceError("saved_body_parser_difference");
       }
-      await dependencies.assertCurrent();
+      stage = "verify_current_snapshot"; await dependencies.assertCurrent();
     } catch (error) {
+      failure = auditFailure(stage, error);
       blocked = error instanceof AuditObservationChangedError ? "time_difference" :
         error instanceof SavedEdinetZipQualificationError || error instanceof assert.AssertionError ? "source_or_identity_insufficient" : "unverified";
       detail = error instanceof AuditBodyDifferenceError || error instanceof AuditObservationChangedError || error instanceof SavedEdinetZipQualificationError ? error.message :
@@ -155,7 +197,7 @@ export async function auditOne(latest: LatestDoc, row: SupplementRow, dependenci
     }
   }
   return { stockCode: latest.stockCode, supplementPageId: row.pageId, currentDocId: row.docId, syncDocId, syncTextPageId: pointer,
-    latestDoc: latest.doc, observedAt: new Date().toISOString(), current39Sha256: digest(current), source: sourceProof, detail,
+    latestDoc: latest.doc, observedAt: new Date().toISOString(), current39Sha256: digest(current), source: sourceProof, detail, failure,
     cells: classifyAuditCells(current, source, blocked) };
 }
 
@@ -163,25 +205,36 @@ export async function main(argv = process.argv.slice(2)) {
   const options = parseAuditArgs(argv), startedAt = new Date().toISOString(), deadline = Date.now() + options.budgetMs;
   mkdirSync(options.outDir, { mode: 0o700 }); // New, private directory only; never replace an old report.
   const restoreDeadline = installCatchupDeadline(deadline), guard = installReadOnlyAuditGuard(options.maxRequests, deadline);
-  const report: { version: number; startedAt: string; codes: string[]; results: Awaited<ReturnType<typeof auditOne>>[]; unverified: Array<{ stockCode: string; reason: string }>; stopped: boolean } =
-    { version: 1, startedAt, codes: options.codes, results: [], unverified: [], stopped: false };
+  let stage: AuditStage = "configuration";
+  const report: { version: number; startedAt: string; codes: string[]; results: Awaited<ReturnType<typeof auditOne>>[];
+    unverified: Array<{ stockCode: string; reason: string; failure?: ReturnType<typeof auditFailure> }>; stopped: boolean; failure: ReturnType<typeof auditFailure> | null } =
+    { version: 1, startedAt, codes: options.codes, results: [], unverified: [], stopped: false, failure: null };
   try {
+    const configuration = auditConfiguration();
     const db = createD1HttpDb(schema) as unknown as BiztagSourceDb;
+    stage = "d1_latest";
     const latest = await loadLatestDocs(db, options.codes);
-    const supplementId = notionEnv.NOTION_STOCK_SUPPLEMENT_DB_ID() ?? await findUniqueBackupChildByTitle({ parentPageId: notionEnv.NOTION_STOCK_INFO_PAGE_ID(), title: SUPPLEMENT_DB_TITLE, kind: "database" });
+    stage = "notion_database";
+    const supplementId = configuration.supplementId === undefined ? await findUniqueBackupChildByTitle({ parentPageId: configuration.parentPageId!, title: SUPPLEMENT_DB_TITLE, kind: "database" }) : configuration.supplementId;
     assert(supplementId !== null, "existing_supplement_db_required");
+    stage = "notion_schema";
     const structure = await notionRequest<{ properties: Record<string, { id: string }> }>("GET", `/databases/${supplementId}`);
+    assertAuditSupplementSchema(structure.properties);
+    stage = "notion_rows";
     const rows = await loadSupplementRows(supplementId, Object.fromEntries(Object.entries(structure.properties).map(([name, value]) => [name, value.id])), { codes: options.codes });
     for (const code of options.codes) {
-      if (Date.now() >= deadline || guard.count() >= options.maxRequests) { report.stopped = true; break; }
+      if (Date.now() >= deadline || guard.count() >= options.maxRequests) {
+        report.stopped = true; report.failure = { stage: "code_admission", code: Date.now() >= deadline ? "deadline_exceeded" : "request_limit" }; break;
+      }
       const selected = latest.find(s => s.stockCode === code), row = rows.find(s => s.stockCode === code);
       if (!selected || !row) { report.unverified.push({ stockCode: code, reason: selected ? "supplement_row_missing" : "not_in_current_active_scope" }); continue; }
       try {
+        stage = "notion_current39";
         const full = await readSupplementRowFully(row.pageId, supplementId, titles, () => assert(Date.now() < deadline, "audit_deadline"));
         assert(full.stockCode === code && full.pageId === row.pageId, "current_identity_changed");
         report.results.push(await auditOne(selected, full, {
           readDocument: () => db.select().from(schema.yuhoDocuments).where(eq(schema.yuhoDocuments.docId, selected.doc!.docId)).limit(2),
-          readSource: readSavedEdinetZip, readBody: readVerifiedDocText, textDbId: notionEnv.NOTION_YUHO_TEXT_DB_ID(),
+          readSource: readSavedEdinetZip, readBody: readVerifiedDocText, textDbId: configuration.textDbId,
           assertCurrent: async () => {
             if (JSON.stringify(await loadLatestDocs(db, [code])) !== JSON.stringify([selected])) throw new AuditObservationChangedError("latest_changed_during_read");
             const after = await readSupplementRowFully(row.pageId, supplementId, titles, () => assert(Date.now() < deadline, "audit_deadline"));
@@ -189,9 +242,9 @@ export async function main(argv = process.argv.slice(2)) {
               after.textSyncReceipt !== full.textSyncReceipt || digest(current39(after)) !== digest(current39(full))) throw new AuditObservationChangedError("current_changed_during_read");
           },
         }));
-      } catch { report.unverified.push({ stockCode: code, reason: "current_read_incomplete" }); }
+      } catch (error) { report.unverified.push({ stockCode: code, reason: "current_read_incomplete", failure: auditFailure(stage, error) }); }
     }
-  } catch { report.stopped = true; }
+  } catch (error) { report.stopped = true; report.failure = auditFailure(stage, error); }
   finally { guard.restore(); restoreDeadline(); }
   const observedCodes = new Set([...report.results.map(r => r.stockCode), ...report.unverified.map(r => r.stockCode)]);
   const cellCounts: Record<string, number> = {}, blankCounts: Record<string, number> = {};
@@ -207,7 +260,7 @@ export async function main(argv = process.argv.slice(2)) {
     historical7074Reconstruction: false, wholeSupplementComplete: false }, null, 2) + "\n";
   writeFileSync(resolve(options.outDir, "report.json"), body, { flag: "wx", mode: 0o600 });
   console.info(JSON.stringify({ reportSha256: sha(body), codes: options.codes.length, observedCodes: report.results.length,
-    unverifiedCodes: report.unverified.length, stopped: report.stopped, cellCounts, blankCounts, requests: guard.count(), businessWrites: 0, modelCalls: 0 }));
+    unverifiedCodes: report.unverified.length, stopped: report.stopped, failure: report.failure, cellCounts, blankCounts, requests: guard.count(), businessWrites: 0, modelCalls: 0 }));
   return report.stopped || report.unverified.length > 0 || Object.keys(cellCounts).some(key => !["matched", "source_target_absent"].includes(key)) ? 1 : 0;
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

@@ -1,13 +1,16 @@
 /** Actual public 6963 CSV/body; surrounding current Notion/archive envelopes are explicit offline protocol controls. */
 import { afterEach, expect, it, vi } from "vitest";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
-import { auditOne, classifyAuditCells, installReadOnlyAuditGuard, parseAuditArgs, qualifyAuditSource } from "./audit-supplement-texts.js";
+import { assertAuditSupplementSchema, auditFailure, auditOne, classifyAuditCells, installReadOnlyAuditGuard, main, parseAuditArgs, qualifyAuditSource } from "./audit-supplement-texts.js";
+import { NotionConfigError } from "../../../src/shared/notion-archive/env.js";
 import { TEXT_SECTIONS } from "../src/services/edinet/text-sections.js";
 import { withTextSyncReceipt, type TextSyncReceipt } from "../src/biztag/plan.js";
 import type { LatestDoc } from "../src/biztag/source.js";
-import type { SupplementRow } from "../../../src/shared/notion-archive/stock-supplement.js";
+import { SUPPLEMENT_PROPS, type SupplementRow } from "../../../src/shared/notion-archive/stock-supplement.js";
 import type { yuhoDocuments } from "../src/db/schema.js";
 
 const fixture = new URL("../src/tests/fixtures/ingest-csv-reingest-6963/", import.meta.url);
@@ -33,7 +36,7 @@ const row: SupplementRow = { pageId: saved.item.archivePageId, stockCode: latest
   })) };
 const deps = () => ({ readDocument: vi.fn(async () => [document]), readSource: vi.fn(async () => source), readBody: vi.fn(async () => body),
   assertCurrent: vi.fn(async () => {}), textDbId: saved.item.archivePageId });
-afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
 it("joins all37 actual sections and39 current cells; missing target is not a non-disclosure claim", async () => {
   expect(source.sha256).toBe("b1f127e76e1d32fe540b48d3c9c162d2470ff6b7399072b665837472cba34fb0");
@@ -109,4 +112,40 @@ it("requires a fixed finite explicit scope and budget before dependencies/networ
     [`--codes=${Array.from({ length: 51 }, (_, i) => String(1300 + i)).join(",")}`]]) {
     expect(() => parseAuditArgs([...args, "--out-dir=tmp/private-control"])).toThrow();
   }
+});
+
+it("missing Notion IDs are classified before D1/Notion HTTP; report is private and old evidence cannot be replaced", async () => {
+  // Explicit configuration-only control, never sent to a service.
+  for (const key of ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "D1_DATABASE_ID", "NOTION_TOKEN"]) vi.stubEnv(key, "protocol-config-control");
+  vi.stubEnv("NOTION_ARCHIVE_PAGE_ID", saved.item.archivePageId);
+  for (const key of ["NOTION_STOCK_SUPPLEMENT_DB_ID", "NOTION_STOCK_INFO_PAGE_ID", "NOTION_YUHO_TEXT_DB_ID"]) vi.stubEnv(key, "");
+  const fetch = vi.fn(() => { throw new Error("network forbidden"); }); vi.stubGlobal("fetch", fetch);
+  const output = vi.spyOn(console, "info").mockImplementation(() => {});
+  const base = mkdtempSync(join(tmpdir(), "field-audit-config-")), out = join(base, "actual");
+  const args = ["--codes=6963", "--budget-min=1", `--out-dir=${out}`];
+  try {
+    expect(await main(args)).toBe(1); expect(fetch).not.toHaveBeenCalled();
+    const reportBytes = readFileSync(join(out, "report.json"), "utf8"), report = JSON.parse(reportBytes);
+    expect(report.failure).toEqual({ stage: "configuration", code: "configuration_invalid", configKeys: ["NOTION_STOCK_INFO_PAGE_ID", "NOTION_YUHO_TEXT_DB_ID"] });
+    expect(report).toMatchObject({ stopped: true, requests: 0, results: [], unstartedCodes: ["6963"] });
+    expect(statSync(out).mode & 0o777).toBe(0o700); expect(statSync(join(out, "report.json")).mode & 0o777).toBe(0o600);
+    expect(JSON.stringify(output.mock.calls)).not.toContain("protocol-config-control");
+    await expect(main(args)).rejects.toThrow(); expect(readFileSync(join(out, "report.json"), "utf8")).toBe(reportBytes);
+  } finally { rmSync(base, { recursive: true, force: true }); }
+});
+
+it("stage/error codes never serialize upstream errors, signed URLs, SQL or secret values", () => {
+  const sensitive = "https://file.notion.so/control?signature=protocol-secret SELECT confidential";
+  expect(auditFailure("d1_latest", new Error(sensitive))).toEqual({ stage: "d1_latest", code: "read_failed" });
+  expect(auditFailure("notion_schema", new NotionConfigError(sensitive))).toEqual({ stage: "notion_schema", code: "read_contract_invalid" });
+});
+
+it("legacy schema missing the three nullable lineage columns stops honestly before querying current rows", () => {
+  // Property schema boundary projection only; no Notion row values or added columns are persisted.
+  const properties = Object.fromEntries([...Object.values(SUPPLEMENT_PROPS), ...TEXT_SECTIONS.map(s => s.title)].map(name => [name, { id: name }]));
+  expect(() => assertAuditSupplementSchema(properties)).not.toThrow();
+  for (const key of ["textSyncReceipt", "textInputSha256", "tagInputSha256"] as const) delete properties[SUPPLEMENT_PROPS[key]];
+  let failure;
+  try { assertAuditSupplementSchema(properties); } catch (error) { failure = auditFailure("notion_schema", error); }
+  expect(failure).toEqual({ stage: "existing_schema_missing", code: "required_properties_missing", propertyKeys: ["textSyncReceipt", "textInputSha256", "tagInputSha256"] });
 });
