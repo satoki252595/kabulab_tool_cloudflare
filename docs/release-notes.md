@@ -9,6 +9,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ## 2026-10-25
 
+- 通常タグCLIの既存Clef journal未閉鎖/不正を共有publisher取得前に検査し、モデル側の確定停止によるowner残存を防ぐ。初回移行では、本文が同じでも適格な独立receipt/SHAの欠測を補完し、旧タグ入力の不明と新しい結果不明は保持する。
 - Actionsの元job時計は、Jobs APIの未反映だけを最大30秒・3回の読取で再資格化。同run/attempt/job/runnerと元started_atの検査を維持し、HTTP失敗・曖昧・未来・不完全ページでは停止して固定理由だけを記録する。
 - 機械同期の両jobをJobs API実開始のnative期限へ束縛し、setup後の残時間から新規開始/閉鎖を分離。本文は共通producer readerで所属/7メタを検証し、不一致なら書込・推論を行わず旧値を保持する。#568
 - 補足本文診断で必要なD1/Notion設定をHTTP前に検証し、不足キー・未作成のschema列・読取の停止stage/codeを値や生errorなしで記録する。原因不明となる経路を直し、旧reportの上書き・自動設定変更・原本再取得は行わない。

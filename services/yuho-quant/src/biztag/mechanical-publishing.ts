@@ -126,7 +126,7 @@ export async function runMechanicalPublishing(options: { limit: number; budgetMs
           let prior = null;
           if (row !== null) { try { prior = rowTextSyncReceipt(row); } catch { /* Requalify the source; do not fabricate historical input lineage. */ } }
           const current = row !== null && row.docId === item.doc.docId && row.textStatus === "取得済" && prior?.docId === item.doc.docId &&
-            prior.textPageId === item.doc.notionDocPageId && prior.notionTextsSha256 !== undefined && row.textInputSha256 !== undefined;
+            prior.textPageId === item.doc.notionDocPageId && prior.notionTextsSha256 !== undefined;
           active();
           const full = row === null ? null : await publishingReadOnly(() => readSupplementRowFully(row.pageId, supplement.dbId, TEXT_SECTIONS.map(s => s.title), active));
           if (full !== null) assert(full.stockCode === item.stockCode && JSON.stringify(savedRowGuard(full)) === JSON.stringify(savedRowGuard(row!)), "補足メタ/判定が限定plan後に変更されています");
@@ -134,7 +134,9 @@ export async function runMechanicalPublishing(options: { limit: number; budgetMs
           const sections = await publishingReadOnly(() => readQualifiedBiztagDocText(db, item.stockCode, item.doc!));
           active(); const input = await mechanicalTextInput(item, full, sections, masterId);
           const observed = rowTextSyncReceipt({ textSyncReceipt: input.textSyncReceipt, judgeInput: null });
-          if (current && full !== null && observed !== null && observed.textsSha256 === prior!.textsSha256 &&
+          if (current && full !== null && full.textSyncReceipt !== undefined && full.textSyncReceipt !== null &&
+              full.textInputSha256 === input.textInputSha256 && full.tagInputSha256 === input.tagInputSha256 &&
+              observed !== null && observed.textsSha256 === prior!.textsSha256 &&
               observed.notionTextsSha256 === prior!.notionTextsSha256 && full.masterLinked && full.companyName === item.companyName && full.sector33 === item.sector33 &&
               await sha256Hex(JSON.stringify(TEXT_SECTIONS.map(({ title }) => [title, normalizeSupplementText(full.texts[title]) || null]))) === prior!.notionTextsSha256) {
             unchanged++; done.add(item.stockCode); continue;

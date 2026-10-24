@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SupplementRow } from "../../../../src/shared/notion-archive/stock-supplement.js";
 import { SHARED_WRITER_KEY, withSharedPublishingWriter, type PublishingStore } from "../../../../scripts/mechanical-publishing/shared-writer.js";
 import { mechanicalSelection, mechanicalTextInput, publishingCursor, runMechanicalPublishing } from "./mechanical-publishing.js";
-import { planWork, withInputReceipt } from "./plan.js";
+import { planWork, withInputReceipt, withTextSyncReceipt } from "./plan.js";
 import { TEXT_SECTIONS } from "../services/edinet/text-sections.js";
 import { BiztagTextQualificationError, type LatestDoc } from "./source.js";
 
@@ -144,4 +144,27 @@ it("same-length source edit cannot reuse prior receipt or call an old target unc
   expect(io.qualified).toHaveBeenCalledTimes(1); expect(io.source).toHaveBeenCalledTimes(1);
   expect(io.replace.mock.calls[0][2].texts["事業の内容"]).toBe(changed);
   expect(io.replace.mock.calls[0][2]).not.toHaveProperty("tagDoc");
+});
+
+it.each(["legacy_all_null", "receipt_null", "text_sha_null", "tag_sha_null"] as const)("%s provenance is synchronized even when body is unchanged", async missing => {
+  const saved = row();
+  if (missing !== "legacy_all_null") saved.judgeInput = withInputReceipt("保存済み判定入力", {
+    docId: latest.doc!.docId, textPageId: latest.doc!.notionDocPageId!, businessSha256: null,
+    sectionsSha256: "1".repeat(64), stateSha256: null, vocabVersion: "v1", model: null });
+  const expected = await mechanicalTextInput(latest, saved, sections, "protocol-master");
+  Object.assign(saved, expected); saved.texts = row().texts;
+  saved.judgeInput = withTextSyncReceipt(saved.judgeInput!, JSON.parse(expected.textSyncReceipt!));
+  if (missing === "legacy_all_null" || missing === "receipt_null") saved.textSyncReceipt = null;
+  if (missing === "legacy_all_null" || missing === "text_sha_null") saved.textInputSha256 = null;
+  if (missing === "legacy_all_null" || missing === "tag_sha_null") saved.tagInputSha256 = null;
+  const historical = saved.judgeInput;
+  io.rows.mockResolvedValue([saved]); io.full.mockResolvedValue(saved);
+  const result = await withSharedPublishingWriter(() => runMechanicalPublishing({ codes: ["6103"], limit: 1, budgetMs: 60_000 }), store());
+  expect(result).toMatchObject({ unchanged: 0, synced: 1, modelCalls: 0 });
+  expect(io.qualified).toHaveBeenCalledTimes(1); expect(io.source).toHaveBeenCalledTimes(1);
+  const input = io.replace.mock.calls[0][2];
+  expect(input).toMatchObject({ textSyncReceipt: expected.textSyncReceipt, textInputSha256: expected.textInputSha256,
+    tagInputSha256: missing === "legacy_all_null" ? null : "1".repeat(64) });
+  expect(input).not.toHaveProperty("judgeInput"); expect(input).not.toHaveProperty("tagDoc");
+  expect(saved.judgeInput).toBe(historical);
 });

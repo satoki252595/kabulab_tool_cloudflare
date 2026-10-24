@@ -80,6 +80,43 @@ function rejectedInput(directory: string): Record<string, string> {
   return hashes;
 }
 
+function readJournalFile(path: string): Buffer {
+  privatePath(path, false); assert(lstatSync(path).size <= FILE_MAX, "journal file size HOLD"); return readFileSync(path);
+}
+const incomplete = (directory: string) => ["response-partial.raw", "partial.json", "unexpected-response.raw"].some(name => existsSync(join(directory, name)));
+/** The same bounded scan used before a forward. No directory creation, writes, fsync, model or configuration reads. */
+function inspectClefJournal(state: string) {
+  privatePath(state, true);
+  const root = join(state, "clef-decisions"), rejected: Array<{ directory: string; hashes: Record<string, string> }> = [];
+  if (!existsSync(root)) return { stored: 0, rejected };
+  privatePath(root, true);
+  const directories = readdirSync(root).map(entry => join(root, entry));
+  let stored = 0;
+  for (const directory of directories) {
+    privatePath(directory, true);
+    for (const name of readdirSync(directory)) { const path = join(directory, name); privatePath(path, false); stored += lstatSync(path).size; }
+  }
+  assert(stored <= STORE_MAX, "journal storage full; preserve old evidence and HOLD");
+  for (const directory of directories) {
+    assert(!incomplete(directory), "prior unknown model output HOLD");
+    if (existsSync(join(directory, "rejected.json"))) {
+      const marker = jsonLine(readJournalFile(join(directory, "rejected.json")));
+      assert.equal(marker.noReinference, true);
+      assert.equal(typeof marker.at, "string"); assert(Number.isFinite(Date.parse(marker.at as string)));
+      const hashes = rejectedInput(directory); assert.deepEqual(marker.hashes, hashes);
+      rejected.push({ directory, hashes });
+    } else {
+      const accepted = jsonLine(readJournalFile(join(directory, "accepted.json")));
+      for (const name of ["input.json", "intent.json", "request.raw", "send.json", "response.raw"]) privatePath(join(directory, name), false);
+      for (const name of ["inputSha256", "requestSha256", "responseSha256"]) assert(typeof accepted[name] === "string" && /^[a-f0-9]{64}$/.test(accepted[name] as string), "prior incomplete accepted marker HOLD");
+    }
+  }
+  return { stored, rejected };
+}
+
+/** Normal tag CLI only, under its canonical kernel lock and before acquiring the cross-host publisher. */
+export function assertClefJournalReady(state: string): void { inspectClefJournal(state); }
+
 export function acknowledgeClefError(state: string, key: string, responseSha256: string): void {
   assert.match(key, /^[a-f0-9]{64}$/); assert.match(responseSha256, /^[a-f0-9]{64}$/);
   privatePath(state, true); const root = join(state, "clef-decisions"); privatePath(root, true);
@@ -99,10 +136,7 @@ export function acknowledgeClefError(state: string, key: string, responseSha256:
 export function createClefJournal(state: string, pins: Pins, upgrade?: ClefContextUpgrade): (input: ClefJournalInput) => LocalDecisionExchange {
   let written = 0, stored: number | undefined, stopped = false;
   const root = join(state, "clef-decisions");
-  const incomplete = (directory: string) => ["response-partial.raw", "partial.json", "unexpected-response.raw"].some(name => existsSync(join(directory, name)));
-  const read = (path: string): Buffer => {
-    privatePath(path, false); assert(lstatSync(path).size <= FILE_MAX, "journal file size HOLD"); return readFileSync(path);
-  };
+  const read = readJournalFile;
   const put = (path: string, value: string | Uint8Array): void => {
     const raw = Buffer.from(value);
     assert(raw.length <= FILE_MAX && written + raw.length <= RUN_MAX && stored !== undefined && stored + written + raw.length <= STORE_MAX, "journal byte budget STOP");
@@ -118,31 +152,13 @@ export function createClefJournal(state: string, pins: Pins, upgrade?: ClefConte
       if (!existsSync(root)) { mkdirSync(root, { mode: 0o700 }); syncParent(root); }
       privatePath(root, true);
       if (stored === undefined) {
-        stored = 0;
-        const directories = readdirSync(root).map(entry => join(root, entry));
-        for (const directory of directories) {
-          privatePath(directory, true);
-          for (const name of readdirSync(directory)) { const path = join(directory, name); privatePath(path, false); stored += lstatSync(path).size; }
-        }
-        assert(stored <= STORE_MAX, "journal storage full; preserve old evidence and HOLD");
-        // A previous run's unresolved request stops every later forward, including other stocks.
-        for (const directory of directories) {
-          assert(!incomplete(directory), "prior unknown model output HOLD");
-          if (existsSync(join(directory, "rejected.json"))) {
-            const marker = jsonLine(read(join(directory, "rejected.json")));
-            assert.equal(marker.noReinference, true);
-            assert.equal(typeof marker.at, "string"); assert(Number.isFinite(Date.parse(marker.at as string)));
-            assert.deepEqual(marker.hashes, rejectedInput(directory));
-            // A marker/parent fsync may have failed after its bytes appeared. Establish durability before any new forward.
-            for (const name of [...Object.keys(marker.hashes as Record<string, string>), "rejected.json"]) {
-              const fd = openSync(join(directory, name), "r"); try { fsyncSync(fd); } finally { closeSync(fd); }
-            }
-            syncParent(join(directory, "rejected.json"));
-            continue; // Other inputs may proceed; the rejected input remains immutable and cannot forward again.
+        const inspected = inspectClefJournal(state); stored = inspected.stored;
+        for (const { directory, hashes } of inspected.rejected) {
+          // Establish ACK durability before a new forward even if an earlier marker/parent fsync failed.
+          for (const name of [...Object.keys(hashes), "rejected.json"]) {
+            const fd = openSync(join(directory, name), "r"); try { fsyncSync(fd); } finally { closeSync(fd); }
           }
-          const accepted = jsonLine(read(join(directory, "accepted.json")));
-          for (const name of ["input.json", "intent.json", "request.raw", "send.json", "response.raw"]) privatePath(join(directory, name), false);
-          for (const name of ["inputSha256", "requestSha256", "responseSha256"]) assert(typeof accepted[name] === "string" && /^[a-f0-9]{64}$/.test(accepted[name] as string), "prior incomplete accepted marker HOLD");
+          syncParent(join(directory, "rejected.json"));
         }
       }
       assert.equal(sha(input.state), input.receipt.stateSha256);
