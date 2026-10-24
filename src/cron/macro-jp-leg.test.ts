@@ -89,6 +89,7 @@ describe("日本引け原本の翌朝持越し", () => {
     vi.setSystemTime(new Date(`${date}T21:00:01Z`));
     vi.stubEnv("STOCK_SYNC_TARGET", "scheduled-context");
     vi.stubEnv("SCHEDULED_DATE", date);
+    vi.stubEnv("SCHEDULED_AT", `${date}T21:00:01.000Z`);
     const writes: { sql: string; params: unknown[] }[] = [];
     const db = drizzle(async (sql, params) => { writes.push({ sql, params }); return { rows: [] }; });
     expect(await runMarketContextSync(db as unknown as Parameters<typeof runMarketContextSync>[0], store)).toBe(true);

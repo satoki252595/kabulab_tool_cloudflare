@@ -29,6 +29,10 @@ on:
         description: "CF予定UTC日。stocksは実18〜20時開始/23:30新規IO締切、contextは既存朝窓"
         type: string
         default: ""
+      scheduled_at:
+        description: "CF controller.scheduledTime のUTC。定時の起動受付に使う。空は定時targetを止める"
+        type: string
+        default: ""
 
 concurrency:
   group: stock-sync
@@ -113,6 +117,7 @@ jobs:
             (github.event.inputs.target == 'daily' || github.event.inputs.target == 'stocks' || github.event.inputs.target == 'scheduled-stocks' || github.event.inputs.target == 'all')
         env:
           SCHEDULED_DATE: ${{ github.event.inputs.scheduled_date }}
+          SCHEDULED_AT: ${{ github.event.inputs.scheduled_at }}
           STOCK_SYNC_TARGET: ${{ github.event.inputs.target }}
         run: pnpm sync:daily:core --stocks-only
 
@@ -144,6 +149,7 @@ jobs:
             (github.event.inputs.target == 'daily' || github.event.inputs.target == 'context' || github.event.inputs.target == 'scheduled-context' || github.event.inputs.target == 'all')
         env:
           SCHEDULED_DATE: ${{ github.event.inputs.scheduled_date }}
+          SCHEDULED_AT: ${{ github.event.inputs.scheduled_at }}
           STOCK_SYNC_TARGET: ${{ github.event.inputs.target }}
         run: pnpm sync:daily:core --context-only
 

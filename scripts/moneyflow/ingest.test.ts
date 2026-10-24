@@ -75,7 +75,7 @@ describe("normal mainのlane分離とqueue後の実期限", () => {
     vi.resetModules(); vi.useFakeTimers(); vi.setSystemTime(new Date("2026-10-16T14:40:00.001Z"));
     vi.stubEnv("GITHUB_RUN_ID", "38879272134"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
     const path = join(dir, "late.json");
-    process.argv = [...originalArgv, "--only=independent", "--lane=yahoo", `--summary=${path}`, "--scheduled-date=2026-10-16"];
+    process.argv = [...originalArgv, "--only=independent", "--lane=yahoo", `--summary=${path}`, "--scheduled-date=2026-10-16", "--scheduled-at=2026-10-16T09:15:00.000Z"];
     const runSpec = vi.fn(), catalog = vi.fn();
     vi.doMock("./lib/run-spec.js", () => ({ runSpec }));
     vi.doMock("../../src/shared/notion-archive/index.js", async original => ({

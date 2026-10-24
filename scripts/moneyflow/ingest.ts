@@ -31,7 +31,8 @@ import "dotenv/config";
 import { fileURLToPath } from "node:url";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { installMoneyflowDeadline, moneyflowLaneSources, moneyflowScheduledWindow, qualifyMoneyflowPredecessor, type MoneyflowLane, type MoneyflowSummary } from "./lib/source-summary.js";
+import { parseScheduledAt } from "../../src/shared/scheduled-admission.js";
+import { assertMoneyflowScheduledAt, installMoneyflowDeadline, moneyflowLaneSources, moneyflowScheduledWindow, qualifyMoneyflowPredecessor, type MoneyflowLane, type MoneyflowSummary } from "./lib/source-summary.js";
 import { notionStats } from "../../src/shared/notion-archive/client.js";
 import {
   ensureIndicatorDefsDb,
@@ -608,7 +609,15 @@ export async function main(): Promise<void> {
   if (scheduledArgs.length > 1 || (scheduledDate !== undefined && (LANE === undefined || DRY_RUN || !process.argv.includes("--only=independent")))) {
     throw new Error("moneyflow予定日は通常independent分割専用です");
   }
-  if (scheduledDate !== undefined) moneyflowScheduledWindow(scheduledDate, Date.now());
+  if (scheduledDate !== undefined) {
+    const atArgs = process.argv.filter(x => x.startsWith("--scheduled-at="));
+    if (atArgs.length !== 1) throw new Error("scheduled_atが無いかUTC時刻として不正です");
+    const scheduledMs = parseScheduledAt(atArgs[0].slice("--scheduled-at=".length));
+    if (new Date(scheduledMs).toISOString().slice(0, 10) !== scheduledDate) throw new Error("scheduled_atの日付が予定日と一致しません");
+    if (scheduledMs > Date.now()) throw new Error("予定時刻が未来です");
+    assertMoneyflowScheduledAt(scheduledDate, scheduledMs);
+    moneyflowScheduledWindow(scheduledDate, Date.now());
+  }
   const summaryArgs = process.argv.filter(x => x.startsWith("--summary="));
   const summaryPath = summaryArgs[0]?.slice(10);
   const runId = `${sharedEnv.GITHUB_RUN_ID()}.${sharedEnv.GITHUB_RUN_ATTEMPT()}`;

@@ -14,22 +14,23 @@ import {
 import { validateDailyMarginSnapshot } from "../../services/vwap-analysis/lib/margin-daily.js";
 import { r2GetVersion, r2Put } from "./lib/r2.js";
 import { sanitizeLogText } from "./lib/ingest-guard.js";
+import { parseScheduledAt, scheduledMarginWindow } from "../../src/shared/scheduled-admission.js";
 
-export function scheduledMarginWindow(date: string) {
-  const start = Date.parse(`${date}T08:00:00.000Z`);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(start) ||
-      new Date(start).toISOString().slice(0, 10) !== date || [0, 6].includes(new Date(start).getUTCDay())) {
-    throw new Error("信用残の予定日は実在する平日が必要です");
-  }
-  return { start, latestStart: start + 10 * 60_000, deadline: start + 30 * 60_000 };
-}
+export { scheduledMarginWindow };
 
 function marginDeadline(argv: readonly string[]) {
   const args = argv.filter(arg => arg.startsWith("--scheduled-date="));
   if (args.length > 1) throw new Error("信用残の予定日が重複しています");
   if (args.length === 0) return { assertActive() {}, restore() {}, readOptions: undefined };
   if (parseDateArg(argv) !== undefined) throw new Error("定時信用残で手動基準日は指定できません");
-  const window = scheduledMarginWindow(args[0].slice(17)), admittedAt = Date.now();
+  const atArgs = argv.filter(arg => arg.startsWith("--scheduled-at="));
+  if (atArgs.length !== 1) throw new Error("scheduled_atが無いかUTC時刻として不正です");
+  const admittedAt = parseScheduledAt(atArgs[0].slice("--scheduled-at=".length));
+  const window = scheduledMarginWindow(args[0].slice(17));
+  if (new Date(admittedAt).toISOString().slice(0, 10) !== args[0].slice(17)) {
+    throw new Error("scheduled_atの日付が予定日と一致しません");
+  }
+  if (admittedAt > Date.now()) throw new Error("予定時刻が未来です");
   if (admittedAt < window.start || admittedAt > window.latestStart) throw new Error("信用残の開始は予定日17:00〜17:10 JSTです（取得前停止）");
   const assertActive = () => {
     if (Date.now() < admittedAt || Date.now() >= window.deadline) throw new Error("信用残の17:30 JST新規IO期限です");

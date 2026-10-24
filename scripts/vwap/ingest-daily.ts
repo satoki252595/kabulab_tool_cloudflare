@@ -44,7 +44,7 @@ export async function main() {
   if (arg("scheduled-date") !== undefined && sessionSource.kind !== "yahoo-direct") {
     throw new Error("定時VWAPの市場sessionは従来のyahoo-directだけです。保存原本は明示手動選択してください");
   }
-  const schedule = scheduledVwapGuard({ plannedDate: arg("scheduled-date"), runId, phase: "daily" });
+  const schedule = scheduledVwapGuard({ plannedDate: arg("scheduled-date"), scheduledAt: arg("scheduled-at"), runId, phase: "daily" });
   const fetchReference = (stage?: string) => schedule.admission === null
     ? stage === undefined ? fetchDailySessionReference(runId) : fetchDailySessionReference(runId, stage)
     : fetchDailySessionReference(runId, stage, schedule.assertActive);

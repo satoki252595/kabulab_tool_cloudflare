@@ -58,6 +58,10 @@ on:
         description: "CF独立起動の予定UTC日。実23:40期限と両summary照合専用"
         type: string
         default: ""
+      scheduled_at:
+        description: "CF controller.scheduledTime のミリ秒付きUTC。起動受付は18:15〜23:40。追加IOの23:40は実時計"
+        type: string
+        default: ""
   workflow_call:
     inputs:
       trade_date:
@@ -132,6 +136,7 @@ env:
   DRY_RUN: ${{ inputs.dry_run }}
   TRADE_DATE: ${{ inputs.trade_date }}
   SCHEDULED_DATE: ${{ inputs.scheduled_date }}
+  SCHEDULED_AT: ${{ inputs.scheduled_at }}
 
 jobs:
   # ponytail: shared cross-job budget未成立; 取得は直列。初回DB/schemaは単一CLIで準備する。
@@ -162,7 +167,7 @@ jobs:
           if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
           if [ -n "$SOURCE_SELECTION" ]; then args+=("--only=$SOURCE_SELECTION"); fi
           if [ -n "$TRADE_DATE" ]; then args+=("--as-of=$TRADE_DATE"); fi
-          if [ -n "$SCHEDULED_DATE" ]; then args+=("--scheduled-date=$SCHEDULED_DATE"); fi
+          if [ -n "$SCHEDULED_DATE" ]; then args+=("--scheduled-date=$SCHEDULED_DATE" "--scheduled-at=$SCHEDULED_AT"); fi
           pnpm ingest:moneyflow -- "${args[@]}"
 
       - uses: actions/upload-artifact@v4
@@ -211,7 +216,7 @@ jobs:
           if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
           if [ -n "$SOURCE_SELECTION" ]; then args+=("--only=$SOURCE_SELECTION"); fi
           if [ -n "$TRADE_DATE" ]; then args+=("--as-of=$TRADE_DATE"); fi
-          if [ -n "$SCHEDULED_DATE" ]; then args+=("--scheduled-date=$SCHEDULED_DATE"); fi
+          if [ -n "$SCHEDULED_DATE" ]; then args+=("--scheduled-date=$SCHEDULED_DATE" "--scheduled-at=$SCHEDULED_AT"); fi
           pnpm ingest:moneyflow -- "${args[@]}"
       - uses: actions/upload-artifact@v4
         with:

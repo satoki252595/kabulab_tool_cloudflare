@@ -28,6 +28,18 @@ function isoMs(value: unknown): number {
   return Date.parse(value);
 }
 
+/** 起動受付は予定時刻。実時計の23:40は moneyflowScheduledWindow が残す。 */
+export function assertMoneyflowScheduledAt(plannedDate: string, scheduledAtMs: number): void {
+  const floor = Date.parse(`${plannedDate}T09:15:00.000Z`);
+  const cutoff = Date.parse(`${plannedDate}T14:40:00.000Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(plannedDate) || !Number.isFinite(floor) || new Date(floor).toISOString().slice(0, 10) !== plannedDate || [0, 6].includes(new Date(floor).getUTCDay())) {
+    throw new Error("moneyflow joinの予定日が不正です");
+  }
+  if (!Number.isFinite(scheduledAtMs) || scheduledAtMs < floor || scheduledAtMs >= cutoff) {
+    throw new Error("moneyflowの予定時刻が18:15〜23:40 JSTの範囲外です");
+  }
+}
+
 export function moneyflowScheduledWindow(plannedDate: string, nowMs: number): { floor: number; cutoff: number } {
   const floor = Date.parse(`${plannedDate}T09:15:00.000Z`), cutoff = Date.parse(`${plannedDate}T14:40:00.000Z`);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(plannedDate) || !Number.isFinite(floor) || new Date(floor).toISOString().slice(0, 10) !== plannedDate || [0, 6].includes(new Date(floor).getUTCDay())) {
