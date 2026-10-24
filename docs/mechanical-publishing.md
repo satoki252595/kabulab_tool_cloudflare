@@ -2,6 +2,8 @@
 
 2026-10-25の実装。保存済みの適格原本を使うLinux/Actionsの独立処理で、EDINET/Yahooの再取得、語彙審査、Clef/MLX、有料APIを呼ばない。旧Macの自動起動は廃止を維持する。**実装・定期設定・初回移行・実データ充足は別の受入条件**で、マージだけでは移行完了ではない。
 
+10/25に共有状態の明示fence移行・有限本番確認を行い、`MECHANICAL_PUBLISHING_ENABLED=true`を読戻し済み。Mac受入runtimeは`.runtime/mac-publishing-20261025`の`45629c8`。634A本文1社はモデル0で同期・完全POST一致、2307優待1件は額面なしの正当HOLD/更新0で閉鎖を確認した。初回Actions `all` [40133382741](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40133382741)はsource `45629c8`で**FAILURE**終了。本文は選択50社中31社同期・時間予算終了で未着手19、優待は選択60件保留/適用0で、モデル0。全段階成功・全社充足とはしない。個別保留理由と別GETの共有状態確認は[受入台帳](work-plans/production-completion-20261025.md)を参照。
+
 | 段階 | 入口・有限範囲 | 先行条件・停止 |
 |---|---|---|
 | 本文39・基本補足 | `pnpm sync:mechanical --target=supplement --limit=50 --budget-min=10` | active普通株の変更文書＋コード巡回をSQLで先に最大50社へ限定。10分で新しい会社を開始せず、追加IOのhard境界はその5分後。未閉鎖は保持して成功にしない |
@@ -37,10 +39,10 @@
 
 ## 初回切替（root/operatorが一度だけ実施）
 
-**通常runより先に以下を全て満たす。Linuxから初期化はできない。** この文書の新runtime名`.runtime/mac-publishing-20261025`は切替用の計画値で、作成・実受入は別の運用証跡に残す。
+**以下は10/25に一度実施済みの切替手順。通常runのたびに初期化しない。Linuxから初期化はできない。** `.runtime/mac-publishing-20261025`の作成・受入・fence閉鎖は[受入台帳](work-plans/production-completion-20261025.md)に記録した。
 
 1. CI緑のマージ済みmainを新しい受入runtimeへ用意する。新runtimeの`.env`は従来と同じcanonical実体、モデル・state・原本も同じ。依存はNix/既存lockで準備する。
-2. Macの全writerがidleで、旧journal未閉鎖0、優待pendingなしを確認する。旧runtime/env/receiptの切替前SHAを保存する。未知の掃除はしない。
+2. Macの全writerがidleで、旧業務publisherのjournalと優待pendingが閉鎖していることを確認する。Clef側に結果不明がある場合も、機械処理の初期化で解除せず保持する。旧runtime/env/receiptの切替前SHAを保存し、未知の掃除はしない。
 3. 同canonical `.env` の`BIZTAG_LOCAL_ACCEPTED_REVISION`を新main SHAへ明示更新する。**旧runtimeのpreflightが版不一致で止まることを確認**し、Calendar/月次driverの`--runtime`も新runtimeへ変える。旧runtimeを残したまま共有gateを迂回できる構成にしない。
 4. 新runtime自身をcwdにしてNixから次の一回限りの移行を実施する。scriptの`import.meta`で解決したrootと`.env`、preflightのHEAD/acceptedRevision/main祖先/clean/権限を同じruntimeへ固定する。
 
@@ -76,8 +78,14 @@ nix develop --offline --no-write-lock-file --command env -u NODE_PATH pnpm publi
 
 6. 有限scopeの初回本番処理と完全readbackをrootが確認し、残件/unknownとcanonical旧bytes不変を記録する。**それから** `MECHANICAL_PUBLISHING_ENABLED=true` をGitHub repository variableへ設定する。未設定ではschedule/manual jobとも実行しない。新schema/readback・定期初回結果はコードテストとは別の受入証跡にする。
 
+実施結果：旧10,456 files・3,485完成journal・1,779,649,567 bytes不変、baseline `c968eddf…`とowner/pending閉鎖を完全GETで確認した。MacのR2資格2キーは同account/bucketの既存SSH資格へ補正し、GitHub global R2 secretは変更していない。初回の通常初期化は成功へ読み替えず、保全した失敗ログに束縛したfenceによる移行として記録する。
+
 ## 費用・性能の上限
 
 モデル/有料API追加0、上流原本の新規取得0。Notionは毎日最大50社の現在値確認＋source所属/7メタ/strict本文の有限読取（変更がない対象も含む）＋変更分だけ通常publisher、優待は最大60群の既存一括SELECT/原子適用/バッチ保管。R2は共有状態の小さいGET/CASと、実際に変更するpublicationのPRE/completion/cursorだけ。物理PREは64MiB、状態/完了/各cursorは16KiBを超えると停止する。
 
 Notionは新job内0.8 req/sで直列、本文と優待も同時実行しない。raw/source取込を含む他全familyとのグローバルrate制御はこのownerでは成立しないため、既存の取得rateを増やさず閑散時間に置く。最大値だけから請求額や全残の所要日数を断定しない。初回本番summaryの実Notion requests/429/retryとcursor進行から算定する。
+
+初回Actions本文の実測は31社同期、Notion449 requests・429 0・retry0。未着手19は今回選択50社内の残りで、全市場の未完数を示さない。全残数の再計測なしに全充足までの日数を見積もらない。
+
+機械同期jobの部分完了・保留は終了コードと実行summaryへ残す。ユーザー指定に従い、このworkflowから追加の失敗通知Issueは作らない。既存の株式・運用監視は変更しない。

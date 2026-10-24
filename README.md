@@ -126,7 +126,7 @@ pnpm ingest:ir-tdnet      # 原本Notion保管・本文抽出 → D1
 pnpm ingest:yuho-edinet   # Node 共通取込 + D1 HTTP atomic sender (EDINET/D1/Notion 設定必須)
 
 # 事業タグ (日次自動は廃止。月次手動スクリプトは docs/mac-monthly-manual.md)
-pnpm biztag:monthly --runtime .runtime/mac-main554-20261020 --preflight # 月次手動の準備確認
+pnpm biztag:monthly --runtime .runtime/mac-publishing-20261025 --preflight # 月次手動の準備確認
 ```
 
 > **母集団**: JPX `data_j.xlsx` に載る東証プライム／スタンダード／グロースの
@@ -137,7 +137,7 @@ pnpm biztag:monthly --runtime .runtime/mac-main554-20261020 --preflight # 月次
 
 ## 本番の定期処理・先行条件・LLM利用
 
-確認日: **2026-10-23**。時刻は **JST**。Cloudflareが起動・結果監視、Actionsが機械取得を担当する。**Macの2自動起動は廃止・停止済み。本文39・基本補足・優待機械要約は毎日04:17のLinux/Actionsへ分離し、Clef・設定済み競合準備は月次手動**。SSHは不足補完用で日次cronは未登録。
+確認日: **2026-10-25**。時刻は **JST**。Cloudflareが起動・結果監視、Actionsが機械取得を担当する。**Macの2自動起動は廃止・停止済み。本文39・基本補足・優待機械要約は毎日04:17のLinux/Actionsへ分離し、Clef・設定済み競合準備は月次手動**。SSHは不足補完用で日次cronは未登録。
 原本はNotionに物理保管し、構造化データはD1、時系列・実行receiptはR2へ保存する。
 
 **全件は[データ取得・更新・監視の全件一覧](docs/batch-data-inventory.md)**。通常データ40行、資金フロー29取得元、旧Mac内7機能、監視9機能、手動/停止/未実装20項目、本文39項目を列挙する。下表は予定時刻の要約。
@@ -148,7 +148,7 @@ pnpm biztag:monthly --runtime .runtime/mac-main554-20261020 --preflight # 月次
 | VWAP日足・5分足 | 月水金17:00、CF起動 | 公式銘柄表・対象日の原本資格。日足→5分足。段階間でYahoo共通排他を解放し、同runの受付証跡を継承。結果不明では後続停止 | なし |
 | 市場の信用残高 | 平日17:00、CF起動 | 公表元の対象日資料。専用排他で実行し、Yahoo取得の待ち行列には入れない | なし |
 | 株価・財務断面・RSI・スイング・モメンタム・業種騰落 | 平日18:00、CF起動 | 母集団と通常取得原本。指標は価格・分割単位の資格確認後、Yahoo共通排他 | なし |
-| 東証33業種の対応 | 株式同期の成功後 | 現workflowは株式成功後。入力はcore銘柄集合＋公式提出者表 | なし |
+| 東証33業種の対応 | 株式job終了後（失敗時も独立実行） | core銘柄集合＋公式提出者表。取消・起動資格の失敗では停止 | なし |
 | 価格依存の業種別資金フロー | 株式同期の成功後、許容失敗もない場合だけ | 当日の必要価格・`core_stocks.sector`。現ハーネスはstock-sync job全体の成功も要求 | なし |
 | 価格非依存の資金フロー28取得元 | 平日18:15、CF起動 | 当日の株式同期は待たず、非Yahooの結果を閉じてからYahoo→両lane成功後join。既知のsource失敗だけなら独立Yahooは続行、不明な保存結果では停止 | なし |
 | TDnet・有報の補完 | 平日19:00、CF起動 | 共通起動資格・保存設定を確認し、予算内でTDnet→Node有報。TDnet失敗でも独立した有報は実行し、共通資格失敗・取消では停止 | なし |
@@ -175,9 +175,9 @@ pnpm biztag:monthly --runtime .runtime/mac-main554-20261020 --preflight # 月次
 
 ### 現在の復旧状況
 
-10/25の[完了条件と残件](docs/work-plans/production-completion-20261025.md)に、追加改修・データ不足・本番受入をまとめています。
+10/25の[完了条件と残件](docs/work-plans/production-completion-20261025.md)に、追加改修・データ不足・本番受入をまとめています。共有publisher移行と有効化は完了し、初回Actionsでは本文31社を同期、選択分19社は時間予算で未着手、優待60件は保留でした。全件充足は未完です。
 
-**定期設定と全データ充足は別です。** CFの14 trigger、GitHubの13有効workflowは継続。Macの20/21時calendarは廃止し、専用分は月次手動スクリプトへ変更しました。歴史RAW用workflow1本も意図的停止。10/21の株式429・VWAP保存不明・有報停止と修正範囲は[10/22の稼働確認](docs/test-logs/recovery-functional-status-20261022.md)、現設定は[全件一覧](docs/batch-data-inventory.md)へ記録します。以下は10/20までの修復実績で、現在の全件充足を示す数値ではありません。残件は[Issue #348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)で追跡します。
+**定期設定と全データ充足は別です。** CFの14 trigger、GitHubの14有効workflow（機械同期を含む）は継続。Macの20/21時calendarは廃止し、専用分は月次手動スクリプトへ変更しました。歴史RAW用workflow1本も意図的停止。10/21の株式429・VWAP保存不明・有報停止と修正範囲は[10/22の稼働確認](docs/test-logs/recovery-functional-status-20261022.md)、現設定は[全件一覧](docs/batch-data-inventory.md)へ記録します。以下は10/20までの修復実績で、現在の全件充足を示す数値ではありません。残件は[Issue #348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)で追跡します。
 
 | 対象 | 確認済み | 残り・保留 |
 | --- | --- | --- |

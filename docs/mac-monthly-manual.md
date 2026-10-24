@@ -2,7 +2,7 @@
 
 2026-10-20のユーザー指定。MacのLaunchAgentは廃止したまま、月1回の案内からコマンドを手動実行する。Macを常時起動・ログインしておく必要はない。Cloudflare／Actionsの通常定期は継続する。
 
-月次の機械取得は毎月10日10:30 JSTに母集団→優待原文→スコア再計算の順で動く。案内は2026-11-11開始、毎月11日09:00 JST（Asia/Tokyo）のGoogle Calendar予定と開始0分前のメール通知を設定し、読戻し確認した。非公開・予定ありにしない15分枠の説明欄に、preflight/run各1行のコマンドと手順リンクを保存している。初回メール受信・実処理成功は未検証。
+月次の機械取得は毎月10日10:30 JSTに母集団→優待原文→スコア再計算の順で動く。案内は2026-11-11開始、毎月11日09:00 JST（Asia/Tokyo）のGoogle Calendar予定と開始0分前のメール通知を設定し、読戻し確認した。非公開・予定ありにしない15分枠の説明欄には、短い起動/事前検査/本実行コマンド5行と、privateログ保存の本手順への参照を保存した。日時・繰返し・通知等も変更なしを読戻し済み。初回メール受信・月次の本モデル実行は未観測。
 
 ## 実行対象と保存境界
 
@@ -34,7 +34,7 @@ monthly_log="tmp/biztag-local/monthly-$(date +%Y%m%dT%H%M%S)-$$.log"
 nix develop --offline --no-write-lock-file --command env -u NODE_PATH pnpm biztag:monthly --runtime .runtime/mac-publishing-20261025 >"$monthly_log" 2>&1
 ```
 
-旧受入runtimeは`4cb4867d9a9f189684b07efa89be81a085e03f51`。上記の新runtime名は切替計画であり、[初回移行](mechanical-publishing.md)で新mainの受入・同canonical env/stateの保持・旧runtimeの版不一致停止を確認してから使う。Calendarの説明欄も同じ新runtimeへ更新する。root側の月次driverはCIが通ったmainから実行する。ログを確認する際もファイル全体を公開しない。
+上記runtimeは`45629c8`で受入済み。[初回移行](mechanical-publishing.md)でcanonical state・原本・旧journalを保全し、acceptedRevision一致と旧runtimeの版不一致停止、新runtimeの月次preflightを確認した。Calendarもこのruntimeへ更新済み。これは本モデルの実行成功とは別である。root側の月次driverはCIが通ったmainから実行する。ログを確認する際もファイル全体を公開しない。
 
 runtimeのHEAD・acceptedRevision・main包含・clean・env権限・Nix依存をpreflightで確認する。受入済みruntimeを勝手にpull/resetせず、変更時はCI確認と未完状態保全を先に行う。実行ログはprivateな既存stateへ保存し、本文・判断入力・秘密値をメールやGitへ貼らない。
 
