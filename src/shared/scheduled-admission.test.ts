@@ -12,7 +12,7 @@ it("同日でも未来の予定は拒否し、遅配・同時刻だけを受け�
   expect(() => scheduledAtForDate(scheduled, "2026-10-22", at)).toThrow("一致");
 });
 
-it("株式は原本全量の閉鎖30分と後続600秒をnative360分の前へ収める", () => {
+it("株式は原本全量の閉鎖30分と後続原本保存枠600秒をnative360分の前へ予約する", () => {
   const window = scheduledStockSyncWindow("2026-10-23");
   expect(window.deadline - window.sourceDeadline).toBe(30 * 60_000);
   expect(() => assertStockSyncSource("2026-10-23", window.sourceDeadline - 1, true)).not.toThrow();

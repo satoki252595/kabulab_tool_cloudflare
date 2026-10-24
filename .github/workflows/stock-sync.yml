@@ -54,7 +54,7 @@ jobs:
       cancel-in-progress: false
       queue: max # pending同士の後着cancelを防ぐ。Yahoo取得は引き続き1 jobずつ。
     runs-on: ubuntu-latest
-    timeout-minutes: 360 # 23:00取得停止→23:30閉鎖。最早18時job開始より前に終了する。
+    timeout-minutes: 360 # 各段階は元job時計を引継ぎ、native終了前にsource停止/原本閉鎖。
     # 株式 step の実成功出力 (後続 moneyflow の起動条件)。step skip 時は空。
     outputs:
       trade_date: ${{ steps.daily.outputs.trade_date }}
@@ -142,7 +142,7 @@ jobs:
           CF_D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_ARCHIVE_PAGE_ID: ${{ secrets.NOTION_ARCHIVE_PAGE_ID }}
-        run: nix develop -c bash -c 'cd pipeline && uv run python -m jp_stock_pipeline.jobs.sector33_sync'
+        run: nix develop -c bash -c 'cd pipeline && uv run python -m jp_stock_pipeline.jobs.sector33_sync --job-started-at "$BATCH_JOB_STARTED_AT"'
 
       - name: market context sync
         if: >-
