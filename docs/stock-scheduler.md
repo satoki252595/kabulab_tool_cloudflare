@@ -51,10 +51,10 @@ D=2026-10-08 の原文で 00:15 以降が null）の中だった。
 10/19のコードは全active/equityを直列にChart 5yとQuoteSummaryで取得し、共有clientが
 HTTP開始間隔を1秒にする。3,687社なら約7,374通信の間隔だけで**約123分が下限**。
 通信待ち・認証更新・原本保管・計算・D1保存・Yahoo共通queueの待ちが加わる。
-workflowの210分timeoutは強制停止の限界で、完了保証や測定済み上限ではない。
+当時のworkflowは210分timeoutだった。現在は360分で、23:00に新sourceを止め、23:30までの30分を取得済み全量原本の閉鎖へ残す。時間予算は全量完了の保証ではない。
 
 保存境界もVWAPとは異なる。株式は全pending/rawを収集後に`stocks-first`の物理原本を
-保管し、途中429/503があれば`custodyStop`で株式D1のflush前に停止する。
+保管する。途中429/503やsource期限では、新規取得を止め、先行した正常原本の物理照合とD1保存を完了してから未完として停止する。原本保存・照合の失敗ではD1へ進まない。
 先行したoverlay/JP legの反映は別会計。正常閉鎖した中断では取得済原本が残るが、
 全量収集中の強制終了で未保管原本を回収できる保証はない。
 VWAPは最大30社/30wave/8MiBごとに原本保管と条件付きR2保存を行うため、
@@ -70,8 +70,7 @@ VWAPは最大30社/30wave/8MiBごとに原本保管と条件付きR2保存を行
 CF version`ac3d1414-d93f-43fa-99da-89411874025a`を配置し、同じ10triggerを確認した。
 この修正から株式全量の成功・過去データの充足を推定しない。
 
-- POST 前ガード: 未知 cron・未来・土日・UTC 日跨ぎ・開始期限
-  (株式60分、マクロ30分) 超過
+- POST 前ガード: 未知 cron・未来・土日・UTC 日跨ぎ・各sourceの実開始締切超過
   は POST 前に error。既存の price guard・close guard・完了期限・失敗率
   1% 判定は不変。
 - receipt: `stock-scheduler/receipt-<予定UTC日>.json` を `If-None-Match: *`
@@ -84,7 +83,7 @@ CF version`ac3d1414-d93f-43fa-99da-89411874025a`を配置し、同じ10trigger�
   `html_url`) 後に native `etagMatches` で CAS 保存。
 - マクロreceiptは `stock-scheduler/context-receipt-<予定UTC日>.json`。
   株式と同日でも別claimとし、原本・成果・成功判定を混同しない。
-  予定から30分を超えたマクロdispatchはPOST前に停止する。
+  マクロは21:00 UTCの予定slotを保持し、21:50 UTCの新source締切以後はPOST前に停止する。
 - GitHub API は `User-Agent` 必須。Jobs 分頁は同一 origin/path・run 限定、
   循環検出・10 頁上限超過は error。run ID は正の整数のみ。
 - pending・結果不明は成功にしない。自動再 POST なし (CAS 競合時は
@@ -225,19 +224,25 @@ rows_written=0、SQL20.73ms。OHLCV全走査やR2列挙は追加しない。
 
 ## 取得処理の時刻契約
 
-2026-10-23改定。すべてJST。CFの起動受付と、Actions待機・Nix準備後のCLI受付は別に判定する。
-Python3系統と信用残のCF dispatchは予定分から5分以内だけ。同じ日時slotはR2 claim→POST1回→CASで固定し、結果不明時は再POSTしない。
+2026-10-25改定。下表はJST。`scheduled_at`はCFの予定slotを固定する入力で、実時計の代用ではない。未来・別日・曜日/slot違いは取得前に拒否する。CF配送も各CLIの実開始/source期限まで受け、R2 claim待機後もPOST直前に再検査する。同じslotは条件付claim→POST1回→CASを維持し、claimed/結果不明を再送しない。Python EDINETの翌日配送だけは元slotに束縛した受付期間でreceiptを検証する。
 
-| 処理 | CLIの新規開始 | 新規取得・保存の締切 | 対象日と先行関係 |
+| 処理 | 予定slot・実開始の資格 | 実source停止 / 閉鎖の上限 | 対象日と先行関係 |
 |---|---|---|---|
-| 日証金 | 12:17〜同日22:00未満 | 同日23:00未満 | 予定JST日。CSV内の基準日は変更しない |
-| TDnet速報 | 各09〜19時slotから60分未満 | そのslotから90分未満 | 予定JST日。遅配を別日へ読み替えない |
-| Python EDINET | 21:00〜翌19:00未満 | 翌21:00未満 | 予定JST日の提出資料。19時Nodeと独立 |
-| 信用残 | 17:00〜17:10 | 17:30 | 専用排他。原本の対象日・公表日を保持 |
-| VWAP日足→5分足 | 日足17:00〜17:10、5分足は同run/attemptの受付を継承 | 同日23:30 | 日足の既知閉鎖exit0/1後だけ5分足。段階間でYahoo排他を解放 |
-| 株式 | 18:00〜20:00 | 同日23:30 | Yahoo共通排他内。日付・分割単位・原本保管の資格を維持 |
-| 独立資金フロー | 18:15以降、同日締切前 | 同日23:40 | 非Yahoo結果を閉じてからYahoo。既知失敗でも独立sourceは進めるが、join成功には全source成功が必要 |
-| Node開示補完 | 19:00〜19:05 | 新規文書は終端10分を残して開始、19:53で停止 | TDnet→EDINET。job予算54分、期限確認の完了上限19:54。手動/Workerの既定5分は維持 |
+| 日証金 | 12:17 slot、実開始は同日22:00未満 | 22:50 / 23:00（さらにjob予算で短縮） | 予定JST日。CSV基準日は変えない。native 60分 |
+| TDnet速報 | 各09〜19時slot、実開始は次slot未満 | slot+80分 / +90分（さらにjob予算で短縮） | 予定JST日。native 30分 |
+| Python EDINET | 21:00 slot、実開始は翌19:00未満 | 翌20:50 / 翌21:00（さらにjob予算で短縮） | 予定JST日の提出資料。native 120分 |
+| 信用残 | 予定17:00〜17:10、実source開始は17:20未満 | 17:20 / 17:30 | 専用排他。原本の基準日・公表日を保持 |
+| VWAP日足→5分足 | 予定17:00〜17:10、5分足は同run/attempt受付を継承 | 23:20 / 23:30（さらにjob予算で短縮） | 日足の閉鎖exit0/1後だけ5分足。各job native 360分 |
+| 株式 | 予定18:00〜20:00、実source開始は23:00未満。手動GHも実job時計へ束縛 | 23:00 / 23:30（手動を含めjob予算で短縮） | 閉鎖30分。native 360分から後続sector33の原本保存枠600秒と終了5分を予約する |
+| 独立資金フロー | 予定18:15以降、実source開始は23:30未満 | 23:30 / 23:40（さらにjob予算で短縮） | 既知失敗は独立laneへ渡せるがjoinは全source成功のみ。各lane native 120分 |
+| Node開示補完 | 予定19:00〜19:05、実source開始は19:43未満 | 19:43 / 19:53 | TDnet→EDINET。native 54分、期限確認上限19:54。手動targetは従来どおり |
+| マクロ | 予定06:00〜06:30（UTC前日21時）、実source開始は06:50未満 | 06:50 / 07:00 | 元UTC予定日のJP保存原本と米国原本。米国立会中は実時計で拒否 |
+
+株式・VWAP・独立資金フロー・Python3系統のActionsでは、最初の実取得より前にJobs APIを1回（30秒上限、100 jobsまでの完全ページ）読み、同run/attempt・job名・runnerの一意な`started_at`を検証する。閉鎖期限は **固定締切と「実job開始＋native timeout−5分」の早い方**、新source停止はその10分前。株式はさらにsector33の原本保存枠600秒を予約し、閉鎖30分を確保する。600秒はsector33全体の所要上限ではなく、sector33自身も同じ元job時計でsource/hardを検査する。依存準備も予算に含み、原本閉鎖後のartifact・既存実行記録には外部終了までの5分を残す。取得不能・曖昧・予算不足は取得前に停止する。時計は自動注入で、設定や監視の追加はない。
+
+手動`all`の後続マクロ・母集団・優待・月次再計算も元jobの時計を引き継ぐ。月次の新sourceはjob開始+345分、原本閉鎖/新保存は+355分まで。段階開始で時計を更新せず、残予算不足なら取得0・未完で停止する。母集団/再計算の公式overlayとBasic取得にも同じsource期限を渡す。
+
+SSH/ローカルも通常CLIの同じ受付・固定締切を使う。外部job timeoutが無い実行ではjob時計を補わない。取得済みbatchを閉鎖しても未着手があれば未完/非0を保持し、VWAPのactive snapshotやreadcheckを成功化しない。
 
 締切は新しい通信・レコード保存の開始条件であり、開始済みHTTPのremote rollbackは保証しない。
 原本保存の未完intent・CAS不明・失敗は保持し、後続へ成功として渡さない。
@@ -245,4 +250,4 @@ Python3系統と信用残のCF dispatchは予定分から5分以内だけ。同�
 GitHubの待ち行列は処理能力の保証ではない。Yahooは並列化せず、段階間の占有を短くする。
 各jobのNotion pacingも全process共通のレート保証ではないため、追加の全量取得・自動再送は行わない。
 
-根拠（2026-10-23確認）: [GitHub scheduleの遅配](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)、[GitHub concurrencyの待機規則](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)、[Cloudflare CronのUTC時計・伝播時間](https://developers.cloudflare.com/workers/configuration/cron-triggers/)。
+根拠（2026-10-25確認）: [GitHub job timeout](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idtimeout-minutes)、[Jobs APIのstarted_at・runner・attempt](https://docs.github.com/en/rest/actions/workflow-jobs#list-jobs-for-a-workflow-run-attempt)、[GitHub scheduleの遅配](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)、[Cloudflare scheduledTime](https://developers.cloudflare.com/workers/runtime-apis/handlers/scheduled/)。

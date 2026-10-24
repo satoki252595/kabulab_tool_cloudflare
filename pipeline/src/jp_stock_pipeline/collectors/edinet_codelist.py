@@ -109,13 +109,14 @@ def fetch_codelist(
     settings: Settings,
     *,
     on_response: Callable[[requests.Response], None] | None = None,
+    before_request: Callable[[], None] | None = None,
 ) -> RawArtifact:
     """コードリスト zip を取得し、無加工で原本保存する (§8.1 step 1-2)。
 
     `on_response` は同一 Response を受け取る最小 seam (検証通過後のみ呼ぶ。
     新 GET・新 schema なし)。渡さない既存呼び出し (月次) の挙動は不変。
     """
-    resp = fetch(CODELIST_URL)
+    resp = fetch(CODELIST_URL, **({} if before_request is None else {"before_request": before_request}))
     # マジックバイト検証 (CONTRACTS): 200 で返るエラーページを正本の原本にしない (§3)
     if not resp.content.startswith(b"PK\x03\x04"):
         raise FetchError(

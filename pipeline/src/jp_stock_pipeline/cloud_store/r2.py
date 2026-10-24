@@ -13,9 +13,11 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from contextvars import ContextVar
 from typing import Any
 
 from ..config import CloudStoreSettings
+from ..request_guard import RequestNotStartedError, assert_request_allowed
 from .guards import GuardError, check_no_regression
 
 logger = logging.getLogger(__name__)
@@ -25,13 +27,29 @@ class R2Error(RuntimeError):
     """R2 への読み書きに失敗した（取得単位の失敗として記録する）。"""
 
 
+_sdk_attempts: ContextVar[list[int] | None] = ContextVar("r2_sdk_attempts", default=None)
+
+
+def _before_s3_send(**_kwargs) -> None:
+    attempts = _sdk_attempts.get()
+    try:
+        assert_request_allowed()
+    except RequestNotStartedError as exc:
+        if attempts is not None and attempts[0] > 0:
+            # 先行SDK attemptの適用有無を「未送信」に戻さない。
+            raise R2Error("R2 request stopped after an earlier SDK attempt; retain prior result") from exc
+        raise
+    if attempts is not None:
+        attempts[0] += 1
+
+
 def _client(settings: CloudStoreSettings):
     try:
         import boto3  # noqa: PLC0415 - 任意依存。未設定環境では import しない
         from botocore.config import Config  # noqa: PLC0415
     except ImportError as exc:  # pragma: no cover - 依存が入っていない環境
         raise R2Error(f"boto3 が無い: {exc}") from exc
-    return boto3.client(
+    client = boto3.client(
         "s3",
         endpoint_url=settings.r2_endpoint,
         aws_access_key_id=settings.r2_access_key_id,
@@ -39,6 +57,8 @@ def _client(settings: CloudStoreSettings):
         region_name="auto",
         config=Config(retries={"max_attempts": 3, "mode": "standard"}),
     )
+    client.meta.events.register("before-send.s3", _before_s3_send)
+    return client
 
 
 class R2Store:
@@ -69,6 +89,14 @@ class R2Store:
             self._local.client = client
         return client
 
+    def _send(self, operation: str, **kwargs):
+        token = _sdk_attempts.set([0])
+        try:
+            assert_request_allowed()
+            return getattr(self.s3, operation)(**kwargs)
+        finally:
+            _sdk_attempts.reset(token)
+
     def get_json(self, key: str) -> tuple[Any | None, bool]:
         """(payload, found) を返す。404 は (None, False)。
 
@@ -76,7 +104,9 @@ class R2Store:
         後退禁止ガードが無力化するため、呼び出し側は必ず例外を伝播させる。
         """
         try:
-            resp = self.s3.get_object(Bucket=self.bucket, Key=key)
+            resp = self._send("get_object", Bucket=self.bucket, Key=key)
+        except RequestNotStartedError:
+            raise
         except Exception as exc:  # noqa: BLE001 - botocore の例外型に依存しない
             if _is_not_found(exc):
                 return None, False
@@ -87,11 +117,13 @@ class R2Store:
             raise R2Error(f"R2 の既存オブジェクトが JSON でない {self.bucket}/{key}") from exc
 
     def put_bytes(self, key: str, body: bytes, *, content_type: str) -> None:
-        """immutable キー用の素の PUT（原本など。ガードは適用しない）。"""
+        """immutable キー用の素の PUT（原本など。後退禁止ガードは適用しない）。"""
         try:
-            self.s3.put_object(
+            self._send("put_object",
                 Bucket=self.bucket, Key=key, Body=body, ContentType=content_type
             )
+        except RequestNotStartedError:
+            raise
         except Exception as exc:  # noqa: BLE001
             raise R2Error(f"R2 PUT 失敗 {self.bucket}/{key}: {exc}") from exc
         logger.info("R2 PUT %s/%s (%d bytes)", self.bucket, key, len(body))
@@ -101,7 +133,7 @@ class R2Store:
         if type(max_bytes) is not int or max_bytes <= 0:
             raise ValueError("control max_bytesは正整数必須")
         try:
-            response = self.s3.get_object(Bucket=self.bucket, Key=key)
+            response = self._send("get_object", Bucket=self.bucket, Key=key)
             stream = response["Body"]
             try:
                 body = stream.read(max_bytes + 1)
@@ -113,6 +145,8 @@ class R2Store:
                     or not isinstance(etag, str) or not etag):
                 raise ValueError("control body/ETagが不完全")
             return payload, body, etag
+        except RequestNotStartedError:
+            raise
         except Exception as exc:  # noqa: BLE001 - 欠測をabsentへ変換しない
             raise R2Error("R2 control原bytes/ETagを読めない; reconcile禁止") from exc
 
@@ -121,10 +155,12 @@ class R2Store:
         condition = {"IfNoneMatch": "*"} if etag is None else {"IfMatch": etag}
         body = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
         try:
-            response = self.s3.put_object(
+            response = self._send("put_object",
                 Bucket=self.bucket, Key=key, Body=body,
                 ContentType="application/json", **condition,
             )
+        except RequestNotStartedError:
+            raise
         except Exception as exc:  # noqa: BLE001 - ambiguous success/412 must never re-claim
             raise R2Error("R2 conditional mutation rejected or unknown; retain claim, do not retry") from exc
         result = response.get("ETag")
@@ -171,7 +207,9 @@ class R2Store:
     def exists(self, key: str) -> bool:
         """immutable キーの冪等スキップ判定。"""
         try:
-            self.s3.head_object(Bucket=self.bucket, Key=key)
+            self._send("head_object", Bucket=self.bucket, Key=key)
+        except RequestNotStartedError:
+            raise
         except Exception as exc:  # noqa: BLE001
             if _is_not_found(exc):
                 return False

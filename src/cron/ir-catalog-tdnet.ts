@@ -107,7 +107,12 @@ export async function runIrCatalogCatchup(
     to.getUTCDate()
   )}`;
 
-  const items = await listRange(range);
+  const sourceDeadline = deadlineMs === undefined ? undefined : deadlineMs - 10 * 60_000;
+  const beforeSource = sourceDeadline === undefined ? undefined : () => {
+    if (Date.now() >= sourceDeadline) throw new Error("TDnet catchupの新規取得期限です（原本閉鎖予算・未完）");
+  };
+  beforeSource?.();
+  const items = beforeSource === undefined ? await listRange(range) : await listRange(range, beforeSource);
   if (deadlineMs !== undefined && Date.now() >= deadlineMs) throw new Error("TDnet catchupの絶対締切です（原文保管を保持・再送なし）");
   const existingTdnetIds = await loadTdnetIdsSince(
     db,
@@ -144,7 +149,7 @@ export async function runIrCatalogCatchup(
     dailySnapshot: true,
     notionByStock: true,
     notionByStockBudgetMs: NOTION_BUDGET_MS,
-    notionByStockDeadlineMs: deadlineMs,
+    notionByStockDeadlineMs: sourceDeadline,
     unsavedLookbackDays: TDNET_PDF_RETAIN_DAYS,
     codeToId,
   });

@@ -213,7 +213,7 @@ describe("main (検証 → 原本保管 → 実体確認 → R2 PUT の順序)",
 
   it("保管待機中に17:30へ達したら次の添付HTTP/R2 PUTを送らず、既存原本日付を変えない", async () => {
     const date="2026-10-22";vi.useFakeTimers({toFake:["Date"]});vi.setSystemTime(`${date}T08:00:00.000Z`);
-    const result=await runMain({argv:[`--scheduled-date=${date}`],archiveImpl:async()=>{
+    const result=await runMain({argv:[`--scheduled-date=${date}`, `--scheduled-at=${date}T08:00:00.000Z`],archiveImpl:async()=>{
       vi.setSystemTime(`${date}T08:30:00.000Z`);return {pageId:"p1",fileTooLarge:false};
     }});
     expect(result.rejected).toMatchObject({message:expect.stringContaining("17:30")});

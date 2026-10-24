@@ -1,6 +1,7 @@
 import type { MoneyflowNotYetPublishedReason } from "../../../services/moneyflow/lib/source-spec.js";
 import { isoWeekLabelOf } from "../../../services/moneyflow/lib/iso-week.js";
 import { isCalendarDateString } from "../../../src/shared/vwap/proof.js";
+import { installScheduledDeadline } from "../../../src/shared/scheduled-admission.js";
 
 /** source選択の正本はingest.tsのSOURCES。ここでは集合の重複とlaneだけを検証する。 */
 export type MoneyflowLane = "non-yahoo" | "yahoo";
@@ -32,6 +33,18 @@ function isoMs(value: unknown): number {
   return Date.parse(value);
 }
 
+/** 起動受付は予定時刻。実時計の23:40は moneyflowScheduledWindow が残す。 */
+export function assertMoneyflowScheduledAt(plannedDate: string, scheduledAtMs: number): void {
+  const floor = Date.parse(`${plannedDate}T09:15:00.000Z`);
+  const cutoff = Date.parse(`${plannedDate}T14:40:00.000Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(plannedDate) || !Number.isFinite(floor) || new Date(floor).toISOString().slice(0, 10) !== plannedDate || [0, 6].includes(new Date(floor).getUTCDay())) {
+    throw new Error("moneyflow joinの予定日が不正です");
+  }
+  if (!Number.isFinite(scheduledAtMs) || scheduledAtMs < floor || scheduledAtMs >= cutoff) {
+    throw new Error("moneyflowの予定時刻が18:15〜23:40 JSTの範囲外です");
+  }
+}
+
 export function moneyflowScheduledWindow(plannedDate: string, nowMs: number): { floor: number; cutoff: number } {
   const floor = Date.parse(`${plannedDate}T09:15:00.000Z`), cutoff = Date.parse(`${plannedDate}T14:40:00.000Z`);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(plannedDate) || !Number.isFinite(floor) || new Date(floor).toISOString().slice(0, 10) !== plannedDate || [0, 6].includes(new Date(floor).getUTCDay())) {
@@ -42,16 +55,10 @@ export function moneyflowScheduledWindow(plannedDate: string, nowMs: number): { 
 }
 
 /** 定時laneだけのHTTP期限。待機後のNotion/Yahoo送信も元signalと共に止める。 */
-export function installMoneyflowDeadline(date: string): () => void {
+export function installMoneyflowDeadline(date: string, executionDeadline?: number): () => void {
   const { cutoff } = moneyflowScheduledWindow(date, Date.now());
-  const nativeFetch = globalThis.fetch, signal = AbortSignal.timeout(cutoff - Date.now());
-  const guarded: typeof fetch = (input, init) => {
-    moneyflowScheduledWindow(date, Date.now());
-    const original = init?.signal !== undefined ? init.signal : input instanceof Request ? input.signal : undefined;
-    return nativeFetch(input, { ...init, signal: original ? AbortSignal.any([original, signal]) : signal });
-  };
-  globalThis.fetch = guarded;
-  return () => { if (globalThis.fetch === guarded) globalThis.fetch = nativeFetch; };
+  return installScheduledDeadline(executionDeadline === undefined ? cutoff : Math.min(cutoff, executionDeadline),
+    () => { moneyflowScheduledWindow(date, Date.now()); });
 }
 
 interface SummaryContext {

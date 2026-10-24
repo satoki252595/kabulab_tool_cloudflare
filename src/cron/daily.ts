@@ -52,7 +52,8 @@ import {
   type JssAnnualRow,
 } from "../shared/db/jss-financials.js";
 import { sharedEnv } from "../shared/env.js";
-import { assertStockSyncDeadline, assertStockSyncStart, stockSyncDeadline, stockSyncRunDate } from "../shared/stock-sync-window.js";
+import { installScheduledDeadline, nativeJobExecutionWindow, scheduledAtForDate, scheduledMacroWindow, ScheduledSourceDeadlineError } from "../shared/scheduled-admission.js";
+import { assertStockSyncDeadline, assertStockSyncStart, stockSyncExecutionWindow, stockSyncRunDate } from "../shared/stock-sync-window.js";
 import {
   ensurePriceSyncDb,
   recordPriceSyncLog,
@@ -1251,15 +1252,29 @@ async function runDailySyncAndRecord(
     throw new Error("定時株式同期にはJP leg保存接続が必須です");
   }
   const rawRunId = priceSyncBatchRunId(startedAt);
+  const stockWindow = stockSyncExecutionWindow(targetDate, scheduledStocks, startedAt, sharedEnv.BATCH_JOB_STARTED_AT());
   const assertStockDeadline = () => {
     assertStockSyncDeadline(targetDate, Date.now(), scheduledStocks);
+    if (Date.now() >= stockWindow.deadline) throw new Error("株式jobの原本閉鎖期限です（未完・再送なし）");
   };
-  // 価格・母集団とも開始窓と予定日・書込み期限は守る。
-  assertStockSyncStart(startedAt, scheduledStocks ? targetDate : undefined);
+  const assertStockSource = () => {
+    if (Date.now() >= stockWindow.sourceDeadline) {
+      throw new ScheduledSourceDeadlineError("株式の新規取得期限です。取得済み原本の閉鎖を優先し未取得は未完にします");
+    }
+  };
+  // 定時の開始窓はscheduled_at。23:30の新規IOは実時計。
+  if (scheduledStocks) {
+    assertStockSyncStart(scheduledAtForDate(sharedEnv.SCHEDULED_AT(), targetDate, startedAt), targetDate);
+  } else {
+    assertStockSyncStart(startedAt);
+  }
+  assertStockDeadline();
+  assertStockSource();
   // 母集団は価格取得とは独立して更新する。N225 の欠測で上場廃止の適用を止めない。
   // HOLD 残があれば不完全失敗を throw し、株価 fetch へ進まない。
   const overlay = await ensureUniverseOverlay(db, {
     eligibilityAsOf: targetDate,
+    beforeSourceRequest: assertStockSource,
     collect:
       collectOverlay ??
       withBasicEvidence((input) => collectUniverseOfficialEvents(input)),
@@ -1284,7 +1299,8 @@ async function runDailySyncAndRecord(
     let session;
     let sessionArchivePages: string[];
     try {
-      session = await fetchChart("^N225", "1mo", { onRaw: (capture) => { captures.push({ api: "chart", attempt: 0, capture }); } });
+      session = await fetchChart("^N225", "1mo", { beforeRequest: assertStockSource,
+        onRaw: (capture) => { captures.push({ api: "chart", attempt: 0, capture }); } });
       if (captures.length !== 1 || captures[0]?.capture.symbol !== "^N225") {
         throw new Error("日経225の応答原本captureが一致しないためSTOP");
       }
@@ -1330,8 +1346,9 @@ async function runDailySyncAndRecord(
     if (jpLegStore !== undefined) {
       const capture = captures[0]?.capture;
       if (capture === undefined) throw new Error("JP legのN225同一原本がありません");
+      assertStockSource();
       const jp = await captureMacroJpLeg({ date: targetDate, runId: rawRunId, n225: capture,
-        n225ArchivePages: sessionArchivePages, store: jpLegStore });
+        n225ArchivePages: sessionArchivePages, store: jpLegStore, beforeSourceRequest: assertStockSource });
       console.info(`[sync-daily] JP leg ${jp.ok ? "保存照合済み" : "HOLD"}: ${jp.reason}`);
       assertStockDeadline();
     }
@@ -1385,7 +1402,7 @@ async function runDailySyncAndRecord(
   const queue = [...targets];
   const firstPassFailures: DailyRecoveryFailure<(typeof targets)[number]>[] =
     [];
-  const stockStartGate = createDailyStockStartGate(STOCK_START_INTERVAL_MS, stockSyncDeadline(targetDate, scheduledStocks));
+  const stockStartGate = createDailyStockStartGate(STOCK_START_INTERVAL_MS, stockWindow.sourceDeadline);
   let succeeded = 0; // 当日金融・短期指標の更新数。全機能成功数は履歴HOLDを後で差し引く。
 
   // 年次は月曜 UTC の run でのみ書く (L-49)。年 1 回変わるものに毎日
@@ -1418,6 +1435,7 @@ async function runDailySyncAndRecord(
     try {
       return await buildSnapshot(target.id, target.code, target.sector, targetDate,
         jssAnnualByCode.get(target.code) ?? [], { onChartRaw: add("chart"), onSummaryRaw: add("quote-summary"), assertCaptured,
+          beforeRequest: assertStockSource,
           onCorporateDiagnostics: diagnostic => { corporateDiagnostics.push({ code: symbol, attempt, expectedDate: targetDate, diagnostic }); } });
     } catch (error) {
       if (error instanceof YahooRawTooLargeError) custodyStop = error;
@@ -1436,11 +1454,12 @@ async function runDailySyncAndRecord(
       if (!target) break;
       try {
         if (!await stockStartGate.wait()) {
-          custodyStop = new Error("Yahooの取得開始期限が株式同期の実締切以後のためSTOPします");
+          sourceStop = new Error("Yahooの新規取得期限です。保管済み正常分を閉鎖して未完にします");
           break;
         }
         if (custodyStop !== null || sourceStop !== null) break;
         assertStockDeadline();
+        assertStockSource();
         const snap = await capturedSnapshot(target, 0, firstCaptures, firstMissing);
         assertStockDeadline();
         pending.push({
@@ -1451,7 +1470,8 @@ async function runDailySyncAndRecord(
         });
       } catch (e) {
         if (isYahooSourceStop(e)) sourceStop = e instanceof Error ? e : new Error(String(e));
-        if (Date.now() >= stockSyncDeadline(targetDate, scheduledStocks)) custodyStop = e instanceof Error ? e : new Error(String(e));
+        if (Date.now() >= stockWindow.sourceDeadline) sourceStop = e instanceof Error ? e : new Error(String(e));
+        if (Date.now() >= stockWindow.deadline) custodyStop = e instanceof Error ? e : new Error(String(e));
         const msg = rootCauseMessage(e);
         stockStartGate.observeFailure(msg);
         firstPassFailures.push({ target, error: msg });
@@ -1523,7 +1543,7 @@ async function runDailySyncAndRecord(
   let recoveredStocks = 0;
   const recoveryAttempts = new Map<string, number>();
   const recoveryDeadlineMs = Math.min(startedAt + RECOVERY_TIME_BUDGET_MS,
-    stockSyncDeadline(targetDate, scheduledStocks));
+    stockWindow.sourceDeadline);
   const recovery = await recoverTransientDailyFailures(
     recoveryTargets,
     async (recoveryTarget) => {
@@ -1591,7 +1611,7 @@ async function runDailySyncAndRecord(
         }
         recoveredStocks++;
       } catch (error) {
-        if (Date.now() >= stockSyncDeadline(targetDate, scheduledStocks)) custodyStop = error instanceof Error ? error : new Error(String(error));
+        if (Date.now() >= stockWindow.deadline) custodyStop = error instanceof Error ? error : new Error(String(error));
         // 2 パス目も 429 を尊重する (L-57)。初回と同じゲートへ観測を流す。
         stockStartGate.observeFailure(rootCauseMessage(error));
         throw error;
@@ -1717,12 +1737,7 @@ async function runDailySyncAndRecord(
 
   const elapsedSec = (Date.now() - startedAt) / 1000;
   if (marketContextOk === undefined) throw new Error("マクロ同期結果を確認できません");
-  if (Date.now() >= stockSyncDeadline(targetDate, scheduledStocks)) {
-    throw new Error(
-      `株式同期が ${targetDate} の${scheduledStocks ? "23:30 JST期限" : "翌06:00 JST基準"}を超えました。` +
-      "基準後の値は過去レポートに使えません。日次レポートの欠損と同期遅延を確認してください。"
-    );
-  }
+  assertStockDeadline();
   console.info(
     `[sync-daily] 完了: 成功=${fullySucceeded} 失敗=${failures.length} 当日更新=${succeeded} RSI履歴HOLD=${historyHolds.length} 所要=${elapsedSec.toFixed(1)}s`
   );
@@ -1745,7 +1760,7 @@ async function runDailySyncAndRecord(
 
   // 主要金融write・Phase6・期限確認・完了記録の後。custody待機でquote書込窓を消費しない。
   if (sharedEnv.STOCK_SYNC_TARGET() === "scheduled-stocks") {
-    const custody = await collectOfficialRightsCustody(new Date(startedAt + 9 * 3600_000).toISOString().slice(0, 10));
+    const custody = await collectOfficialRightsCustody(new Date(startedAt + 9 * 3600_000).toISOString().slice(0, 10), assertStockSource);
     officialRightsCustody.push(custody);
     console.info(`[sync-daily] 公式権利原本: ${JSON.stringify(custody)}`);
     if (custody.status === "incomplete") console.warn("[sync-daily] JPX source incomplete。権利資格は未確認のまま、既存株価の資格・値は変更しません。");
@@ -1795,12 +1810,33 @@ export async function runMarketContextSync(db: Db, jpLegStore?: MacroJpLegStore)
   const targetDate = runDateKeys(startedAt).runDate;
   assertScheduledDate(targetDate);
   if (scheduled) {
-    const floor = Date.parse(`${targetDate}T21:00:00.000Z`);
-    const cutoff = Date.parse(`${targetDate}T21:30:00.000Z`);
-    if (startedAt < floor || startedAt > cutoff) {
+    const scheduledMs = scheduledAtForDate(sharedEnv.SCHEDULED_AT(), targetDate, startedAt);
+    const window = scheduledMacroWindow(targetDate);
+    if (scheduledMs < window.start || scheduledMs > window.latestStart) {
       throw new Error("定時マクロの開始は予定日21:00〜21:30 UTCに限定します");
     }
+    if (Date.now() > Date.parse(`${targetDate}T22:00:00.000Z`)) {
+      throw new Error("定時マクロの保存期限22:00 UTCを超過しました");
+    }
   }
+  const nativeWindow = nativeJobExecutionWindow(startedAt, sharedEnv.BATCH_JOB_STARTED_AT(), 360, 10);
+  let deadline = scheduled ? scheduledMacroWindow(targetDate).deadline : undefined;
+  let sourceDeadline = scheduled ? scheduledMacroWindow(targetDate).sourceDeadline : undefined;
+  if (nativeWindow !== undefined) {
+    deadline = deadline === undefined ? nativeWindow.deadline : Math.min(deadline, nativeWindow.deadline);
+    sourceDeadline = sourceDeadline === undefined ? nativeWindow.sourceDeadline : Math.min(sourceDeadline, nativeWindow.sourceDeadline);
+  }
+  const assertSource = () => {
+    if (sourceDeadline !== undefined && Date.now() >= sourceDeadline) {
+      throw new ScheduledSourceDeadlineError("マクロの新規取得期限です（未完）");
+    }
+  };
+  const assertActive = () => {
+    if (deadline !== undefined && Date.now() >= deadline) throw new Error("マクロの原本閉鎖期限です（未完）");
+  };
+  assertSource();
+  const restore = deadline === undefined ? undefined : installScheduledDeadline(deadline);
+  try {
   const ny = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "numeric",
     hourCycle: "h23",
@@ -1818,10 +1854,10 @@ export async function runMarketContextSync(db: Db, jpLegStore?: MacroJpLegStore)
       jpLeg: { kind: "missing-jp-leg", expectedDate: targetDate, cacheKey: macroJpCacheKey(targetDate) } });
     return false;
   }
-  const context = await fetchMarketContextDraft(jpLeg);
+  const context = await fetchMarketContextDraft(jpLeg, assertSource);
   const recovery = await recoverTransientDailyFailures(
     context.failures,
-    (target) => fetchMarketContextTarget(context.draft, target, context.collector),
+    (target) => fetchMarketContextTarget(context.draft, target, context.collector, assertSource),
     { retry: false, deadlineMs: startedAt + RECOVERY_TIME_BUDGET_MS },
   );
   for (const failure of recovery.failures) {
@@ -1829,9 +1865,10 @@ export async function runMarketContextSync(db: Db, jpLegStore?: MacroJpLegStore)
   }
   const saved = await archiveAndPersistMarketContext(db, startedAt, context.draft, context.collector,
     scheduled ? targetDate : undefined,
-    context.sourceStop ? () => { throw context.sourceStop; } : undefined, jpLeg?.reference);
+    () => { if (nativeWindow !== undefined) assertActive(); if (context.sourceStop) throw context.sourceStop; }, jpLeg?.reference);
   if (context.sourceStop) throw context.sourceStop;
   return saved;
+  } finally { restore?.(); }
 }
 
 /**
@@ -1996,6 +2033,7 @@ async function buildSnapshot(
       return rawOptions.onChartRaw?.(capture);
     },
     onSummaryRaw: rawOptions.onSummaryRaw,
+    beforeRequest: rawOptions.beforeRequest,
   });
   rawOptions?.assertCaptured();
   if (raw.corporateDiagnostics !== undefined) rawOptions?.onCorporateDiagnostics?.(raw.corporateDiagnostics);
@@ -3137,13 +3175,15 @@ async function collectMacroRawAttempt(
 async function fetchMarketContextTarget(
   draft: MarketContextDraft,
   target: MarketContextTarget,
-  collector: MacroRawAttempt[]
+  collector: MacroRawAttempt[],
+  beforeSource?: () => void
 ): Promise<void> {
   const requestedAt = new Date().toISOString();
   if (target === NIKKEI_VI_TARGET) {
     let capture: { status: number; bytes: Uint8Array } | null = null;
     try {
       const snapshot = await fetchNikkeiVi({
+        beforeRequest: beforeSource,
         onRaw: (cap) => {
           capture = cap;
         },
@@ -3176,6 +3216,7 @@ async function fetchMarketContextTarget(
   };
   try {
     const chart = await fetchChart(target, "1mo", {
+      beforeRequest: beforeSource,
       onRaw: (cap) => {
         capture.current = cap;
       },
@@ -3235,7 +3276,7 @@ function isYahooSourceStop(error: unknown): boolean {
   return error instanceof YahooRateLimitError || /(?:Yahoo|Chart|QuoteSummary).*\b(?:429|503)\b/.test(rootCauseMessage(error));
 }
 
-async function fetchMarketContextDraft(jpLeg?: MacroJpLeg): Promise<{
+async function fetchMarketContextDraft(jpLeg?: MacroJpLeg, beforeSource?: () => void): Promise<{
   draft: MarketContextDraft;
   failures: DailyRecoveryFailure<MarketContextTarget>[];
   collector: MacroRawAttempt[];
@@ -3256,7 +3297,8 @@ async function fetchMarketContextDraft(jpLeg?: MacroJpLeg): Promise<{
   let sourceStop: Error | null = null;
   for (const target of targets) {
     try {
-      await fetchMarketContextTarget(draft, target, collector);
+      beforeSource?.();
+      await fetchMarketContextTarget(draft, target, collector, beforeSource);
       // 必須N225の確定日・終値・前日終値がHOLDなら、残り4取得元を叩いても保存できない。
       // 同一応答原本の保管・readbackは呼出側で続け、古値で補わず失敗を返す。
       if (target === "^N225" &&
@@ -3269,7 +3311,7 @@ async function fetchMarketContextDraft(jpLeg?: MacroJpLeg): Promise<{
       const message = rootCauseMessage(error);
       failures.push({ target, error: message });
       console.warn(`[sync-daily]   マクロ取得失敗 ${target}:`, message);
-      if (isYahooSourceStop(error)) {
+      if (isYahooSourceStop(error) || error instanceof ScheduledSourceDeadlineError) {
         sourceStop = error instanceof Error ? error : new Error(String(error));
         break;
       }

@@ -16,6 +16,8 @@ import {
 } from "../../src/shared/notion-archive/archive.js";
 import { verifyArchivedAttachments } from "../../src/shared/notion-archive/readback.js";
 import { notionEnv } from "../../src/shared/notion-archive/env.js";
+import { sharedEnv } from "../../src/shared/env.js";
+import { installScheduledDeadline, nativeJobExecutionWindow, parseScheduledAt } from "../../src/shared/scheduled-admission.js";
 
 export interface ArchiveDeps {
   record: typeof recordPrimaryData;
@@ -106,6 +108,7 @@ export function parseArchiveArgs(argv: readonly string[]): {
   manifest: string;
   asOf: string;
   completedAt: string;
+  jobStartedAt?: string;
 } {
   const get = (name: string): string | null => {
     const prefix = `--${name}=`;
@@ -118,12 +121,15 @@ export function parseArchiveArgs(argv: readonly string[]): {
   const manifest = get("manifest");
   const asOf = get("as-of");
   const completedAt = get("completed-at");
+  const jobStartedAt = get("job-started-at");
+  if (jobStartedAt !== null) parseScheduledAt(jobStartedAt);
   if (!key || !source || !zip || !manifest || !asOf || !completedAt) {
     throw new Error(
       "必須: --key= --source= --zip= --manifest= --as-of= --completed-at= (任意: --service=)"
     );
   }
-  return { key, source, service: get("service") ?? "universe", zip, manifest, asOf, completedAt };
+  return { key, source, service: get("service") ?? "universe", zip, manifest, asOf, completedAt,
+    ...(jobStartedAt === null ? {} : { jobStartedAt }) };
 }
 
 const realDeps: ArchiveDeps = {
@@ -144,8 +150,16 @@ const realDeps: ArchiveDeps = {
 
 async function main(): Promise<number> {
   let result: ArchiveResult;
+  let restore: (() => void) | undefined;
   try {
     const args = parseArchiveArgs(process.argv.slice(2));
+    const inheritedClock = sharedEnv.BATCH_JOB_STARTED_AT();
+    if (args.jobStartedAt !== undefined && inheritedClock !== undefined && args.jobStartedAt !== inheritedClock) {
+      throw new Error("sector33原本保管のjob時計が呼出元と一致しません");
+    }
+    const clock = args.jobStartedAt === undefined ? inheritedClock : args.jobStartedAt;
+    const window = nativeJobExecutionWindow(Date.now(), clock, 360, 10);
+    if (window !== undefined) restore = installScheduledDeadline(window.deadline);
     const zipBytes = new Uint8Array(readFileSync(args.zip));
     const manifestBytes = new Uint8Array(readFileSync(args.manifest));
     const zipName = args.zip.split("/").pop() ?? "Edinetcode.zip";
@@ -170,7 +184,7 @@ async function main(): Promise<number> {
     );
   } catch (e) {
     result = fail(e instanceof Error ? e.message : String(e));
-  }
+  } finally { restore?.(); }
   process.stdout.write(`${JSON.stringify(result)}\n`);
   return result.ok && result.verified ? 0 : 1;
 }

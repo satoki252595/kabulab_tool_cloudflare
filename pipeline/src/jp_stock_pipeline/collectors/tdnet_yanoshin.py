@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Callable
 from datetime import date, datetime
 from urllib.parse import urlsplit
 
@@ -400,6 +401,7 @@ def list_disclosures(
     settings: Settings,
     target: str = "recent",
     limit: int = 300,
+    *, before_request: Callable[[], None] | None = None,
 ) -> tuple[RawArtifact, list[DisclosureRecord]]:
     """適時開示一覧を取得し、原本保存して DisclosureRecord 群を返す。
 
@@ -419,7 +421,7 @@ def list_disclosures(
         （ソース抽象化 §4。やのしん停止時は差し替え可能 §11）。
     """
     url = f"{BASE_URL}/{target}.json"
-    resp = fetch(url, params={"limit": limit})
+    resp = fetch(url, params={"limit": limit}, **({} if before_request is None else {"before_request": before_request}))
     content = resp.content
     try:
         payload = json.loads(content)

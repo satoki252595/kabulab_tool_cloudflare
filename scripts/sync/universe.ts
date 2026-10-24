@@ -13,8 +13,16 @@
 import "dotenv/config";
 import { createUniverseDb, runUniverseSync } from "../../src/cron/universe.js";
 import { rootCauseMessage } from "../../src/shared/errors.js";
+import { sharedEnv } from "../../src/shared/env.js";
+import { installScheduledDeadline, nativeJobExecutionWindow, ScheduledSourceDeadlineError } from "../../src/shared/scheduled-admission.js";
 
 async function main(): Promise<void> {
+  const window = nativeJobExecutionWindow(Date.now(), sharedEnv.BATCH_JOB_STARTED_AT(), 360, 10);
+  if (window !== undefined && Date.now() >= window.sourceDeadline) {
+    throw new ScheduledSourceDeadlineError("月次母集団の新規取得予算がありません（未完）");
+  }
+  const restore = window === undefined ? undefined : installScheduledDeadline(window.deadline);
+  try {
   const db = createUniverseDb();
   const result = await runUniverseSync(db);
   console.info(
@@ -27,6 +35,7 @@ async function main(): Promise<void> {
   console.info(
     `[sync-universe] instrument_type 未分類: ${JSON.stringify(result.unclassifiedCategories)}`
   );
+  } finally { restore?.(); }
 }
 
 main().catch((e) => {

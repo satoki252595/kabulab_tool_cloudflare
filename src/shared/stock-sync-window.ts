@@ -1,4 +1,5 @@
 /** 通常株式同期のUTC対象日・開始窓・書込期限。元の実時計を変更しない。 */
+import { ScheduledSourceDeadlineError, scheduledExecutionWindow } from "./scheduled-admission.js";
 export function stockSyncRunDate(startedAt: number): string {
   return new Date(startedAt).toISOString().split("T")[0];
 }
@@ -9,7 +10,25 @@ export function scheduledStockSyncWindow(date: string) {
       new Date(start).toISOString().slice(0, 10) !== date || [0, 6].includes(new Date(start).getUTCDay())) {
     throw new Error("定時株式の予定日が不正です");
   }
-  return { start, latestStart: start + 120 * 60_000, deadline: Date.parse(`${date}T14:30:00.000Z`) };
+  const deadline = Date.parse(`${date}T14:30:00.000Z`);
+  return { start, latestStart: start + 120 * 60_000, deadline, sourceDeadline: deadline - 30 * 60_000 };
+}
+
+export function stockSyncSourceDeadline(date: string, scheduled = false): number {
+  return scheduled ? scheduledStockSyncWindow(date).sourceDeadline : stockSyncDeadline(date);
+}
+
+/** native360分からsector33最大600秒と既存終了5分を除き、閉鎖30分を確保する。 */
+export function stockSyncExecutionWindow(date: string, scheduled: boolean, nowMs: number, jobStartedAt?: string) {
+  const absoluteDeadline = stockSyncDeadline(date, scheduled);
+  if (jobStartedAt === undefined) return { deadline: absoluteDeadline, sourceDeadline: stockSyncSourceDeadline(date, scheduled) };
+  return scheduledExecutionWindow(absoluteDeadline, nowMs, jobStartedAt, 360 - 600 / 60, 30);
+}
+
+export function assertStockSyncSource(date: string, now: number, scheduled = false): void {
+  if (!Number.isFinite(now) || now >= stockSyncSourceDeadline(date, scheduled)) {
+    throw new ScheduledSourceDeadlineError("株式の新規取得期限です。取得済み原本の閉鎖を優先し未取得は未完にします");
+  }
 }
 
 export function assertStockSyncStart(startedAt: number, scheduledDate?: string): void {
@@ -40,13 +59,18 @@ export function assertStockSyncDeadline(targetDate: string, now: number, schedul
 }
 
 /** Node定時入口だけで使う。既存signalを保ち、待機後のHTTP開始も固定期限で止める。 */
-export function installStockSyncDeadline(targetDate: string): () => void {
-  const deadline = stockSyncDeadline(targetDate, true);
-  assertStockSyncDeadline(targetDate, Date.now(), true);
+export function installStockSyncDeadline(targetDate: string, options: { scheduled?: boolean; jobStartedAt?: string } = {}): () => void {
+  const scheduled = options.scheduled !== false;
+  const { deadline } = stockSyncExecutionWindow(targetDate, scheduled, Date.now(), options.jobStartedAt);
+  const assertActive = () => {
+    assertStockSyncDeadline(targetDate, Date.now(), scheduled);
+    if (Date.now() >= deadline) throw new Error("株式jobの原本閉鎖期限です（未完・再送なし）");
+  };
+  assertActive();
   const nativeFetch = globalThis.fetch;
   const signal = AbortSignal.timeout(deadline - Date.now());
   const guarded: typeof fetch = (input, init) => {
-    assertStockSyncDeadline(targetDate, Date.now(), true);
+    assertActive();
     const original = init?.signal !== undefined ? init.signal : input instanceof Request ? input.signal : undefined;
     return nativeFetch(input, { ...init, signal: original ? AbortSignal.any([original, signal]) : signal });
   };

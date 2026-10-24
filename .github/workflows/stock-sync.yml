@@ -29,6 +29,10 @@ on:
         description: "CF予定UTC日。stocksは実18〜20時開始/23:30新規IO締切、contextは既存朝窓"
         type: string
         default: ""
+      scheduled_at:
+        description: "CF controller.scheduledTime のUTC。定時の起動受付に使う。空は定時targetを止める"
+        type: string
+        default: ""
 
 concurrency:
   group: stock-sync
@@ -38,6 +42,7 @@ concurrency:
   queue: max
 
 permissions:
+  actions: read # reusable moneyflowの実job開始時計にも必要。
   contents: read
   issues: write  # 失敗時に Issue を立てるため
 
@@ -49,7 +54,7 @@ jobs:
       cancel-in-progress: false
       queue: max # pending同士の後着cancelを防ぐ。Yahoo取得は引き続き1 jobずつ。
     runs-on: ubuntu-latest
-    timeout-minutes: 210
+    timeout-minutes: 360 # 各段階は元job時計を引継ぎ、native終了前にsource停止/原本閉鎖。
     # 株式 step の実成功出力 (後続 moneyflow の起動条件)。step skip 時は空。
     outputs:
       trade_date: ${{ steps.daily.outputs.trade_date }}
@@ -76,6 +81,7 @@ jobs:
       NOTION_PRICE_SYNC_DB_ID: ${{ secrets.NOTION_PRICE_SYNC_DB_ID }}
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/record-job-clock
 
       - uses: pnpm/action-setup@v4
 
@@ -115,6 +121,7 @@ jobs:
             (github.event.inputs.target == 'daily' || github.event.inputs.target == 'stocks' || github.event.inputs.target == 'scheduled-stocks' || github.event.inputs.target == 'all')
         env:
           SCHEDULED_DATE: ${{ github.event.inputs.scheduled_date }}
+          SCHEDULED_AT: ${{ github.event.inputs.scheduled_at }}
           STOCK_SYNC_TARGET: ${{ github.event.inputs.target }}
         run: pnpm sync:daily:core --stocks-only
 
@@ -137,7 +144,7 @@ jobs:
           CF_D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_ARCHIVE_PAGE_ID: ${{ secrets.NOTION_ARCHIVE_PAGE_ID }}
-        run: nix develop -c bash -c 'cd pipeline && uv run python -m jp_stock_pipeline.jobs.sector33_sync'
+        run: nix develop -c bash -c 'cd pipeline && uv run python -m jp_stock_pipeline.jobs.sector33_sync --job-started-at "$BATCH_JOB_STARTED_AT"'
 
       - name: market context sync
         if: >-
@@ -145,6 +152,7 @@ jobs:
             (github.event.inputs.target == 'daily' || github.event.inputs.target == 'context' || github.event.inputs.target == 'scheduled-context' || github.event.inputs.target == 'all')
         env:
           SCHEDULED_DATE: ${{ github.event.inputs.scheduled_date }}
+          SCHEDULED_AT: ${{ github.event.inputs.scheduled_at }}
           STOCK_SYNC_TARGET: ${{ github.event.inputs.target }}
         run: pnpm sync:daily:core --context-only
 
@@ -187,5 +195,6 @@ jobs:
       only: sector-turnover
     secrets: inherit
     permissions:
+      actions: read
       contents: read
       issues: write

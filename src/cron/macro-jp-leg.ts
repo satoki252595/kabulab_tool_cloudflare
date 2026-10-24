@@ -157,7 +157,7 @@ export async function loadMacroJpLeg(store: MacroJpLegStore, date: string): Prom
   return found === null ? null : readBody(found.body, date);
 }
 /** stocks-session原本は既に全bytes保管済み。追加upstream GETはVI1回だけ。 */
-export async function captureMacroJpLeg(args: { date: string; runId: string; n225: YahooRawCapture; n225ArchivePages: string[]; store: MacroJpLegStore }): Promise<{ ok: boolean; reason: string }> {
+export async function captureMacroJpLeg(args: { date: string; runId: string; n225: YahooRawCapture; n225ArchivePages: string[]; store: MacroJpLegStore; beforeSourceRequest?: () => void }): Promise<{ ok: boolean; reason: string }> {
   const key = macroJpCacheKey(args.date);
   const prior = await args.store.get(key);
   if (prior !== null) {
@@ -171,7 +171,9 @@ export async function captureMacroJpLeg(args: { date: string; runId: string; n22
   let ok = false;
   try {
     qualifyN225(args.date, args.n225);
-    await fetchNikkeiVi({ onRaw: (raw) => { viCapture.value = raw; viReceivedAt = new Date().toISOString(); } });
+    args.beforeSourceRequest?.();
+    await fetchNikkeiVi({ beforeRequest: args.beforeSourceRequest,
+      onRaw: (raw) => { viCapture.value = raw; viReceivedAt = new Date().toISOString(); } });
     if (viCapture.value === null) throw new Error("日経VI原本captureがありません");
     qualifyMacroJpRaw(args.date, args.n225, { ...viCapture.value, receivedAt: viReceivedAt });
     ok = true;

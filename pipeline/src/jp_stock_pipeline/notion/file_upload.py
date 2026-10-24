@@ -37,6 +37,7 @@ from uuid import UUID
 from ..config import Settings
 from ..contracts.stock_code import parse_stock_code
 from ..models import RawArtifact
+from ..request_guard import RequestNotStartedError
 from . import schema as S
 from .client import NotionClient, NotionUnknownResultError
 from .upsert import (
@@ -424,6 +425,8 @@ def upload_raw_artifact(
             client, page_id, artifact,
             expected_master_id=related["relation"][0]["id"] if related is not None else None,
         )
+    except RequestNotStartedError:
+        raise
     except NotionUnknownResultError as exc:
         raise RawUploadUnknownResultError("⑤ 原本保管の結果不明。再送せず原本を保持して停止します") from exc
     except RawUploadError:

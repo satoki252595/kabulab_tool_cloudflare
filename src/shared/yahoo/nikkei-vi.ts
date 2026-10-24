@@ -39,6 +39,7 @@ export interface NikkeiViRawCapture {
 }
 
 export interface FetchNikkeiViOptions {
+  beforeRequest?: () => void;
   /**
    * 原文 capture の受取 (任意・1 件)。chart の onRaw と同型。
    * HTTP 判定より前に clone して呼ぶ (未指定の通常呼出は従来どおり)。
@@ -49,6 +50,7 @@ export interface FetchNikkeiViOptions {
 export async function fetchNikkeiVi(
   options?: FetchNikkeiViOptions
 ): Promise<NikkeiViSnapshot> {
+  options?.beforeRequest?.();
   const res = await fetch(NIKKEI_SMARTCHART_URL, {
     signal: AbortSignal.timeout(30_000),
     headers: {

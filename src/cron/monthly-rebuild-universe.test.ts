@@ -28,6 +28,7 @@ import { runMonthlyRebuild } from "./monthly.js";
 import type { OverlayCollectFn } from "./universe-overlay.js";
 import { fakeOverlayCollect } from "./tests/overlay-batch.js";
 import { makeTxBatchSender } from "./tests/overlay-test-sender.js";
+import { ScheduledSourceDeadlineError } from "../shared/scheduled-admission.js";
 
 const fakeCollect: OverlayCollectFn = fakeOverlayCollect;
 
@@ -118,6 +119,19 @@ afterEach(() => {
 });
 
 describe("runMonthlyRebuild の母集団 (active かつ equity かつ is_yutai)", () => {
+  it("月次のoverlay source期限を共通collectorへ渡し、期限時は原本取得/適用/派生保存に進まない", async () => {
+    const overlaySends = { sends: 0 }, stopped = new ScheduledSourceDeadlineError("monthly source deadline");
+    const source = vi.fn(() => { throw stopped; });
+    await expect(runMonthlyRebuild(makeProxyDb(sqlite) as unknown as Db, {
+      beforeSourceRequest: source,
+      collectOverlay: async (input) => { input.beforeSourceRequest?.(); return fakeCollect(input); },
+      sendOverlayBatch: makeTxBatchSender(sqlite, overlaySends),
+    })).rejects.toBe(stopped);
+    expect(source).toHaveBeenCalledTimes(1);
+    expect(overlaySends.sends).toBe(0);
+    expect(stockIds("otakara_stock_financials")).toEqual([]);
+    expect(stockIds("otakara_stock_scores")).toEqual([]);
+  });
   it("otakara_stock_financials / otakara_stock_scores には equity の行だけができる", async () => {
     const overlaySends = { sends: 0 };
     const result = await runMonthlyRebuild(makeProxyDb(sqlite) as unknown as Db, { collectOverlay: fakeCollect, sendOverlayBatch: makeTxBatchSender(sqlite, overlaySends) });

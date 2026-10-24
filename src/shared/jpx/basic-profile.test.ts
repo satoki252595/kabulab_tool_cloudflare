@@ -100,6 +100,19 @@ describe("parseBasicProfile", () => {
 });
 
 describe("collectBasicProfile (mock 3 段・live なし)", () => {
+  it.each([1, 2, 3])("第%d段の送信前source停止で次通信を開かず、取得済み実rawをpartialで返す", async (stopAt) => {
+    const { roundTrip, calls } = mockTrip([ENTRY, SEARCH, TABLE]);
+    let checks = 0;
+    const error = await collectBasicProfile("621A", { roundTrip, beforeRequest: () => {
+      if (++checks === stopAt) throw new Error("source deadline");
+    } }).then(() => null, (reason: unknown) => reason as PartialErr);
+    expect(error?.message).toBe("source deadline");
+    expect(calls).toHaveLength(stopAt - 1);
+    expect(Object.keys(error?.partial ?? {})).toHaveLength(stopAt - 1);
+    if (stopAt > 1) expect(error?.partial?.entry?.bytes).toEqual(new TextEncoder().encode(ENTRY));
+    if (stopAt > 2) expect(error?.partial?.search?.bytes).toEqual(new TextEncoder().encode(SEARCH));
+    expect(error?.partial?.basic).toBeUndefined();
+  });
   it("成功 control の連鎖で証拠を返す (3 往復・retry なし)", async () => {
     const { roundTrip, calls } = mockTrip([ENTRY, SEARCH, TABLE]);
     const out = await collectBasicProfile("621A", {

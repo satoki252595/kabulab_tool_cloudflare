@@ -27,6 +27,8 @@ from ..config import (
 )
 from ..local_store import connect_local_store
 from ..notion.client import NotionClient, NotionUnknownResultError
+from ..request_guard import RequestNotStartedError, assert_request_allowed, request_guard
+from .scheduled import assert_scheduled_io
 
 if TYPE_CHECKING:
     from ..cloud_store.sink import CloudSink
@@ -88,8 +90,11 @@ class JobContext:
         if self.local is None:
             return None
         try:
+            assert_request_allowed()
             fn(self.local)
             return True
+        except RequestNotStartedError:
+            raise
         except Exception as exc:  # noqa: BLE001 - ミラー失敗で収集を止めない (§3-2)
             self.mirror_failed += 1
             logger.warning("ローカルミラー失敗 (%s): %s", label, exc)
@@ -106,7 +111,10 @@ class JobContext:
         if self.cloud is None:
             return None
         try:
+            assert_request_allowed()
             result = fn(self.cloud)
+        except RequestNotStartedError:
+            raise
         except Exception as exc:  # noqa: BLE001 - Cloudflare 失敗で収集を止めない (§3-2)
             self.cloud_failed += 1
             logger.warning("Cloudflare 書き込み失敗 (%s): %s", label, exc)
@@ -195,8 +203,11 @@ class JobContext:
         """
         notion_ok = False
         try:
+            assert_request_allowed()
             notion_write()
             notion_ok = True
+        except RequestNotStartedError:
+            raise
         except NotionUnknownResultError:
             self.notion_failed += 1
             raise  # ローカル成功へ変換せず、次の取得単位も開始しない。
@@ -243,10 +254,13 @@ class JobContext:
         notion_err: Exception | None = None
         raw_page_id: str | None = None
         try:
+            assert_request_allowed()
             raw_page_id = file_upload.upload_raw_artifact(
                 self.client, self.settings, artifact,
                 sha_map=sha_map, sha_map_date=sha_map_date,
             )
+        except RequestNotStartedError:
+            raise
         except NotionUnknownResultError:
             self.notion_failed += 1
             raise  # 原本bytesはsave_raw済み。unknownを別系統の成功で閉じない。
@@ -362,7 +376,10 @@ def run_job(
     started = time.monotonic()
     crashed = False
     try:
-        fn(ctx)
+        # executeが資格化したargsのhard期限を、各実送信直前にも適用する。
+        # 最後のops receiptはこのscopeの外でnative終了までに閉鎖する。
+        with request_guard(lambda: assert_scheduled_io(args, datetime.now().astimezone())):
+            fn(ctx)
     except Exception:
         crashed = True
         logger.error("ジョブ異常終了: %s\n%s", job_name, traceback.format_exc())
