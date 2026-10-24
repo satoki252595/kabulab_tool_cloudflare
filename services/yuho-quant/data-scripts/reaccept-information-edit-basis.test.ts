@@ -27,6 +27,8 @@ vi.mock("../../../src/shared/notion-archive/page-file.js", () => ({ listPageFile
 vi.mock("../../../src/shared/notion-archive/archived-download.js", async original => ({ ...await original<typeof import("../../../src/shared/notion-archive/archived-download.js")>(), downloadArchivedFile: io.download }));
 vi.mock("../../../scripts/mechanical-publishing/shared-writer.js", async original => ({ ...await original<typeof import("../../../scripts/mechanical-publishing/shared-writer.js")>(), publishingStore: io.store }));
 const fixture = new URL("../src/tests/fixtures/information-edit-basis-3776/", import.meta.url);
+// Full real ZIP parsing runs several times; allow the slower Linux CI worker to finish before hooks reset its I/O controls.
+const fixtureTimeout = 60_000;
 const json = (name: string) => JSON.parse(readFileSync(new URL(name, fixture), "utf8"));
 const before = json("current-state-before.json"), entry = json("native-entry.json"), metadata = json("current-zip-metadata.json"), oldMetadata = json("old-source-metadata.json");
 const csv = readFileSync(new URL("current-type5.zip", fixture)), current = readFileSync(new URL("current-type1.zip", fixture)), old = readFileSync(new URL("old-explicit-type1.zip", fixture));
@@ -104,7 +106,7 @@ it("real3776 changes exactly four derived columns; strict/v1 stays unchanged, ev
   expect(() => verifyInformationEditData(state, parseEdinetCsvZip(csv), saved, body)).not.toThrow();
   expect(JSON.parse(pre.yuho_documents[0].overseas_omission_json as string).archiveManifest).toBe("unknown");
   expect(io.sender).toHaveBeenCalledTimes(1); expect(io.verify).toHaveBeenCalledTimes(2); expect(owner).toBeNull(); expect(fetch).not.toHaveBeenCalled();
-}, 15_000);
+}, fixtureTimeout);
 it.each(["original-flag", "fact", "body", "old-sha", "old-native", "old-parent", "old-state", "old-metadata-sha", "old-metadata-bytes", "typed-manifest", "omission"])("%s discrepancy is rejected before PRE or D1 send", async fault => {
   if (fault === "original-flag") io.list.mockImplementation(async source => ({ results: [source.date === original.date ? { ...originalDoc, docInfoEditStatus: "0" } : entry.doc] }));
   if (fault === "fact") sqlite.prepare("INSERT INTO yuho_order_facts(document_id,stock_id,fiscal_year_end,segment_name,segment_kind,unit_label,pattern) VALUES(621,2574,'2025-12-31','declared negative control','total','円','pattern_a')").run();
@@ -118,7 +120,7 @@ it.each(["original-flag", "fact", "body", "old-sha", "old-native", "old-parent",
   if (fault === "omission") { const value = structuredClone(omission); value.omission.evidence[0].rawBlockSha256 = "0".repeat(64); sqlite.prepare("UPDATE yuho_documents SET overseas_omission_json=? WHERE id=621").run(JSON.stringify(value)); }
   const pre = readSnapshot(sqlite, 2574); await expect(execute()).rejects.toThrow();
   expect(io.sender).not.toHaveBeenCalled(); expect(io.record).not.toHaveBeenCalled(); expect(readSnapshot(sqlite, 2574)).toEqual(pre);
-});
+}, fixtureTimeout);
 it.each(["issuer", "observation", "resolution"])("a concurrent %s change at send rolls back the four-column UPDATE", async fault => {
   io.sender.mockImplementationOnce(async statements => {
     if (fault === "issuer") sqlite.prepare("UPDATE jss_notion_pages SET page_id='6963' WHERE code='E05494'").run();
@@ -129,7 +131,7 @@ it.each(["issuer", "observation", "resolution"])("a concurrent %s change at send
   });
   const pre = readSnapshot(sqlite, 2574); await expect(execute()).rejects.toThrow(); expect(readSnapshot(sqlite, 2574)).toEqual(pre);
   expect(owner).not.toBeNull(); expect(existsSync(join(canonical, "tmp/edinet-information-edit-basis/S100WZGB/pending.json"))).toBe(true);
-});
+}, fixtureTimeout);
 it("lost D1 ACK preserves owner and canonical latch; another output/cwd cannot resend", async () => {
   io.sender.mockImplementationOnce(async statements => { apply(statements); throw new Error("declared offline lost ACK"); });
   const plan = await runBasisReaccept(options, canonical), executeOptions = { ...options, execute: true, expectedPreSha256: plan.preSha256 };
@@ -137,4 +139,4 @@ it("lost D1 ACK preserves owner and canonical latch; another output/cwd cannot r
   expect(owner).not.toBeNull(); expect(io.sender).toHaveBeenCalledTimes(1);
   const reads = io.list.mock.calls.length; await expect(runBasisReaccept(executeOptions, canonical)).rejects.toThrow("no_reentry");
   expect(io.sender).toHaveBeenCalledTimes(1); expect(io.list).toHaveBeenCalledTimes(reads);
-});
+}, fixtureTimeout);
