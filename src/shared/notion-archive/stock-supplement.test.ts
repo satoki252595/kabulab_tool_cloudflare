@@ -734,6 +734,7 @@ function buildFullSchema(extraTextColumns: string[] = []): Record<string, TestPr
   const cols = [...allColumnNames(), ...extraTextColumns];
   const out: Record<string, TestPropertyDef> = {};
   for (const c of cols) out[c] = { id: `${c}-id`, type: "rich_text" };
+  out["事業タグと現在本文の対応"] = { id: "tag-current-id", type: "formula" };
   out["銘柄名"] = { id: "name-id", type: "title" };
   out["銘柄マスタ"] = { id: "master-id", type: "relation" };
   out["会計期末"] = { id: "period-id", type: "date" };
@@ -768,6 +769,9 @@ function allColumnNames(): string[] {
     "事業タグ判定日",
     "候補語数",
     "判定入力",
+    "本文同期根拠",
+    "本文の事業タグ入力SHA256",
+    "事業タグの判定入力SHA256",
     "判定エラー",
     "再試行回数",
     "次回再試行日",

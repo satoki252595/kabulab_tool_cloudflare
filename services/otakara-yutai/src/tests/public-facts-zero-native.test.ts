@@ -105,16 +105,15 @@ describe("holding明示search READ1停止の一度再資格", () => {
     expect(() => claimHoldingUpgradeReadOnlyStop(f.state, directory, f.manifest, f.qualificationPath)).toThrow();
     expect(existsSync(join(f.state, "upgrade-v1-read-only-resume-started.json"))).toBe(false); expect(fetch).not.toHaveBeenCalled();
   });
-  it("通常CLI新modeだけ同じ計画へ進み、再開後エラーもprivateへ保持する", () => {
+  it("退役単体CLIはread-only-stop名でも適用入口を拒否し旧intentを保持する", () => {
     const f = readOnlyProtocol(), old = readFileSync(f.startedPath), oldResume = readFileSync(f.sidecarPath), hook = join(f.root, "deny-fetch.mjs");
     writeFileSync(hook, "globalThis.fetch=async()=>{throw new Error('procedural transport denied; no native HTTP');};\n");
     expect(() => execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), "--import", hook,
       join(ROOT, "services/otakara-yutai/data-scripts/backfill-public-facts.ts"), "resume-upgrade-holding-v1-read-only-stop",
       f.sourcePath, f.directory, f.scopePath, f.qualificationPath], { cwd: f.root, env: { PATH: process.env.PATH, NODE_ENV: "test" }, stdio: "pipe", timeout: 10_000 })).toThrow();
     expect(readFileSync(f.startedPath).equals(old)).toBe(true); expect(readFileSync(f.sidecarPath).equals(oldResume)).toBe(true);
-    expect(existsSync(join(f.state, "upgrade-v1-read-only-resume-started.json"))).toBe(true);
-    const failure = readdirSync(f.directory).find(n => n.startsWith("upgrade-failure-")); expect(failure).toBeDefined();
-    expect(read(join(f.directory, failure!)).mode).toBe("resume-upgrade-holding-v1-read-only-stop");
+    expect(existsSync(join(f.state, "upgrade-v1-read-only-resume-started.json"))).toBe(false);
+    expect(readdirSync(f.directory).filter(n => n.startsWith("upgrade-failure-"))).toEqual([]);
     expect(existsSync(join(f.directory, "apply-started.json"))).toBe(false);
   });
 });
@@ -149,15 +148,14 @@ describe("holding zero-nativeの明示再資格", () => {
     expect(() => claimHoldingUpgradeZeroNative(f.state, directory, manifest, f.proofPath)).toThrow();
     expect(readdirSync(f.state)).toEqual(["upgrade-v1-started.json"]); expect(readFileSync(f.startedPath).equals(old)).toBe(true); expect(fetch).not.toHaveBeenCalled();
   });
-  it("通常CLIの専用modeが同じ計画を再資格し、以降のエラーもprivateへ残す", () => {
+  it("退役単体CLIのzero-native再開は業務/sidecar前に拒否する", () => {
     const f = protocol(), old = readFileSync(f.startedPath), hook = join(f.root, "deny-fetch.mjs");
     writeFileSync(hook, "globalThis.fetch=async()=>{throw new Error('procedural transport denied; no native HTTP');};\n");
     expect(() => execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), "--import", hook,
       join(ROOT, "services/otakara-yutai/data-scripts/backfill-public-facts.ts"), "resume-upgrade-holding-v1-zero-native",
       f.sourcePath, f.directory, f.scopePath, f.proofPath], { cwd: f.root, env: { PATH: process.env.PATH, NODE_ENV: "test" }, stdio: "pipe", timeout: 10_000 })).toThrow();
-    expect(readFileSync(f.startedPath).equals(old)).toBe(true); expect(existsSync(join(f.state, "upgrade-v1-zero-native-resume-started.json"))).toBe(true);
-    const failures = readdirSync(f.directory).filter(n => n.startsWith("upgrade-failure-")); expect(failures).toHaveLength(1);
-    expect(read(join(f.directory, failures[0]))).toMatchObject({ mode: "resume-upgrade-holding-v1-zero-native", error: { name: expect.any(String), message: expect.any(String) } });
+    expect(readFileSync(f.startedPath).equals(old)).toBe(true); expect(existsSync(join(f.state, "upgrade-v1-zero-native-resume-started.json"))).toBe(false);
+    expect(readdirSync(f.directory).filter(n => n.startsWith("upgrade-failure-"))).toEqual([]);
     expect(existsSync(join(f.directory, "apply-started.json"))).toBe(false);
   });
 });

@@ -126,6 +126,7 @@ export function makeSummaryWriter(
 
 async function main(): Promise<void> {
   const { tasks: tasksPath, results: resultsPath, apply, showText } = parseImportArgs(process.argv.slice(2));
+  if (apply) throw new Error("standalone_summary_apply_retired_use_mechanical_publisher");
   assertNotCommittable(tasksPath);
   assertNotCommittable(resultsPath);
 

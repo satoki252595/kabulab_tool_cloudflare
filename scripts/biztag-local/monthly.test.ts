@@ -1,6 +1,5 @@
 import { vi } from "vitest";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
 import { EventEmitter } from "node:events";
 import { executeMonthly, monthlyFailureCode, monthlyMain, parseMonthlyArgs, type MonthlyStep } from "./monthly.js";
 
@@ -25,12 +24,11 @@ it("runtime必須・未知引数拒否、preflightは実行計画だけでchild�
   } finally { log.mockRestore(); }
 });
 
-it("受入runtimeで通常biztag→モデル無許可summary、旧daily controller/receiptは使わない", async () => {
+it("受入runtimeで通常biztag、優待は独立した本番機械処理、旧daily controller/receiptは使わない", async () => {
   const run = vi.fn(async (_runtime: string, _step: MonthlyStep) => "");
   await executeMonthly(runtime, state, undefined, run);
   expect(run.mock.calls.map(([cwd, step]) => [cwd, step.script, step.args])).toEqual([
     [runtime, "services/yuho-quant/data-scripts/biztag.ts", ["run", "--budget-min=20"]],
-    [runtime, "services/otakara-yutai/data-scripts/summary-local.ts", ["--limit", "60", "--state-dir", join(dirname(state), "yutai-local")]],
   ]);
   expect(prepare.plan).not.toHaveBeenCalled();
 });
@@ -42,7 +40,7 @@ it("先行失敗では後続・prepare markerを開始せず、再試行しな�
   expect(run).toHaveBeenCalledTimes(1); expect(prepare.plan).not.toHaveBeenCalled();
 });
 
-it("任意prepareは既存pending/cursor/acceptを再用し、不明終了ではsummaryへ進まない", async () => {
+it("任意prepareは既存pending/cursor/acceptを再用し、不明終了では完了扱いしない", async () => {
   vi.clearAllMocks();
   const stage = { args: ["competitors", "--prepare-only", "--judge=semif", "--codes=634A", "--limit=1", "--budget-min=6", `--out=${state}`] };
   prepare.plan.mockReturnValue(stage); prepare.accept.mockImplementation(() => { throw new Error("expected unresolved archive"); });

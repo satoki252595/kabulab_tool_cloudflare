@@ -22,6 +22,7 @@ import { pathToFileURL } from "node:url";
 import { moveToTrash, recordPrimaryData, verifyArchivedAttachments } from "../../../src/shared/notion-archive/index.js";
 import { sha256HexBytes } from "../../../src/shared/sha256.js";
 import { resolveRunId, writeSummaryLocal } from "../../../scripts/vwap/lib/ingest-guard.js";
+import { currentPublishingWriter, publishingReadOnly, withSharedPublishingWriter } from "../../../scripts/mechanical-publishing/shared-writer.js";
 import "dotenv/config";
 import { ANYTIME_RECORD_MONTH } from "../src/record-date.js";
 
@@ -441,6 +442,12 @@ export async function main() {
 
 /** 全量・物理原本の照合済み収集結果を、通常のPRE保管・原子取込へ渡す。 */
 export async function importCollectedYutaiData(allData: StockYutaiData[], runId: string, sourceFetchedAt: string): Promise<void> {
+  return withSharedPublishingWriter(() => importCollectedYutaiDataOwned(allData, runId, sourceFetchedAt));
+}
+
+async function importCollectedYutaiDataOwned(allData: StockYutaiData[], runId: string, sourceFetchedAt: string): Promise<void> {
+  const writer = currentPublishingWriter();
+  if (writer === undefined) throw new Error("優待原文取込の共有writerがありません");
   log.info(`\n✅ ${allData.length}銘柄の詳細データを取得\n`);
 
   // データ品質サマリー (表示用の union。合成には表ローカル月だけを使う)
@@ -453,10 +460,12 @@ export async function importCollectedYutaiData(allData: StockYutaiData[], runId:
 
   // Phase 3: DB import
   log.info("\n📦 Phase 3: DBにインポート中...");
-  const db = createD1HttpDb(schema);
+  const db = await publishingReadOnly(async () => createD1HttpDb(schema));
   // 取得経路だけでなく上書き前の全優待行を復元可能にする。原文・解釈をログには出さない。
-  const previous = await db.select().from(schema.yutaiBenefits);
+  const previous = await publishingReadOnly(() => db.select().from(schema.yutaiBenefits));
   const preimageBytes = Buffer.from(JSON.stringify(previous));
+  const publication = await writer.reserve("yutai-source-import", { runId, sourceFetchedAt },
+    JSON.stringify({ runId, sourceFetchedAt, previous, allData }));
   const preimage = await archivePages([{
     url: "D1:yutai_benefits before source import", receivedAt: new Date().toISOString(),
     status: null, contentType: "application/json", byteLength: preimageBytes.length,
@@ -464,9 +473,20 @@ export async function importCollectedYutaiData(allData: StockYutaiData[], runId:
   }], `${runId}-preimage`, "D1 yutai_benefits complete row snapshot before source import (HTTP status not exposed)");
   if (preimage === undefined) throw new Error("優待の更新前スナップショットが無いためSTOP");
   const result = await importYutaiFull(db, allData, createD1HttpBatchSender(), sourceFetchedAt);
+  const postRows = await publishingReadOnly(() => db.select().from(schema.yutaiBenefits));
+  const postBytes = Buffer.from(JSON.stringify(postRows));
+  const postimage = await archivePages([{
+    url: "D1:yutai_benefits after source import", receivedAt: new Date().toISOString(),
+    status: null, contentType: "application/json", byteLength: postBytes.length,
+    bodyBase64: postBytes.toString("base64"),
+  }], `${runId}-postimage`, "D1 yutai_benefits complete observed row snapshot after source import (HTTP status not exposed)");
+  if (postimage === undefined) throw new Error("優待の取込後スナップショットが無いためSTOP");
   const retired = await moveToTrash({ service: "otakara-yutai", originPageId: preimage.pageId,
     reason: `優待原文取込 ${runId} が成功。更新前の全行スナップショットを復元用に保管。` });
   await verifyArchivedAttachments(retired.trashPageId, preimage.files, "優待更新前スナップショット退避");
+  await publication.complete({ preArchivePageId: preimage.pageId, postArchivePageId: postimage.pageId,
+    observedPostSha256: await sha256HexBytes(postBytes), observedPostRows: postRows.length,
+    stockCount: result.stockCount, benefitCount: result.benefitCount });
 
   log.info("\n" + "=".repeat(60));
   log.info("📊 最終結果:");
