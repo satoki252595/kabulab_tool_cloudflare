@@ -52,6 +52,7 @@ import {
   type JssAnnualRow,
 } from "../shared/db/jss-financials.js";
 import { sharedEnv } from "../shared/env.js";
+import { scheduledAtForDate } from "../shared/scheduled-admission.js";
 import { assertStockSyncDeadline, assertStockSyncStart, stockSyncDeadline, stockSyncRunDate } from "../shared/stock-sync-window.js";
 import {
   ensurePriceSyncDb,
@@ -1252,8 +1253,13 @@ async function runDailySyncAndRecord(
   const assertStockDeadline = () => {
     assertStockSyncDeadline(targetDate, Date.now(), scheduledStocks);
   };
-  // 価格・母集団とも開始窓と予定日・書込み期限は守る。
-  assertStockSyncStart(startedAt, scheduledStocks ? targetDate : undefined);
+  // 定時の開始窓はscheduled_at。23:30の新規IOは実時計。
+  if (scheduledStocks) {
+    assertStockSyncStart(scheduledAtForDate(sharedEnv.SCHEDULED_AT(), targetDate), targetDate);
+    assertStockDeadline();
+  } else {
+    assertStockSyncStart(startedAt);
+  }
   // 母集団は価格取得とは独立して更新する。N225 の欠測で上場廃止の適用を止めない。
   // HOLD 残があれば不完全失敗を throw し、株価 fetch へ進まない。
   const overlay = await ensureUniverseOverlay(db, {
@@ -1793,10 +1799,14 @@ export async function runMarketContextSync(db: Db, jpLegStore?: MacroJpLegStore)
   const targetDate = runDateKeys(startedAt).runDate;
   assertScheduledDate(targetDate);
   if (scheduled) {
+    const scheduledMs = scheduledAtForDate(sharedEnv.SCHEDULED_AT(), targetDate);
     const floor = Date.parse(`${targetDate}T21:00:00.000Z`);
     const cutoff = Date.parse(`${targetDate}T21:30:00.000Z`);
-    if (startedAt < floor || startedAt > cutoff) {
+    if (scheduledMs < floor || scheduledMs > cutoff) {
       throw new Error("定時マクロの開始は予定日21:00〜21:30 UTCに限定します");
+    }
+    if (Date.now() > Date.parse(`${targetDate}T22:00:00.000Z`)) {
+      throw new Error("定時マクロの保存期限22:00 UTCを超過しました");
     }
   }
   const ny = Object.fromEntries(new Intl.DateTimeFormat("en-US", {

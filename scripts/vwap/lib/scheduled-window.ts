@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { assertVwapAdmission, assertVwapContinuation } from "../../../src/shared/vwap-schedule.js";
+import { parseScheduledAt } from "../../../src/shared/scheduled-admission.js";
+import { assertVwapAdmission, assertVwapContinuation, scheduledVwapWindow } from "../../../src/shared/vwap-schedule.js";
 
 interface Admission {
   version: 1;
@@ -11,7 +12,7 @@ interface Admission {
 
 /** 日足が受付時計を1回保存し、同runの5分足だけがその時計を継承する。外部通信なし。 */
 export function scheduledVwapGuard(options: {
-  plannedDate: string | undefined; runId: string; phase: "daily" | "intra";
+  plannedDate: string | undefined; scheduledAt?: string; runId: string; phase: "daily" | "intra";
   nowMs?: number; directory?: string; maxStartSeconds?: string;
 }): { admission: Admission | null; startBudget?: { startedAt: string; deadline: string; seconds: number }; assertActive(): void } {
   const nowMs = options.nowMs === undefined ? Date.now() : options.nowMs;
@@ -33,10 +34,14 @@ export function scheduledVwapGuard(options: {
   const path = join(dir, `vwap-scheduled-admission-${options.runId}.json`);
   let admission: Admission;
   if (options.phase === "daily") {
-    // 遅配はファイル作成・D1・R2・Yahooのすべてより先に停止。
-    assertVwapAdmission(options.plannedDate, nowMs);
+    // 受付窓はscheduled_at。23:30の新規IOは実時計。保存する時計は予定時刻。
+    const admittedMs = parseScheduledAt(options.scheduledAt);
+    assertVwapAdmission(options.plannedDate, admittedMs);
+    if (nowMs >= scheduledVwapWindow(options.plannedDate).completionCutoff) {
+      throw new Error("VWAP完了期限の範囲外です (予定日23:30 JSTより前)。新規取得・価格PUTしません");
+    }
     admission = { version: 1, runId: options.runId, plannedDate: options.plannedDate,
-      admittedAt: new Date(nowMs).toISOString() };
+      admittedAt: new Date(admittedMs).toISOString() };
     mkdirSync(dir, { recursive: true });
     writeFileSync(path, JSON.stringify(admission), { flag: "wx", mode: 0o600, flush: true });
   } else {

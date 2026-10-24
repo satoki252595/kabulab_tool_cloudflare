@@ -24,13 +24,14 @@ describe("VWAP定時窓と同run受付時計", () => {
   it("受付端と終了直前は許可し、原時計を更新せず次run/日/終了端以降を拒否する", () => {
     const directory = mkdtempSync(join(tmpdir(), "vwap-window-"));
     const input = { plannedDate: date, runId: "38570657322.1", directory };
-    const admitted = scheduledVwapGuard({ ...input, phase: "daily", nowMs: start + 600_000 });
+    const admittedAt = new Date(start + 600_000).toISOString();
+    const admitted = scheduledVwapGuard({ ...input, phase: "daily", nowMs: start + 600_000, scheduledAt: admittedAt });
     const file = join(directory, readdirSync(directory)[0]);
     const before = readFileSync(file, "utf8");
     const continued = scheduledVwapGuard({ ...input, phase: "intra", nowMs: start + 390 * 60_000 - 1 });
     expect(continued.admission).toEqual(admitted.admission);
     expect(readFileSync(file, "utf8")).toBe(before);
-    expect(() => scheduledVwapGuard({ ...input, phase: "daily", nowMs: start + 600_000 })).toThrow();
+    expect(() => scheduledVwapGuard({ ...input, phase: "daily", nowMs: start + 600_000, scheduledAt: admittedAt })).toThrow();
     for (const nowMs of [start + 390 * 60_000, start + 390 * 60_000 + 1]) {
       expect(() => scheduledVwapGuard({ ...input, phase: "intra", nowMs })).toThrow("完了期限");
     }

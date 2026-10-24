@@ -35,7 +35,7 @@ describe("公表取得のCF起動は予定slot保持・one-shot", () => {
       const plan = timedDispatchPlan({ cron: profile.cron, scheduledTime: ms }, ms);
       expect(plan.scheduledAt).toBe(new Date(ms).toISOString().replace(".000Z", "Z"));
       expect(plan.inputs).toEqual(profile.name === "margin"
-        ? { target: "scheduled-margin", scheduled_date: "2026-10-23" }
+        ? { target: "scheduled-margin", scheduled_date: "2026-10-23", scheduled_at: new Date(ms).toISOString() }
         : { scheduled_at: plan.scheduledAt });
     }
     expect(isTimedCron("0 9 * * MON-FRI")).toBe(false);

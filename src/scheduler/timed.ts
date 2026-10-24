@@ -1,3 +1,4 @@
+import { scheduledAtIso, scheduledMarginWindow } from "../shared/scheduled-admission.js";
 import {
   runWorkflowDispatch, schedulerToken,
   type ScheduledControllerLike, type SchedulerEnv,
@@ -28,12 +29,20 @@ export function timedDispatchPlan(controller: ScheduledControllerLike, nowMs: nu
       !(profile.hours as readonly number[]).includes(planned.getUTCHours()) || planned.getUTCMinutes() !== profile.minute) {
     throw new Error("予定日時がcronの公表取得slotと一致しません");
   }
-  // CFの遅配はここで止める。Actions待機・環境準備後にも各CLIが別途受付を判定する。
-  if (nowMs > plannedMs + 5 * 60_000) throw new Error("定時dispatchの5分受付を超過しました");
   const scheduledAt = planned.toISOString().replace(".000Z", "Z");
   const scheduledDate = scheduledAt.slice(0, 10);
+  // 信用残だけ5分の実時計受付を外す。17:00〜17:10は予定時刻、17:30は新規IOの実時計。
+  if (profile.name === "margin") {
+    const window = scheduledMarginWindow(scheduledDate);
+    if (controller.scheduledTime < window.start || controller.scheduledTime > window.latestStart) {
+      throw new Error("信用残の開始は予定日17:00〜17:10 JSTです（取得前停止）");
+    }
+    if (nowMs >= window.deadline) throw new Error("信用残の17:30 JST新規IO期限です");
+  } else if (nowMs > plannedMs + 5 * 60_000) {
+    throw new Error("定時dispatchの5分受付を超過しました");
+  }
   const inputs: Record<string, string> = profile.name === "margin"
-    ? { target: "scheduled-margin", scheduled_date: scheduledDate }
+    ? { target: "scheduled-margin", scheduled_date: scheduledDate, scheduled_at: scheduledAtIso(controller.scheduledTime) }
     : { scheduled_at: scheduledAt };
   return { ...profile, scheduledAt, scheduledDate, inputs,
     key: `timed-scheduler/${profile.name}/${scheduledAt}.json` };
@@ -46,5 +55,6 @@ export async function handleTimedScheduled(controller: ScheduledControllerLike, 
   return runWorkflowDispatch({ bucket: env.BUCKET, token: schedulerToken(env), cron: controller.cron,
     scheduledDate: plan.scheduledDate, scheduledAt: plan.scheduledAt, key: plan.key,
     workflow: plan.workflow, inputs: plan.inputs, nowMs,
+    claimWindowMs: plan.name === "margin" ? 30 * 60_000 : undefined,
     fetchFn: options.fetchFn === undefined ? fetch : options.fetchFn });
 }

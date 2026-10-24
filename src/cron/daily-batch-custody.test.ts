@@ -488,7 +488,7 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
   it("JPX待機は実8303の主要write・Phase6・完了記録の後、以降の金融write0", async () => {
     const targetDate = "2026-10-14";
     vi.mocked(Date.now).mockReturnValue(Date.parse(`${targetDate}T10:16:00Z`));
-    vi.stubEnv("STOCK_SYNC_TARGET", "scheduled-stocks"); vi.stubEnv("SCHEDULED_DATE", targetDate);
+    vi.stubEnv("STOCK_SYNC_TARGET", "scheduled-stocks"); vi.stubEnv("SCHEDULED_DATE", targetDate); vi.stubEnv("SCHEDULED_AT", `${targetDate}T10:16:00.000Z`);
     // N225/JPlegは既存harnessのtransport投影。8303金融値は保存実原本のまま。
     vi.mocked(fetchChart).mockImplementation(chartWithRaw(sessionChart(targetDate)));
     vi.spyOn(jpLegModule, "captureMacroJpLeg").mockResolvedValue({ ok: true, reason: "JP leg transport projection" });

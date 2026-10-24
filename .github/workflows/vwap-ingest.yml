@@ -20,6 +20,10 @@ on:
         description: "CF予定日 YYYY-MM-DD。17:00〜17:10受付、価格23:30/信用残17:30新規IO終了"
         type: string
         default: ""
+      scheduled_at:
+        description: "CF controller.scheduledTime のミリ秒付きUTC。17:00〜17:10の起動受付。価格23:30/信用残17:30は実時計"
+        type: string
+        default: ""
       daily_codes:
         description: "target=daily の対象コード（カンマ区切り）。空欄は通常の全母集団"
         type: string
@@ -159,6 +163,7 @@ jobs:
           DAILY_SESSION_DATE: ${{ inputs.daily_session_date }}
           TARGET: ${{ inputs.target }}
           SCHEDULED_DATE: ${{ inputs.scheduled_date }}
+          SCHEDULED_AT: ${{ inputs.scheduled_at }}
         run: |
           # daily の errors/invalid (exit1) で intra を道連れにしない。exit2
           # (連続429/503 ABORT・R2 fatal unknown/rejected/GET fault・バッチ保管
@@ -168,6 +173,7 @@ jobs:
           intra_args=()
           if [ "$TARGET" = "scheduled-daily-intra" ]; then
             daily_args+=("--scheduled-date=$SCHEDULED_DATE")
+            daily_args+=("--scheduled-at=$SCHEDULED_AT")
             intra_args+=("--scheduled-date=$SCHEDULED_DATE")
           fi
           if [ -n "$DAILY_SESSION_SOURCE" ]; then daily_args+=("--session-source=$DAILY_SESSION_SOURCE"); fi
@@ -238,9 +244,10 @@ jobs:
         env:
           TARGET: ${{ inputs.target }}
           SCHEDULED_DATE: ${{ inputs.scheduled_date }}
+          SCHEDULED_AT: ${{ inputs.scheduled_at }}
         run: |
           args=()
-          if [ "$TARGET" = "scheduled-margin" ]; then args+=("--scheduled-date=$SCHEDULED_DATE"); fi
+          if [ "$TARGET" = "scheduled-margin" ]; then args+=("--scheduled-date=$SCHEDULED_DATE" "--scheduled-at=$SCHEDULED_AT"); fi
           pnpm ingest:vwap-margin "${args[@]}"
       # archive 前に producer が cwd/.vwap-summaries/ へ原本 bytes を保持する。
       # 保管失敗 (413 UNKNOWN 等) でも summary が ephemeral runner と共に消えない。

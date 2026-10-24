@@ -143,7 +143,7 @@ describe("通常定時VWAPの5分足は同run受付と終了窓を継承", () =>
   it("最終empty/summary保管中に期限を越えても成功出口へ進まない", async () => {
     vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-10-14T08:00:00.000Z"));
     vi.stubEnv("GITHUB_RUN_ID", "101"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
-    scheduledVwapGuard({ plannedDate: "2026-10-14", runId: "101.1", phase: "daily" });
+    scheduledVwapGuard({ plannedDate: "2026-10-14", scheduledAt: "2026-10-14T08:00:00.000Z", runId: "101.1", phase: "daily" });
     process.argv.push("--scheduled-date=2026-10-14");
     mockLoadCodes.mockResolvedValue(["7203"]); mockFetch5m.mockResolvedValue([]); mockR2Get.mockResolvedValue(null);
     mockRecord.mockImplementationOnce(async () => {
@@ -163,7 +163,7 @@ describe("通常定時VWAPの5分足は同run受付と終了窓を継承", () =>
     vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-10-14T08:00:00.000Z"));
     vi.stubEnv("GITHUB_RUN_ID", "101"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
     if (mode === "expired") {
-      scheduledVwapGuard({ plannedDate: "2026-10-14", runId: "101.1", phase: "daily" });
+      scheduledVwapGuard({ plannedDate: "2026-10-14", scheduledAt: "2026-10-14T08:00:00.000Z", runId: "101.1", phase: "daily" });
       vi.setSystemTime(new Date("2026-10-14T14:30:00.001Z"));
     }
     process.argv.push("--scheduled-date=2026-10-14");
@@ -175,7 +175,7 @@ describe("通常定時VWAPの5分足は同run受付と終了窓を継承", () =>
   it("取得中に終了窓へ達しても原本を保管し、価格PUT0・残りnotStartedで終了2", async () => {
     vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-10-14T08:00:00.000Z"));
     vi.stubEnv("GITHUB_RUN_ID", "101"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
-    scheduledVwapGuard({ plannedDate: "2026-10-14", runId: "101.1", phase: "daily" });
+    scheduledVwapGuard({ plannedDate: "2026-10-14", scheduledAt: "2026-10-14T08:00:00.000Z", runId: "101.1", phase: "daily" });
     process.argv.push("--scheduled-date=2026-10-14");
     mockLoadCodes.mockResolvedValue(["7203", "6758"]);
     mockFetch5m.mockImplementationOnce(async () => {
@@ -243,7 +243,7 @@ describe("ingest-intra main flow", () => {
     });
     if (mode === "deadline") {
       vi.stubEnv("GITHUB_RUN_ID", "101"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
-      scheduledVwapGuard({ plannedDate: "2026-10-14", runId: "101.1", phase: "daily" }); process.argv.push("--scheduled-date=2026-10-14");
+      scheduledVwapGuard({ plannedDate: "2026-10-14", scheduledAt: "2026-10-14T08:00:00.000Z", runId: "101.1", phase: "daily" }); process.argv.push("--scheduled-date=2026-10-14");
     }
     const operation = main();
     try {

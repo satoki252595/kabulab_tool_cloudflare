@@ -26,6 +26,7 @@ import { rootCauseMessage } from "../../src/shared/errors.js";
 import { r2GetVersion, r2Put } from "../vwap/lib/r2.js";
 import type { MacroJpLegStore } from "../../src/cron/macro-jp-leg.js";
 import { notionStats } from "../../src/shared/notion-archive/client.js";
+import { scheduledAtForDate } from "../../src/shared/scheduled-admission.js";
 import { assertStockSyncDeadline, assertStockSyncStart, installStockSyncDeadline, stockSyncDeadline } from "../../src/shared/stock-sync-window.js";
 
 const MAX_CODES_PER_ERROR = 50;
@@ -81,7 +82,7 @@ async function main(): Promise<void> {
   if (sharedEnv.STOCK_SYNC_TARGET() === "scheduled-stocks") {
     const date = sharedEnv.SCHEDULED_DATE();
     if (date === undefined) throw new Error("定時株式にはSCHEDULED_DATEが必須です");
-    assertStockSyncStart(Date.now(), date);
+    assertStockSyncStart(scheduledAtForDate(sharedEnv.SCHEDULED_AT(), date), date);
     restore = installStockSyncDeadline(date);
     const assertActive = () => assertStockSyncDeadline(date, Date.now(), true);
     jpLegStore.get = key => {

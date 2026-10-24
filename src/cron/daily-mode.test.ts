@@ -687,10 +687,13 @@ describe("株式 guard の default パス共有 (stocksOnly 依存の除去)", (
 
 describe("SCHEDULED_DATE 検証 (CF scheduler 経由の一致確認のみ)", () => {
   const ORIGINAL_DATE = process.env.SCHEDULED_DATE;
+  const ORIGINAL_AT = process.env.SCHEDULED_AT;
   const ORIGINAL_TARGET = process.env.STOCK_SYNC_TARGET;
   afterEach(() => {
     if (ORIGINAL_DATE === undefined) delete process.env.SCHEDULED_DATE;
     else process.env.SCHEDULED_DATE = ORIGINAL_DATE;
+    if (ORIGINAL_AT === undefined) delete process.env.SCHEDULED_AT;
+    else process.env.SCHEDULED_AT = ORIGINAL_AT;
     if (ORIGINAL_TARGET === undefined) delete process.env.STOCK_SYNC_TARGET;
     else process.env.STOCK_SYNC_TARGET = ORIGINAL_TARGET;
   });
@@ -698,6 +701,7 @@ describe("SCHEDULED_DATE 検証 (CF scheduler 経由の一致確認のみ)", () 
   it("一致すれば通常フローへ進む (検証のみ・日付を上書きしない)", async () => {
     vi.setSystemTime(new Date("2026-09-28T09:10:00.000Z")); // 定時18:10 JST、対象日は不変。
     process.env.SCHEDULED_DATE = "2026-09-28";
+    process.env.SCHEDULED_AT = "2026-09-28T09:10:00.000Z";
     process.env.STOCK_SYNC_TARGET = "scheduled-stocks";
     vi.mocked(fetchChart).mockImplementation(chartWithRaw(chart("2026-09-25")));
     const { db } = recordingDb();
@@ -730,10 +734,32 @@ describe("SCHEDULED_DATE 検証 (CF scheduler 経由の一致確認のみ)", () 
 
   it("定時stocksが20時を過ぎてqueueから出た場合は原本取得/金融保存を開始しない", async () => {
     vi.setSystemTime(new Date("2026-09-28T11:00:00.001Z"));
-    process.env.SCHEDULED_DATE = "2026-09-28"; process.env.STOCK_SYNC_TARGET = "scheduled-stocks";
+    process.env.SCHEDULED_DATE = "2026-09-28"; process.env.SCHEDULED_AT = "2026-09-28T11:00:00.001Z"; process.env.STOCK_SYNC_TARGET = "scheduled-stocks";
     const { db, calls } = recordingDb();
     await expect(runDailySync(db, { stocksOnly: true, jpLegStore: emptyJpStore })).rejects.toThrow("18:00〜20:00");
     expect(fetchChart).not.toHaveBeenCalled(); expect(fetchStockRawData).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
+
+  it("scheduled_atが18:00なら20時を過ぎた実時計でも開始窓では止めない", async () => {
+    vi.setSystemTime(new Date("2026-09-28T11:00:00.001Z"));
+    process.env.SCHEDULED_DATE = "2026-09-28";
+    process.env.SCHEDULED_AT = "2026-09-28T09:00:00.000Z";
+    process.env.STOCK_SYNC_TARGET = "scheduled-stocks";
+    vi.mocked(fetchChart).mockImplementation(chartWithRaw(chart("2026-09-25")));
+    const { db } = recordingDb();
+    await expect(runDailySync(db, { stocksOnly: true, jpLegStore: emptyJpStore })).rejects.toThrow("日足を確認できません");
+    expect(fetchChart).toHaveBeenCalled();
+  });
+
+  it("23:30以降は開始窓内のscheduled_atでも取得前に止める", async () => {
+    vi.setSystemTime(new Date("2026-09-28T14:30:00.000Z"));
+    process.env.SCHEDULED_DATE = "2026-09-28";
+    process.env.SCHEDULED_AT = "2026-09-28T09:00:00.000Z";
+    process.env.STOCK_SYNC_TARGET = "scheduled-stocks";
+    const { db, calls } = recordingDb();
+    await expect(runDailySync(db, { stocksOnly: true, jpLegStore: emptyJpStore })).rejects.toThrow("23:30");
+    expect(fetchChart).not.toHaveBeenCalled();
     expect(calls).toEqual([]);
   });
 
@@ -768,6 +794,7 @@ describe("定時マクロの予定日・開始窓・保存期限", () => {
   beforeEach(() => {
     vi.stubEnv("STOCK_SYNC_TARGET", "scheduled-context");
     vi.stubEnv("SCHEDULED_DATE", "2026-09-29");
+    vi.stubEnv("SCHEDULED_AT", "2026-09-29T21:00:30.000Z");
     vi.setSystemTime(new Date("2026-09-29T21:00:30Z"));
     vi.spyOn(jpLegModule, "loadMacroJpLeg").mockResolvedValue({
       n225: { value: 47505.875, prev: 47000, date: "2026-09-29" }, nikkeiVi: 20, nikkeiViDate: "2026-09-29",
@@ -843,14 +870,25 @@ describe("定時マクロの予定日・開始窓・保存期限", () => {
     vi.stubEnv("SCHEDULED_DATE", "2026/09/29");
     await expect(runMarketContextSync(db, emptyJpStore)).rejects.toThrow("形式");
     vi.stubEnv("SCHEDULED_DATE", "2026-09-29");
+    vi.stubEnv("SCHEDULED_AT", "2026-09-29T21:31:00.000Z");
     vi.setSystemTime(new Date("2026-09-29T21:31:00Z"));
     await expect(runMarketContextSync(db, emptyJpStore)).rejects.toThrow("開始");
     expect(fetchChart).not.toHaveBeenCalled();
     expect(calls).toEqual([]);
   });
 
+  it("21:31の実時計でもscheduled_atが21:00台なら開始窓では止めない", async () => {
+    vi.stubEnv("SCHEDULED_AT", "2026-09-29T21:00:30.000Z");
+    vi.setSystemTime(new Date("2026-09-29T21:31:00.000Z"));
+    mockMacro(ALIGNED);
+    const { db } = recordingDb();
+    expect(await runMarketContextSync(db, emptyJpStore)).toBe(true);
+    expect(fetchChart).toHaveBeenCalled();
+  });
+
   it("前日原本を予定日の成功にせず原本を保管してHOLDする", async () => {
     vi.stubEnv("SCHEDULED_DATE", "2026-09-30");
+    vi.stubEnv("SCHEDULED_AT", "2026-09-30T21:00:30.000Z");
     vi.setSystemTime(new Date("2026-09-30T21:00:30Z"));
     mockMacro(ALIGNED);
     const { db, calls } = recordingDb();

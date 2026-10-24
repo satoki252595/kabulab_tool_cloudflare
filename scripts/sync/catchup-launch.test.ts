@@ -7,7 +7,9 @@ import { CATCHUP_JOIN_CUTOFF_TIME, CATCHUP_COMPLETION_CUTOFF_TIME } from "../../
 
 const date = "2026-10-14";
 const now = Date.parse(`${date}T10:00:10Z`);
-const event = (target: unknown = "scheduled-catchup", scheduled_date: unknown = date) => ({ inputs: { target, scheduled_date } });
+const event = (target: unknown = "scheduled-catchup", scheduled_date: unknown = date, scheduled_at: unknown = target === "scheduled-catchup" ? `${date}T10:00:10.000Z` : undefined) => ({
+  inputs: scheduled_at === undefined ? { target, scheduled_date } : { target, scheduled_date, scheduled_at },
+});
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 it("event ref/SHA・取得済main・実checkoutの同一leaseだけ通す", () => {
@@ -82,11 +84,13 @@ describe("catchup取得前の起動資格", () => {
   it("6境界:初回19時/5分境界と後続19:53を分け、最早外部終了19:54より前に閉じる", () => {
     const floor = Date.parse(`${date}T10:00:00Z`);
     const cutoff = Date.parse(`${date}T${CATCHUP_JOIN_CUTOFF_TIME}`);
-    const initial = (clock: number) => assertCatchupInvocation("all", "workflow_dispatch", event(), clock);
+    const initial = (scheduledMs: number, nowMs = scheduledMs) => assertCatchupInvocation("all", "workflow_dispatch", event("scheduled-catchup", date, new Date(scheduledMs).toISOString()), nowMs);
     expect(() => initial(floor - 1)).toThrow();
     expect(() => initial(floor)).not.toThrow();
     expect(() => initial(floor + 5 * 60_000)).not.toThrow();
     expect(() => initial(floor + 5 * 60_000 + 1)).toThrow();
+    expect(() => initial(floor, floor + 5 * 60_000 + 1)).not.toThrow();
+    expect(() => initial(floor, floor + 19 * 60_000)).not.toThrow();
     expect(assertCatchupInvocation("edinet", "workflow_dispatch", event(), cutoff - 1)).toBe(cutoff);
     expect(() => assertCatchupInvocation("edinet", "workflow_dispatch", event(), cutoff)).toThrow();
     const yml = readFileSync(new URL("../../.github/workflows/catchup.yml", import.meta.url), "utf8");
@@ -123,7 +127,8 @@ describe("catchup取得前の起動資格", () => {
       expect(() => assertCatchupInvocation("all", "workflow_dispatch", event(), clock)).toThrow();
     }
     expect(() => assertCatchupInvocation("edinet", "workflow_dispatch", event(), Date.parse(`${date}T10:52:59.999Z`))).not.toThrow();
-    expect(() => assertCatchupInvocation("all", "workflow_dispatch", event(), Date.parse(`${date}T10:05:00.001Z`))).toThrow();
+    expect(() => assertCatchupInvocation("all", "workflow_dispatch", event(), Date.parse(`${date}T10:05:00.001Z`))).not.toThrow();
+    expect(() => assertCatchupInvocation("all", "workflow_dispatch", event("scheduled-catchup", date, `${date}T10:05:00.001Z`), Date.parse(`${date}T10:05:00.001Z`))).toThrow();
   });
   it("実TDnet CLIの旧scheduleはsource/configより前に停止する", () => {
     const child = spawnSync(process.execPath, ["--import", "tsx", "scripts/sync/ir-tdnet.ts"], {
