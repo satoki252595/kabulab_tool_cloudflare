@@ -1,4 +1,5 @@
 import { BASE_PATH } from "../../base-path.js";
+import { termTip } from "../../../../src/shared/term-tip.js";
 import { h, fmtNum, pctCell, layout } from "./layout.js";
 
 export interface DashboardData {
@@ -208,9 +209,10 @@ export function dashboardPage(data: DashboardData): string {
   </div>
 
   <div class="notice">
-    <strong>※ ④需給 (信用倍率) と ⑤カタリスト (決算カレンダー)</strong> は Yahoo Finance から取得できないため、
+    <strong>※ ④${termTip("需給（買残高と出来高の比率）", "信用買い残高（未返済の信用買いの株数）を出来高（売買された株数）と比べる指標。対象日・出来高の集計期間を確認します。本画面では自動判定しません。")}
+    と ⑤${termTip("カタリスト（2週間以内）", "株価が動くきっかけとなる材料。今後2週間以内の決算・レーティング・自社株買い・政策などの公表内容や予定を確認します。本画面では自動判定しません。")}</strong> は自動判定に対応していません。
     5 条件のうち ①流動性 / ②ボラ / ③トレンド の 3 条件のみを自動判定しています。
-    ④⑤ は各銘柄詳細ページで外部サイトへのリンクから手動確認してください。
+    ④は買残高と出来高の対象日・集計期間、⑤は決算・レーティング・自社株買い・政策などを手動確認してください。
   </div>
 
   <div class="section-label">2. SECTOR / 本日のセクター上位</div>
