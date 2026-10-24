@@ -84,7 +84,8 @@ describe("明示された普通株の分割前期末単位だけを読む", () =
   });
   // 各社の全XBRLを用いた負例を別caseにし、2社分を単一の5秒枠に重ねない。
   const explicitExamples = provenance.items.filter((item: { code: string }) => ["7322", "8142"].includes(item.code));
-  it.each(explicitExamples)("実$codeの記載文型でも主体/普通株/当期/単一文/法的日/割合/unitの条件を保つ", (item) => {
+  for (const item of explicitExamples) {
+    it(`実${item.code}の記載文型でも主体/普通株/当期/単一文/法的日/割合/unitの条件を保つ`, () => {
       expect(explicitExamples).toHaveLength(2);
       const zip = read(item.filename), entries = zipReader.unzip(zip), original = entries.get(item.basis.filename)!.toString();
       const fact = /<jpcrp_cor:NotesRegardingIssuedSharesAndTreasurySharesTextBlock contextRef="CurrentYearDuration">[\s\S]*?<\/jpcrp_cor:NotesRegardingIssuedSharesAndTreasurySharesTextBlock>/.exec(original)![0];
@@ -120,6 +121,7 @@ describe("明示された普通株の分割前期末単位だけを読む", () =
       expect(observePreSplitFiscalYearBasis(zip, { ...item.source, fiscalYearEnd: "2025-03-31" }, item.basis.filename, entries)).toBeUndefined();
       expect(sha(zip)).toBe(item.zipSha256);
       expect(item.candidateAProvenance.priceAccepted).toBe(false);
-    expect(explicitExamples.map((item: { candidateAProvenance: { sameFiscalYearImpactRows: number } }) => item.candidateAProvenance.sameFiscalYearImpactRows)).toEqual([28, 0]);
-  });
+      expect(explicitExamples.map((item: { candidateAProvenance: { sameFiscalYearImpactRows: number } }) => item.candidateAProvenance.sameFiscalYearImpactRows)).toEqual([28, 0]);
+    });
+  }
 });
