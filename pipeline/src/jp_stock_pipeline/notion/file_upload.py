@@ -38,7 +38,7 @@ from ..config import Settings
 from ..contracts.stock_code import parse_stock_code
 from ..models import RawArtifact
 from . import schema as S
-from .client import NotionClient
+from .client import NotionClient, NotionUnknownResultError
 from .upsert import (
     KEY_QUERY_PAGE_SIZE,
     KEY_QUERY_SORTS,
@@ -79,6 +79,10 @@ class RawUploadError(RuntimeError):
     呼び出し側 (ジョブ) は当該取得単位の構造化データ書き込みを中止すること
     (§8.1-4: 原本必須の保証)。
     """
+
+
+class RawUploadUnknownResultError(RawUploadError, NotionUnknownResultError):
+    """原本保管の結果不明。RawUploadError契約と非冪等STOP型を両方保持する。"""
 
 
 def plan_upload(size_bytes: int) -> tuple[str, int]:
@@ -420,6 +424,8 @@ def upload_raw_artifact(
             client, page_id, artifact,
             expected_master_id=related["relation"][0]["id"] if related is not None else None,
         )
+    except NotionUnknownResultError as exc:
+        raise RawUploadUnknownResultError("⑤ 原本保管の結果不明。再送せず原本を保持して停止します") from exc
     except RawUploadError:
         raise
     except Exception as exc:  # 重複クエリ/アップロード/行作成のあらゆる失敗を契約例外に揃える

@@ -586,6 +586,39 @@ class TestRawUploadError:
             client._client.close()
             client._session.close()
 
+    @pytest.mark.parametrize("phase", ["create", "send"])
+    def test_upload_529_preserves_unknown_type_and_local_bytes(self, tmp_path, monkeypatch, phase):
+        from unittest.mock import Mock
+
+        import requests
+
+        from jp_stock_pipeline.notion.client import NotionClient, NotionUnknownResultError
+
+        artifact = make_artifact(tmp_path)
+        client = NotionClient("test-token-not-a-credential")
+        overloaded = requests.Response()
+        overloaded.status_code = 529
+        overloaded.headers["Retry-After"] = "9"
+        overloaded._content = b'{"code":"service_overload","message":"overloaded"}'
+        created = requests.Response()
+        created.status_code = 200
+        created._content = b'{"id":"declared-upload","content_type":"application/zip"}'
+        sends = Mock(side_effect=[overloaded] if phase == "create" else [created, overloaded])
+        monkeypatch.setattr(client._session, "request", sends)
+        monkeypatch.setattr(client._throttle, "wait", lambda: None)
+        monkeypatch.setattr(client, "query_database", lambda *a, **kw: [])
+        monkeypatch.setattr(client._client.pages, "create", Mock(side_effect=AssertionError("unknown後のpage作成")))
+        try:
+            with pytest.raises(file_upload.RawUploadUnknownResultError) as failure:
+                file_upload.upload_raw_artifact(client, make_settings(), artifact)
+            assert isinstance(failure.value, NotionUnknownResultError)
+            assert isinstance(failure.value.__cause__, NotionUnknownResultError)
+            assert sends.call_count == (1 if phase == "create" else 2)
+            assert artifact.local_path.read_bytes() == b"raw-bytes" and artifact.notion_page_id is None
+        finally:
+            client._client.close()
+            client._session.close()
+
     def test_api_failure_raises_raw_upload_error(self, dry_client, tmp_path, monkeypatch):
         """失敗時は RawUploadError (呼び出し側は構造化書き込みを中止 §8.1-4)。"""
         settings = make_settings()

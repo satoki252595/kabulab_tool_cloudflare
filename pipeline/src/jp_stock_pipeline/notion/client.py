@@ -1,7 +1,7 @@
 """スロットル付き Notion API クライアント (DESIGN.md §6.1, §12-4)。
 
 - 全リクエストを設定値 (既定 2.5req/s) でスロットル
-- 429 / 529 は再試行。5xx / 通信断は安全に再送できる読み取り・上書きだけ再試行
+- 429 は再試行。529 / その他5xx / 通信断は安全な読み取り・上書きだけ再試行
 - 作成・追記は結果不明なら再送せず失敗を返す（成功後の応答欠落による重複を防ぐ）
 - dry-run (§3-6): 本番DBへ一切書き込まない。書き込み操作は self.ops に記録し
   合成ID (`dry-run-*`) を返す。読み取りはトークンがあれば実行、無ければ空を返す
@@ -46,6 +46,10 @@ class QueryTruncatedError(RuntimeError):
 
 class NotionRequestError(RuntimeError):
     """Notion API の失敗。作成結果不明の場合も、再送せずこの例外を返す。"""
+
+
+class NotionUnknownResultError(NotionRequestError):
+    """非冪等mutationの結果不明。代替保存で成功化せず、既存pendingを保持する。"""
 
 
 class NotionConfigError(RuntimeError):
@@ -211,7 +215,7 @@ class NotionClient:
     # ------------------------------------------------------------------
 
     def _call(self, fn, /, *, _retry_safe: bool = True, **kwargs) -> Any:
-        # 公式方針: 429/529 は再試行、5xx は冪等な操作のみ。
+        # 429は明示拒否。529も非冪等mutationではNode同様に結果不明で止める。
         # https://developers.notion.com/reference/request-limits
         # POST query/search は読取だが、PATCH children.append は非冪等なので
         # HTTPメソッドだけでは判定しない。呼び出し側が操作の性質を指定する。
@@ -228,8 +232,8 @@ class NotionClient:
                 rate_limited = status in (429, 529) or getattr(exc, "code", None) == "rate_limited"
                 if isinstance(exc, APIResponseError) and not (rate_limited or status >= 500):
                     raise
-                if not _retry_safe and not rate_limited:
-                    raise NotionRequestError(
+                if not _retry_safe and status != 429:
+                    raise NotionUnknownResultError(
                         "Notion 書き込みの結果不明。重複防止のため自動再送しません。"
                         "対象が既に作成・追記されていないか確認してから再実行してください。"
                         f" ({type(exc).__name__}, HTTP {status or '不明'})"
