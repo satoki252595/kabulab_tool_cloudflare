@@ -26,7 +26,8 @@ describe("通常VWAPのCF移管と既存Yahoo直列契約", () => {
     expect(yml).toContain("group: yahoo-source");
     expect(yml).toContain("queue: max");
     expect(yml).toContain('CONC: "1"');
-    expect(yml).toContain("timeout-minutes: 300");
+    expect(yml).toContain("timeout-minutes: 360");
+    expect(yml).toContain("uses: ./.github/actions/record-job-clock");
     expect(yml).toContain('[ "$daily_rc" -ne 0 ] && [ "$daily_rc" -ne 1 ]');
   });
   it("定時だけdaily閉鎖artifactを同run/attemptの別Yahoo jobへ渡し、全0だけ最終成功", () => {

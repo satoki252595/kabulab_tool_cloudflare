@@ -31,7 +31,7 @@ from .runner import (
     main_exit,
     run_job,
 )
-from .scheduled import add_scheduled_argument, assert_scheduled_io, assert_scheduled_source, scheduled_target
+from .scheduled import add_scheduled_argument, assert_scheduled_io, assert_scheduled_source, scheduled_target, source_request_options
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ def _collect(ctx: JobContext, target_date: date) -> list[tuple[RawArtifact, list
     assert_scheduled_source(ctx.args, now_jst())
     target = target_date.strftime("%Y%m%d")
     artifact, records = tdnet_yanoshin.list_disclosures(
-        ctx.settings, target, limit=YANOSHIN_LIMIT
+        ctx.settings, target, limit=YANOSHIN_LIMIT, **source_request_options(ctx.args)
     )
     payload = json.loads(artifact.local_path.read_bytes())
     convert_artifact(artifact, "json")  # §5.2 ペア保存 (JSON→CSV+Parquet)
@@ -90,7 +90,7 @@ def _process_financial_xbrl(
     内部の find_stock_master_page(① per-record 検索)を省く (§8.3)。
     """
     assert_scheduled_source(ctx.args, now_jst())
-    resp = fetch(xbrl_url)
+    resp = fetch(xbrl_url, **source_request_options(ctx.args))
     artifact = save_raw(
         resp.content,
         source=Source.TDNET,

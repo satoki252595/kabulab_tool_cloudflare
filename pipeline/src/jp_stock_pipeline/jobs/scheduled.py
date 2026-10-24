@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import re
+from collections.abc import Callable
 from datetime import date, datetime, time, timedelta, timezone
 
 from ..models import JST
@@ -18,7 +19,7 @@ class ScheduledWindowError(ValueError):
 
 def add_scheduled_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--scheduled-at", default=None, help="CFの予定UTC時刻 YYYY-MM-DDTHH:mm:00Z")
-    parser.add_argument("--job-started-at", default=None, help="Actions最初のstepの実UTC時計（外部timeoutの閉鎖予算用）")
+    parser.add_argument("--job-started-at", default=None, help="Jobs APIで資格化したActions job実開始UTC時計（外部timeoutの閉鎖予算用）")
 
 
 def _jst(now: datetime) -> datetime:
@@ -84,6 +85,13 @@ def assert_scheduled_source(args: argparse.Namespace, now: datetime) -> None:
     deadline = getattr(args, "_scheduled_source_deadline", None)
     if deadline is not None and _jst(now) >= deadline:
         raise ScheduledWindowError("CF予定の新規取得期限です（原本閉鎖へ移行・未完）")
+
+
+def source_request_options(args: argparse.Namespace) -> dict[str, Callable[[], None]]:
+    """手動の呼出契約は維持し、定時sourceの各HTTP attemptだけsoftを再検査する。"""
+    if getattr(args, "_scheduled_source_deadline", None) is None:
+        return {}
+    return {"before_request": lambda: assert_scheduled_source(args, datetime.now(JST))}
 
 
 def assert_scheduled_io(args: argparse.Namespace, now: datetime) -> None:

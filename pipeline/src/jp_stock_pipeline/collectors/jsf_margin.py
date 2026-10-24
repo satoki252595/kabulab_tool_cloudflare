@@ -21,6 +21,7 @@ import csv
 import io
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
 
@@ -207,10 +208,11 @@ def parse_meigara(content: bytes) -> list[MeigaraRow]:
     return out
 
 
-def fetch_csv(name: str) -> bytes:
+def fetch_csv(name: str, *, before_request: Callable[[], None] | None = None) -> bytes:
     """{name}.csv を取得する。中身が CSV でなければ FetchError。"""
     url = f"{BASE_URL}/{name}.csv"
-    resp = fetch(url, headers={"Accept": "text/csv,*/*"})
+    resp = fetch(url, headers={"Accept": "text/csv,*/*"},
+                 **({} if before_request is None else {"before_request": before_request}))
     content = resp.content
     if not content or len(content) < 100:
         raise FetchError(f"日証金 {name}.csv が空か短すぎる: {len(content)} bytes")

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 
 from ..cloud_store.r2 import R2Store
 from ..cloud_store.supply import upsert_supply_series
@@ -23,7 +24,7 @@ from ..licensing import LicenseTag
 from ..models import Provenance, Source, SupplyRecord, now_jst
 from ..rawstore import save_raw
 from .runner import JobContext, apply_limit, build_parser, main_exit, run_job
-from .scheduled import add_scheduled_argument, assert_scheduled_io, assert_scheduled_source, scheduled_target
+from .scheduled import add_scheduled_argument, assert_scheduled_io, assert_scheduled_source, scheduled_target, source_request_options
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,7 @@ _LATEST_COLUMNS = (
 def _fetch_and_store(ctx: JobContext, name: str, datatype: str):
     """CSV を取得し ⑤原本として保存する。原本が残らなければ None。"""
     assert_scheduled_source(ctx.args, now_jst())
-    content = jsf.fetch_csv(name)
+    content = jsf.fetch_csv(name, **source_request_options(ctx.args))
     artifact = save_raw(
         content,
         source=Source.JSF,
@@ -231,7 +232,9 @@ def execute(ctx: JobContext) -> None:
     # 集計は ThreadPoolExecutor の外（メインスレッド）で行う。ctx のカウンタに
     # ロックが無いため、ワーカーから直接触らない。
     with ThreadPoolExecutor(max_workers=R2_WRITE_WORKERS) as pool:
-        for code, key, error in pool.map(_write_one, codes):
+        # ContextVarはthreadへ自動伝播しない。各taskに独立した同一期限のcontextを渡す。
+        work = ((copy_context(), code) for code in codes)
+        for code, key, error in pool.map(lambda item: item[0].run(_write_one, item[1]), work):
             if key is not None:
                 keys[code] = key
                 ctx.add_success()

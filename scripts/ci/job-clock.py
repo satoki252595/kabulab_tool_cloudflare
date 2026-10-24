@@ -16,6 +16,7 @@ def qualify_job_clock(payload, run_id: str, attempt: str, job: str, runner: str)
     if not isinstance(jobs, list) or not 1 <= count <= 100 or len(jobs) != count:
         raise ValueError("incomplete job page")
     matches = [row for row in jobs if isinstance(row, dict)
+               and type(row.get("run_id")) is int and type(row.get("run_attempt")) is int
                and row.get("run_id") == int(run_id) and row.get("run_attempt") == int(attempt)
                and row.get("status") == "in_progress" and row.get("runner_name") == runner
                and isinstance(row.get("name"), str)

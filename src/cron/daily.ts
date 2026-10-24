@@ -1268,6 +1268,7 @@ async function runDailySyncAndRecord(
   // HOLD 残があれば不完全失敗を throw し、株価 fetch へ進まない。
   const overlay = await ensureUniverseOverlay(db, {
     eligibilityAsOf: targetDate,
+    beforeSourceRequest: assertStockSource,
     collect:
       collectOverlay ??
       withBasicEvidence((input) => collectUniverseOfficialEvents(input)),
@@ -1341,7 +1342,7 @@ async function runDailySyncAndRecord(
       if (capture === undefined) throw new Error("JP legのN225同一原本がありません");
       assertStockSource();
       const jp = await captureMacroJpLeg({ date: targetDate, runId: rawRunId, n225: capture,
-        n225ArchivePages: sessionArchivePages, store: jpLegStore });
+        n225ArchivePages: sessionArchivePages, store: jpLegStore, beforeSourceRequest: assertStockSource });
       console.info(`[sync-daily] JP leg ${jp.ok ? "保存照合済み" : "HOLD"}: ${jp.reason}`);
       assertStockDeadline();
     }
@@ -3171,6 +3172,7 @@ async function fetchMarketContextTarget(
     let capture: { status: number; bytes: Uint8Array } | null = null;
     try {
       const snapshot = await fetchNikkeiVi({
+        beforeRequest: beforeSource,
         onRaw: (cap) => {
           capture = cap;
         },

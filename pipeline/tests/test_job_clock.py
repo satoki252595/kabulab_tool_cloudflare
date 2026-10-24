@@ -26,7 +26,8 @@ def test_reusable_and_direct_job_clock_are_exactly_qualified():
     assert qualify([row(name="ingest-yahoo"), row(name="ingest-non-yahoo")]) == "2026-10-23T09:00:00.000Z"
 
 
-@pytest.mark.parametrize("changes", [{"run_id": 39928733183}, {"run_attempt": 2}, {"runner_name": "other"},
+@pytest.mark.parametrize("changes", [{"run_id": 39928733183}, {"run_id": 39928733182.0},
+    {"run_attempt": True}, {"run_attempt": 2}, {"runner_name": "other"},
     {"status": "queued"}, {"status": "completed"}, {"name": "other"}, {"started_at": None},
     {"started_at": "2099-01-01T00:00:00Z"}, {"started_at": "2026-02-30T00:00:00Z"}])
 def test_wrong_run_attempt_runner_state_or_clock_is_not_substituted(changes):

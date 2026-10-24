@@ -69,7 +69,10 @@ def test_delayed_edinet_uses_planned_day_after_utc_and_jst_midnight(monkeypatch)
     monkeypatch.setattr(edinet_daily.edinet, "list_documents", source)
     with pytest.raises(RuntimeError, match="source boundary"):
         edinet_daily.execute(ctx)
-    source.assert_called_once_with(None, date(2026, 10, 22))
+    source.assert_called_once()
+    assert source.call_args.args == (None, date(2026, 10, 22))
+    assert set(source.call_args.kwargs) == {"before_request"}
+    assert callable(source.call_args.kwargs["before_request"])
 
 
 @pytest.mark.parametrize("module", [supply_daily, tdnet_hourly, edinet_daily])

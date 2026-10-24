@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Callable
 from datetime import date, datetime
 
 from ..config import ConfigError, Settings
@@ -162,7 +163,7 @@ def _require_api_key(settings: Settings) -> str:
 
 
 def list_documents(
-    settings: Settings, target_date: date
+    settings: Settings, target_date: date, *, before_request: Callable[[], None] | None = None,
 ) -> tuple[RawArtifact, list[dict]]:
     """指定日の書類一覧を取得し、原本保存して (RawArtifact, results) を返す (§8.1)。
 
@@ -172,7 +173,8 @@ def list_documents(
     key = _require_api_key(settings)
     datestr = target_date.isoformat()
     url = f"{EDINET_API_BASE}/documents.json"
-    resp = fetch(url, params={"date": datestr, "type": 2, "Subscription-Key": key})
+    resp = fetch(url, params={"date": datestr, "type": 2, "Subscription-Key": key},
+                 **({} if before_request is None else {"before_request": before_request}))
     if resp.status_code != 200:
         raise FetchError(f"EDINET 書類一覧 HTTP 状態不正: date={datestr}")
     try:
@@ -228,6 +230,7 @@ def fetch_document(
     *,
     code: str | None = None,
     data_date: date | None = None,
+    before_request: Callable[[], None] | None = None,
 ) -> RawArtifact:
     """書類本体（1=XBRL zip / 2=PDF / 5=CSV zip）を取得し原本保存する。
 
@@ -240,7 +243,8 @@ def fetch_document(
         raise ValueError(f"未知の書類取得 type={doc_type} (有効: {sorted(_DOC_FETCH_TYPES)})")
     datatype, ext = _DOC_FETCH_TYPES[doc_type]
     url = f"{EDINET_API_BASE}/documents/{doc_id}"
-    resp = fetch(url, params={"type": doc_type, "Subscription-Key": key})
+    resp = fetch(url, params={"type": doc_type, "Subscription-Key": key},
+                 **({} if before_request is None else {"before_request": before_request}))
 
     content_type = (resp.headers.get("Content-Type") or "").lower()
     if "application/json" in content_type:

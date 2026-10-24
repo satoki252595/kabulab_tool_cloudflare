@@ -26,6 +26,7 @@ import {
 import { loadAppliedOverlaySets } from "./universe.js";
 import { activeEquityCondition } from "../shared/db/active-equity.js";
 import { stocks } from "../shared/db/core-schema.js";
+import { ScheduledSourceDeadlineError } from "../shared/scheduled-admission.js";
 
 // 値は全て実証拠の転記 (捏造なし):
 //   delist行: pinned delisted.html sha4974be15 (136行中9月14+未来2)
@@ -1442,6 +1443,18 @@ function verifyMocks() {
 }
 
 describe("withBasicEvidence", () => {
+  it("公式batch待機中にsource期限を越えたらBasic0、未完をHOLDの成功へ変換しない", async () => {
+    const b = batch("2026-09-29");
+    b.sources.delisted.rows = [];
+    b.sources.transfers.rows = [];
+    const collectBasic = vi.fn();
+    let stopped = false;
+    const collect = withBasicEvidence(async () => { stopped = true; return b; }, { collectBasic });
+    await expect(collect({ baseAsOf: null, eligibilityAsOf: "2026-09-29", beforeSourceRequest: () => {
+      if (stopped) throw new ScheduledSourceDeadlineError("source deadline");
+    } })).rejects.toThrow("source deadline");
+    expect(collectBasic).not.toHaveBeenCalled();
+  });
   it("eligible 行のみ取得・保管+readback して batch.basics に束縛する", async () => {
     const b = batch("2026-09-29");
     b.sources.delisted.rows = [];

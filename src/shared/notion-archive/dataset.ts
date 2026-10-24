@@ -37,6 +37,7 @@ import { verifyArchivedAttachments } from "./readback.js";
 import { listPageFiles } from "./page-file.js";
 import { jpxPdfUrl, officialPdfId, type ArchivedPdfProvenance } from "../../../services/ir-catalog/src/services/official-pdf.js";
 import { sha256HexBytes } from "../sha256.js";
+import { ScheduledSourceDeadlineError } from "../scheduled-admission.js";
 import {
   IR_PDF_ARCHIVE_INCIDENT_TAG,
   compareDisclosuresForArchive,
@@ -749,13 +750,15 @@ type PdfFetch = PdfFile | "unavailable" | "transient";
 async function fetchIrPdf(
   documentUrl: string,
   baseName: string,
-  ticker: string
+  ticker: string,
+  beforeSourceRequest?: () => void
 ): Promise<PdfFetch> {
   let url = documentUrl;
   let transient = false;
   // The existing primary/archive size policy stays unchanged. The only extra
   // source is the same observed official filename under this issuer at JPX.
   for (let attempt = 0; attempt < 2; attempt++) {
+    beforeSourceRequest?.();
     let observedUrl = url;
     try {
       const res = await fetch(url, {
@@ -959,7 +962,7 @@ async function runUpsertDisclosuresByStock(
   let reachedDeadline = false;
   let stocksTouched = 0;
   const overDeadline = () =>
-    input.deadlineMs !== undefined && Date.now() > input.deadlineMs;
+    input.deadlineMs !== undefined && Date.now() >= input.deadlineMs;
 
   const skippedNoFileKeys: string[] = [];
   let deadlineRemainderKeys: string[] = [];
@@ -1092,8 +1095,17 @@ async function runUpsertDisclosuresByStock(
         pdf = await fetchIrPdf(
           row.documentUrl,
           `${row.ticker}_${row.pubdate.slice(0, 10)}_${row.key}`,
-          row.ticker
+          row.ticker,
+          () => {
+            if (overDeadline()) throw new ScheduledSourceDeadlineError("IR PDFの新規取得期限です");
+          }
         );
+      } catch (error) {
+        if (!(error instanceof ScheduledSourceDeadlineError)) throw error;
+        reachedDeadline = true;
+        deadlineRemainderKeys = ordered.slice(index).map((r) => r.key);
+        logIrPdfIncident("deadline-remainder", deadlineRemainderKeys);
+        break;
       } finally {
         recordIrPdfPdfFetch(performance.now() - fetchStarted);
       }

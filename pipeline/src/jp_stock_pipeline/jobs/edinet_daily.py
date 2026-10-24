@@ -43,7 +43,7 @@ from .runner import (
     main_exit,
     run_job,
 )
-from .scheduled import add_scheduled_argument, assert_scheduled_io, assert_scheduled_source, scheduled_target
+from .scheduled import add_scheduled_argument, assert_scheduled_io, assert_scheduled_source, scheduled_target, source_request_options
 
 logger = logging.getLogger(__name__)
 
@@ -144,12 +144,12 @@ def _fetch_financial_tidy(
     assert_scheduled_source(ctx.args, now_jst())
     if csv_flag == "1":
         artifact = edinet.fetch_document(
-            ctx.settings, doc_id, 5, code=code, data_date=data_date
+            ctx.settings, doc_id, 5, code=code, data_date=data_date, **source_request_options(ctx.args)
         )
         parser = xbrl_to_csv.edinet_csv_zip_to_tidy
     elif csv_flag == "0":
         artifact = edinet.fetch_document(
-            ctx.settings, doc_id, 1, code=code, data_date=data_date
+            ctx.settings, doc_id, 1, code=code, data_date=data_date, **source_request_options(ctx.args)
         )
         parser = xbrl_to_csv.xbrl_zip_to_tidy
     else:
@@ -240,7 +240,7 @@ def _roa_table_original(
     if full is None:
         assert_scheduled_source(ctx.args, now_jst())
         full = edinet.fetch_document(
-            ctx.settings, doc_id, 1, code=artifact.scope, data_date=artifact.data_date
+            ctx.settings, doc_id, 1, code=artifact.scope, data_date=artifact.data_date, **source_request_options(ctx.args)
         )
     if full.size_bytes > saved_edinet.MAX_ZIP_BYTES:
         ctx.upload_raw(full, sha_map=sha_map, sha_map_date=target_date)
@@ -291,7 +291,7 @@ def load_issuer_codelist(ctx: JobContext, not_before: date) -> RawArtifact:
     artifact = saved_edinet.read_saved_codelist(ctx.client, ctx.settings, not_before=not_before)
     if artifact is None:
         assert_scheduled_source(ctx.args, now_jst())
-        artifact = edinet_codelist.fetch_codelist(ctx.settings)
+        artifact = edinet_codelist.fetch_codelist(ctx.settings, **source_request_options(ctx.args))
         artifact.notion_page_id = ctx.upload_raw(artifact)
     if artifact.notion_page_id is None:
         raise ValueError("公式銘柄表の物理原本が未資格")
@@ -389,7 +389,7 @@ def _process_document(
     if pdf_flag == "1":
         assert_scheduled_source(ctx.args, now_jst())
         pdf_artifact = edinet.fetch_document(
-            ctx.settings, doc_id, 2, code=code, data_date=data_date
+            ctx.settings, doc_id, 2, code=code, data_date=data_date, **source_request_options(ctx.args)
         )
         pdf_artifact.qualified_master_page_id = raw_master_id
         json_to_parquet.convert_artifact(pdf_artifact, "pdf")
@@ -524,7 +524,7 @@ def execute(ctx: JobContext) -> None:
 
     # 1-4. 書類一覧取得・原本⑤UL（本番共通 strict: Notion⑤未保管で中止 §8.1-4）
     assert_scheduled_source(ctx.args, now_jst())
-    list_artifact, docs = edinet.list_documents(ctx.settings, target_date)
+    list_artifact, docs = edinet.list_documents(ctx.settings, target_date, **source_request_options(ctx.args))
     json_to_parquet.convert_artifact(list_artifact, "json")
     list_page_id = ctx.upload_raw(list_artifact, sha_map=sha_map, sha_map_date=target_date)
 

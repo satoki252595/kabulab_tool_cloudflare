@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 import requests
 from tenacity import (
@@ -11,6 +12,8 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
 )
+
+from .request_guard import RequestNotStartedError, assert_request_allowed
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +40,10 @@ def _is_retryable(exc: BaseException) -> bool:
     wait=wait_exponential(multiplier=2, min=2, max=60),
     retry=retry_if_exception(_is_retryable),
 )
-def _get(session: requests.Session, url: str, params, headers, timeout) -> requests.Response:
+def _get(session: requests.Session, url: str, params, headers, timeout, before_request=None) -> requests.Response:
+    assert_request_allowed()
+    if before_request is not None:
+        before_request()
     resp = session.get(url, params=params, headers=headers, timeout=timeout)
     if resp.status_code == 429 or resp.status_code >= 500:
         raise _RetryableHTTP(f"HTTP {resp.status_code} for {url}")
@@ -52,6 +58,7 @@ def _get(session: requests.Session, url: str, params, headers, timeout) -> reque
 )
 def _post_idempotent(session, url, json_body, headers, timeout) -> requests.Response:
     """冪等な POST のみリトライする内部実装。"""
+    assert_request_allowed()
     resp = session.post(url, json=json_body, headers=headers, timeout=timeout)
     if resp.status_code == 429 or resp.status_code >= 500:
         raise _RetryableHTTP(f"HTTP {resp.status_code} for {url}")
@@ -82,7 +89,10 @@ def post_json(
         if idempotent:
             resp = _post_idempotent(sess, url, json_body, merged_headers, timeout)
         else:
+            assert_request_allowed()
             resp = sess.post(url, json=json_body, headers=merged_headers, timeout=timeout)
+    except RequestNotStartedError:
+        raise
     except Exception as exc:  # リトライ枯渇・接続不能
         raise FetchError(f"POST 失敗: {url}: {exc}") from exc
     if resp.status_code >= 400:
@@ -107,6 +117,7 @@ def fetch(
     headers: dict | None = None,
     timeout: int = DEFAULT_TIMEOUT,
     session: requests.Session | None = None,
+    before_request: Callable[[], None] | None = None,
 ) -> requests.Response:
     """GET 取得（指数バックオフ付き最大3回）。失敗は FetchError。
 
@@ -115,7 +126,9 @@ def fetch(
     sess = session or requests.Session()
     merged_headers = {"User-Agent": USER_AGENT, **(headers or {})}
     try:
-        resp = _get(sess, url, params, merged_headers, timeout)
+        resp = _get(sess, url, params, merged_headers, timeout, before_request)
+    except RequestNotStartedError:
+        raise
     except Exception as exc:  # リトライ枯渇・接続不能
         raise FetchError(f"取得失敗: {url}: {exc}") from exc
     if resp.status_code >= 400:

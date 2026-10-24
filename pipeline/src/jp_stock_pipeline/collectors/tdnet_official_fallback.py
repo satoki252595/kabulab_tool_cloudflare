@@ -162,7 +162,7 @@ def fetch_list_pages(
             before_fetch()
         url = page_url(target_date, page_no)
         try:
-            resp = fetch(url)
+            resp = fetch(url, **({} if before_fetch is None else {"before_request": before_fetch}))
         except FetchError:
             if page_no == 1:
                 raise  # その日の一覧が存在しない（休日等）or 取得不能

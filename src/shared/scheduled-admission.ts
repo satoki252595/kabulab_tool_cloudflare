@@ -33,7 +33,7 @@ export function scheduledAtForDate(value: unknown, expectedDate: string, nowMs: 
   return ms;
 }
 
-/** job最初のstepの実時計に束縛。外部killの5分前までに閉鎖し、その前にsourceを止める。 */
+/** Jobs APIの実開始に束縛。外部killの5分前までに閉鎖し、その前にsourceを止める。 */
 export function scheduledExecutionWindow(absoluteDeadline: number, nowMs: number,
   jobStartedAt: string | undefined, timeoutMinutes: number, closureMinutes: number) {
   if (![absoluteDeadline, nowMs, timeoutMinutes, closureMinutes].every(Number.isFinite) ||

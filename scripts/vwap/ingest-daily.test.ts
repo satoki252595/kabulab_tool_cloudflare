@@ -897,7 +897,7 @@ it.skipIf(!actualReplayAvailable)("actual repaired NEWPOSTs reenter the SAME nor
 });
 
 describe("通常定時VWAPの日足source前開始/終了窓", () => {
-  it("source期限で次銘柄を止めても開始済み原本/条件付PUT/summaryを閉じ、未完2を返す", async () => {
+  it.each(["source", "r2-get"])("%s待機中のsource期限でも開始済み原本/PUT/summaryを閉じ、未完2を返す", async stage => {
     vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date(COMPLETED_AT));
     vi.stubEnv("GITHUB_RUN_ID", "101"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
     process.argv.push("--scheduled-date=2026-10-02", "--scheduled-at=2026-10-02T08:00:00.000Z");
@@ -905,8 +905,12 @@ describe("通常定時VWAPの日足source前開始/終了窓", () => {
     rawHook.body = completionRaw("7203.T");
     const actual = await parseDailyChart("7203.T", "10y", rawHook.body, COMPLETED_AT);
     mockFetchDaily.mockImplementationOnce(async () => {
-      vi.setSystemTime("2026-10-02T14:20:00.000Z");
+      if (stage === "source") vi.setSystemTime("2026-10-02T14:20:00.000Z");
       return actual;
+    });
+    if (stage === "r2-get") mockR2Get.mockImplementation(async key => {
+      if (key === "daily/6758.json") vi.setSystemTime("2026-10-02T14:20:00.000Z");
+      return null;
     });
     await main();
     expect(mockFetchDaily).toHaveBeenCalledTimes(1);
