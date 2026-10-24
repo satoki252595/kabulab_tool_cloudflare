@@ -20,6 +20,7 @@ from ..http import FetchError, fetch
 from ..licensing import source_license
 from ..models import JST, DisclosureRecord, Provenance, RawArtifact, Source, now_jst
 from ..notion import file_upload, upsert
+from ..notion.client import NotionUnknownResultError
 from ..rawstore import save_raw
 from ..transform import normalize
 from .runner import (
@@ -291,7 +292,7 @@ def execute(ctx: JobContext) -> None:
                         master_id=master_id, master_resolved=master_resolved,
                         sha_map=sha_map, sha_map_date=target_date,
                     )
-                except (FetchError, file_upload.RawUploadError):
+                except (FetchError, file_upload.RawUploadError, NotionUnknownResultError):
                     raise  # 取得・原本保管が不明なまま次の開示を取得しない。
                 except Exception as exc:
                     # ③ 反映失敗は欠損として記録 (④ は成立済み。ダミーで埋めない §3-1)
