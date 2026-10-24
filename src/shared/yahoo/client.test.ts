@@ -312,6 +312,16 @@ describe("fetchStockRawData — PBR/BPS・配当利回りの検算 guard (2026-1
 });
 
 describe("yahooHttpErrorMessage", () => {
+  it.each(["auth-page", "auth-crumb", "chart", "quote-summary", "shared-cooldown", "unknown", "secret-cookie"])(
+    "proxy stage %sを固定語彙だけで記録する",
+    async (stage) => {
+      const response = new Response(null, { status: 429, headers: { "X-Kabulab-Yahoo-Stage": stage } });
+      const message = await yahooHttpErrorMessage("Yahoo HTTP エラー", response);
+      expect(message).toContain(`yahoo-stage=${stage === "secret-cookie" ? "unrecognized" : stage}`);
+      expect(message).not.toContain("secret-cookie");
+    }
+  );
+
   it("429のRetry-Afterを有界な再試行時刻として記録する", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-27T00:00:00.000Z"));

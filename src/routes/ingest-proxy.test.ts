@@ -58,6 +58,7 @@ describe("GET /yahoo", () => {
     expect(stopped.status).toBe(429);
     expect(stopped.headers.get("Retry-After")).toBe("3600");
     expect(stopped.headers.get("X-Kabulab-Yahoo-Cooldown")).toBe("active");
+    expect(stopped.headers.get("X-Kabulab-Yahoo-Stage")).toBe("shared-cooldown");
     expect(stopped.headers.get("X-Kabulab-Yahoo-Status")).toBeNull(); // 新しい上流応答ではない
     expect(fetchYahoo).toHaveBeenCalledTimes(2);
     expect(d1.executed.filter(sql => sql.startsWith("SELECT"))).toHaveLength(3);
@@ -100,6 +101,7 @@ describe("GET /yahoo", () => {
     expect(response.status).toBe(status);
     expect(response.headers.get("Retry-After")).toBe("120");
     expect(response.headers.get("X-Kabulab-Yahoo-Status")).toBe(String(status));
+    expect(response.headers.get("X-Kabulab-Yahoo-Stage")).toBe("chart");
     expect(response.headers.get("X-Kabulab-Yahoo-Cooldown")).toBe("persist-failed");
     expect(response.headers.get("Set-Cookie")).toBeNull();
     expect(await response.text()).toBe("source body untouched");
@@ -230,7 +232,7 @@ describe("GET /yahoo", () => {
 
   it("YahooRateLimitError は 429 + Retry-After + 診断marker を返す", async () => {
     const retryAt = Date.now() + 5_000;
-    fetchYahoo.mockRejectedValue(new YahooRateLimitError(429, 5_000, retryAt));
+    fetchYahoo.mockRejectedValue(new YahooRateLimitError(429, 5_000, retryAt, "auth-crumb"));
     const consoleError = vi
       .spyOn(console, "error")
       .mockImplementation(() => undefined);
@@ -246,6 +248,7 @@ describe("GET /yahoo", () => {
     expect(response.status).toBe(429);
     expect(response.headers.get("Retry-After")).toBe("5");
     expect(response.headers.get("X-Kabulab-Yahoo-Status")).toBe("429");
+    expect(response.headers.get("X-Kabulab-Yahoo-Stage")).toBe("auth-crumb");
     const body = await response.json();
     expect(body.error).toContain("yahoo rate limited");
     expect(body.error).toContain(`retry-at-ms=${retryAt}`);
