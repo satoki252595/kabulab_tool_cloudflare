@@ -1,0 +1,439 @@
+{
+  "stock": [
+    {
+      "code": "3776"
+    }
+  ],
+  "document": [
+    {
+      "id": 621,
+      "stockId": 2574,
+      "edinetCode": "E05494",
+      "docId": "S100WZGB",
+      "docTypeCode": "120",
+      "filerName": "株式会社ブロードバンドタワー",
+      "periodStart": "2025-01-01",
+      "periodEnd": "2025-12-31",
+      "submittedAt": "2026-03-19T13:39:00.000Z",
+      "parseStatus": "no_order_table",
+      "honbunFile": "XBRL/PublicDoc/0102010_honbun_jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_ixbrl.htm",
+      "overseasParseStatus": "no_overseas_table",
+      "overseasHonbunFile": "XBRL/PublicDoc/0105100_honbun_jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_ixbrl.htm",
+      "overseasOmissionJson": "{\"version\":1,\"docId\":\"S100WZGB\",\"periodEnd\":\"2025-12-31\",\"archivePageId\":\"364d74ff-84cd-8147-916b-cc4d5ed0057b\",\"archiveManifest\":\"unknown\",\"zipSha256\":\"89a7b3ae5fc76682da2078f8a00d089f0f38bc62f9d4a954b6b2143786cc567a\",\"omission\":{\"reason\":\"domestic_external_sales_over_90_percent\",\"scope\":\"regional_external_customer_sales_note\",\"evidence\":[{\"honbunFile\":\"XBRL/PublicDoc/0105110_honbun_jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_ixbrl.htm\",\"memberSha256\":\"b5eb4bc8e42073f765b14dcc0c5f7056f2e769d5f2d7e39f83b3ec067d035a09\",\"rawBlockSha256\":\"9e92aa3e233e3d848d69bae8c9c537ff1a93380029019a0e4d14ff1ded25342b\",\"quote\":\"(1) 売上高 本邦の外部顧客への売上高が連結損益計算書の売上高の90％を超えるため、記載を省略しております。\",\"contextPeriod\":{\"contextRef\":\"CurrentYearDuration\",\"entity\":\"E05494-000\",\"startDate\":\"2025-01-01\",\"endDate\":\"2025-12-31\"}}]}}",
+      "textParseStatus": "ok",
+      "notionDocPageId": "3f9d74ff-84cd-8129-948c-ef7952f9cac9",
+      "ingestedAt": "2026-05-17T22:58:17.000Z"
+    }
+  ],
+  "orders": [],
+  "overseas": [],
+  "text": [
+    {
+      "id": 1404696,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "business",
+      "elementId": "jpcrp_cor:DescriptionOfBusinessTextBlock",
+      "itemName": "事業の内容 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 1743
+    },
+    {
+      "id": 1404697,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "risks",
+      "elementId": "jpcrp_cor:BusinessRisksTextBlock",
+      "itemName": "事業等のリスク [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 5530
+    },
+    {
+      "id": 1404698,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "management_policy",
+      "elementId": "jpcrp_cor:BusinessPolicyBusinessEnvironmentIssuesToAddressEtcTextBlock",
+      "itemName": "経営方針、経営環境及び対処すべき課題等 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 3796
+    },
+    {
+      "id": 1404699,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "dividend_policy",
+      "elementId": "jpcrp_cor:DividendPolicyTextBlock",
+      "itemName": "配当政策 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 647
+    },
+    {
+      "id": 1404700,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "mda",
+      "elementId": "jpcrp_cor:ManagementAnalysisOfFinancialPositionOperatingResultsAndCashFlowsTextBlock",
+      "itemName": "経営者による財政状態、経営成績及びキャッシュ・フローの状況の分析 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 6976
+    },
+    {
+      "id": 1404701,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "rnd",
+      "elementId": "jpcrp_cor:ResearchAndDevelopmentActivitiesTextBlock",
+      "itemName": "研究開発活動 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 903
+    },
+    {
+      "id": 1404702,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "major_shareholders",
+      "elementId": "jpcrp_cor:MajorShareholdersTextBlock",
+      "itemName": "大株主の状況 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 638
+    },
+    {
+      "id": 1404703,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "issued_shares_total",
+      "elementId": "jpcrp_cor:IssuedSharesTotalNumberOfSharesEtcTextBlock",
+      "itemName": "発行済株式、株式の総数等 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 237
+    },
+    {
+      "id": 1404704,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "ownership_breakdown",
+      "elementId": "jpcrp_cor:ShareholdingByShareholderCategoryTextBlock",
+      "itemName": "所有者別状況 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 349
+    },
+    {
+      "id": 1404705,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "voting_rights",
+      "elementId": "jpcrp_cor:IssuedSharesVotingRightsTextBlock",
+      "itemName": "発行済株式、議決権の状況 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 315
+    },
+    {
+      "id": 1404706,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "treasury_shares",
+      "elementId": "jpcrp_cor:TreasurySharesEtcTextBlock",
+      "itemName": "自己株式等 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 183
+    },
+    {
+      "id": 1404707,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "treasury_shareholders_meeting",
+      "elementId": "jpcrp_cor:AcquisitionsByResolutionOfShareholdersMeetingTextBlock",
+      "itemName": "株主総会決議による取得の状況 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 31
+    },
+    {
+      "id": 1404708,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "treasury_board",
+      "elementId": "jpcrp_cor:AcquisitionsByResolutionOfBoardOfDirectorsMeetingTextBlock",
+      "itemName": "取締役会決議による取得の状況 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 32
+    },
+    {
+      "id": 1404709,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "treasury_disposal",
+      "elementId": "jpcrp_cor:DisposalsOrHoldingOfAcquiredTreasurySharesTextBlock",
+      "itemName": "取得自己株式の処理状況及び保有状況 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 251
+    },
+    {
+      "id": 1404710,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "subsidiaries",
+      "elementId": "jpcrp_cor:OverviewOfAffiliatedEntitiesTextBlock",
+      "itemName": "関係会社の状況 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 1476
+    },
+    {
+      "id": 1404711,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "employees",
+      "elementId": "jpcrp_cor:InformationAboutEmployeesTextBlock",
+      "itemName": "従業員の状況 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 926
+    },
+    {
+      "id": 1404712,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "history",
+      "elementId": "jpcrp_cor:CompanyHistoryTextBlock",
+      "itemName": "沿革 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 2813
+    },
+    {
+      "id": 1404713,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "material_contracts",
+      "elementId": "jpcrp_cor:CriticalContractsTextBlock",
+      "itemName": "重要な契約等 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 1651
+    },
+    {
+      "id": 1404714,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "officers",
+      "elementId": "jpcrp_cor:InformationAboutOfficersTextBlock",
+      "itemName": "役員の状況 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 15070
+    },
+    {
+      "id": 1404715,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "officer_shareholdings",
+      "elementId": "jpcrp_cor:ShareholdingsTextBlock",
+      "itemName": "株式の保有状況 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 1003
+    },
+    {
+      "id": 1404716,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "outside_directors",
+      "elementId": "jpcrp_cor:OutsideDirectorsAndOutsideCorporateAuditorsTextBlock",
+      "itemName": "社外取締役（及び社外監査役） [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 8497
+    },
+    {
+      "id": 1404717,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "governance_overview",
+      "elementId": "jpcrp_cor:OverviewOfCorporateGovernanceTextBlock",
+      "itemName": "コーポレート・ガバナンスの概要 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 8453
+    },
+    {
+      "id": 1404718,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "audit_status",
+      "elementId": "jpcrp_cor:AuditsTextBlock",
+      "itemName": "監査の状況 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 3156
+    },
+    {
+      "id": 1404719,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "sustainability",
+      "elementId": "jpcrp_cor:DisclosureOfSustainabilityRelatedFinancialInformationTextBlock",
+      "itemName": "サステナビリティに関する考え方及び取組 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 4381
+    },
+    {
+      "id": 1404720,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "facilities",
+      "elementId": "jpcrp_cor:MajorFacilitiesTextBlock",
+      "itemName": "主要な設備の状況 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 760
+    },
+    {
+      "id": 1404721,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "facilities_plan",
+      "elementId": "jpcrp_cor:PlannedAdditionsRetirementsEtcOfFacilitiesTextBlock",
+      "itemName": "設備の新設、除却等の計画 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 295
+    },
+    {
+      "id": 1404722,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "capex",
+      "elementId": "jpcrp_cor:OverviewOfCapitalExpendituresEtcTextBlock",
+      "itemName": "設備投資等の概要 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 152
+    },
+    {
+      "id": 1404723,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "securities_note",
+      "elementId": "jpcrp_cor:NotesSecuritiesConsolidatedFinancialStatementsTextBlock",
+      "itemName": "有価証券関係、連結財務諸表 [テキストブロック]",
+      "contextId": "CurrentYearDuration",
+      "charCount": 1040
+    },
+    {
+      "id": 1404724,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "fixed_assets_schedule",
+      "elementId": "jpcrp_cor:AnnexedDetailedScheduleOfPropertyPlantAndEquipmentEtcTextBlock",
+      "itemName": "有形固定資産等明細表 [テキストブロック]",
+      "contextId": "CurrentYearDuration",
+      "charCount": 564
+    },
+    {
+      "id": 1404725,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "segment_info",
+      "elementId": "jpcrp_cor:NotesSegmentInformationEtcConsolidatedFinancialStatementsTextBlock",
+      "itemName": "セグメント情報等、連結財務諸表 [テキストブロック]",
+      "contextId": "CurrentYearDuration",
+      "charCount": 4669
+    },
+    {
+      "id": 1404726,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "subsequent_events",
+      "elementId": "jpcrp_cor:NotesSignificantEventsAfterReportingPeriodConsolidatedFinancialStatementsTextBlock",
+      "itemName": "重要な後発事象、連結財務諸表 [テキストブロック]",
+      "contextId": "CurrentYearDuration",
+      "charCount": 21
+    },
+    {
+      "id": 1404727,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "related_parties",
+      "elementId": "jpcrp_cor:NotesRelatedPartiesConsolidatedFinancialStatementsTextBlock",
+      "itemName": "関連当事者情報、連結財務諸表 [テキストブロック]",
+      "contextId": "CurrentYearDuration",
+      "charCount": 318
+    },
+    {
+      "id": 1404728,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "parent_info",
+      "elementId": "jpcrp_cor:InformationAboutParentCompanyEtcOfReportingCompanyTextBlock",
+      "itemName": "提出会社の親会社等の情報 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 32
+    },
+    {
+      "id": 1404729,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "rights_plan",
+      "elementId": "jpcrp_cor:DescriptionOfRightsPlanTextBlock",
+      "itemName": "ライツプランの内容 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 25
+    },
+    {
+      "id": 1404730,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "mscb_exercise",
+      "elementId": "jpcrp_cor:ExercisesEtcOfMovingStrikeConvertibleBondsEtcTextBlock",
+      "itemName": "行使価額修正条項付新株予約権付社債券等の行使状況等 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 43
+    },
+    {
+      "id": 1404731,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "changes_issued",
+      "elementId": "jpcrp_cor:ChangesInNumberOfIssuedSharesStatedCapitalEtcTextBlock",
+      "itemName": "発行済株式総数、資本金等の推移 [テキストブロック]",
+      "contextId": "FilingDateInstant",
+      "charCount": 747
+    },
+    {
+      "id": 1404732,
+      "documentId": 621,
+      "stockId": 2574,
+      "fiscalYearEnd": "2025-12-31",
+      "sectionKey": "main_customers",
+      "elementId": "jpcrp_cor:InformationForEachOfMainCustomersTextBlock",
+      "itemName": "主要な顧客ごとの情報 [テキストブロック]",
+      "contextId": "CurrentYearDuration",
+      "charCount": 73
+    }
+  ]
+}

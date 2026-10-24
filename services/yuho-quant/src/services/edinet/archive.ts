@@ -7,7 +7,8 @@
  * の証明に使っていた)。海外 backfill は Type1 取得・解析後に記録自体が無い。
  *
  * 契約: 1 type = 1 key (`{docID}:type1` / `{docID}:type5`) + 取得した実 ZIP
- * bytes のみ添付。旧来の素 docID 記録は読まない・書かない・消さない。
+ * bytes のみ添付。通常経路は旧来の素 docID 記録を読まない・書かない・消さない。
+ * D1旧省略根拠の対証だけはreadSavedEdinetZipReferenceで明示page/SHAを読む。
  * ingest / backfill-missing-docs / backfill-overseas / manual59
  * (repair-zip-archive) の全4経路がこの helper だけを使う。
  */
@@ -22,6 +23,8 @@ import { notionEnv } from "../../../../../src/shared/notion-archive/env.js";
 import { listPageFiles } from "../../../../../src/shared/notion-archive/page-file.js";
 import { downloadArchivedFile } from "../../../../../src/shared/notion-archive/archived-download.js";
 import { sha256HexBytes } from "../../../../../src/shared/sha256.js";
+import { notionRequest } from "../../../../../src/shared/notion-archive/client.js";
+import type { edinetArchiveMetadata } from "./archive-metadata.js";
 
 /** EDINET 書類取得種別 (1=XBRL ZIP / 5=CSV ZIP)。 */
 export type EdinetArchiveDocType = 1 | 5;
@@ -182,6 +185,49 @@ export async function readSavedEdinetZip(docID: string, type: EdinetArchiveDocTy
       manifest.files[0].originalFilename !== files[0].name || manifest.files[0].byteLength !== bytes.length || manifest.files[0].sha256 !== sha256 ||
       await inputFingerprint(manifest.files.map(f => ({ filename: f.originalFilename, contentType: f.originalMime, byteLength: f.byteLength, sha256: f.sha256 }))) !== manifest.inputFingerprint)) throw new SavedEdinetZipQualificationError("EDINET保存原本manifestが不一致です");
   return { pageId: page.id, bytes, sha256, metadata, originalManifest: manifest === "absent" ? "unknown" as const : "known" as const };
+}
+
+/** D1旧省略根拠が明示する1page/物理SHAだけを対証する。通常readerの代替・探索には使わない。 */
+export async function readSavedEdinetZipReference(args: {
+  docID: string; type: 1; pageId: string; sha256: string; originalManifest: "known" | "unknown";
+  nativeMetadata: ReturnType<typeof edinetArchiveMetadata>;
+}) {
+  const requireReference = (value: unknown) => { if (!value) throw new SavedEdinetZipQualificationError("旧EDINET原本の明示参照が不適格です"); };
+  requireReference(/^[a-f0-9]{64}$/.test(args.sha256));
+  requireReference(/^(?:[a-f0-9]{32}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/i.test(args.pageId));
+  const dbId = await findUniqueBackupChildByTitle({ parentPageId: notionEnv.NOTION_ARCHIVE_PAGE_ID(), title: "一次データ｜yuho-quant", kind: "database" });
+  requireReference(dbId !== null);
+  const page = await notionRequest<{ object: string; id: string; archived: boolean; in_trash: boolean; parent: { type: string; database_id: string };
+    properties: Record<string, { type: string; title?: Array<{ type: string; plain_text: string; text: { content: string } }>;
+      rich_text?: Array<{ type: string; plain_text: string; text: { content: string } }> }> }>("GET", `/pages/${args.pageId}`);
+  const nid = (value: string) => value.replaceAll("-", "").toLowerCase();
+  requireReference(page.object === "page" && page.archived === false && page.in_trash === false && nid(page.id) === nid(args.pageId) &&
+    page.parent.type === "database_id" && nid(page.parent.database_id) === nid(dbId!));
+  const text = (parts: Array<{ type: string; plain_text: string; text: { content: string } }> | undefined) => {
+    requireReference(Array.isArray(parts) && parts.length > 0 && parts.every(p => p.type === "text" && typeof p.plain_text === "string" && p.plain_text === p.text?.content));
+    return parts!.map(p => p.plain_text).join("");
+  };
+  requireReference(page.properties.Key?.type === "title" && page.properties.Metadata?.type === "rich_text");
+  const key = text(page.properties.Key.title), metadata = JSON.parse(text(page.properties.Metadata.rich_text)) as Record<string, unknown>;
+  requireReference((key === args.docID || key === edinetArchiveKey(args.docID, 1)) && metadata.docID === args.docID &&
+    (metadata.edinetDocType === 1 || key === args.docID && metadata.edinetDocType === undefined) &&
+    Object.entries(args.nativeMetadata).every(([k, value]) => metadata[k] === value));
+  // legacy page can hold other attachments; qualify only the exact D1-bound type1, never claim custody of the others.
+  const files = (await listPageFiles(page.id, "Files")).filter(file => file.name === edinetArchiveFilename(args.docID, 1));
+  requireReference(files.length === 1 && files[0].kind === "file");
+  const bytes = Buffer.from(await downloadArchivedFile(files[0], "情報修正の旧明示原本", { maxBytes: 20 * 1024 ** 2 }));
+  const sha256 = await sha256HexBytes(bytes); requireReference(sha256 === args.sha256 &&
+    (metadata.sourceZIPSHA === undefined || metadata.sourceZIPSHA === sha256) &&
+    (metadata.sourceZIPBytes === undefined || metadata.sourceZIPBytes === bytes.length));
+  const manifest = readFileManifest(metadata); requireReference(manifest !== "malformed");
+  const originalManifest = manifest === "absent" ? "unknown" as const : "known" as const;
+  requireReference(originalManifest === args.originalManifest);
+  if (manifest !== "absent" && manifest !== "malformed") {
+    const selected = manifest.files.filter(file => file.originalFilename === files[0].name);
+    requireReference(selected.length === 1 && selected[0].upload === "uploaded" && selected[0].byteLength === bytes.length && selected[0].sha256 === sha256 &&
+      await inputFingerprint(manifest.files.map(file => ({ filename: file.originalFilename, contentType: file.originalMime, byteLength: file.byteLength, sha256: file.sha256 }))) === manifest.inputFingerprint);
+  }
+  return { pageId: page.id, bytes, sha256, metadata, originalManifest };
 }
 
 /**

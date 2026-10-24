@@ -1,0 +1,13 @@
+{
+  "id": 2574,
+  "code": "3776",
+  "name": "ブロードバンドタワー",
+  "market": "スタンダード（内国株式）",
+  "sector": "情報・通信業",
+  "is_active": 1,
+  "is_yutai": 0,
+  "created_at": 1779027887,
+  "updated_at": 1791617403,
+  "instrument_type": "equity",
+  "sector33": "情報・通信業"
+}

@@ -1,0 +1,82 @@
+{
+  "type5": {
+    "docID": "S100WZGB",
+    "edinetCode": "E05494",
+    "secCode": "37760",
+    "filerName": "株式会社ブロードバンドタワー",
+    "docTypeCode": "120",
+    "periodStart": "2025-01-01",
+    "periodEnd": "2025-12-31",
+    "submitDateTime": "2026-03-19 13:39",
+    "repairedBy": "fixed-missing-type-custody",
+    "sourceListPage": "3fed74ff-84cd-81ce-bb61-cf022d4e14d1",
+    "sourceListRawSha256": "9fa5846342605c8d787d76c046a2d22334f5a917f7c3ba041bdd88676849ba55",
+    "edinetDocType": 5,
+    "_fileManifest": {
+      "version": 1,
+      "files": [
+        {
+          "originalFilename": "S100WZGB_csv.zip",
+          "uploadFilename": "S100WZGB_csv.zip",
+          "originalMime": "application/zip",
+          "uploadMime": "application/zip",
+          "byteLength": 121555,
+          "sha256": "3abd45d570b5ece2f1719de4c2172697e9e6e51254358d138cc78dc37b9a1d91",
+          "upload": "uploaded"
+        }
+      ],
+      "inputFingerprint": "9b1d47f584e2619de54e1433540e9b7090619a9dd0b112b8ebf1ab969a3f5215"
+    }
+  },
+  "type1": {
+    "docID": "S100WZGB",
+    "edinetCode": "E05494",
+    "secCode": "37760",
+    "filerName": "株式会社ブロードバンドタワー",
+    "docTypeCode": "120",
+    "periodStart": "2025-01-01",
+    "periodEnd": "2025-12-31",
+    "submitDateTime": "2026-03-19 13:39",
+    "repairedBy": "fixed-missing-type-custody",
+    "sourceListPage": "3fed74ff-84cd-81ce-bb61-cf022d4e14d1",
+    "sourceListRawSha256": "9fa5846342605c8d787d76c046a2d22334f5a917f7c3ba041bdd88676849ba55",
+    "edinetDocType": 1,
+    "_fileManifest": {
+      "version": 1,
+      "files": [
+        {
+          "originalFilename": "S100WZGB_xbrl.zip",
+          "uploadFilename": "S100WZGB_xbrl.zip",
+          "originalMime": "application/zip",
+          "uploadMime": "application/zip",
+          "byteLength": 666008,
+          "sha256": "96f870d80fa3b47db6f3f0c99c788a6db6700e21699372886fbdb1770f353fb3",
+          "upload": "uploaded"
+        }
+      ],
+      "inputFingerprint": "4b22f5263bc3deb85ced6071b75f969d096b442eed7a319e1125b96b48567e39"
+    }
+  },
+  "custody": [
+    {
+      "type": 5,
+      "pageId": "3fed74ff-84cd-8119-8cc4-d5694f3dd3b4",
+      "sha256": "3abd45d570b5ece2f1719de4c2172697e9e6e51254358d138cc78dc37b9a1d91",
+      "bytes": 121555,
+      "originalManifest": "known",
+      "metadataSha256": "2230d6284ad9deff1b38b1111122218f61a33ff5acca6569d31362d3d72b78bf",
+      "matchesOct19PhysicalSHA": true,
+      "matchesOct19Bytes": true
+    },
+    {
+      "type": 1,
+      "pageId": "3fed74ff-84cd-812b-9798-fc12d7cecfdc",
+      "sha256": "96f870d80fa3b47db6f3f0c99c788a6db6700e21699372886fbdb1770f353fb3",
+      "bytes": 666008,
+      "originalManifest": "known",
+      "metadataSha256": "09ccd9bca170b8b1f8004b2a416a188bdba868daadd21accc8cd99540c9f91a7",
+      "matchesOct19PhysicalSHA": true,
+      "matchesOct19Bytes": true
+    }
+  ]
+}
