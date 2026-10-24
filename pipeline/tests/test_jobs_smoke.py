@@ -937,6 +937,31 @@ class TestWorkflowManualDate:
 
 
 class TestRunJobExit:
+    @pytest.mark.parametrize("path", ["record", "raw"])
+    def test_notion_unknown_is_not_converted_to_alternate_store_success(self, monkeypatch, tmp_path, path):
+        import argparse
+        from unittest.mock import Mock
+
+        from jp_stock_pipeline.config import load_settings
+        from jp_stock_pipeline.notion.client import NotionUnknownResultError
+
+        ctx = runner.JobContext(load_settings(env=_env(tmp_path), dry_run=True), NotionClient(None, dry_run=True), argparse.Namespace())
+        unknown = NotionUnknownResultError("declared write result unknown")
+        alternate = Mock(side_effect=AssertionError("unknown後の代替保存"))
+        monkeypatch.setattr(ctx, "_mirror", alternate)
+        monkeypatch.setattr(ctx, "_cloud", alternate)
+        fail = Mock(side_effect=unknown)
+        if path == "raw":
+            monkeypatch.setattr(file_upload, "upload_raw_artifact", fail)
+        with pytest.raises(NotionUnknownResultError) as failure:
+            if path == "raw":
+                ctx.upload_raw(object())
+            else:
+                ctx._persist(fail, alternate, "declared boundary")
+        assert failure.value is unknown and fail.call_count == 1
+        assert ctx.notion_failed == 1
+        alternate.assert_not_called()
+
     @pytest.mark.parametrize("zero_status", sorted(runner.VERIFIED_ZERO_STATUSES))
     @pytest.mark.parametrize("failure", [None, "crash", "source", "cloud", "history_unknown"])
     def test_verified_zero_terminal_does_not_hide_failure_or_history_unknown(

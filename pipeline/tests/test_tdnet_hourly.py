@@ -173,6 +173,25 @@ def test_verified_dedup_counts_as_processed_only_after_persist(monkeypatch, tmp_
     assert runner._status(ctx, False) == (runner.STATUS_SUCCESS if persist_ok else runner.STATUS_FAILURE)
 
 
+def test_financial_unknown_stops_before_next_disclosure(monkeypatch, tmp_path):
+    from unittest.mock import Mock
+
+    from jp_stock_pipeline.notion.client import NotionUnknownResultError
+
+    ctx, record = _ctx(str(tmp_path)), _record()
+    ctx.args = argparse.Namespace(date=date(2026, 9, 11), limit=None)
+    monkeypatch.setattr(mod, "_collect", lambda *a: [(object(), [record, record], {record.doc_id: "https://declared-not-called.invalid/xbrl"})])
+    monkeypatch.setattr(mod, "_load_master_map", lambda _: ({}, True))
+    monkeypatch.setattr(mod.upsert, "load_disclosure_page_entries", lambda *a, **kw: {})
+    monkeypatch.setattr(mod.file_upload, "load_raw_page_map", lambda *a, **kw: {})
+    failure = NotionUnknownResultError("declared non-idempotent529")
+    process = Mock(side_effect=failure)
+    monkeypatch.setattr(mod, "_process_financial_xbrl", process)
+    with pytest.raises(NotionUnknownResultError) as result:
+        mod.execute(ctx)
+    assert result.value is failure and process.call_count == 1 and ctx.processed == 1
+
+
 class TestProcessFinancialXbrlSavesDocId:
     def test_save_raw_receives_the_disclosure_doc_id(self, monkeypatch, tmp_path):
         captured: dict = {}
