@@ -85,6 +85,25 @@ describe("同runのmoneyflow source集合join", () => {
     for (const value of [undefined, {}, { ...a, runId:"38879272134.2" }, { ...a, outcomes:a.outcomes.slice(1) },
       { ...a, outcomes:[{...a.outcomes[0],ok:"unknown"},...a.outcomes.slice(1)] }, summary("yahoo")]) expect(() => qualify(value)).toThrow();
   });
+  it("CFTCの未公表理由は後続へ保持し、最新充足joinや偽造された成功・期間を拒否する", () => {
+    const a = summary("non-yahoo"), i = a.outcomes.findIndex(o => o.source === "cftc-cot-jpy");
+    const reason = { code: "not_yet_published" as const, period: "2026-W40", expectedAsOfDate: "2026-09-29",
+      expectedReleaseDate: "2026-10-02", latestPublishedAsOfDate: "2026-09-22" };
+    a.outcomes = a.outcomes.map((o, index) => index === i
+      ? { source: "cftc-cot-jpy", ok: false, detail: "予定期間は未公表。旧期を代用しない", reason } : o);
+    const qualify = (s: unknown) => qualifyMoneyflowPredecessor({ summary: s, requested, all: SOURCES,
+      runId: "38879272134.1", plannedDate: date, nowMs, dryRun: false });
+    expect(() => qualify(a)).not.toThrow();
+    expect(() => join([a, summary("yahoo")])).toThrow(/not_yet_published.*2026-W40/);
+    for (const edit of [
+      { ok: true }, { reason: { ...reason, period: "2026-W39" } }, { reason: { ...reason, expectedAsOfDate: "2026-02-30" } },
+      { reason: { ...reason, expectedReleaseDate: "2026-09-22" } }, { reason: { ...reason, latestPublishedAsOfDate: "2026-09-29" } },
+      { reason: { ...reason, code: "http503" } },
+    ]) {
+      const altered = structuredClone(a); Object.assign(altered.outcomes[i], edit);
+      expect(() => qualify(altered)).toThrow("未公表理由");
+    }
+  });
   it("source内で締切を跨いでも次のHTTPを送らず、元のabort signalを保持する", async () => {
     vi.useFakeTimers({toFake:["Date"]}); vi.setSystemTime(`${date}T14:39:59.000Z`);
     const native = vi.fn<typeof fetch>(async()=>new Response("ack")); vi.stubGlobal("fetch",native);

@@ -30,7 +30,7 @@ import { ingestDocument } from "../../services/yuho-quant/src/services/ingest.js
 import { ExistingTextReadbackMismatchError } from "../../services/yuho-quant/src/services/text-backup.js";
 import { checkDocsCustody } from "../../services/yuho-quant/src/services/edinet/archive.js";
 import { rebuildYuhoGrowthProjection } from "../../services/yuho-quant/src/services/projection.js";
-import { resumePendingShareholdings, resumePendingShareholdingsPrices, type HoldingPriceSourceLoader } from "../shared/notion-archive/shareholdings.js";
+import { isExplicitNotApplicableHoldings, resumePendingShareholdings, resumePendingShareholdingsPrices, type HoldingPriceSourceLoader } from "../shared/notion-archive/shareholdings.js";
 
 const WINDOW_DAYS = 60;
 /**
@@ -164,6 +164,7 @@ export async function runYuhoEdinetCatchup(
     holdingsPending = resumed.pending || resumed.held > 0;
     if (resumed.resumed > 0) byStatus["holdings:resumed"] = resumed.resumed;
     if (resumed.held > 0) byStatus["holdings:requires_review"] = resumed.held;
+    if (resumed.explicitNotApplicable) byStatus["holdings:explicit_not_applicable"] = resumed.explicitNotApplicable;
     if (resumed.unknownSources) {
       byStatus["holdings:unknown_source_isolated"] = resumed.unknownSources.length;
       for (const source of resumed.unknownSources) console.warn("[yuho-edinet] 保有明細source隔離", JSON.stringify(source));
@@ -353,9 +354,10 @@ export async function runYuhoEdinetCatchup(
           byStatus[status] = (byStatus[status] ?? 0) + 1;
         }
         if (r.holdings) {
-          const hs = `holdings:${r.holdings.status}`;
+          const notApplicable = isExplicitNotApplicableHoldings(r.holdings);
+          const hs = `holdings:${notApplicable ? "explicit_not_applicable" : r.holdings.status}`;
           byStatus[hs] = (byStatus[hs] ?? 0) + 1;
-          if (r.holdings.status === "held") holdingsPending = true;
+          if (r.holdings.status === "held" && !notApplicable) holdingsPending = true;
         }
         byStatus[r.parseStatus] = (byStatus[r.parseStatus] ?? 0) + 1;
         const ok = `oseas:${r.overseasParseStatus}`;

@@ -50,6 +50,22 @@ export class MoneyflowFetchError extends Error {
   }
 }
 
+/** 取得・解析済み原本が期待する公表回に達していない。観測値の成功とは区別する。 */
+export interface MoneyflowNotYetPublishedReason {
+  code: "not_yet_published";
+  period: string;
+  expectedAsOfDate: string;
+  expectedReleaseDate: string;
+  latestPublishedAsOfDate: string;
+}
+
+export class MoneyflowNotYetPublishedError extends MoneyflowFetchError {
+  constructor(message: string, readonly reason: MoneyflowNotYetPublishedReason, primary: Omit<FetchedBatch, "key">) {
+    super(message, primary, undefined);
+    this.name = "MoneyflowNotYetPublishedError";
+  }
+}
+
 /** 解析に使うファイル (取得直後の `PrimaryFile`、または Notion 保管済みの再取得分)。 */
 export type SpecFile = Pick<PrimaryFile, "filename" | "bytes">;
 

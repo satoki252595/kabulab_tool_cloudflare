@@ -79,12 +79,24 @@ export function judgeMacro(input: MacroInput): MacroResult {
     judgment = "B";
     reason = `日経VI ${vi.toFixed(1)} (25-30・通常ゾーン)`;
     if (turnoverNormal) reason += " / 売買代金平均";
-  } else if (vi >= 20 && vi <= 25 && turnoverOk && gapSmall) {
-    judgment = "A";
-    reason = `日経VI ${vi.toFixed(1)} / 売買代金 ${input.topixTurnoverRatio!.toFixed(2)}x / ギャップ${input.futuresGap!.toFixed(0)}円 → 積極`;
   } else if (vi >= 20 && vi <= 25) {
-    judgment = "B";
-    reason = `日経VI ${vi.toFixed(1)} (20-25だが売買代金/ギャップが条件未達)`;
+    if (turnoverOk && gapSmall) {
+      judgment = "A";
+      reason = `日経VI ${vi.toFixed(1)} / 売買代金 ${input.topixTurnoverRatio!.toFixed(2)}x / ギャップ${input.futuresGap!.toFixed(0)}円 → 積極`;
+    } else if (
+      (input.topixTurnoverRatio !== null && !turnoverOk) ||
+      (input.futuresGap !== null && !gapSmall)
+    ) {
+      judgment = "B";
+      reason = `日経VI ${vi.toFixed(1)} (20-25だが売買代金/ギャップが条件未達)`;
+    } else {
+      const missing = [
+        input.topixTurnoverRatio === null ? "TOPIX売買代金比率" : null,
+        input.futuresGap === null ? "先物ギャップ" : null,
+      ].filter((field) => field !== null);
+      judgment = "HOLD";
+      reason = `日経VI ${vi.toFixed(1)} / ${missing.join("・")}が未取得のため判定保留`;
+    }
   } else if (vi < 20) {
     judgment = "B";
     reason = `日経VI ${vi.toFixed(1)} (低すぎ・通常扱い)`;

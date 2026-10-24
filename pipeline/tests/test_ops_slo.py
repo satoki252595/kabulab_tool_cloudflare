@@ -891,6 +891,20 @@ class TestOpsCheck:
         assert len(problems) == 1
         assert "edinet_daily" in problems[0]
 
+    @pytest.mark.parametrize("status", sorted(runner.VERIFIED_ZERO_STATUSES))
+    def test_原本検証済みの正常ゼロは理由不明の空振りに数えない(self, status) -> None:
+        store = _FakeStore()
+        for i in range(5):
+            ops.record_job_run(
+                store, job_name="edinet_daily", status=status,
+                processed=0, failed=0, failed_codes=[], run_url=None,
+                duration_secs=1.0, finished_at=int(datetime.now(UTC).timestamp()) - i,
+            )
+        problems: list[str] = []
+        ops_check._check_idle_runs(store, problems)
+        assert problems == []
+        assert all(row["failed_codes"] is None for row in store.query("SELECT failed_codes FROM jss_job_runs"))
+
     def test_30日より前の実行は空振り判定に入らない(self) -> None:
         """直近窓が無いと昔の不調をいつまでも通報し続ける (L-17)。"""
         store = _FakeStore()

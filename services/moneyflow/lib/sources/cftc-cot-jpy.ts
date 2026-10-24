@@ -328,7 +328,7 @@ export function determineExpectedCftcCotPeriod(now: Date): CftcCotExpectedPeriod
 
 export type CftcCotAvailability =
   | { status: "published"; asOfDate: string }
-  | { status: "not_yet_published"; expectedAsOfDate: string; expectedReleaseDate: string; reason: string };
+  | { status: "not_yet_published"; expectedAsOfDate: string; expectedReleaseDate: string; latestPublishedAsOfDate: string; reason: string };
 
 /**
  * 実測できた「契約キーごとの最新基準日」と期待値を突き合わせ、
@@ -361,6 +361,7 @@ export function determineCftcCotAvailability(
       status: "not_yet_published",
       expectedAsOfDate: expected.asOfDate,
       expectedReleaseDate: expected.releaseDate,
+      latestPublishedAsOfDate: maxDate,
       reason:
         `直近の公表想定日 ${expected.asOfDate} (公表日 ${expected.releaseDate} ET 15:30) 時点のデータが` +
         `まだ反映されていません (取得できた最新の基準日: ${maxDate})`,
@@ -669,7 +670,7 @@ export interface CftcCotJpyResolveOk {
 
 export type CftcCotJpyResolveResult =
   | CftcCotJpyResolveOk
-  | Extract<CftcCotAvailability, { status: "not_yet_published" }>;
+  | (Extract<CftcCotAvailability, { status: "not_yet_published" }> & { rawResponseText: string; requestUrl: string });
 
 /**
  * 最新データを取得し、パース・期間判定まで行う統合関数。
@@ -694,7 +695,7 @@ export async function resolveCftcCotJpy(
 
   const availability = determineCftcCotAvailability(now, latestByContract);
   if (availability.status === "not_yet_published") {
-    return availability;
+    return { ...availability, rawResponseText: text, requestUrl: url };
   }
 
   const { asOfDate } = availability;

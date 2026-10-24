@@ -17,6 +17,7 @@
  */
 import { isoWeekLabelOf } from "../iso-week.js";
 import {
+  MoneyflowNotYetPublishedError,
   requireSpecFile,
   type FetchedBatch,
   type MoneyflowSourceSpec,
@@ -89,8 +90,9 @@ const ADAPTER_LIMITATIONS =
   "非商業筋の買い・売り建玉には、同じトレーダーが買いと売りを両建てしたスプレッド分を含まない。" +
   "【取込の範囲】観測ログには毎週、最新の公表回(基準日=直前火曜)の1週分だけを書く" +
   "(API応答には過去8週分が入っているが、過去週は書き直さない)。公表が米国の祝日や政府閉鎖で" +
-  "遅れて、次の取込までに公表されなかった週は、取込時に「未公表」として失敗を記録する" +
-  "(黙ってスキップしない)。その週が後から公表されても自動では遡らないため、必要なら再実行する。" +
+  "遅れて、次の取込までに公表されなかった週は、取込時に期間・公表予定日付きの「未公表」として記録する" +
+  "(通信・解析障害と区別するが、予定期間の取得完了にはしない)。" +
+  "その週が後から公表されても自動では遡らないため、必要なら再実行する。" +
   "【期間】対象期間は基準日(火曜)の ISO 週 (例 2026-09-22 → 2026-W39)。CFTC 自身の" +
   "「Report Week」番号(同じ回で 38)とは数え方が違う。残高なので期間開始=期間終了=基準日。" +
   "【公表の遅れ】基準日(火曜)から3日後の金曜 米国東部時間15:30 (日本時間の土曜早朝) に公表。" +
@@ -248,9 +250,16 @@ function toObservations(input: {
 async function resolve(now: Date) {
   const result = await resolveCftcCotJpy({ now });
   if (result.status !== "ok") {
-    throw new Error(
+    const reason = { code: "not_yet_published" as const,
+      period: isoWeekLabelOf(new Date(`${result.expectedAsOfDate}T00:00:00Z`)),
+      expectedAsOfDate: result.expectedAsOfDate, expectedReleaseDate: result.expectedReleaseDate,
+      latestPublishedAsOfDate: result.latestPublishedAsOfDate };
+    throw new MoneyflowNotYetPublishedError(
       `cftc-cot-jpy: 最新回がまだ公表されていません (基準日 ${result.expectedAsOfDate}、` +
         `公表予定 ${result.expectedReleaseDate} 米国東部時間15:30): ${result.reason}`,
+      reason, { source: result.requestUrl, metadata: { publication: reason }, files: [{
+        filename: CFTC_COT_JPY_RESPONSE_FILENAME, bytes: new TextEncoder().encode(result.rawResponseText), contentType: "application/json",
+      }] },
     );
   }
   const key = keyForAsOfDate(result.asOfDate);

@@ -17,6 +17,7 @@
 import "dotenv/config";
 import {
   createDailyDb,
+  categorizeSyncFailure,
   isDailySyncIncomplete,
   runDailySync,
   runMarketContextSync,
@@ -42,8 +43,15 @@ function printFailureSummary(
   }
 
   console.warn(
-    `[sync-daily] 失敗銘柄: ${failures.length} 件 / 原因グループ: ${groups.size} 件`
+    `[sync-daily] 未完銘柄: ${failures.length} 件 / 原因グループ: ${groups.size} 件`
   );
+  const categories = new Map<string, number>();
+  for (const { error } of failures) {
+    const category = categorizeSyncFailure(error);
+    categories.set(category, (categories.get(category) ?? 0) + 1);
+  }
+  console.warn(`[sync-daily] 未完分類: ${JSON.stringify(Object.fromEntries(categories))} ` +
+    "(source_unavailableは売買なし未確認、history_holdは長期指標保留。通信・保存障害と区別)");
   for (const [error, codes] of [...groups].slice(0, MAX_ERROR_GROUPS)) {
     const shown = codes.slice(0, MAX_CODES_PER_ERROR).join(", ");
     const omitted =

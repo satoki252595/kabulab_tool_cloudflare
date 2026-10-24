@@ -70,6 +70,22 @@ afterEach(() => {
 });
 
 describe("describeNullBarsFailure", () => {
+  it.each(["null", "0", "missing-slot", "missing-array"])("出来高の%sを他の状態へ変換しない", (state) => {
+    const json = JSON.parse(new TextDecoder().decode(chartBytes({
+      rmt: sec("2026-10-13T06:30:00Z"), timestamps: [sec("2026-10-14T00:00:00Z")],
+      open: [null], high: [null], low: [null], close: [null], volume: [null],
+    })));
+    const quote = json.chart.result[0].indicators.quote[0];
+    if (state === "0") quote.volume = [0];
+    if (state === "missing-slot") quote.volume = [];
+    if (state === "missing-array") delete quote.volume;
+    const described = describeNullBarsFailure(input({ bytes: new TextEncoder().encode(JSON.stringify(json)) }));
+    const expected = state.startsWith("missing") ? "missing" : state;
+    expect(described.line).toContain(`v=${expected} `);
+    expect(described.categories).toMatchObject({ fullyNull: true, tradeBefore: true });
+    expect(described.line).not.toContain("no_trade");
+  });
+
   it("対象日バーが全 null のとき OHLC・出来高・JST 時刻・cache header を1行にする", () => {
     const timestamps = [sec("2026-10-10T00:00:00Z"), sec("2026-10-13T00:00:00Z"), sec("2026-10-14T00:00:00Z")];
     const described = describeNullBarsFailure(input({
@@ -87,7 +103,7 @@ describe("describeNullBarsFailure", () => {
       fullyNull: true, closeOnlyNull: false, absent: false, tradeBefore: false,
     });
     expect(described.line).toBe(
-      `${INC_NULL_BARS_TAG} 7203 rmt=2026-10-14T15:00:01+09:00 rmtDay=on o=N h=N l=N c=N v=nil n=3 ` +
+      `${INC_NULL_BARS_TAG} 7203 rmt=2026-10-14T15:00:01+09:00 rmtDay=on o=N h=N l=N c=N v=null n=3 ` +
       "tail=2026-10-10T09:00,2026-10-13T09:00,2026-10-14T09:00 prev=V age=18 cf=HIT src=raw",
     );
     expect(described.line).not.toContain(SECRET);
@@ -158,7 +174,7 @@ describe("describeNullBarsFailure", () => {
       ],
     });
     expect(described.categories.closeOnlyNull).toBe(true);
-    expect(described.line).toContain("rmt=- rmtDay=- o=V h=V l=V c=N v=nil");
+    expect(described.line).toContain("rmt=- rmtDay=- o=V h=V l=V c=N v=null");
     expect(described.line).toContain("n=- tail=- prev=V age=bad cf=HIT src=bad");
     expect(described.line).not.toContain(SECRET);
   });

@@ -97,7 +97,7 @@ async function requestRouter(method: string, path: string, body?: unknown): Prom
   if (method === "POST" && path === `/databases/${"p".repeat(32)}/query`) return { object: "list", results: [], has_more: false, next_cursor: null };
   if (method === "GET" && path.startsWith("/databases/")) {
     if (path.includes("p".repeat(32))) return { id: "p".repeat(32), properties: {
-      "保有明細状態": { type: "select" }, "保有明細理由": { type: "rich_text" }, "保有明細再開情報": { type: "rich_text" },
+      "保有明細状態": { type: "select", select: { options: [{ name: "原本明示不該当" }] } }, "保有明細理由": { type: "rich_text" }, "保有明細再開情報": { type: "rich_text" },
       "保有価格状態": { type: "select" }, "保有価格理由": { type: "rich_text" }, "保有価格再開情報": { type: "rich_text" },
     } };
     return migratedSchema();
@@ -137,6 +137,26 @@ describe("保有明細schemaの宣言値とHTTP応答envelope", () => {
     expect(replies[0].request_id).toBe("first-read-request"); expect(replies[1].request_id).toBe("second-read-request");
     expect(vi.mocked(notionRequest).mock.calls.map(call => call.slice(0, 2))).toEqual(Array.from({ length: 2 }, () => ["GET", `/databases/${"d".repeat(32)}`]));
     expect(recordPrimaryData).not.toHaveBeenCalled();
+  });
+  it("通常ensureは既存選択肢のID/色を保持して不該当terminalだけを1回追加し読戻す", async () => {
+    const schema = await requestRouter("GET", `/databases/${"p".repeat(32)}`) as HoldingsSchema;
+    const old = [{ id: "existing-attention", name: "要確認", color: "red" }];
+    schema.properties["保有明細状態"].select = { options: structuredClone(old) };
+    vi.mocked(notionRequest).mockImplementation(async (method, path, body) => {
+      if (path === `/databases/${"p".repeat(32)}`) {
+        if (method === "PATCH") {
+          Object.assign(schema.properties["保有明細状態"], (body as { properties: HoldingsSchema["properties"] }).properties["保有明細状態"]);
+          return { object: "database", id: schema.id } as never;
+        }
+        return structuredClone(schema) as never;
+      }
+      return requestRouter(method, path, body) as never;
+    });
+    vi.mocked(parseShareholdingsData).mockReturnValue({ ...extraction, status: "unsupported", reason: "原表未対応", holdings: [] });
+    expect(await publishVerifiedShareholdings(args)).toMatchObject({ status: "held" });
+    expect(schema.properties["保有明細状態"].select?.options).toEqual([...old, { name: "原本明示不該当" }]);
+    expect(vi.mocked(notionRequest).mock.calls.filter(([method, path]) => method === "PATCH" && path.startsWith("/databases/"))).toHaveLength(1);
+    expect(vi.mocked(notionRequest).mock.calls.filter(([method, path]) => method === "GET" && path === `/databases/${"p".repeat(32)}`)).toHaveLength(2);
   });
 });
 
@@ -274,13 +294,14 @@ describe("株式保有の原典限定writer", () => {
     inlineNamespace: "http://www.xbrl.org/2008/inlineXBRL",
     context: { contextRef: "FilingDateInstant", entity: `${source.edinetCode}-000`, instantDate: "2026-09-18" },
     statement: "(5) 【株式の保有状況】 該当事項はありません。" };
-  it("明示不該当は型付き原本根拠をHOLDへ残し、明細0件成功・新価格queueや旧価格変更を作らない", async () => {
+  it("明示不該当は専用terminalへ根拠を残し、明細0件成功・新価格queueや旧価格変更を作らない", async () => {
     vi.mocked(parseShareholdingsData).mockReturnValue({ ...extraction, status: "explicit_not_applicable", reason: "原本明示不該当", holdings: [], notApplicable });
     const path = `/pages/${args.archivePageId}`, price = { "保有価格状態": { select: { name: "要確認" } }, "保有価格理由": { rich_text: [{ text: { content: "旧価格の資格は不明" } }] } };
     saved[path] = structuredClone(price);
     const budget = { remainingRows: 20 };
     expect(await publishVerifiedShareholdings({ ...args, budget })).toEqual({ status: "held", parsed: 0, reason: "原本明示不該当", reasonCode: "explicit_not_applicable", notApplicable });
     expect(restartInfo(saved[path]).notApplicable).toEqual(notApplicable);
+    expect(testProperties(saved[path])["保有明細状態"].select?.name).toBe("原本明示不該当");
     expect(restartInfo(saved[path]).sourceQueueVersion).toBeUndefined(); expect(restartInfo(saved[path]).factsSha256).toBeUndefined();
     for (const [name, value] of Object.entries(price)) expect((saved[path] as Record<string, unknown>)[name]).toEqual(value);
     expect(testProperties(saved[path])["保有価格再開情報"]).toBeUndefined(); expect(budget.remainingRows).toBe(20);
@@ -338,6 +359,59 @@ describe("株式保有の原典限定writer", () => {
   it("実206Aのabsence marker読戻しで旧Keyが一文字でも変更されれば成功にしない", async () => {
     await expect(realAbsence(actualAbsences[0], true)).rejects.toThrow("他の原本props");
     expect(vi.mocked(notionRequest).mock.calls.filter(([method]) => method === "PATCH")).toHaveLength(1);
+  });
+  it.each(["normal", "following-held", "expired-after-read", "changed-proof", "legacy-cursor", "soft-expired"])("保存実206Aの旧不該当の有限再資格: %s", async mode => {
+    const fixture = actualAbsences[0], { page } = await realAbsence(fixture);
+    page.properties["保有明細状態"].select = { name: "要確認" };
+    page.properties.Metadata = mirrored({ Metadata: { rich_text: [{ text: { content: JSON.stringify({ docID: fixture.source.docId,
+      secCode: `${fixture.source.stockCode}0`, edinetCode: fixture.source.edinetCode, periodEnd: fixture.source.fiscalYearEnd,
+      filerName: fixture.ownerName, edinetDocType: 1 }) } }] } }).Metadata as never;
+    page.properties["Fetched At"] = { type: "date", date: { start: "2026-09-18T00:00:00Z" } } as never;
+    if (mode === "changed-proof" || mode === "legacy-cursor") {
+      const info = restartInfo(page.properties);
+      if (mode === "changed-proof") (info.notApplicable as ShareholdingsNotApplicable).blockHtmlSha256 = "0".repeat(64);
+      else { info.sourceQueueVersion = 1; info.sourceNextHoldingOffset = 0; }
+      page.properties["保有明細再開情報"] = mirrored({ "保有明細再開情報": { rich_text: [{ text: { content: JSON.stringify(info) } }] } })["保有明細再開情報"] as never;
+    }
+    const original = vi.mocked(notionRequest).getMockImplementation()!;
+    vi.mocked(notionRequest).mockImplementation(async (method, path, body, opts) => {
+      if (method === "POST" && path === `/databases/${"p".repeat(32)}/query`) {
+        const status = (body as { filter: { select: { equals: string } } }).filter.select.equals;
+        return { results: status !== "要確認" ? [] : page.properties["保有明細状態"].select?.name === "要確認"
+          ? [structuredClone(page)] : mode === "following-held" ? [{ id: "f".repeat(32), properties: {} }] : [], has_more: false, next_cursor: null } as never;
+      }
+      return original(method, path, body, opts);
+    });
+    vi.mocked(queryUniqueRow).mockResolvedValue(page as never);
+    vi.mocked(listPageFiles).mockResolvedValue([{ name: `${fixture.source.docId}_xbrl.zip`, kind: "file", url: "https://file.notion.so/saved-only" }]);
+    const zip = readFileSync(new URL(`../../../services/yuho-quant/src/tests/fixtures/holdings-absence-cli/${fixture.fixture}`, import.meta.url));
+    let expired = false;
+    const native = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      if (mode === "expired-after-read") expired = true;
+      return new Response(Uint8Array.from(zip));
+    });
+    vi.mocked(notionRequest).mockClear();
+    try {
+      const running = resumePendingShareholdings({ sourceDb, maxRows: 100, shouldStop: () => mode === "soft-expired", hardDeadlineReached: () => expired });
+      if (mode === "expired-after-read" || mode === "changed-proof") {
+        await expect(running).rejects.toThrow(mode === "changed-proof" ? "全文根拠" : "時間予算");
+      } else if (mode === "legacy-cursor" || mode === "soft-expired") {
+        expect(await running).toEqual({ usedRows: 0, resumed: 0, held: 1, pending: false });
+      } else {
+        expect(await running).toEqual({ usedRows: 0, resumed: 0, held: mode === "following-held" ? 1 : 0, pending: false, explicitNotApplicable: 1 });
+      }
+      if (!["normal", "following-held"].includes(mode)) {
+        expect(page.properties["保有明細状態"].select?.name).toBe("要確認");
+        expect(vi.mocked(notionRequest).mock.calls.filter(([method]) => method === "PATCH")).toHaveLength(0);
+        expect(native).toHaveBeenCalledTimes(mode === "legacy-cursor" || mode === "soft-expired" ? 0 : 1);
+        return;
+      }
+      expect(page.properties["保有明細状態"].select?.name).toBe("原本明示不該当");
+      expect(restartInfo(page.properties).notApplicable).toEqual(fixture.notApplicable);
+      expect(native).toHaveBeenCalledOnce();
+      expect(vi.mocked(notionRequest).mock.calls.filter(([method]) => method === "PATCH")).toHaveLength(1);
+      expect(vi.mocked(notionRequest).mock.calls.filter(([method, path]) => method === "POST" && path === "/pages")).toHaveLength(0);
+    } finally { native.mockRestore(); }
   });
 
   it.each([ ["rich_text", "x".repeat(200_001)], ["送信予算", "あ".repeat(150_000)] ])(
