@@ -1,0 +1,395 @@
+{
+  "version": 1,
+  "recordedOn": "2026-10-25",
+  "description": "Actual retained 3776 / S100WZGB source ZIPs and current document 621 rows/body. No generated business data.",
+  "identity": {
+    "stockCode": "3776",
+    "stockId": 2574,
+    "documentId": 621,
+    "docId": "S100WZGB",
+    "edinetCode": "E05494",
+    "periodEnd": "2025-12-31"
+  },
+  "inputs": {
+    "tmp/feature-audit-20261025/edinet3776-current-equality-readonly-v2/old-explicit-type1.zip": {
+      "sha256": "89a7b3ae5fc76682da2078f8a00d089f0f38bc62f9d4a954b6b2143786cc567a",
+      "bytes": 666008
+    },
+    "tmp/feature-audit-20261025/edinet3776-current-equality-readonly-v2/current-type1.zip": {
+      "sha256": "96f870d80fa3b47db6f3f0c99c788a6db6700e21699372886fbdb1770f353fb3",
+      "bytes": 666008
+    },
+    "tmp/feature-audit-20261025/edinet3776-current-equality-readonly-v2/current-type5.zip": {
+      "sha256": "3abd45d570b5ece2f1719de4c2172697e9e6e51254358d138cc78dc37b9a1d91",
+      "bytes": 121555
+    },
+    "tmp/feature-audit-20261025/edinet3776-current-equality-readonly-v2/current-state-before.json": {
+      "sha256": "a1e34aed5de28227755931a186e141a0ebb81d3511b82c1079b111e60637e9d7",
+      "bytes": 15950
+    },
+    "tmp/feature-audit-20261025/edinet3776-current-equality-readonly-v2/current-zip-metadata.json": {
+      "sha256": "df264574f523493dc6c1d8c896efc7c7e913835086f425beeb02796cb30b99f4",
+      "bytes": 2894
+    },
+    "tmp/feature-audit-20261025/edinet3776-current-equality-readonly-v2/current-body.json": {
+      "sha256": "d18d1302e07a642ec26f223ae3c61da0c450d868f639367438a66bc88bf47c54",
+      "bytes": 210748
+    },
+    "tmp/feature-audit-20261013/holdings-latest-all/source-only-20261014/scoped-019/3776-S100WZGB.item.json": {
+      "sha256": "5bd738409108d9b22ca8489108a2d4504b93ff96c740a63550b8eaacf517f204",
+      "bytes": 1608
+    },
+    "tmp/feature-audit-20261020/edinet3776-normal-once-v1/custody-and-second-phase-copy-v1/after-custody-once-v1/QUALIFIED-ENTRY.json": {
+      "sha256": "f2eb10850ae1349f3fc23201178226e37988e493ade89950083ded3d9fa50061",
+      "bytes": 3779
+    },
+    "tmp/feature-audit-20261025/edinet3776-current-equality-readonly-v2/result.json": {
+      "sha256": "79460c4da509e19259da3a9a5b28375cdc93914bbe46ed79a7d6148e1edb2525",
+      "bytes": 8166
+    },
+    "tmp/feature-audit-20261013/holdings-latest-all/source-only-20261014/scoped-019/3776-S100WZGB.zip": {
+      "sha256": "89a7b3ae5fc76682da2078f8a00d089f0f38bc62f9d4a954b6b2143786cc567a",
+      "bytes": 666008
+    },
+    "tmp/feature-audit-20261025/edinet3776-original-snapshot-readonly-v2/ORIGINAL-SNAPSHOT.json": {
+      "sha256": "15eb17482aa209b83be57a711feb5d78d218fae081cd3b298db1caaa05a593a9",
+      "bytes": 401
+    },
+    "tmp/feature-audit-20261025/edinet3776-original-snapshot-readonly-v2/ORIGINAL-ENTRY.json": {
+      "sha256": "a4566faf854e04c445842cd9154c04db5a94001c609e464a2447df80350b09c9",
+      "bytes": 623
+    }
+  },
+  "files": {
+    "old-explicit-type1.zip": {
+      "sha256": "89a7b3ae5fc76682da2078f8a00d089f0f38bc62f9d4a954b6b2143786cc567a",
+      "bytes": 666008,
+      "sourcePath": "tmp/feature-audit-20261025/edinet3776-current-equality-readonly-v2/old-explicit-type1.zip",
+      "projection": "byte-identical copy"
+    },
+    "current-type1.zip": {
+      "sha256": "96f870d80fa3b47db6f3f0c99c788a6db6700e21699372886fbdb1770f353fb3",
+      "bytes": 666008,
+      "sourcePath": "tmp/feature-audit-20261025/edinet3776-current-equality-readonly-v2/current-type1.zip",
+      "projection": "byte-identical copy"
+    },
+    "current-type5.zip": {
+      "sha256": "3abd45d570b5ece2f1719de4c2172697e9e6e51254358d138cc78dc37b9a1d91",
+      "bytes": 121555,
+      "sourcePath": "tmp/feature-audit-20261025/edinet3776-current-equality-readonly-v2/current-type5.zip",
+      "projection": "byte-identical copy"
+    },
+    "current-state-before.json": {
+      "sha256": "a1e34aed5de28227755931a186e141a0ebb81d3511b82c1079b111e60637e9d7",
+      "bytes": 15950,
+      "sourcePath": "tmp/feature-audit-20261025/edinet3776-current-equality-readonly-v2/current-state-before.json",
+      "projection": "byte-identical copy"
+    },
+    "current-zip-metadata.json": {
+      "sha256": "df264574f523493dc6c1d8c896efc7c7e913835086f425beeb02796cb30b99f4",
+      "bytes": 2894,
+      "sourcePath": "tmp/feature-audit-20261025/edinet3776-current-equality-readonly-v2/current-zip-metadata.json",
+      "projection": "byte-identical copy"
+    },
+    "current-body.json.gz": {
+      "sha256": "22a00e341759bcee3e4551a6bb04a63aa60b2fc3a7f6aa01f6960bc8bc63244b",
+      "bytes": 47426,
+      "sourcePath": "tmp/feature-audit-20261025/edinet3776-current-equality-readonly-v2/current-body.json",
+      "projection": "gzip of exact saved JSON bytes, mtime=0; gunzip equals source bytes",
+      "uncompressedSha256": "d18d1302e07a642ec26f223ae3c61da0c450d868f639367438a66bc88bf47c54",
+      "uncompressedBytes": 210748
+    },
+    "old-source-metadata.json": {
+      "sha256": "e93a214c9549e28e778c9391b67bfb92febb94b58e1f780b1bc36196ee4cb9c1",
+      "bytes": 536,
+      "sourcePath": "tmp/feature-audit-20261013/holdings-latest-all/source-only-20261014/scoped-019/3776-S100WZGB.item.json",
+      "projection": "exact sourceMetadata object; formatting only"
+    },
+    "native-entry.json": {
+      "sha256": "87fa36edf64a0b93b3d600ed5bdb7a270e777d7e07edab6c6829cd3def758d0d",
+      "bytes": 1127,
+      "sourcePath": "tmp/feature-audit-20261020/edinet3776-normal-once-v1/custody-and-second-phase-copy-v1/after-custody-once-v1/QUALIFIED-ENTRY.json",
+      "projection": "exact doc and source objects; unrelated beforeDocument/beforeProgress omitted"
+    },
+    "core-stock.json": {
+      "sha256": "c32c9e509a3b807dad7eef6ece97c65f00fb92ab3a9a8eadd1b6baac09e8c0c4",
+      "bytes": 323,
+      "sourcePath": "tmp/feature-audit-20261013/disclosures-recovery-finish/body-rest2595-finite53-handoff-v1/batch-future-011/POST-capsule.json.gz",
+      "projection": "exact stock2574 row from accepted historical POST; current active identity in tests is an explicit protocol control"
+    },
+    "original-snapshot.json": {
+      "sha256": "15eb17482aa209b83be57a711feb5d78d218fae081cd3b298db1caaa05a593a9",
+      "bytes": 401,
+      "sourcePath": "tmp/feature-audit-20261025/edinet3776-original-snapshot-readonly-v2/ORIGINAL-SNAPSHOT.json",
+      "projection": "byte-identical copy of qualified existing physical source read; no new EDINET capture"
+    },
+    "original-entry.json": {
+      "sha256": "a4566faf854e04c445842cd9154c04db5a94001c609e464a2447df80350b09c9",
+      "bytes": 623,
+      "sourcePath": "tmp/feature-audit-20261025/edinet3776-original-snapshot-readonly-v2/ORIGINAL-ENTRY.json",
+      "projection": "byte-identical copy of qualified existing physical source read; no new EDINET capture"
+    }
+  },
+  "legacySource": {
+    "archivePageId": "364d74ff-84cd-8147-916b-cc4d5ed0057b",
+    "zipSha256": "89a7b3ae5fc76682da2078f8a00d089f0f38bc62f9d4a954b6b2143786cc567a",
+    "originalManifest": "unknown",
+    "sourceCustody": "legacy",
+    "sourceMetadataCanonicalSha256": "c4845ef2d7e56636643b33020d78070d81b46bba5cb17a1dc37a3844ed44cf8f",
+    "sameMetadataEightFields": [
+      "docID",
+      "edinetCode",
+      "secCode",
+      "filerName",
+      "docTypeCode",
+      "periodStart",
+      "periodEnd",
+      "submitDateTime"
+    ],
+    "allEightExactToCurrentTypedType1Type5AndNativeDoc": true
+  },
+  "zipComparison": {
+    "rawFileEntriesPerZIP": 43,
+    "duplicateMemberNames": false,
+    "exactMemberNamesAndAllBytesEqual": true,
+    "containerBytesEqual": false,
+    "members": [
+      {
+        "name": "XBRL/AuditDoc/jpaud-aai-cc-001_E05494-000_2025-12-31_01_2026-03-19.xbrl",
+        "bytes": 85706,
+        "sha256": "4024d9a3bfc5a44ee40acfc7f6004689fba836dc596112122d3a978d0a6b74cb"
+      },
+      {
+        "name": "XBRL/AuditDoc/jpaud-aai-cc-001_E05494-000_2025-12-31_01_2026-03-19.xsd",
+        "bytes": 2280,
+        "sha256": "9c1ebb8bb6c102bd6f015e57a546df642a22d5c2ba34974ae621212d93b8fb64"
+      },
+      {
+        "name": "XBRL/AuditDoc/jpaud-aai-cc-001_E05494-000_2025-12-31_01_2026-03-19_def.xml",
+        "bytes": 6250,
+        "sha256": "8357d8867df6f4e088c3801c7c63831bd3769e78bfea70278c52c4aa1e6defae"
+      },
+      {
+        "name": "XBRL/AuditDoc/jpaud-aai-cc-001_E05494-000_2025-12-31_01_2026-03-19_ixbrl.htm",
+        "bytes": 61964,
+        "sha256": "e13497bc90a65fc6b2688469ee61faf8028e2fc9bb93dd2fbeaa79f1393a6b9b"
+      },
+      {
+        "name": "XBRL/AuditDoc/jpaud-aai-cc-001_E05494-000_2025-12-31_01_2026-03-19_pre.xml",
+        "bytes": 9967,
+        "sha256": "442d5dca0684d56237210952da76e19dd6812c0dc91a1d3c0b160f1d41c9e5cc"
+      },
+      {
+        "name": "XBRL/AuditDoc/jpaud-aar-cn-001_E05494-000_2025-12-31_01_2026-03-19.xbrl",
+        "bytes": 47177,
+        "sha256": "01933ca4f05f8d4bcbf4c82a802754f5b9c68af3386154302fe9ab84716933e8"
+      },
+      {
+        "name": "XBRL/AuditDoc/jpaud-aar-cn-001_E05494-000_2025-12-31_01_2026-03-19.xsd",
+        "bytes": 2280,
+        "sha256": "7d9964e6c4fc842bfe87410f6acd3980a550f0d8481de35de81aa19b2ca593fd"
+      },
+      {
+        "name": "XBRL/AuditDoc/jpaud-aar-cn-001_E05494-000_2025-12-31_01_2026-03-19_def.xml",
+        "bytes": 4897,
+        "sha256": "1e3b751e240e0fd0e70f904cf095b0fcf029a520e245d3fdd992ade1259aa1f7"
+      },
+      {
+        "name": "XBRL/AuditDoc/jpaud-aar-cn-001_E05494-000_2025-12-31_01_2026-03-19_ixbrl.htm",
+        "bytes": 42684,
+        "sha256": "38dabb421b4ab34f182a3fe3775a17ab1ac4c6d6b34077ccbfa92e82f4e260fe"
+      },
+      {
+        "name": "XBRL/AuditDoc/jpaud-aar-cn-001_E05494-000_2025-12-31_01_2026-03-19_pre.xml",
+        "bytes": 8701,
+        "sha256": "b5410e573c4d9a9525bb5f98cb33f70df0cd079b65c38f3016e7e3d4b593cc43"
+      },
+      {
+        "name": "XBRL/AuditDoc/manifest_AuditDoc.xml",
+        "bytes": 1257,
+        "sha256": "f9616f358d5dd16852f297b46a62f10555879c8450923111cc060c0b729d8591"
+      },
+      {
+        "name": "XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_ixbrl.htm",
+        "bytes": 127518,
+        "sha256": "6bb096a94a4be07ea50853b18a4ba2ba05741470b31d50bcc5a3ce8fb419bd88"
+      },
+      {
+        "name": "XBRL/PublicDoc/0101010_honbun_jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_ixbrl.htm",
+        "bytes": 342706,
+        "sha256": "53ca5248115ddfe316c45d1a6dae8301f6cb137e094788c32fccc9bd7cb2520f"
+      },
+      {
+        "name": "XBRL/PublicDoc/0102010_honbun_jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_ixbrl.htm",
+        "bytes": 174092,
+        "sha256": "2768b1919789fb4e6ee70468e263ecc373c6793d892f61b3a9c1f2f6aaa190de"
+      },
+      {
+        "name": "XBRL/PublicDoc/0103010_honbun_jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_ixbrl.htm",
+        "bytes": 61838,
+        "sha256": "9a3f5c32fda28c5425dfaf524b4ceb780b0b32f73820ea103f6b2f86d5a68cc7"
+      },
+      {
+        "name": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_ixbrl.htm",
+        "bytes": 927868,
+        "sha256": "3ff2e64a23a3d9379e92fa29bc04b0a2c96256e2ee75fba426b27da307f23592"
+      },
+      {
+        "name": "XBRL/PublicDoc/0105000_honbun_jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_ixbrl.htm",
+        "bytes": 13376,
+        "sha256": "c5bb08b4970944211e1e952ec708759ceed176aa93ceaf2ac72a4afa1b924cca"
+      },
+      {
+        "name": "XBRL/PublicDoc/0105010_honbun_jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_ixbrl.htm",
+        "bytes": 165352,
+        "sha256": "037d83204324a0e6b4d9f58167390ec5388d3462ae502735f261451a99d4236d"
+      },
+      {
+        "name": "XBRL/PublicDoc/0105020_honbun_jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_ixbrl.htm",
+        "bytes": 69528,
+        "sha256": "5b72d49bcf74d9d5f5de90456f0a22d2f3e19e6adbbdd9313292053e4fef5e18"
+      },
+      {
+        "name": "XBRL/PublicDoc/0105025_honbun_jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_ixbrl.htm",
+        "bytes": 34450,
+        "sha256": "c9607747618ef8aebd124b2b13d6275c44468ee73cdd797c4406708b3e002ea7"
+      },
+      {
+        "name": "XBRL/PublicDoc/0105040_honbun_jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_ixbrl.htm",
+        "bytes": 149364,
+        "sha256": "bf5b1fe4a287d7a208f7471a54ca06ae69039dec54be29d940ab01bb19e66b47"
+      },
+      {
+        "name": "XBRL/PublicDoc/0105050_honbun_jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_ixbrl.htm",
+        "bytes": 105138,
+        "sha256": "4aa039f5638275003354ef9ab604ea3db91521326a3927159bb39c8f1903a5e9"
+      },
+      {
+        "name": "XBRL/PublicDoc/0105100_honbun_jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_ixbrl.htm",
+        "bytes": 666724,
+        "sha256": "bb2b1ff717c9d14e3967905de94c8438f6f49630adbca866d3367cf7209c41f0"
+      },
+      {
+        "name": "XBRL/PublicDoc/0105110_honbun_jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_ixbrl.htm",
+        "bytes": 274769,
+        "sha256": "b5eb4bc8e42073f765b14dcc0c5f7056f2e769d5f2d7e39f83b3ec067d035a09"
+      },
+      {
+        "name": "XBRL/PublicDoc/0105120_honbun_jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_ixbrl.htm",
+        "bytes": 43944,
+        "sha256": "de8096c27696c3a8c3732de7b817a5891d8f895b4f15361a5a681c33437b55d3"
+      },
+      {
+        "name": "XBRL/PublicDoc/0105310_honbun_jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_ixbrl.htm",
+        "bytes": 191930,
+        "sha256": "9800e558121e0b0021b88d6e331355b747564b18f0056597a8c0d12d162a3c60"
+      },
+      {
+        "name": "XBRL/PublicDoc/0105320_honbun_jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_ixbrl.htm",
+        "bytes": 110165,
+        "sha256": "b450ae326739e30de6a0cdec3b67a83f9f398d5f7e1223ad3a7216a970b49d68"
+      },
+      {
+        "name": "XBRL/PublicDoc/0105330_honbun_jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_ixbrl.htm",
+        "bytes": 162365,
+        "sha256": "49a6378b81e25002e939a6154d7e5ea41b6bfafd92d0037ddff1abfbf570c756"
+      },
+      {
+        "name": "XBRL/PublicDoc/0105400_honbun_jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_ixbrl.htm",
+        "bytes": 199892,
+        "sha256": "22de34b1070558f4c01cba74038b49e421bdefffda58eaa6242d18000ca4cd85"
+      },
+      {
+        "name": "XBRL/PublicDoc/0105410_honbun_jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_ixbrl.htm",
+        "bytes": 61539,
+        "sha256": "a268dbf05696d963c189caa3b3b8b2fdea7644f6e7a104b13c602de8f2f5347e"
+      },
+      {
+        "name": "XBRL/PublicDoc/0106010_honbun_jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_ixbrl.htm",
+        "bytes": 19761,
+        "sha256": "135cb657b2477de0cefacfce56f612d4537bf760eaccb3265e860daeab8974c0"
+      },
+      {
+        "name": "XBRL/PublicDoc/0107010_honbun_jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_ixbrl.htm",
+        "bytes": 13878,
+        "sha256": "093795b615c24854079b5ebab11baeb2ca9488a2291b05e4b4c1f4cd7bac81f4"
+      },
+      {
+        "name": "XBRL/PublicDoc/0201010_honbun_jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_ixbrl.htm",
+        "bytes": 9767,
+        "sha256": "f082526d043c56b3f64e9f9e26d932117285b6cf4b54a88022a3ea45f55639d6"
+      },
+      {
+        "name": "XBRL/PublicDoc/fuzoku/50_0746300102603.gif",
+        "bytes": 34430,
+        "sha256": "d554cd5e3aff0393202ba3f365d4480dd1fdcfeff33acc7f71f520603e8e7061"
+      },
+      {
+        "name": "XBRL/PublicDoc/fuzoku/51_0746300102603.gif",
+        "bytes": 43409,
+        "sha256": "8efc91c961355fd906211ecc93e7fa3b791db516f637ed4253f2d5ff5a77dd19"
+      },
+      {
+        "name": "XBRL/PublicDoc/jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19.xbrl",
+        "bytes": 4652463,
+        "sha256": "f5489ea9948a85f411a0b5427149340fc37b2ec8aafae3f11b302a75ea628dfc"
+      },
+      {
+        "name": "XBRL/PublicDoc/jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19.xsd",
+        "bytes": 12090,
+        "sha256": "50268190434bb4d305dbe600d49f8028377ff4bb303d4afd4afc6ff48a9832e5"
+      },
+      {
+        "name": "XBRL/PublicDoc/jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_cal.xml",
+        "bytes": 103348,
+        "sha256": "8f580be8428f8ba48d30290dc87e28137afec6b0fe506f74fda61cbdff311711"
+      },
+      {
+        "name": "XBRL/PublicDoc/jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_def.xml",
+        "bytes": 403328,
+        "sha256": "010f9762f536bf4a052ce4f4bb1e8c3f81b38e3458d5a7ef60ca1f49576b6f1a"
+      },
+      {
+        "name": "XBRL/PublicDoc/jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_lab-en.xml",
+        "bytes": 31220,
+        "sha256": "c1f408ac54fa6241c6544eb7c9bf5903637cbc771d288c7748583c2fdbcf9464"
+      },
+      {
+        "name": "XBRL/PublicDoc/jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_lab.xml",
+        "bytes": 31488,
+        "sha256": "d93f6913ecad47679fca263a4ee1b0f5332a460c5b502b2be66d4336162c812f"
+      },
+      {
+        "name": "XBRL/PublicDoc/jpcrp030000-asr-001_E05494-000_2025-12-31_01_2026-03-19_pre.xml",
+        "bytes": 536229,
+        "sha256": "4f3fbeefc428d984d6bf03c86b919052959643611fc55c904645fe1e4f8865b4"
+      },
+      {
+        "name": "XBRL/PublicDoc/manifest_PublicDoc.xml",
+        "bytes": 2893,
+        "sha256": "15eafc1d921af8bcfb98174894c66096db7cbac0eaf542ea49620858ce4d1ce0"
+      }
+    ]
+  },
+  "savedStateScope": {
+    "documentRows": 1,
+    "orderFacts": 0,
+    "overseasFacts": 0,
+    "textIndexRows": 37,
+    "bodySections": 37,
+    "stockFields": [
+      "code"
+    ],
+    "stateAndBodyFromCurrentReadAt": "2026-10-24T21:51:21.621Z",
+    "thisFixtureIsNotALiveStateAssertion": true
+  },
+  "boundaries": [
+    "ZIP files preserve original container bytes. The old and current type1 ZIP containers have different SHA despite identical 43 unique file members.",
+    "The legacy manifest remains unknown. Current typed metadata is retained exactly, including its existing manifest.",
+    "native-entry.json contains the saved October 19 event doc/source descriptor. original-entry.json and original-snapshot.json retain the original-day source qualified on October 25 by existing saved physical gzip, full gzip/raw SHA and readListSnapshot. No complete daily-list gzip or HTTP response is committed; test transport responses remain explicit offline controls.",
+    "No complete current Notion page/HTTP response was retained for the explicit legacy page. Tests must label any page/manifest response construction as a protocol projection, not as an original HTTP capture.",
+    "current-state-before.json is a byte-identical document-621 read projection. Its stock row contains code only; no extra business fields were fabricated.",
+    "current-body.json.gz gunzips to the exact saved current-body.json bytes. Public filing body is kept in the fixture and was not printed.",
+    "No source API requests, model calls, dependency installation, or production writes were made while creating this fixture."
+  ]
+}

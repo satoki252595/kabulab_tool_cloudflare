@@ -1,0 +1,36 @@
+{
+  "doc": {
+    "seqNumber": 79,
+    "docID": "S100WZGB",
+    "edinetCode": "E05494",
+    "secCode": "37760",
+    "JCN": "6010401059802",
+    "filerName": "株式会社ブロードバンドタワー",
+    "ordinanceCode": "010",
+    "formCode": "030000",
+    "docTypeCode": "120",
+    "periodStart": "2025-01-01",
+    "periodEnd": "2025-12-31",
+    "submitDateTime": "2026-03-19 13:39",
+    "docDescription": "有価証券報告書－第27期(2025/01/01－2025/12/31)",
+    "xbrlFlag": "1",
+    "csvFlag": "1",
+    "withdrawalStatus": "0",
+    "docInfoEditStatus": "1",
+    "disclosureStatus": "0",
+    "parentDocID": null,
+    "opeDateTime": "2026-10-19 15:11",
+    "legalStatus": "1"
+  },
+  "source": {
+    "date": "2026-10-19",
+    "pageId": "3fed74ff-84cd-81ce-bb61-cf022d4e14d1",
+    "filename": "edinet-list-2026-10-19.json.gz",
+    "gzipSha256": "bfd877cb6d28705f5563b65546eb0c887effb0f68263db6e982cd94483b83717",
+    "rawSha256": "9fa5846342605c8d787d76c046a2d22334f5a917f7c3ba041bdd88676849ba55",
+    "rawBytes": 119420,
+    "httpStatus": 200,
+    "qualified": true,
+    "fetchedAt": "2026-10-19T10:19:15.596Z"
+  }
+}

@@ -56,7 +56,7 @@ export function informationEditRowsGuard(db: Database, table: SQLiteTable, where
     then 'null' else '' end)` }).from(sql`(select 1)`);
 }
 
-async function readState(db: Database, docID: string, stockId: number, stop: () => void) {
+export async function readInformationEditState(db: Database, docID: string, stockId: number, stop: () => void) {
   stop(); const document = await db.select().from(yuhoDocuments).where(eq(yuhoDocuments.docId, docID)).limit(2);
   requireSame(document.length === 1, "同じ有報の取込行が一意に存在しません");
   const d = document[0];
@@ -69,7 +69,8 @@ async function readState(db: Database, docID: string, stockId: number, stop: () 
   requireSame(orders.length <= 1000 && overseas.length <= 1000 && text.length <= 100, "対象有報の有限読取上限です");
   return { stock, document, orders, overseas, text };
 }
-type State = Awaited<ReturnType<typeof readState>>;
+export type InformationEditState = Awaited<ReturnType<typeof readInformationEditState>>;
+type State = InformationEditState;
 type SavedZip = Awaited<ReturnType<typeof readSavedEdinetZip>>;
 
 /** 共通parser/serializerの結果が、既存全facts/本文索引/原文と同じ場合だけ許可する。 */
@@ -153,7 +154,7 @@ export async function requalifyInformationEdit(db: Database, args: { doc: Edinet
         observed.reportedIdentity.periodEnd === args.doc.periodEnd && observed.reportedIdentity.ticker === args.stockCode &&
         observed.reportedIdentity.edinetCode === args.doc.edinetCode, "別状態/別主体/別情報修正の未解決観測があります");
     }
-    const before = await readState(db, args.doc.docID, args.stockId, stop), d = before.document[0];
+    const before = await readInformationEditState(db, args.doc.docID, args.stockId, stop), d = before.document[0];
     requireSame(before.stock[0].code === args.stockCode && d.edinetCode === args.doc.edinetCode && d.docTypeCode === "120" &&
       d.periodEnd === args.doc.periodEnd && d.periodStart === args.doc.periodStart && d.filerName === args.doc.filerName &&
       args.doc.submitDateTime !== null && d.submittedAt.getTime() === parseSubmitDateTime(args.doc.submitDateTime).getTime(), "取込済み主体/FY/業務metadataが変わるためHOLDです");
@@ -193,7 +194,7 @@ export async function requalifyInformationEdit(db: Database, args: { doc: Edinet
     if (prior === undefined) { requireSame(csvRows !== undefined, "CSV parserの入力がありません"); verifyInformationEditData(before, csvRows, xbrl, body); }
     else requireSame(encoded(prior.zips) === encoded(zips) && prior.bodySha256 === bodySha256, "完了済み同入力の原本/全文が変わっています");
     // 読取・parserの間にpointerやfacts/identityが変わっていないことを限定再読取で確認する。
-    requireSame(encoded(await readState(db, d.docId, args.stockId, stop)) === encoded(before), "再確認中に保存状態が変わっています");
+    requireSame(encoded(await readInformationEditState(db, d.docId, args.stockId, stop)) === encoded(before), "再確認中に保存状態が変わっています");
     const proof = { contract: "information-edit-identical-v1", metadataJson, originalSnapshot: original.snapshot,
       state: before, requiresXbrl, zips, bodySha256 };
     const now = Math.floor(Date.now() / 1000), proofJson = JSON.stringify(normalized(proof));
