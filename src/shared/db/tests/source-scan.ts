@@ -33,7 +33,8 @@ export const PUBLIC_SURFACE_DIRS = [
 ];
 
 /** 公開面の判定から外すもの (取込経路・スキーマ定義・クライアント JS 生成)。 */
-export const NOT_PUBLIC_SURFACE = /(^|[\\/])(data-scripts|db|tests)[\\/]/;
+// mechanical-publishing is the bounded Node saved-source publisher, never a Worker response.
+export const NOT_PUBLIC_SURFACE = /(^|[\\/])(data-scripts|db|tests)[\\/]|(^|[\\/])biztag[\\/]mechanical-publishing\.ts$/;
 
 /** コメント (ブロック / 行) を除いた実コード。説明文まで弾かないため。 */
 export function stripComments(source: string): string {

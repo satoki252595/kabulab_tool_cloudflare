@@ -4,7 +4,7 @@
 
 | 段階 | 入口・有限範囲 | 先行条件・停止 |
 |---|---|---|
-| 本文39・基本補足 | `pnpm sync:mechanical --target=supplement --limit=50 --budget-min=10` | active普通株の変更文書＋コード巡回をSQLで先に最大50社へ限定。10分で新しい会社を開始せず、開始済みを5分以内に閉じる |
+| 本文39・基本補足 | `pnpm sync:mechanical --target=supplement --limit=50 --budget-min=10` | active普通株の変更文書＋コード巡回をSQLで先に最大50社へ限定。10分で新しい会社を開始せず、追加IOのhard境界はその5分後。未閉鎖は保持して成功にしない |
 | 優待機械要約 | `pnpm sync:mechanical --target=yutai --limit=60 --budget-min=15 --state-dir=<private-dir>` | 最大60群、既存の条件・金額文法/validator/原子取込を使用。モデル許可は入口で拒否。機械未対応は理由付き保留 |
 | 月次Mac手動 | [月次手動](mac-monthly-manual.md)の同じdriver | 適格新規/実入力変更のClef判定と、設定済み固定scopeの競合入力準備。優待要約はここから外す |
 
