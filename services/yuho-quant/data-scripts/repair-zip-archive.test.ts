@@ -124,6 +124,14 @@ it("verified type5 non-provision stays not-applicable instead of a physical type
   expect(await repairZipArchives(options)).toEqual({ recorded: 0, skipped_existing: 1, reused_existing_types: 1, not_applicable_types: 1, edinet_not_found: 0 });
   expect(downloadDocument).not.toHaveBeenCalled(); expect(recordEdinetZip).not.toHaveBeenCalled();
 });
+it("a qualified late-existing type is counted as reuse rather than a new save", async () => {
+  vi.mocked(readSavedEdinetZip).mockRejectedValueOnce(new SavedEdinetZipMissingError("declared key0"))
+    .mockResolvedValueOnce(stored(1)).mockResolvedValueOnce({ ...stored(5), metadata: { ...stored(5).metadata, xbrlUnavailable: false } });
+  vi.mocked(recordEdinetZip).mockResolvedValueOnce({ pageId: snapshot.pageId, outcome: "skipped_existing", fileTooLarge: false, manifestMatch: "unknown" });
+  expect(await repairZipArchives(options)).toEqual({ recorded: 0, skipped_existing: 1, reused_existing_types: 2, not_applicable_types: 0, edinet_not_found: 0 });
+  expect(vi.mocked(downloadDocument).mock.calls.map(args => args[1])).toEqual([5]);
+  expect(vi.mocked(recordEdinetZip).mock.calls.map(([args]) => args.type)).toEqual([5]);
+});
 it("a late existing CSV cannot inherit a newly requested non-provision marker", async () => {
   vi.mocked(readSavedEdinetZip).mockRejectedValueOnce(new SavedEdinetZipMissingError("declared key0"))
     .mockRejectedValueOnce(new SavedEdinetZipMissingError("declared key0")).mockResolvedValueOnce(stored(5));

@@ -169,6 +169,7 @@ export async function repairZipArchives(options: ReturnType<typeof zipRepairArgu
       const r5 = await archive({ service: "yuho-quant", docID: doc.docID, type: 5, zip: csvZip,
         source: `EDINET API v2 /documents/${doc.docID}?type=5`, fetchedAt: csvFetchedAt, metadata: completeMetadata, force: false }, native);
       recorded = r5.outcome === "recorded";
+      if (r5.outcome === "skipped_existing") tally.reused_existing_types += 1;
       if (xbrlUnavailable) tally.not_applicable_types += 1;
     }
     if (xbrlZip !== null) {
@@ -176,6 +177,7 @@ export async function repairZipArchives(options: ReturnType<typeof zipRepairArgu
       const r1 = await archive({ service: "yuho-quant", docID: doc.docID, type: 1, zip: xbrlZip,
         source: `EDINET API v2 /documents/${doc.docID}?type=1`, fetchedAt: xbrlFetchedAt, metadata: completeMetadata, force: false }, native);
       recorded = recorded || r1.outcome === "recorded";
+      if (r1.outcome === "skipped_existing") tally.reused_existing_types += 1;
     }
     tally[recorded ? "recorded" : "skipped_existing"] += 1;
   }
