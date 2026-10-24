@@ -75,10 +75,30 @@ function propertyText(value: unknown): string {
 /** 既存本文の所属・全7プロパティと全文を読む。DB作成/書込はしない。 */
 export async function readVerifiedDocText(args: {
   dbId: string; rowPageId: string; stockCode: string; docId: string; d1DocumentId: number; fiscalYearEnd: string;
-  textParseStatus: string; sectionCount: number; charCount: number;
-}): Promise<DocTextSection[]> {
-  const { dbId, rowPageId, stockCode, docId, d1DocumentId, fiscalYearEnd, textParseStatus, sectionCount, charCount } = args;
+  textParseStatus: string;
+} & ({ sectionCount: number; charCount: number; deriveCountsFromBody?: never } |
+  { deriveCountsFromBody: true; sectionCount?: never; charCount?: never })): Promise<DocTextSection[]> {
+  const { dbId, rowPageId, stockCode, docId, d1DocumentId, fiscalYearEnd, textParseStatus } = args;
   const expectedRowId = normalizedId(rowPageId), expectedDbId = normalizedId(dbId);
+  const readSections = async () => {
+    const sections = await readStockTextRow(rowPageId, true);
+    if (!Array.isArray(sections) || sections.some((section) => !section ||
+        typeof section.itemName !== "string" || typeof section.sectionKey !== "string" ||
+        typeof section.text !== "string")) {
+      throw new Error("有報テキストの読み戻し本文型が不正");
+    }
+    return sections;
+  };
+  if (args.deriveCountsFromBody === true && (args.sectionCount !== undefined || args.charCount !== undefined)) {
+    throw new Error("有報テキストの読み戻し件数契約が混在");
+  }
+  // consumerはstrict全文1回から件数だけを算出。producerの独立した件数・原文照合は維持する。
+  const body = args.deriveCountsFromBody === true ? await readSections() : undefined;
+  const sectionCount = body === undefined ? args.sectionCount : body.length;
+  const charCount = body === undefined ? args.charCount : body.reduce((n, section) => n + [...section.text].length, 0);
+  if (!Number.isSafeInteger(sectionCount) || !Number.isSafeInteger(charCount)) {
+    throw new Error("有報テキストの読み戻し件数が不正");
+  }
   const page = record(await notionRequest<unknown>("GET", `/pages/${rowPageId}`));
   const parent = record(page.parent);
   if (page.object !== "page" || normalizedId(page.id) !== expectedRowId ||
@@ -104,13 +124,7 @@ export async function readVerifiedDocText(args: {
       record(property("抽出状態", "select").select).name !== textParseStatus) {
     throw new Error("有報テキストの読み戻し7プロパティが不一致");
   }
-  const readback = await readStockTextRow(rowPageId, true);
-  if (!Array.isArray(readback) || readback.some((section) => !section ||
-      typeof section.itemName !== "string" || typeof section.sectionKey !== "string" ||
-      typeof section.text !== "string")) {
-    throw new Error("有報テキストの読み戻し本文型が不正");
-  }
-  return readback;
+  return body === undefined ? await readSections() : body;
 }
 
 export async function backupDocTextToNotion(args: {

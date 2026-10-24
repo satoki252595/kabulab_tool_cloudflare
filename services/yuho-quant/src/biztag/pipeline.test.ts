@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { createJevClient, jevEnv } from "../../../../src/shared/jev/index.js";
-import { assertLatestDocCurrent, loadLatestDocs, loadNewStockEligibility, type LatestDoc } from "./source.js";
+import { assertLatestDocCurrent, loadLatestDocs, loadNewStockEligibility, readQualifiedBiztagDocText, BiztagTextQualificationError, type LatestDoc } from "./source.js";
 import type { LedgerEntry, SupplementRow, SupplementRowInput } from "../../../../src/shared/notion-archive/index.js";
 import type { StockTextSection } from "../../../../src/shared/notion-archive/stock-text.js";
 import { makeBudgetedVerifySources } from "./sources-verify.js";
@@ -76,7 +76,9 @@ vi.mock("../../../../src/shared/clef/client.js", async (importOriginal) => ({
 
 vi.mock("../db/schema.js", () => ({}));
 
-vi.mock("./source.js", () => ({
+vi.mock("./source.js", async original => ({
+  ...await original<typeof import("./source.js")>(),
+  readQualifiedBiztagDocText: vi.fn(async (_db, _code, _doc) => notionMocks.readStockTextRow()),
   assertLatestDocCurrent: vi.fn(async () => {}),
   loadLatestDocs: vi.fn(async () => []),
   loadNewStockEligibility: vi.fn(async () => ({ eligibleCodes: new Set<string>(), heldCodes: new Set<string>() })),
@@ -160,6 +162,7 @@ function setupListLedgerEntries(): void {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv("BIZTAG_NEW_LISTING_FROM", "2026-09-01");
+  vi.mocked(readQualifiedBiztagDocText).mockReset().mockImplementation(async () => notionMocks.readStockTextRow());
   vi.mocked(loadLatestDocs).mockResolvedValue([]);
   vi.mocked(loadNewStockEligibility).mockResolvedValue({ eligibleCodes: new Set(), heldCodes: new Set() });
   notionMocks.loadSupplementRows.mockReset().mockResolvedValue([]);
@@ -847,4 +850,23 @@ describe("runBiztag input-change safety", () => {
     expect(summary.judge).toMatchObject({ calls: 0, reusedOutputs: 1 });
     expect(notionMocks.replaceEvidenceBlock.mock.calls[0][2]).toMatchObject({ judgedAt: "2026-09-24" });
   });
+});
+
+it("normal Mac/tag source metadata HOLD preserves old row and never reserves or forwards", async () => {
+  const latest: LatestDoc = { stockCode: "6103", companyName: "オークマ", sector33: "機械", doc: {
+    docId: "S100YFQC", docTypeCode: "120", periodEnd: "2026-03-31", submittedAt: "2026-06-25T00:00:00Z",
+    notionDocPageId: "source-page", textParseStatus: "ok" } };
+  vi.mocked(loadLatestDocs).mockResolvedValue([latest]);
+  const old = minimalRow({ stockCode: "6103", companyName: "オークマ", sector33: "機械", docId: "S100OLD",
+    tagDoc: "S100OLD 2025年3月期", tagStatus: "判定済", vocabVersion: "v0", upstream: ["工作機械"], evidenceText: "保存済み根拠" });
+  notionMocks.loadSupplementRows.mockResolvedValue([old]);
+  vi.mocked(readQualifiedBiztagDocText).mockRejectedValueOnce(new BiztagTextQualificationError(new Error("7メタ不一致")));
+  const journal = { assertReady: vi.fn(async () => {}), reserve: vi.fn(async () => { throw new Error("no publication"); }) };
+  const summary = await runBiztag({ budgetMs: 10_000, codes: ["6103"], limit: 1, model: CLEF_MODEL,
+    thresholds: { yesMin: 0.8, noMax: 0.2 }, publicationJournal: journal });
+  expect(summary.qualificationHeld).toEqual(["6103"]); expect(summary.judge?.calls).toBe(0);
+  expect(summary.failures[0].message).toContain("保存本文の所属/7メタ");
+  expect(journal.reserve).not.toHaveBeenCalled(); expect(createClefClient).not.toHaveBeenCalled();
+  expect(notionMocks.createSupplementRow).not.toHaveBeenCalled(); expect(notionMocks.updateSupplementRow).not.toHaveBeenCalled();
+  expect(notionMocks.replaceEvidenceBlock).not.toHaveBeenCalled();
 });

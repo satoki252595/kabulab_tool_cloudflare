@@ -8,7 +8,7 @@
 | 優待機械要約 | `pnpm sync:mechanical --target=yutai --limit=60 --budget-min=15 --state-dir=<private-dir>` | 最大60群、既存の条件・金額文法/validator/原子取込を使用。モデル許可は入口で拒否。機械未対応は理由付き保留 |
 | 月次Mac手動 | [月次手動](mac-monthly-manual.md)の同じdriver | 適格新規/実入力変更のClef判定と、設定済み固定scopeの競合入力準備。優待要約はここから外す |
 
-`.github/workflows/mechanical-publishing.yml` は毎日04:17 JST。夕方〜23:30の通常取得と06時処理の間に置き、本文→優待を直列で動かす。本文の既知HOLDは優待の意味上の前提ではないので後続へ進むが、保存結果不明の共有owner/pendingなら後続は依存生成前に停止する。jobは30分、新規開始予算＋5分のHTTP/SDK期限をCLIで検査する。GitHub遅配時も実開始時の保存入力を対象とし、予定日の市場取得成功へ読み替えない。次回の機械同期は未完cursorを使う。
+`.github/workflows/mechanical-publishing.yml` は毎日04:17 JST。夕方〜23:30の通常取得と06時処理の間に置き、本文→優待を直列で動かす。本文の既知HOLDは優待の意味上の前提ではないので後続へ進むが、保存結果不明の共有owner/pendingなら後続は依存生成前に停止する。jobは30分。両jobが既存`record-job-clock`でJobs APIの実開始時刻を取得し、CLIのhardを「CLI開始＋指定budget＋5分」と「job実開始＋25分」の早い方へ固定する。新規開始のsoftはhardの5分前で、clock欠落・setup後にsoftを過ぎた場合は共有owner/業務依存の生成前に停止する。本文は銘柄単位、優待は最大60群の原子batch開始時にsoftを検査し、開始済みPRE→POSTとR2/HTTPは同じhardまでに閉鎖する。指定budgetやjob開始時計は書き換えない。GitHub遅配時も実開始時の保存入力を対象とし、予定日の市場取得成功へ読み替えない。次回の機械同期は未完cursorを使う。
 
 ## 本文とタグを別の原本へ束縛する
 
@@ -16,11 +16,13 @@
 
 新しいNotion formula `事業タグと現在本文の対応` は「旧書類のタグ（再判定待ち）」「本文入力が変更（再判定待ち）」「判定入力未確認」を区別する。異なる書類/既知入力の旧タグを、plannerや競合候補が最新判定として再利用しない。formulaは[公式のsubstring/length/if/empty](https://www.notion.com/help/formula-syntax)で構成する。列は既存`ensureSupplementDb`が追加し、別のD1 migrationや手動schema操作は不要。既存選択肢や語彙は削除しない。
 
-最大50社の現在targetを完全GETし、実値の正規化SHAを照合する。未変更なら原本GETと業務PATCHは0。変更・欠落だけ対応する保存Notion原本を読み、通常の物理PRE保管→旧値CAS→完全POST検証を通す。本文が未保管なら基本情報の欠落だけ補い、旧本文・タグを消さない。原本にもない節はNULLを維持し、非開示と断定しない。主体/同doc非空メタの矛盾、reported-state、master重複はHOLD。
+最大50社の現在targetを完全GETし、実値の正規化SHAを照合する。選択済みの保存Notion原本は未変更候補でも所属/7メタ/strict全文を1回読む。未変更なら業務PATCHは0。変更・欠落だけ通常の物理PRE保管→旧値CAS→完全POST検証を通す。本文が未保管なら基本情報の欠落だけ補い、旧本文・タグを消さない。原本にもない節はNULLを維持し、非開示と断定しない。主体/同doc非空メタの矛盾、reported-state、master重複はHOLD。
 
 変更文書cursorは取得時刻＋docID、巡回cursorはコード順。初回は過去の原本を一括読込せず、最大50社ずつ確認する。変更が多い場合は変更を優先するため、全社が毎日更新される保証はない。summaryの`processed/unstarted/synced/unchanged/basicOnly/held`、優待の残件/保留を確認する。
 
 ## MacとLinuxの共有書込保護
+
+通常の本文readerは選択済み1docのD1主体/doc/FY/pointer/状態/idを照会し、共通`readVerifiedDocText`でNotion所属・全7メタ・strict全文を確認する。consumerだけ実全文からsection数/codepoint数を算出し、producerの独立した件数/原文照合は維持する。旧メタ欠落や不同を補作せずHOLDとし、原本ZIPは取り直さない。旧receiptだけではsource所属を保証できないため、unchanged候補もこの読取資格を通し、今回の原39/Notion表現SHAと旧同期receipt・現在targetが全て一致する時だけ業務書込をしない。同doc・同文字数の本文変更も再同期する。
 
 全ての通常Mac writer、Linux本文/優待、月次優待原文取込は、既存`R2_BUCKET_RAW`の`mechanical-publishing/v1/writer.json`を同じETagの単発条件付きPUTで取得する。raw sourceを取得するだけの期間はこのownerを保持しない。新しいCloudflare resource/依存ライブラリはない。[R2のS3互換API](https://developers.cloudflare.com/r2/api/s3/api/)を既存helperから使う。
 
@@ -58,12 +60,14 @@ nix develop --offline --no-write-lock-file --command env -u NODE_PATH pnpm publi
 | Notion共通 | `NOTION_TOKEN`, `NOTION_ARCHIVE_PAGE_ID`, `NOTION_STOCK_INFO_PAGE_ID`, `NOTION_DB_STOCK_MASTER` |
 | R2共有状態/物理PRE | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, **`R2_BUCKET_RAW`** |
 
+`NOTION_YUHO_TEXT_DB_ID`はproducerが保管する既存「有報テキスト」DBのIDを必須で設定する（共有型付きaccessorで検査）。新DBで補完しない。
+
 `R2_BUCKET_RAW`はMacと**同じ原本bucket**にする。公開価格用`R2_BUCKET`へ代用しない。stock-syncの月次優待source importも同じsecretを必要とするので、次の月次実行より前に初回移行を閉じる。既存のNotion DB IDが未設定なら共有ensureの同親/同title検索を使い、秘密欠落を別DBで黙って代用しない。
 
 6. 有限scopeの初回本番処理と完全readbackをrootが確認し、残件/unknownとcanonical旧bytes不変を記録する。**それから** `MECHANICAL_PUBLISHING_ENABLED=true` をGitHub repository variableへ設定する。未設定ではschedule/manual jobとも実行しない。新schema/readback・定期初回結果はコードテストとは別の受入証跡にする。
 
 ## 費用・性能の上限
 
-モデル/有料API追加0、上流原本の新規取得0。Notionは毎日最大50社の現在値確認＋変更分だけ通常publisher、優待は最大60群の既存一括SELECT/原子適用/バッチ保管。R2は共有状態の小さいGET/CASと、実際に変更するpublicationのPRE/completion/cursorだけ。物理PREは64MiB、状態/完了/各cursorは16KiBを超えると停止する。
+モデル/有料API追加0、上流原本の新規取得0。Notionは毎日最大50社の現在値確認＋source所属/7メタ/strict本文の有限読取（変更がない対象も含む）＋変更分だけ通常publisher、優待は最大60群の既存一括SELECT/原子適用/バッチ保管。R2は共有状態の小さいGET/CASと、実際に変更するpublicationのPRE/completion/cursorだけ。物理PREは64MiB、状態/完了/各cursorは16KiBを超えると停止する。
 
 Notionは新job内0.8 req/sで直列、本文と優待も同時実行しない。raw/source取込を含む他全familyとのグローバルrate制御はこのownerでは成立しないため、既存の取得rateを増やさず閑散時間に置く。最大値だけから請求額や全残の所要日数を断定しない。初回本番summaryの実Notion requests/429/retryとcursor進行から算定する。

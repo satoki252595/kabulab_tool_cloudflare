@@ -35,7 +35,7 @@ import { INITIAL_CLEF_INPUT_PREFIX, INITIAL_SEMIF_INPUT_PREFIX, readInputReceipt
 import { sha256Hex } from "../../../../src/shared/sha256.js";
 import { isPrefilterSection, prefilter, PREFILTER_SECTIONS, type PrefilterSectionKey } from "./prefilter.js";
 import { summarizeJudgments, summarizeKeywordMatches, type TagOutcome } from "./row.js";
-import type { LatestDoc } from "./source.js";
+import { BiztagTextQualificationError, type LatestDoc } from "./source.js";
 import { deriveThemes } from "./themes.js";
 import type { Vocabulary } from "./vocabulary/schema.js";
 import { TEXT_SECTIONS, type TextSectionKey } from "../services/edinet/text-sections.js";
@@ -487,6 +487,7 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
   try {
     sections = await deps.readStockTextRow(doc.notionDocPageId);
   } catch (e) {
+    if (e instanceof BiztagTextQualificationError) throw e;
     if (item.row !== null) throw new Error(`有報本文の読込を保留 (${item.stockCode} ${doc.docId})`, { cause: e });
     return recordFailure(item, deps, {
       textStatus: "読込失敗",
