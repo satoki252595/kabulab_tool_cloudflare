@@ -32,6 +32,10 @@ const originalArgv = process.argv;
 beforeEach(() => {
   vi.resetModules(); vi.clearAllMocks();
   dir = mkdtempSync(join(tmpdir(), "competitor-prepare-")); pages = structuredClone(fixture.pages); requests = 0;
+  // Native fixture bytes remain pinned. Project only newly ensured nullable schema columns;
+  // no historical body/judgment receipt or SHA is fabricated.
+  for (const page of pages) for (const [i, name] of ["本文同期根拠", "本文の事業タグ入力SHA256", "事業タグの判定入力SHA256"].entries())
+    page.properties[name] = { id: `protocol-new-lineage-${i}`, type: "rich_text", rich_text: [] };
   vi.stubEnv("NOTION_TOKEN", "test-protocol-only"); vi.stubEnv("NOTION_STOCK_SUPPLEMENT_DB_ID", fixture.dbId);
   vi.stubEnv("NOTION_MAX_RPS", "2.0"); // 実pacingを通すがtransportは置換。実運用所要の測定ではない。
   model.latest.mockResolvedValue(structuredClone(fixture.latest));
@@ -125,7 +129,14 @@ it.each(["text", "receipt", "tag-doc", "latest-pointer"])("選出Bの%s不整合
   if (fault === "latest-pointer") { const latest = structuredClone(fixture.latest); latest[1].doc!.notionDocPageId = fixture.dbId; model.latest.mockResolvedValue(latest); }
   const result = await run(); expect(result.ready).toBe(0); expect(result.holds).toHaveLength(2);
   const manifest = JSON.parse(gunzipSync(model.record.mock.calls[0][0].files[0].bytes).toString());
-  expect(manifest.prepared[0].candidates).toHaveLength(1); expect(manifest.prepared[0].qids).toEqual([`cp.${fixture.latest[1].stockCode}`]);
+  if (fault === "tag-doc") {
+    // This mismatch is already visible before selection: do not let historical/unknown tags
+    // influence the current corpus. Later After-only drift retains the selected qids below.
+    expect(manifest.prepared[0].candidates).toEqual([]); expect(manifest.prepared[0].qids).toEqual([]);
+    expect(manifest.eligibility.excluded).toContainEqual({ stockCode: fixture.latest[1].stockCode, reason: "tag-document-provenance-mismatch" });
+  } else {
+    expect(manifest.prepared[0].candidates).toHaveLength(1); expect(manifest.prepared[0].qids).toEqual([`cp.${fixture.latest[1].stockCode}`]);
+  }
   expect(model.client).not.toHaveBeenCalled();
 });
 
