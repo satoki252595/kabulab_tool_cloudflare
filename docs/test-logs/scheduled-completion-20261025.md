@@ -11,11 +11,11 @@
 - 手動株式もnative予算へ束縛し、原本閉鎖30分と後続sector33の原本保存枠600秒を予約する。600秒はsector33全体の上限ではないため、sector33も元jobのsource/hardを検査し、子原本CLIへ同じ時計を渡す。
 - `all`末尾のマクロ・母集団・優待・再計算も元jobの時計を維持する。優待のsource停止時は取得済みdurable原本だけを保管し、部分取込に進まない。PRE/ACK後のhard停止はpendingを保持する。共有writerのR2 SDKにも同じhardを渡す。
 
-検証は専用worktreeの既存Nix/lockで実施し、mainの#561〜#565を統合した。
+検証は専用worktreeの既存Nix/lockで実施し、mainの#561〜#566を統合した。
 
 | 検証 | 結果 |
 |---|---|
-| Node全件 | 6,843成功、既存465 skip、失敗0 |
+| Node全件 | 6,851成功、既存465 skip、失敗0 |
 | Python全件 | 1,958成功、既存114 skip、失敗0 |
 | TypeScript / 通常lint | 成功 |
 | Python ruff（src/tests/clock helper） | 成功 |
