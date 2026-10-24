@@ -26,7 +26,7 @@ from ..config import (
     load_settings,
 )
 from ..local_store import connect_local_store
-from ..notion.client import NotionClient
+from ..notion.client import NotionClient, NotionUnknownResultError
 
 if TYPE_CHECKING:
     from ..cloud_store.sink import CloudSink
@@ -197,6 +197,9 @@ class JobContext:
         try:
             notion_write()
             notion_ok = True
+        except NotionUnknownResultError:
+            self.notion_failed += 1
+            raise  # ローカル成功へ変換せず、次の取得単位も開始しない。
         except Exception as exc:  # noqa: BLE001 - 片系統失敗でも他系統へ書く
             self.notion_failed += 1
             logger.warning("Notion 書き込み失敗（%s。ローカルは試行）: %s", label, exc)
@@ -244,6 +247,9 @@ class JobContext:
                 self.client, self.settings, artifact,
                 sha_map=sha_map, sha_map_date=sha_map_date,
             )
+        except NotionUnknownResultError:
+            self.notion_failed += 1
+            raise  # 原本bytesはsave_raw済み。unknownを別系統の成功で閉じない。
         except Exception as exc:  # noqa: BLE001 - ローカル ⑤ への保存を試みるため一旦握る
             notion_err = exc
             self.notion_failed += 1

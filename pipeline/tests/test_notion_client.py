@@ -105,18 +105,19 @@ CREATES = [
     httpx.ReadTimeout("response lost after server accepted request"),
     httpx.ConnectError("connection lost"),
     (503, {"code": "service_unavailable", "message": "unavailable"}, {}),
+    (529, {"code": "service_overload", "message": "overloaded"}, {"Retry-After": "7"}),
     (502, {"unexpected": "unstructured error"}, {}),
 ])
 def test_creation_ambiguous_result_is_sent_once(client, operation, failure):
     calls = sdk_responses(client, [failure, (200, {"id": "duplicate"}, {})])
-    with pytest.raises(module.NotionRequestError, match="結果不明.*自動再送しません"):
+    with pytest.raises(module.NotionUnknownResultError, match="結果不明.*自動再送しません"):
         operation(client)
     assert len(calls) == 1
     module.time.sleep.assert_not_called()
 
 
 @pytest.mark.parametrize("operation", CREATES, ids=["page", "database", "append"])
-@pytest.mark.parametrize("status,code", [(429, "rate_limited"), (529, "service_overload")])
+@pytest.mark.parametrize("status,code", [(429, "rate_limited")])
 def test_creation_rate_limit_still_retries_with_retry_after(client, operation, status, code):
     calls = sdk_responses(client, [
         (status, {"code": code, "message": "wait"}, {"Retry-After": "7"}),
@@ -153,16 +154,16 @@ def test_reads_and_property_overwrites_still_recover(client, operation):
     ("POST", "file_uploads/upload/send"), ("POST", "file_uploads/upload/complete"),
     ("PATCH", "blocks/block/children"),
 ])
-@pytest.mark.parametrize("failure", [requests.Timeout("response lost"), raw_response(503)])
+@pytest.mark.parametrize("failure", [requests.Timeout("response lost"), raw_response(503), raw_response(529, headers={"Retry-After": "9"})])
 def test_raw_writes_never_repeat_ambiguous_result(client, method, path, failure):
     client._session.request.side_effect = [failure, raw_response(200)]
-    with pytest.raises(module.NotionRequestError, match="結果不明"):
+    with pytest.raises(module.NotionUnknownResultError, match="結果不明"):
         client.raw_api(method, path, json_body={})
     assert client._session.request.call_count == 1
     module.time.sleep.assert_not_called()
 
 
-@pytest.mark.parametrize("status", [429, 529])
+@pytest.mark.parametrize("status", [429])
 def test_raw_creation_rate_limits_keep_retry_after(client, status):
     client._session.request.side_effect = [
         raw_response(status, headers={"Retry-After": "9"}), raw_response(200),
@@ -176,13 +177,15 @@ def test_raw_creation_rate_limits_keep_retry_after(client, status):
     ("GET", "pages/page"), ("POST", "search"),
     ("POST", "databases/db/query"), ("POST", "/data_sources/source/query/"),
 ])
-def test_raw_reads_including_post_recover(client, method, path):
+@pytest.mark.parametrize("status", [503, 529])
+def test_raw_reads_including_post_recover(client, method, path, status):
     terminal = {"id": "result", "results": [], "has_more": False, "next_cursor": None}
     client._session.request.side_effect = [
-        requests.Timeout("timeout"), raw_response(503), raw_response(200, terminal),
+        requests.Timeout("timeout"), raw_response(status, headers={"Retry-After": "3"}), raw_response(200, terminal),
     ]
     assert client.raw_api(method, path)["id"] == "result"
     assert client._session.request.call_count == 3
+    module.time.sleep.assert_any_call(3.0)
 
 
 def test_rate_limit_then_unknown_creation_result_does_not_send_third_request(client):

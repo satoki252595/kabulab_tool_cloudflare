@@ -25,6 +25,29 @@ def catalog(tmp_path):
     )
 
 
+def test_notion_unknown_stops_before_next_document(monkeypatch):
+    from unittest.mock import Mock
+
+    from jp_stock_pipeline.notion.client import NotionUnknownResultError
+
+    failure = NotionUnknownResultError("declared non-idempotent529")
+    process = Mock(side_effect=failure)
+    ctx = SimpleNamespace(settings=SimpleNamespace(), client=object(),
+        args=SimpleNamespace(date=date(2026, 10, 16), limit=None),
+        upload_raw=lambda *a, **kw: "saved-list",
+        add_success=lambda: pytest.fail("unknownの成功化"),
+        add_failure=lambda *a: pytest.fail("unknown後の次doc継続"))
+    monkeypatch.setattr(job.file_upload, "load_raw_page_map", lambda *a, **kw: {})
+    monkeypatch.setattr(job.edinet, "list_documents", lambda *a: ("list", [DOC, DOC]))
+    monkeypatch.setattr(job.json_to_parquet, "convert_artifact", lambda *a: None)
+    monkeypatch.setattr(job, "_load_master_maps", lambda _: ({}, {}, True))
+    monkeypatch.setattr(job.upsert, "load_disclosure_page_entries", lambda *a, **kw: {})
+    monkeypatch.setattr(job, "_process_document", process)
+    with pytest.raises(NotionUnknownResultError) as result:
+        job.execute(ctx)
+    assert result.value is failure and process.call_count == 1
+
+
 def test_excluded_is_not_a_financial_success_and_never_fetches_body(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(
