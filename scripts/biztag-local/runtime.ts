@@ -37,7 +37,7 @@ export function preflight(root: string, mechanicalOnly = false): { revision: str
 }
 
 /** kernel flockが正。ファイル残存をrunningとせず、プロセス終端で自動解放する。 */
-async function withLocalBiztagWriter<T>(execute: () => Promise<T>, mechanicalOnly = false): Promise<T> {
+async function withLocalBiztagWriter<T>(execute: (state: string) => Promise<T>, mechanicalOnly = false): Promise<T> {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
   const { revision, state } = preflight(root, mechanicalOnly);
   const python = execFileSync("which", ["python3.12"], { encoding: "utf8" }).trim();
@@ -54,15 +54,18 @@ async function withLocalBiztagWriter<T>(execute: () => Promise<T>, mechanicalOnl
     if (typeof response !== "object" || response === null || !("locked" in response)) throw new Error("writer排他応答が不正です。");
     if (response.locked === false) throw new Error("biztagのkernel writer lockは使用中です。同時実行を停止します。");
     if (response.locked !== true) throw new Error("writerのkernel排他を確認できません。");
-    return await execute();
+    return await execute(state);
   } finally {
     closeSync(descriptor);
   }
 }
 
 /** The kernel lock still protects the canonical model/state; R2 also protects every remote publisher. */
-export async function withBiztagWriter<T>(execute: () => Promise<T>, mechanicalOnly = false): Promise<T> {
-  return withLocalBiztagWriter(() => withSharedPublishingWriter(execute), mechanicalOnly);
+export async function withBiztagWriter<T>(execute: () => Promise<T>, mechanicalOnly = false, beforeShared?: (state: string) => void): Promise<T> {
+  return withLocalBiztagWriter(state => {
+    beforeShared?.(state); // Canonical kernel lock is held; no remote publisher ownership yet.
+    return withSharedPublishingWriter(execute);
+  }, mechanicalOnly);
 }
 
 /** Explicit migration only. The immutable baseline pins closed old journals; no old bytes are changed. */

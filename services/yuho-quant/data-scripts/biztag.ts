@@ -14,7 +14,7 @@ import { appendFileSync, readFileSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { acknowledgeClefError, createClefJournal } from "../../../scripts/biztag-local/clef-journal.js";
+import { acknowledgeClefError, assertClefJournalReady, createClefJournal } from "../../../scripts/biztag-local/clef-journal.js";
 import { reconcileSupplementPreArchive, reconcileAppliedSupplementPublication } from "../../../scripts/biztag-local/publication-journal.js";
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import {
@@ -615,7 +615,8 @@ if (subcommand === "run" && rest.some(flag => !["--mechanical-only", "--dry-run"
     !/^--(codes|limit|budget-min|reconcile-pre-archive|reconcile-proof-sha256|context-upgrade)=/.test(flag))) {
   throw new Error("biztag runの未知の引数/モデル許可は受け付けません");
 }
-await withBiztagWriter(main, subcommand === "run" && hasFlag("mechanical-only") && !hasFlag("allow-model"));
+await withBiztagWriter(main, subcommand === "run" && hasFlag("mechanical-only") && !hasFlag("allow-model"),
+  subcommand === "run" && !hasFlag("mechanical-only") ? assertClefJournalReady : undefined);
 // `--judge=semif` は常駐 Python プロセス (services/yuho-quant/scripts/semif_server.py)
 // を子プロセスとして持ち続ける。標準出力は上の各コマンドで既に同期的に
 // flush 済みのため、ここで明示的に終了してよい (child プロセスは標準入力の

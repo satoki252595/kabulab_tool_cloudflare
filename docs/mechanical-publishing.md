@@ -29,6 +29,7 @@
 - 通常publisherの完全POST/原本保管成功後にcompletionを保存し、pendingを閉じる。その後だけcursorをCAS更新してownerを解放する。
 - `publishingReadOnly`で明示した純SELECT/GETが、reserve/cursor書込開始前に失敗した場合だけ、同owner/同state/STOPなしを再読しCAS解放する。schema ensure/モデル/保管/業務送信を純read扱いしない。
 - 旧FS supplement journal、Clef journal、優待pending/進捗は保持する。未知を片付けるための削除・別state・無条件上書きは禁止。モデルforwardの未知と業務書込の未知は区別し、旧Clef journalは保全して通常のモデルforward前STOPを維持する。モデル未解決だけで本文同期を意味判断へ結合し直さない。未閉鎖時は保存PRE/実結果を限定照合し、個別の明示解消が必要。
+- 通常Macのtag `run`は、canonical kernel lockの内側・共有R2owner取得前に既存Clef journalを読取検査する。既存の未閉鎖/不正だけで新たな共有ownerを残さない。機械専用・優待にはこの検査やモデル設定を必須化せず、新forward中に発生した未知・既存publisherの未閉鎖ownerを解除するものではない。
 
 旧単体 `yutai:summary:import --apply` と `backfill-public-facts.ts apply*/resume*` はCLI入口で業務IO前に拒否する。dry-run/prepare、既存の純粋planner・原子apply部品は維持する。`verify-repair-reentry` とfresh-auditは実senderがthrowする読取/保存済み検証であり、実DMLへは接続しない。旧未閉鎖intentを通常CLIの再実行やこの停止で消さない。
 
