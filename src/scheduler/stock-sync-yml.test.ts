@@ -47,4 +47,18 @@ describe("stock-sync.yml target routing", () => {
     );
     expect(yml).toContain("STOCK_SYNC_TARGET: ${{ github.event.inputs.target }}");
   });
+
+  it("価格非依存の33業種は株式失敗後も実行し、skipと取消では実行しない", () => {
+    const sectorSteps = yml.slice(
+      yml.indexOf("      - uses: DeterminateSystems/nix-installer-action@main"),
+      yml.indexOf("      - name: market context sync")
+    );
+    const conditions = [...sectorSteps.matchAll(/^        if: (.+)$/gm)].map((m) => m[1]);
+    expect(conditions).toHaveLength(4);
+    for (const condition of conditions) {
+      expect(condition).toBe("always() && !cancelled() && (steps.daily.outcome == 'success' || steps.daily.outcome == 'failure')");
+    }
+    expect(sectorSteps).not.toContain("continue-on-error:");
+    expect(sectorSteps).not.toContain("steps.daily.outputs.trade_date");
+  });
 });
