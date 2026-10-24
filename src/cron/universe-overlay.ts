@@ -14,6 +14,7 @@
 import { sql } from "drizzle-orm";
 import { stocks } from "../shared/db/core-schema.js";
 import { sha256HexBytes } from "../shared/sha256.js";
+import { ScheduledSourceDeadlineError } from "../shared/scheduled-admission.js";
 import {
   collectBasicProfile,
   DEFS_COUNTRY_GUIDE,
@@ -1031,6 +1032,7 @@ export type OverlayCollectFn = (input: {
   eligibilityAsOf: string;
   /** core 収録済み code (composer は Basic 取得を省く)。 */
   skipBasicsFor?: ReadonlySet<string>;
+  beforeSourceRequest?: () => void;
 }) => Promise<OverlayBatchInput>;
 
 /**
@@ -1147,14 +1149,14 @@ export function withBasicEvidence(
   baseCollect: OverlayCollectFn,
   deps: BasicsComposerDeps = {}
 ): OverlayCollectFn {
-  const collectBasic =
-    deps.collectBasic ?? ((code4: string) => collectBasicProfile(code4));
   const record = deps.record ?? recordPrimaryData;
   const listFiles = deps.listFiles ?? listPageFiles;
   const downloadBytes = deps.downloadBytes ?? defaultBasicsDownloadBytes;
   const qualificationInput = deps.qualificationInput;
   return async (input) => {
     const batch = await baseCollect(input);
+    const collectBasic = deps.collectBasic ?? ((code4: string) =>
+      collectBasicProfile(code4, { beforeRequest: input.beforeSourceRequest }));
     // planner と同一の delist-final map (不要取得の除外用)。
     const delistFinalByCode = new Map<string, string>();
     for (const row of batch.sources.delisted.rows) {
@@ -1170,6 +1172,7 @@ export function withBasicEvidence(
       if (input.skipBasicsFor?.has(row.code) === true) continue;
       const delistFinal = delistFinalByCode.get(row.code);
       if (delistFinal !== undefined && delistFinal >= row.listingDate) continue;
+      input.beforeSourceRequest?.();
       let got: {
         entry: BasicFetch;
         search: BasicFetch;
@@ -1213,6 +1216,7 @@ export function withBasicEvidence(
             `[universe-overlay] basic ${row.code} 取得失敗のため証拠なし (HOLD へ): ${e instanceof Error ? e.message : String(e)}`
           );
         }
+        if (e instanceof ScheduledSourceDeadlineError) throw e;
         continue;
       }
       const files = [
@@ -1362,6 +1366,7 @@ export async function ensureUniverseOverlay(
   opts: {
     eligibilityAsOf: string;
     collect: OverlayCollectFn;
+    beforeSourceRequest?: () => void;
     /** batch 送信口 (必須。daily/monthly/CLI 同一 seam。fallback なし)。 */
     sendBatch: OverlayBatchSender;
   }
@@ -1422,6 +1427,7 @@ export async function ensureUniverseOverlay(
     baseAsOf: st.baseAsOf,
     eligibilityAsOf: opts.eligibilityAsOf,
     skipBasicsFor: new Set(snapshot.core.map((r) => r.code)),
+    beforeSourceRequest: opts.beforeSourceRequest,
   });
   const result = await applyUniverseOverlay(db, batch, snapshot, opts.sendBatch);
   return { applied: true, result };

@@ -11,6 +11,7 @@ import {
   MONEYFLOW_DISPATCH_CRON,
   MONEYFLOW_READCHECK_CRON,
   CATCHUP_DISPATCH_CRON,
+  CATCHUP_JOIN_CUTOFF_TIME,
   CATCHUP_READCHECK_CRON,
   VWAP_DISPATCH_CRON,
   VWAP_READCHECK_CRON,
@@ -58,15 +59,15 @@ describe("定時VWAPは同頻度CF one-shotで開始/終了窓を検査", () => 
   ] }, { name: "scheduled-result", run_id: 101, status: "completed", conclusion: "success", steps: [
     { name: "VWAP scheduled result", status: "completed", conclusion: "success", started_at: `${date}T14:01:00.000Z`, completed_at: `${date}T14:30:00.000Z` },
   ] }];
-  it("月水金17時と期限照会を識別し、別曜日/10分遅配はPOST/claim0", async () => {
+  it("月水金17時と期限照会を識別し、別曜日と23:30以降はPOST/claim0", async () => {
     expect(routeCron(VWAP_DISPATCH_CRON)).toBe("vwap-dispatch");
     expect(routeCron(VWAP_READCHECK_CRON)).toBe("vwap-readcheck");
     expect(resolveRunDate("vwap-dispatch", start, start + 600_000)).toBe(date);
     const { bucket, puts } = makeBucket(), { fetchFn, calls } = makeFetch(() => jsonRes({}));
-    for (const at of [start + 600_001, Date.parse("2026-10-15T08:00:00.000Z")]) {
-      await expect(handleStockScheduled({ cron: VWAP_DISPATCH_CRON, scheduledTime: at === start + 600_001 ? start : at },
-        { BUCKET: bucket, GITHUB_ACTIONS_TOKEN: TOKEN }, { fetchFn, nowMs: at })).rejects.toThrow();
-    }
+    await expect(handleStockScheduled({ cron: VWAP_DISPATCH_CRON, scheduledTime: start },
+      { BUCKET: bucket, GITHUB_ACTIONS_TOKEN: TOKEN }, { fetchFn, nowMs: Date.parse(`${date}T14:30:00.000Z`) })).rejects.toThrow(/完了期限|23:30/);
+    await expect(handleStockScheduled({ cron: VWAP_DISPATCH_CRON, scheduledTime: Date.parse("2026-10-15T08:00:00.000Z") },
+      { BUCKET: bucket, GITHUB_ACTIONS_TOKEN: TOKEN }, { fetchFn, nowMs: Date.parse("2026-10-15T08:00:00.000Z") })).rejects.toThrow();
     expect(calls).toEqual([]); expect(puts).toEqual([]);
   });
   it("本番で観測した17:00:52は同じ17:00分のdispatch・receipt・Actions受付へ実時計を保持する", async () => {
@@ -82,19 +83,20 @@ describe("定時VWAPは同頻度CF one-shotで開始/終了窓を検査", () => 
       expect(await handleStockScheduled(controller, env, { fetchFn, nowMs: now })).toEqual({ status: "duplicate", workflowRunId: 101 });
       expect(calls).toHaveLength(1);
       const payload = JSON.parse(String(calls[0].init?.body));
-      expect(payload.inputs).toEqual({ target: "scheduled-daily-intra", scheduled_date: observedDate, daily_session_source: "yahoo-direct" });
+      expect(payload.inputs).toEqual({ target: "scheduled-daily-intra", scheduled_date: observedDate, daily_session_source: "yahoo-direct", scheduled_at: new Date(observed).toISOString() });
       expect(puts[0].key).toBe(vwapReceiptKey(observedDate));
       expect(JSON.parse(puts[0].value)).toMatchObject({ status: "claimed", claimedAt: new Date(now).toISOString() });
-      const admission = scheduledVwapGuard({ plannedDate: payload.inputs.scheduled_date, runId: "101.1", phase: "daily", nowMs: now,
+      const admission = scheduledVwapGuard({ plannedDate: payload.inputs.scheduled_date, scheduledAt: new Date(observed).toISOString(), runId: "101.1", phase: "daily", nowMs: now,
         directory: mkdtempSync(join(tmpdir(), "vwap-native-clock-")) });
-      expect(admission.admission).toMatchObject({ plannedDate: observedDate, admittedAt: new Date(now).toISOString() });
+      expect(admission.admission).toMatchObject({ plannedDate: observedDate, admittedAt: new Date(observed).toISOString() });
       expect(() => admission.assertActive()).not.toThrow();
     } finally { vi.useRealTimers(); }
   });
   it("予定時刻は17:00分だけを受け入れ、10分受付を52秒分延長しない", () => {
     for (const offset of [0, 1, 52_000, 59_999]) expect(resolveRunDate("vwap-dispatch", start + offset, start + 600_000)).toBe(date);
     for (const offset of [-1, 60_000]) expect(() => resolveRunDate("vwap-dispatch", start + offset, start + 600_000)).toThrow("17:00 JSTの分");
-    expect(() => resolveRunDate("vwap-dispatch", start + 52_000, start + 600_001)).toThrow("開始期限");
+    expect(resolveRunDate("vwap-dispatch", start + 52_000, start + 600_001)).toBe(date);
+    expect(() => resolveRunDate("vwap-dispatch", start + 52_000, Date.parse(`${date}T14:30:00.000Z`))).toThrow(/完了期限|23:30/);
   });
   it("専用receiptへ1回POSTし、同じ予定日のduplicateは再送0", async () => {
     vi.setSystemTime(new Date(start));
@@ -102,12 +104,12 @@ describe("定時VWAPは同頻度CF one-shotで開始/終了窓を検査", () => 
     const { fetchFn, calls } = makeFetch(() => jsonRes({ workflow_run_id: 101,
       run_url: "https://api.github.com/repos/satoki252595/kabulab_tool_cloudflare/actions/runs/101",
       html_url: "https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/101" }));
-    const deps = { bucket, token: TOKEN, cron: VWAP_DISPATCH_CRON, scheduledDate: date, nowMs: start, fetchFn };
+    const deps = { bucket, token: TOKEN, cron: VWAP_DISPATCH_CRON, scheduledDate: date, scheduledAt: `${date}T08:00:00.000Z`, nowMs: start, fetchFn };
     expect(await runVwapDispatch(deps)).toEqual({ status: "dispatched", workflowRunId: 101 });
     expect(await runVwapDispatch(deps)).toEqual({ status: "duplicate", workflowRunId: 101 });
     expect(calls).toHaveLength(1); expect(calls[0].url).toContain("vwap-ingest.yml/dispatches");
     expect(JSON.parse(String(calls[0].init?.body))).toEqual({ ref: "main", inputs: {
-      target: "scheduled-daily-intra", scheduled_date: date, daily_session_source: "yahoo-direct" } });
+      target: "scheduled-daily-intra", scheduled_date: date, daily_session_source: "yahoo-direct", scheduled_at: `${date}T08:00:00.000Z` } });
     expect(puts.map(x => x.key)).toEqual([vwapReceiptKey(date), vwapReceiptKey(date), vwapReceiptKey(date)]);
   });
   it("unknown dispatchはclaimedを保持してduplicate再送0", async () => {
@@ -120,9 +122,13 @@ describe("定時VWAPは同頻度CF one-shotで開始/終了窓を検査", () => 
   });
   it("readcheckは同日の一意成功・17:10内開始・23:30内完了だけ受入", () => {
     expect(evaluateVwapReadcheck(jobs(), date)).toEqual({ vwapCompletedAt: `${date}T14:30:00.000Z` });
-    for (const at of [null, `${date}T07:59:59Z`, `${date}T08:10:00.001Z`, "2026-10-15T08:00:00Z"]) {
+    for (const at of [null, `${date}T07:59:59Z`, "2026-10-15T08:00:00Z"]) {
       const bad = jobs(); bad[0].steps![0].started_at = at;
       expect(() => evaluateVwapReadcheck(bad, date)).toThrow("開始期限");
+    }
+    for (const at of [`${date}T08:10:00.001Z`, `${date}T08:19:52.000Z`]) {
+      const late = jobs(); late[0].steps![0].started_at = at;
+      expect(evaluateVwapReadcheck(late, date).vwapCompletedAt).toBe(`${date}T14:30:00.000Z`);
     }
     for (const at of [null, `${date}T14:30:00.001Z`, `${date}T08:00:00Z`]) {
       const bad = jobs(); bad[0].steps![0].completed_at = at;
@@ -169,11 +175,12 @@ describe("定時マクロの独立dispatchと期限確認", () => {
     ],
   }, { name: "moneyflow", run_id: 101, status: "completed", conclusion: "skipped" }];
 
-  it("専用cronを識別し30分遅延を超えるdispatchを拒否する", () => {
+  it("専用cronを識別し21:50 UTCの新規取得期限まで配送を受ける", () => {
     expect(routeCron(CONTEXT_DISPATCH_CRON)).toBe("context-dispatch");
     expect(routeCron(CONTEXT_READCHECK_CRON)).toBe("context-readcheck");
     expect(resolveRunDate("context-dispatch", started, started + 30 * 60_000)).toBe(date);
-    expect(() => resolveRunDate("context-dispatch", started, started + 30 * 60_000 + 1)).toThrow("開始期限");
+    expect(resolveRunDate("context-dispatch", started, started + 30 * 60_000 + 1)).toBe(date);
+    expect(() => resolveRunDate("context-dispatch", started, started + 50 * 60_000)).toThrow("開始期限");
   });
 
   it("株式とは別receiptをclaimしscheduled-contextを1回だけPOSTする", async () => {
@@ -182,11 +189,11 @@ describe("定時マクロの独立dispatchと期限確認", () => {
     const { fetchFn, calls } = makeFetch(() => jsonRes({ workflow_run_id: 101,
       run_url: "https://api.github.com/repos/satoki252595/kabulab_tool_cloudflare/actions/runs/101",
       html_url: "https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/101" }));
-    const deps = { bucket, token: TOKEN, cron: CONTEXT_DISPATCH_CRON, scheduledDate: date, nowMs: started, fetchFn };
+    const deps = { bucket, token: TOKEN, cron: CONTEXT_DISPATCH_CRON, scheduledDate: date, scheduledAt: new Date(started).toISOString(), nowMs: started, fetchFn };
     expect(await runContextDispatch(deps)).toEqual({ status: "dispatched", workflowRunId: 101 });
     expect(await runContextDispatch(deps)).toEqual({ status: "duplicate", workflowRunId: 101 });
     expect(calls).toHaveLength(1);
-    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ ref: "main", inputs: { target: "scheduled-context", scheduled_date: date } });
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ ref: "main", inputs: { target: "scheduled-context", scheduled_date: date, scheduled_at: new Date(started).toISOString() } });
     expect(puts[0].key).toBe(contextReceiptKey(date));
     expect(await bucket.get(receiptKey(date))).toBeNull();
   });
@@ -279,10 +286,10 @@ const jsonRes = (body: unknown, status = 200, link: string | null = null) =>
     headers: link ? { Link: link } : {},
   });
 
-// 2026-09-30 (水) 17:13 UTC。開始期限・日跨ぎのガード用（定時の 09:00 UTC とは別の時刻）。
-const TUE_1713 = Date.parse("2026-09-30T17:13:00.000Z");
+// 2026-09-30 (水) 09:00 UTC。定時slotと同じ予定を日跨ぎ/受付境界にも使う。
+const TUE_1713 = Date.parse("2026-09-30T09:00:00.000Z");
 const TUE_1713_30S = TUE_1713 + 30_000;
-const SAT_1713 = Date.parse("2026-10-03T17:13:00.000Z");
+const SAT_1713 = Date.parse("2026-10-03T09:00:00.000Z");
 const TOKEN = "tok-fake-secret";
 
 describe("catchup専用定時入口", () => {
@@ -310,7 +317,7 @@ describe("catchup専用定時入口", () => {
     expect(await handleStockScheduled(controller, env, { fetchFn, nowMs: start + 30_000 })).toEqual({ status: "duplicate", workflowRunId: 101 });
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toContain("/catchup.yml/dispatches");
-    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ ref: "main", inputs: { target: "scheduled-catchup", scheduled_date: date } });
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ ref: "main", inputs: { target: "scheduled-catchup", scheduled_date: date, scheduled_at: new Date(start).toISOString() } });
     expect(puts[0].key).toBe(catchupReceiptKey(date));
     const check = Date.parse(`${date}T11:05:00Z`);
     expect(await handleStockScheduled({ cron: CATCHUP_READCHECK_CRON, scheduledTime: check }, env, { fetchFn, nowMs: check + 30_000 }))
@@ -320,12 +327,14 @@ describe("catchup専用定時入口", () => {
   it("ACK unknownはclaimedを保ち二重POSTせず、誤cron/期限超過も拒否する", async () => {
     const { bucket } = makeBucket();
     const { fetchFn, calls } = makeFetch(() => new Response(null, { status: 204 }));
-    const deps = { bucket, token: TOKEN, cron: CATCHUP_DISPATCH_CRON, scheduledDate: date, nowMs: start, fetchFn };
+    const deps = { bucket, token: TOKEN, cron: CATCHUP_DISPATCH_CRON, scheduledDate: date, scheduledAt: new Date(start).toISOString(), nowMs: start, fetchFn };
     await expect(runCatchupDispatch(deps)).rejects.toThrow();
     await expect(runCatchupDispatch(deps)).rejects.toThrow("未完了");
     expect(calls).toHaveLength(1);
     await expect(runCatchupDispatch({ ...deps, cron: DISPATCH_CRON })).rejects.toThrow("一致");
-    expect(() => resolveRunDate("catchup-dispatch", start, start + 5 * 60_000 + 1)).toThrow("開始期限");
+    expect(resolveRunDate("catchup-dispatch", start, start + 5 * 60_000 + 1)).toBe(date);
+    expect(() => resolveRunDate("catchup-dispatch", start + 5 * 60_000 + 1, start + 5 * 60_000 + 1)).toThrow("開始期限");
+    expect(() => resolveRunDate("catchup-dispatch", start, Date.parse(`${date}T${CATCHUP_JOIN_CUTOFF_TIME}`))).toThrow("絶対締切");
   });
   it("missing/old/claimed/wrongkind receiptを当日の完了に読み替えない", async () => {
     const { fetchFn, calls } = makeFetch(() => jsonRes({ jobs: jobs() }));
@@ -337,6 +346,10 @@ describe("catchup専用定時入口", () => {
   });
   it("source skip/部分成功/重複/時刻逆転/別日/Linuxbiztag実行を成功にしない", () => {
     expect(evaluateCatchupReadcheck(jobs(), date).edinetCompletedAt).toBe(`${date}T10:54:00Z`);
+    const lateAdmission = jobs();
+    lateAdmission[0].steps![0].completed_at = `${date}T10:19:00.000Z`;
+    lateAdmission[0].steps![1].completed_at = `${date}T10:20:00.000Z`;
+    expect(evaluateCatchupReadcheck(lateAdmission, date).edinetCompletedAt).toBe(`${date}T10:54:00Z`);
     for (const index of [0, 1, 2]) for (const conclusion of ["skipped", "failure", null]) {
       const bad = jobs(); bad[0].steps![index].conclusion = conclusion;
       expect(() => evaluateCatchupReadcheck(bad, date)).toThrow();
@@ -438,11 +451,11 @@ describe("resolveRunDate", () => {
     const nextDay = Date.parse("2026-10-01T00:05:00.000Z");
     expect(() => resolveRunDate("dispatch", TUE_1713, nextDay)).toThrow("日跨ぎ");
   });
-  it("dispatch 開始期限 (60分) 超過は落とす", () => {
+  it("dispatchは遅配後も23:00 JSTの新規取得期限前まで受け、期限端で拒否する", () => {
     expect(() =>
-      resolveRunDate("dispatch", TUE_1713, TUE_1713 + 61 * 60_000)
+      resolveRunDate("dispatch", TUE_1713, Date.parse("2026-09-30T14:00:00.000Z"))
     ).toThrow("開始期限");
-    expect(resolveRunDate("dispatch", TUE_1713, TUE_1713 + 59 * 60_000)).toBe(
+    expect(resolveRunDate("dispatch", TUE_1713, TUE_1713 + 61 * 60_000)).toBe(
       "2026-09-30"
     );
   });
@@ -481,6 +494,7 @@ describe("runStockDispatch", () => {
       token: TOKEN,
       cron: DISPATCH_CRON,
       scheduledDate: "2026-09-30",
+      scheduledAt: "2026-09-30T09:00:00.000Z",
       nowMs: TUE_1713_30S,
       fetchFn,
     });
@@ -498,7 +512,7 @@ describe("runStockDispatch", () => {
     expect(headers["User-Agent"]).toMatch(/^kabulab-stock-scheduler\//);
     expect(JSON.parse(String(init.body))).toEqual({
       ref: "main",
-      inputs: { target: "scheduled-stocks", scheduled_date: "2026-09-30" },
+      inputs: { target: "scheduled-stocks", scheduled_date: "2026-09-30", scheduled_at: "2026-09-30T09:00:00.000Z" },
     });
     expect(puts).toHaveLength(2);
     expect(puts[0].onlyIf).toBeInstanceOf(Headers);
@@ -523,6 +537,7 @@ describe("runStockDispatch", () => {
       token: TOKEN,
       cron: DISPATCH_CRON,
       scheduledDate: "2026-09-30",
+      scheduledAt: "2026-09-30T09:00:00.000Z",
       nowMs: TUE_1713_30S,
       fetchFn,
     });
@@ -596,6 +611,7 @@ describe("runStockDispatch", () => {
           token: TOKEN,
           cron: DISPATCH_CRON,
           scheduledDate: "2026-09-30",
+          scheduledAt: "2026-09-30T09:00:00.000Z",
           nowMs: TUE_1713_30S,
           fetchFn,
         })
@@ -622,6 +638,7 @@ describe("runStockDispatch", () => {
         token: TOKEN,
         cron: DISPATCH_CRON,
         scheduledDate: "2026-09-30",
+        scheduledAt: "2026-09-30T09:00:00.000Z",
         nowMs: TUE_1713_30S,
         fetchFn,
       })
@@ -637,6 +654,7 @@ describe("runStockDispatch", () => {
       token: TOKEN,
       cron: DISPATCH_CRON,
       scheduledDate: "2026-09-30",
+      scheduledAt: "2026-09-30T09:00:00.000Z",
       nowMs: TUE_1713_30S,
       fetchFn,
     }).catch((e: unknown) => e);
@@ -697,6 +715,7 @@ describe("runStockDispatch", () => {
           token: TOKEN,
           cron: DISPATCH_CRON,
           scheduledDate: "2026-09-30",
+          scheduledAt: "2026-09-30T09:00:00.000Z",
           nowMs: TUE_1713_30S,
           fetchFn,
         })
@@ -729,6 +748,7 @@ describe("runStockDispatch", () => {
         token: TOKEN,
         cron: DISPATCH_CRON,
         scheduledDate: "2026-09-30",
+        scheduledAt: "2026-09-30T09:00:00.000Z",
         nowMs: TUE_1713_30S,
         fetchFn,
       })
@@ -1219,7 +1239,7 @@ describe("資金フロー独立取得元のCF起動", () => {
     } finally { vi.useRealTimers(); }
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toContain("/moneyflow.yml/dispatches");
-    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ ref: "main", inputs: { only: "independent", scheduled_date: date } });
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ ref: "main", inputs: { only: "independent", scheduled_date: date, scheduled_at: new Date(start).toISOString() } });
     const check = Date.parse(`${date}T14:45:00Z`);
     expect(await handleStockScheduled({ cron: MONEYFLOW_READCHECK_CRON, scheduledTime: check }, env,
       { fetchFn, nowMs: check + 30_000 })).toEqual({ moneyflowCompletedAt: `${date}T14:00:00Z` });
@@ -1237,8 +1257,9 @@ describe("資金フロー独立取得元のCF起動", () => {
     await expect(runMoneyflowDeadlineReadcheck({ bucket, token: TOKEN, scheduledDate: date, fetchFn })).rejects.toThrow();
   });
 
-  it("開始60分超過をPOST前に拒否する", () => {
-    expect(() => resolveRunDate("moneyflow-dispatch", start, start + 60 * 60_000 + 1)).toThrow("開始期限");
+  it("moneyflowは遅配後も23:30 JST新source期限前まで受け、期限端で拒否する", () => {
+    expect(resolveRunDate("moneyflow-dispatch", start, start + 60 * 60_000 + 1)).toBe(date);
+    expect(() => resolveRunDate("moneyflow-dispatch", start, Date.parse(`${date}T14:30:00.000Z`))).toThrow("開始期限");
   });
 
   it("片側欠落/重複/skipとjoin欠落・実queue遅配を成功にしない", () => {

@@ -12,7 +12,7 @@ import hashlib
 import io
 import json
 import re
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -25,6 +25,7 @@ from test_edinet_codelist import _make_zip
 from jp_stock_pipeline.collectors import edinet_codelist
 from jp_stock_pipeline.config import CloudStoreSettings
 from jp_stock_pipeline.jobs import sector33_sync as mod
+from jp_stock_pipeline.jobs import scheduled
 from jp_stock_pipeline.licensing import LicenseTag
 from jp_stock_pipeline.models import Source
 from jp_stock_pipeline.rawstore import save_raw
@@ -57,7 +58,9 @@ def test_blank_rows_use_same_contract_for_master_and_sector():
 def _fake_fetch(art):
     """fetch 二重: `on_response` へ実 bytes 由来の応答 metadata を渡す。"""
 
-    def fake(settings, *, on_response=None):
+    def fake(settings, *, on_response=None, before_request=None):
+        if before_request is not None:
+            before_request()
         if on_response is not None:
             data = art.local_path.read_bytes()
             on_response(
@@ -70,6 +73,73 @@ def _fake_fetch(art):
         return art
 
     return fake
+
+
+class _NativeClock(datetime):
+    current = datetime(2026, 10, 23, 9, tzinfo=timezone.utc)
+
+    @classmethod
+    def now(cls, tz=None):
+        return cls.current if tz is None else cls.current.astimezone(tz)
+
+
+def _native_clock(monkeypatch, minute=1):
+    start = datetime(2026, 10, 23, 9, tzinfo=timezone.utc)
+    _NativeClock.current = start + timedelta(minutes=minute)
+    monkeypatch.setattr(mod, "datetime", _NativeClock)
+    monkeypatch.setattr(scheduled, "datetime", _NativeClock)
+    return start
+
+
+@pytest.mark.parametrize("started,minute", [("2026-10-23T09:00:00.000Z", 345), ("2026-10-23T09:02:00.000Z", 1), ("", 1)])
+def test_native_sector_invalid_or_exhausted_budget_stops_before_source(monkeypatch, started, minute):
+    _native_clock(monkeypatch, minute)
+    ctx, state = _ctx()
+    ctx.args.job_started_at = started
+    calls = []
+    monkeypatch.setattr(edinet_codelist, "fetch_codelist", lambda *a, **kw: calls.append("source"))
+    with pytest.raises(scheduled.ScheduledWindowError):
+        mod.execute(ctx)
+    assert calls == [] and state["processed"] == 0
+
+
+def test_native_sector_rechecks_source_after_wait_without_resetting_original_clock(monkeypatch):
+    start = _native_clock(monkeypatch)
+    ctx, state = _ctx()
+    ctx.args.job_started_at = "2026-10-23T09:00:00.000Z"
+    calls = []
+
+    def fetched(settings, *, on_response, before_request):
+        _NativeClock.current = start + timedelta(minutes=345)
+        before_request()  # Actual collector/HTTP also invokes this after pacing/retry waits.
+        calls.append("source")
+
+    monkeypatch.setattr(edinet_codelist, "fetch_codelist", fetched)
+    report = mod.execute(ctx)
+    assert calls == [] and report.stopped == "fetch-failure" and state["failed"] == 1
+    assert ctx.args._scheduled_window == (start, start + timedelta(minutes=355))
+    assert ctx.args._scheduled_source_deadline == start + timedelta(minutes=345)
+
+
+def test_native_sector_closes_source_then_child_custody_before_hard_and_passes_same_clock(monkeypatch, tmp_path):
+    start = _native_clock(monkeypatch)
+    ticker, sector = _real_tickers(1)[0]
+    store = _SectorD1([(ticker, None, 1, "equity")])
+    before = store.values()
+    holder = _wire(monkeypatch, tmp_path, store)
+    ctx, state = _ctx()
+    ctx.args.job_started_at = "2026-10-23T09:00:00.000Z"
+
+    def custody(cmd, timeout_s=0):
+        holder["cmd"] = cmd
+        _NativeClock.current = start + timedelta(minutes=355)
+        return SimpleNamespace(returncode=0, stdout=json.dumps({"ok": True, "verified": True, "pageId": "page-1"}), stderr="")
+
+    monkeypatch.setattr(mod, "_run_archive_cli", custody)
+    with pytest.raises(scheduled.ScheduledWindowError, match="締切"):
+        mod.execute(ctx)
+    assert "--job-started-at=2026-10-23T09:00:00.000Z" in holder["cmd"]
+    assert store.values() == before and state["processed"] == 0
 
 
 def _artifact(tmp_path, data: bytes | None = None):

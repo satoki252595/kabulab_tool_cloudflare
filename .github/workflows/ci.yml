@@ -16,6 +16,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
@@ -24,6 +25,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Verify current native job clock
+        uses: ./.github/actions/record-job-clock
       # version は指定しない。package.json の packageManager (pnpm@9.15.9) が
       # 唯一の source of truth で、両方書くと action が二重指定で落ちる。
       - uses: pnpm/action-setup@v4
@@ -37,6 +40,8 @@ jobs:
       - name: lint
         run: pnpm lint
       - name: test
+        env:
+          BATCH_JOB_STARTED_AT: "" # unit testsの固定時計へ、上段の実接続時計を持ち込まない。
         run: pnpm run test --reporter=default --reporter=json --outputFile.json=/tmp/vitest.json
       # 監査レポートの正準数値は results.json からの生成物。内訳不一致・
       # 隔離/保留の混入・SHA省略・生成ブロックの手編集を落とす (Issue #151)。

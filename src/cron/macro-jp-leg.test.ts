@@ -89,6 +89,7 @@ describe("日本引け原本の翌朝持越し", () => {
     vi.setSystemTime(new Date(`${date}T21:00:01Z`));
     vi.stubEnv("STOCK_SYNC_TARGET", "scheduled-context");
     vi.stubEnv("SCHEDULED_DATE", date);
+    vi.stubEnv("SCHEDULED_AT", `${date}T21:00:01.000Z`);
     const writes: { sql: string; params: unknown[] }[] = [];
     const db = drizzle(async (sql, params) => { writes.push({ sql, params }); return { rows: [] }; });
     expect(await runMarketContextSync(db as unknown as Parameters<typeof runMarketContextSync>[0], store)).toBe(true);
@@ -149,6 +150,25 @@ describe("日本引け原本の翌朝持越し", () => {
     const files = vi.mocked(recordPrimaryData).mock.calls[0][0].files!;
     expect(files).toHaveLength(1);
     expect(new TextDecoder().decode(files[0].bytes)).toContain("VI unavailable");
+  });
+  it("既存R2 GET待機でsource期限を越えた場合はVI取得0、N225参照と停止理由を保管する", async () => {
+    const { store } = memoryStore();
+    const deadline = Date.now() + 1000;
+    vi.mocked(store.get).mockImplementationOnce(async () => {
+      vi.setSystemTime(new Date(deadline));
+      return null;
+    });
+    const result = await captureMacroJpLeg({ date, runId: "source-stop", n225: n225Raw(),
+      n225ArchivePages: ["test-n225-page"], store, beforeSourceRequest: () => {
+        if (Date.now() >= deadline) throw new Error("source deadline");
+      } });
+    expect(result).toEqual({ ok: false, reason: "source deadline" });
+    expect(fetchNikkeiVi).not.toHaveBeenCalled();
+    expect(store.put).not.toHaveBeenCalled();
+    expect(verifyArchivedAttachments).toHaveBeenCalledTimes(1);
+    const files = vi.mocked(recordPrimaryData).mock.calls[0][0].files!;
+    expect(files.map((file) => file.filename)).toEqual(["macro-jp-manifest.json"]);
+    expect(new TextDecoder().decode(files[0].bytes)).toContain("source deadline");
   });
   it("Notion unknownとR2 unknownは再送しない、全bytes照合より先にPUTしない", async () => {
     const { store } = memoryStore();

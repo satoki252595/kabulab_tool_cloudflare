@@ -54,8 +54,9 @@ interface RawResponse {
 }
 
 /** 1 日 (YYYYMMDD) の全開示を取得する。 */
-async function fetchDay(ymd: string): Promise<TdnetItemRaw[]> {
+async function fetchDay(ymd: string, beforeSource?: () => void): Promise<TdnetItemRaw[]> {
   return schedule(async () => {
+    beforeSource?.();
     const url = `${API_BASE}/${ymd}.json?limit=${DAY_LIMIT}`;
     const res = await fetch(url, {
       redirect: "manual",
@@ -144,7 +145,7 @@ function dateToYmd(d: Date): string {
  * 取得して 1 配列で返す。yanoshin は page 無効・範囲は最新 limit 件で
  * 切られるため、取りこぼさない唯一の確実な方法が日次取得。
  */
-export async function listRange(range: string): Promise<TdnetItemRaw[]> {
+export async function listRange(range: string, beforeSource?: () => void): Promise<TdnetItemRaw[]> {
   // normal/backfill とも原文保管の設定を源取得より前に検査する。
   notionEnv.NOTION_TOKEN();
   notionEnv.NOTION_ARCHIVE_PAGE_ID();
@@ -166,7 +167,7 @@ export async function listRange(range: string): Promise<TdnetItemRaw[]> {
     d.getTime() <= end.getTime();
     d.setUTCDate(d.getUTCDate() + 1)
   ) {
-    const day = await fetchDay(dateToYmd(d));
+    const day = await fetchDay(dateToYmd(d), beforeSource);
     for (const it of day) out.push(it);
   }
   return out;

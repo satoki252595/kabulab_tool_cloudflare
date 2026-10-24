@@ -34,6 +34,10 @@ on:
         description: "CF定時起動の予定日 (YYYY-MM-DD)。scheduled-catchupで必須"
         type: string
         required: false
+      scheduled_at:
+        description: "CF controller.scheduledTime のミリ秒付きUTC。19:00〜19:05の起動受付。19:53は実時計"
+        type: string
+        required: false
 
 concurrency:
   group: catchup

@@ -64,6 +64,7 @@ vi.mock("../../src/shared/notion-archive/index.js", () => ({
 }));
 vi.mock("../../src/shared/env.js", () => ({
   sharedEnv: {
+    BATCH_JOB_STARTED_AT: () => process.env.BATCH_JOB_STARTED_AT?.trim() || undefined,
     LOCAL_OUT: () => undefined,
     R2_BUCKET: () => "test-bucket",
     R2_ACCOUNT_ID: () => "t",
@@ -460,7 +461,7 @@ describe("ingest-daily main flow", () => {
       try { await new Promise<void>((resolve, reject) => pending.push({ resolve, reject })); } finally { writeActive--; }
     });
     if (mode === "deadline") {
-      vi.stubEnv("GITHUB_RUN_ID", "101"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1"); process.argv.push("--scheduled-date=2026-10-14");
+      vi.stubEnv("GITHUB_RUN_ID", "101"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1"); process.argv.push("--scheduled-date=2026-10-14", "--scheduled-at=2026-10-14T08:00:00.000Z");
     }
     const operation = main();
     try {
@@ -896,10 +897,34 @@ it.skipIf(!actualReplayAvailable)("actual repaired NEWPOSTs reenter the SAME nor
 });
 
 describe("通常定時VWAPの日足source前開始/終了窓", () => {
-  it("定時受付だけがbenchmark/個別source/registryへ同じrequest-local guardを渡す", async () => {
+  it.each(["source", "r2-get"])("%s待機中のsource期限でも開始済み原本/PUT/summaryを閉じ、未完2を返す", async stage => {
     vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date(COMPLETED_AT));
     vi.stubEnv("GITHUB_RUN_ID", "101"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
-    process.argv.push("--scheduled-date=2026-10-02"); mockLoadCodes.mockResolvedValue(["7203"]);
+    process.argv.push("--scheduled-date=2026-10-02", "--scheduled-at=2026-10-02T08:00:00.000Z");
+    mockLoadCodes.mockResolvedValue(["7203", "6758"]); mockR2Get.mockResolvedValue(null);
+    rawHook.body = completionRaw("7203.T");
+    const actual = await parseDailyChart("7203.T", "10y", rawHook.body, COMPLETED_AT);
+    mockFetchDaily.mockImplementationOnce(async () => {
+      if (stage === "source") vi.setSystemTime("2026-10-02T14:20:00.000Z");
+      return actual;
+    });
+    if (stage === "r2-get") mockR2Get.mockImplementation(async key => {
+      if (key === "daily/6758.json") vi.setSystemTime("2026-10-02T14:20:00.000Z");
+      return null;
+    });
+    await main();
+    expect(mockFetchDaily).toHaveBeenCalledTimes(1);
+    expect(mockRawArchive).toHaveBeenCalledTimes(1); expect(mockR2Put).toHaveBeenCalledTimes(1);
+    expect(mockRawArchive.mock.invocationCallOrder[0]).toBeLessThan(mockR2Put.mock.invocationCallOrder[0]);
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+    expect(recordedBody()).toMatchObject({ aborted: true, outcomes: { "7203": { status: "written" }, "6758": { status: "notStarted" } } });
+    expect(vi.mocked(publishDailyPriceSnapshot).mock.calls[0][0].complete).toBe(false);
+    expect(process.exitCode).toBe(2);
+  });
+  it("benchmark/個別sourceへ新規取得guard、registryへ閉鎖guardを渡す", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date(COMPLETED_AT));
+    vi.stubEnv("GITHUB_RUN_ID", "101"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
+    process.argv.push("--scheduled-date=2026-10-02", "--scheduled-at=2026-10-02T08:00:00.000Z"); mockLoadCodes.mockResolvedValue(["7203"]);
     rawHook.body = completionRaw("7203.T");
     mockFetchDaily.mockResolvedValue(await parseDailyChart("7203.T", "10y", rawHook.body, COMPLETED_AT));
     mockR2Get.mockResolvedValue(null);
@@ -907,13 +932,14 @@ describe("通常定時VWAPの日足source前開始/終了窓", () => {
     const guard = vi.mocked(fetchDailySessionReference).mock.calls[0][2];
     expect(guard).toBeTypeOf("function");
     expect(mockFetchDaily.mock.calls[0][2].beforeRequest).toBe(guard);
-    expect(vi.mocked(publishDailyPriceSnapshot).mock.calls[0][0].beforeMutation).toBe(guard);
+    expect(vi.mocked(publishDailyPriceSnapshot).mock.calls[0][0].beforeMutation).toBeTypeOf("function");
+    expect(vi.mocked(publishDailyPriceSnapshot).mock.calls[0][0].beforeMutation).not.toBe(guard);
     expect(process.exitCode).toBe(0); expect(mockR2Put).toHaveBeenCalledTimes(1);
   });
   it("registryの非更新read中に完了期限を越えても成功出口へ進まない", async () => {
     vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-10-14T08:00:00.000Z"));
     vi.stubEnv("GITHUB_RUN_ID", "101"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
-    process.argv.push("--scheduled-date=2026-10-14"); mockLoadCodes.mockResolvedValue([]);
+    process.argv.push("--scheduled-date=2026-10-14", "--scheduled-at=2026-10-14T08:00:00.000Z"); mockLoadCodes.mockResolvedValue([]);
     vi.mocked(publishDailyPriceSnapshot).mockImplementationOnce(async () => {
       vi.setSystemTime(new Date("2026-10-14T14:30:00.001Z")); return { status: "unchanged" };
     });
@@ -925,8 +951,8 @@ describe("通常定時VWAPの日足source前開始/終了窓", () => {
   it("7時間超の遅配は母集団/benchmark/個別価格/保存すべて0でSTOP", async () => {
     vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-10-14T15:19:56.144Z"));
     vi.stubEnv("GITHUB_RUN_ID", "38570657322"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
-    process.argv.push("--scheduled-date=2026-10-14");
-    await expect(main()).rejects.toThrow("開始期限");
+    process.argv.push("--scheduled-date=2026-10-14", "--scheduled-at=2026-10-14T08:00:00.000Z");
+    await expect(main()).rejects.toThrow("完了期限");
     expect(mockLoadCodes).not.toHaveBeenCalled(); expect(fetchDailySessionReference).not.toHaveBeenCalled();
     expect(mockFetchDaily).not.toHaveBeenCalled(); expect(mockR2Put).not.toHaveBeenCalled();
     expect(mockRecord).not.toHaveBeenCalled(); expect(mockRawArchive).not.toHaveBeenCalled();
@@ -934,7 +960,7 @@ describe("通常定時VWAPの日足source前開始/終了窓", () => {
   it("受付後の母集団read中に終了窓を越えたらbenchmarkも取得しない", async () => {
     vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-10-14T08:00:00.000Z"));
     vi.stubEnv("GITHUB_RUN_ID", "101"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
-    process.argv.push("--scheduled-date=2026-10-14");
+    process.argv.push("--scheduled-date=2026-10-14", "--scheduled-at=2026-10-14T08:00:00.000Z");
     mockLoadCodes.mockImplementationOnce(async () => {
       vi.setSystemTime(new Date("2026-10-14T14:30:00.001Z")); return ["7203"];
     });

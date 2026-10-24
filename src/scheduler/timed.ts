@@ -1,3 +1,4 @@
+import { scheduledAtIso, scheduledMarginWindow } from "../shared/scheduled-admission.js";
 import {
   runWorkflowDispatch, schedulerToken,
   type ScheduledControllerLike, type SchedulerEnv,
@@ -28,14 +29,28 @@ export function timedDispatchPlan(controller: ScheduledControllerLike, nowMs: nu
       !(profile.hours as readonly number[]).includes(planned.getUTCHours()) || planned.getUTCMinutes() !== profile.minute) {
     throw new Error("予定日時がcronの公表取得slotと一致しません");
   }
-  // CFの遅配はここで止める。Actions待機・環境準備後にも各CLIが別途受付を判定する。
-  if (nowMs > plannedMs + 5 * 60_000) throw new Error("定時dispatchの5分受付を超過しました");
   const scheduledAt = planned.toISOString().replace(".000Z", "Z");
   const scheduledDate = scheduledAt.slice(0, 10);
+  // CF配送にもCLIと同じ実開始締切を適用する。予定slotは変更せず、期限切れの再送はしない。
+  let lastStart: number;
+  if (profile.name === "margin") {
+    const window = scheduledMarginWindow(scheduledDate);
+    if (controller.scheduledTime < window.start || controller.scheduledTime > window.latestStart) {
+      throw new Error("信用残の開始は予定日17:00〜17:10 JSTです（取得前停止）");
+    }
+    lastStart = window.sourceDeadline;
+  } else if (profile.name === "tdnet") {
+    lastStart = plannedMs + 60 * 60_000;
+  } else if (profile.name === "supply") {
+    lastStart = Date.parse(`${scheduledDate}T13:00:00.000Z`); // 同日22時JST
+  } else {
+    lastStart = Date.parse(`${scheduledDate}T10:00:00.000Z`) + 86_400_000; // 翌日19時JST
+  }
+  if (nowMs >= lastStart) throw new Error(profile.name === "margin" ? "信用残の17:20 JST新規取得/17:30新規IO期限です" : "定時dispatchがCLIの実開始期限を超過しました");
   const inputs: Record<string, string> = profile.name === "margin"
-    ? { target: "scheduled-margin", scheduled_date: scheduledDate }
+    ? { target: "scheduled-margin", scheduled_date: scheduledDate, scheduled_at: scheduledAtIso(controller.scheduledTime) }
     : { scheduled_at: scheduledAt };
-  return { ...profile, scheduledAt, scheduledDate, inputs,
+  return { ...profile, scheduledAt, scheduledDate, inputs, claimWindowMs: lastStart - plannedMs,
     key: `timed-scheduler/${profile.name}/${scheduledAt}.json` };
 }
 
@@ -46,5 +61,7 @@ export async function handleTimedScheduled(controller: ScheduledControllerLike, 
   return runWorkflowDispatch({ bucket: env.BUCKET, token: schedulerToken(env), cron: controller.cron,
     scheduledDate: plan.scheduledDate, scheduledAt: plan.scheduledAt, key: plan.key,
     workflow: plan.workflow, inputs: plan.inputs, nowMs,
+    claimWindowMs: plan.claimWindowMs,
+    beforePost: () => { timedDispatchPlan(controller, options.nowMs === undefined ? Date.now() : options.nowMs); },
     fetchFn: options.fetchFn === undefined ? fetch : options.fetchFn });
 }

@@ -266,7 +266,7 @@ async function recordAndVerify(
 }
 
 export async function collectUniverseOfficialEvents(
-  input: { baseAsOf: string | null; eligibilityAsOf: string },
+  input: { baseAsOf: string | null; eligibilityAsOf: string; beforeSourceRequest?: () => void },
   deps: UniverseOfficialEventsDeps = {}
 ): Promise<UniverseOfficialEventsBatch> {
   const d: Required<UniverseOfficialEventsDeps> = {
@@ -291,11 +291,12 @@ export async function collectUniverseOfficialEvents(
   const { years, bootstrapPartial } = requiredCoverageYears(input.baseAsOf, input.eligibilityAsOf);
 
   // 3 fetch は allSettled (成功 raw を捨てない。追加 GET なし)。
-  const settled = await Promise.allSettled([
-    d.fetchDelisted(),
-    d.fetchNewListings(),
-    d.fetchTransfers(),
-  ]);
+  const settled = await Promise.allSettled(
+    [d.fetchDelisted, d.fetchNewListings, d.fetchTransfers].map(async (fetchSource) => {
+      input.beforeSourceRequest?.();
+      return fetchSource();
+    })
+  );
   const fetched = new Map<SourceKey, FetchBundle>();
   const fetchErrors = new Map<SourceKey, string>();
   SOURCE_ORDER.forEach((key, i) => {

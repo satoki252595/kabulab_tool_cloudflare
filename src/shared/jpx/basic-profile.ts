@@ -261,6 +261,7 @@ export type BasicRoundTrip = (req: {
 export interface BasicFetchDeps {
   roundTrip?: BasicRoundTrip;
   nowIso?: () => string;
+  beforeRequest?: () => void;
 }
 
 function cookieJarApply(jar: Map<string, string>, setCookies: string[]): void {
@@ -382,7 +383,11 @@ export async function collectBasicProfile(
   basic: BasicFetch;
   evidence: BasicProfileEvidence;
 }> {
-  const roundTrip = deps.roundTrip ?? defaultRoundTrip;
+  const send = deps.roundTrip ?? defaultRoundTrip;
+  const roundTrip: BasicRoundTrip = (request) => {
+    deps.beforeRequest?.();
+    return send(request);
+  };
   const nowIso = deps.nowIso ?? (() => new Date().toISOString());
   const jar = new Map<string, string>();
   const code5 = `${code4}0`;

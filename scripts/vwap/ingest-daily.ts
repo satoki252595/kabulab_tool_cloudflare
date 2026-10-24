@@ -16,6 +16,7 @@ import { priceMetadata, readPriceReference, referenceFromArchivedParts, type Pri
 import { publishDailyPriceSnapshot } from "./lib/holdings-price-registry.js";
 import { scheduledVwapGuard } from "./lib/scheduled-window.js";
 import { notionStats } from "../../src/shared/notion-archive/client.js";
+import { ScheduledSourceDeadlineError } from "../../src/shared/scheduled-admission.js";
 
 /**
  * 明示 10y range (run 起点の JST 暦日。repair保護上限/従来skip用)。先頭barからの導出は禁止
@@ -44,10 +45,13 @@ export async function main() {
   if (arg("scheduled-date") !== undefined && sessionSource.kind !== "yahoo-direct") {
     throw new Error("定時VWAPの市場sessionは従来のyahoo-directだけです。保存原本は明示手動選択してください");
   }
-  const schedule = scheduledVwapGuard({ plannedDate: arg("scheduled-date"), runId, phase: "daily" });
+  const schedule = scheduledVwapGuard({ plannedDate: arg("scheduled-date"), scheduledAt: arg("scheduled-at"), runId, phase: "daily",
+    jobStartedAt: sharedEnv.BATCH_JOB_STARTED_AT() });
+  const restore = schedule.installDeadline();
+  try {
   const fetchReference = (stage?: string) => schedule.admission === null
     ? stage === undefined ? fetchDailySessionReference(runId) : fetchDailySessionReference(runId, stage)
-    : fetchDailySessionReference(runId, stage, schedule.assertActive);
+    : fetchDailySessionReference(runId, stage, schedule.assertSource);
   console.info(JSON.stringify({ dailySessionSource: sessionSource }));
   const { delayMs: DELAY } = sharedEnv.vwapKnobs();
   const universe = await loadCodes();
@@ -58,13 +62,22 @@ export async function main() {
 
   const CONC = 1; // Yahoo取得は環境変数によらず直列。実HTTP間隔は共有clientで制御。
   const TEN_Y_RANGE = tenYearRange(startedAt); // run 内一定の明示 10y range
-  schedule.assertActive();
+  schedule.assertSource();
   const archivedSession = sessionSource.kind === "archived-jp-leg" ? await loadArchivedDailySessionReference(sessionSource.date) : undefined;
   let reference = archivedSession === undefined ? await fetchReference() : archivedSession.reference; // 原本照合済み独立session。
   let SOURCE_RANGE = tenYearRangeForDate(reference.date);
   let referenceGeneration = 0;
   let written = 0, empty = 0, errors = 0, backfilled = 0, rateLimited = 0, invalid = 0, skipped = 0;
   let consecRL = 0, aborted = false, fatal = false;
+  let sourceStopped = false;
+  const sourceAllowed = () => {
+    try { schedule.assertSource(); return true; }
+    catch (error) {
+      if (!(error instanceof ScheduledSourceDeadlineError)) throw error;
+      sourceStopped = true;
+      return false;
+    }
+  };
   let rawCustodyError: unknown;
   let putBarrier: Promise<void> = Promise.resolve();
   const unknownCodes: string[] = [];
@@ -81,8 +94,8 @@ export async function main() {
       console.error(`  ${code}: R2 fault のため新規作業を停止します: ${sanitizeLogText(text).slice(0, 200)}`);
     }
   };
-  for (let offset = 0; offset < codes.length && !aborted && !fatal;) {
-    try { schedule.assertActive(); } catch (e) { fatal = true; rawCustodyError = e; break; }
+  for (let offset = 0; offset < codes.length && !aborted && !fatal && !sourceStopped;) {
+    try { if (!sourceAllowed()) break; } catch (e) { fatal = true; rawCustodyError = e; break; }
     if (jstDateSec(Date.now() / 1000) !== jstDateSec(Date.parse(reference.observedAt) / 1000)) {
       try {
         // 前batchを物理保管/条件付PUTで閉じてから取得する。unknown後に未保管batchを送らない。
@@ -116,7 +129,7 @@ export async function main() {
       offset - batchStart < 30 && rawBytes < MAX_YAHOO_RAW_BYTES; wave++) {
       await sleep(DELAY);
       if (aborted || fatal) break;
-      try { schedule.assertActive(); } catch (e) { fatal = true; rawCustodyError = e; break; }
+      try { if (!sourceAllowed()) break; } catch (e) { fatal = true; rawCustodyError = e; break; }
       // HTTP中に跨いだ1件は既存資格検査でHOLD。次銘柄前にbatchを閉じて基準原本を更新する。
       if (jstDateSec(Date.now() / 1000) !== jstDateSec(Date.parse(reference.observedAt) / 1000)) break;
       const waveCodes = codes.slice(offset, offset + Math.min(CONC, 30 - (offset - batchStart)));
@@ -170,11 +183,11 @@ export async function main() {
         let corporateEvents: Awaited<ReturnType<typeof fetchDaily>>["corporateEvents"];
         let captured = false;
         let sourceCapture: YahooRawCapture | undefined;
-        schedule.assertActive();
+        if (!sourceAllowed()) return;
         try {
           // 1 社 1 回の単発取得 (producer 側の chart retry なし。失敗は error/HOLD 計数へ)。
           ({ bars, splits, proof, corporateEvents } = await fetchDaily(`${code}.T`, "10y", {
-            ...(schedule.admission === null ? {} : { beforeRequest: schedule.assertActive }),
+            ...(schedule.admission === null ? {} : { beforeRequest: schedule.assertSource }),
             onRaw: (capture) => {
               sourceCapture = capture;
               captures.push({ api: "daily", attempt: 1, capture });
@@ -190,6 +203,11 @@ export async function main() {
             throw new Error("Yahoo日足が返りましたが原HTTP本文captureがありません (raw custody STOP)");
           }
         } catch (e) {
+          if (e instanceof ScheduledSourceDeadlineError) {
+            sourceStopped = true;
+            outcomes[code] = { status: "notStarted", latestSourceBar: null, bodySha: null, reason: failureReason(e) };
+            return;
+          }
           if (e instanceof YahooRawTooLargeError) fatal = true;
           if (!captured) missing.push({ api: "daily", symbol: `${code}.T`, attempt: 1,
             error: sanitizeLogText(e instanceof Error ? e.message : String(e)), failedAt: new Date().toISOString() });
@@ -342,7 +360,7 @@ export async function main() {
   console.info(JSON.stringify({ codes: codes.length, written, skipped, empty, errors, invalid, rateLimited, backfilled, aborted, fatal, unknown: unknown.length, rejected: rejected.length }));
   // run 粒度バッチ保管 (per-stock 鏡像は作らない)。通常 daily に必須接続。
   // 保管失敗は fatal exit 2 にして後続 intra を走らせない (未保管の成功なし)。
-  const summary = buildIngestSummary({ kind: "daily", range: "10y-full", runId, codes: codes.length, written, skipped, empty, errors, invalid, rateLimited, backfilled, aborted, startedAt, finishedAt, unknown, rejected, universe: universePin(codes), outcomes: sortedOutcomes });
+  const summary = buildIngestSummary({ kind: "daily", range: "10y-full", runId, codes: codes.length, written, skipped, empty, errors, invalid, rateLimited, backfilled, aborted: aborted || sourceStopped, startedAt, finishedAt, unknown, rejected, universe: universePin(codes), outcomes: sortedOutcomes });
   const dailySession = { selection: sessionSource, reference, ...(archivedSession === undefined ? {} : { custody: archivedSession.custody }) };
   summary.metadata.dailySession = dailySession;
   if (schedule.admission !== null) summary.metadata.scheduledWindow = schedule.admission;
@@ -371,7 +389,7 @@ export async function main() {
     const priceSnapshot = await publishDailyPriceSnapshot({ runId, sessionDate: reference.date, finishedAt,
       universe, codes, references: priceReferences,
       ...(schedule.admission === null ? {} : { beforeMutation: schedule.assertActive }),
-      outcomes: sortedOutcomes, complete: !aborted && !fatal && rateLimited === 0 });
+      outcomes: sortedOutcomes, complete: !aborted && !fatal && !sourceStopped && rateLimited === 0 });
     schedule.assertActive();
     console.info(JSON.stringify({ holdingPriceSnapshot: priceSnapshot }));
   } catch (e) {
@@ -381,7 +399,8 @@ export async function main() {
   }
   // errors/invalid/rateLimited 計数があれば非0終了 (銘柄 PUT0 は上で確定済み)。
   // R2 fault (fatal) は 2。ワークフローは exit 2 で intra を走らせない。
-  process.exitCode = resolveExitCode({ aborted, fatalUnknown: fatal, errors, invalid, rateLimited });
+  process.exitCode = resolveExitCode({ aborted: aborted || sourceStopped, fatalUnknown: fatal, errors, invalid, rateLimited });
+  } finally { restore(); }
 }
 // loadCodes/config 等の想定外失敗は exit 2 (daily crash 1 で intra を誘発しない)。
 // sanitized 1 行のみ、再試行なし。

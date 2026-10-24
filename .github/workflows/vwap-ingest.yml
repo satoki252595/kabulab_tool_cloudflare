@@ -20,6 +20,10 @@ on:
         description: "CF予定日 YYYY-MM-DD。17:00〜17:10受付、価格23:30/信用残17:30新規IO終了"
         type: string
         default: ""
+      scheduled_at:
+        description: "CF controller.scheduledTime のミリ秒付きUTC。17:00〜17:10の起動受付。価格23:30/信用残17:30は実時計"
+        type: string
+        default: ""
       daily_codes:
         description: "target=daily の対象コード（カンマ区切り）。空欄は通常の全母集団"
         type: string
@@ -64,6 +68,7 @@ concurrency:
   queue: max
 
 permissions:
+  actions: read
   contents: read
   issues: write  # 失敗時に Issue を立てるため
 
@@ -94,7 +99,7 @@ jobs:
       cancel-in-progress: false
       queue: max # pending同士の後着cancelを防ぐ。Yahoo取得は引き続き1 jobずつ。
     runs-on: ubuntu-latest
-    timeout-minutes: 300 # 原本保管追加後の全量時間は初回正常runで計測する。
+    timeout-minutes: 360 # CLIはこの外部終了の15分前にsource停止、5分前までに閉鎖。
     outputs:
       daily_exit: ${{ steps.prices.outputs.daily_exit }}
       daily_closed: ${{ steps.admission.outcome == 'success' && steps.prices.outputs.daily_closed }}
@@ -102,6 +107,7 @@ jobs:
       NOTION_MAX_RPS: ${{ (inputs.target == 'scheduled-margin' || inputs.target == 'margin') && '1.0' || '1.6' }}
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/record-job-clock
 
       - uses: pnpm/action-setup@v4 # packageManager (pnpm@9.15.9) を読む
 
@@ -159,6 +165,7 @@ jobs:
           DAILY_SESSION_DATE: ${{ inputs.daily_session_date }}
           TARGET: ${{ inputs.target }}
           SCHEDULED_DATE: ${{ inputs.scheduled_date }}
+          SCHEDULED_AT: ${{ inputs.scheduled_at }}
         run: |
           # daily の errors/invalid (exit1) で intra を道連れにしない。exit2
           # (連続429/503 ABORT・R2 fatal unknown/rejected/GET fault・バッチ保管
@@ -168,6 +175,7 @@ jobs:
           intra_args=()
           if [ "$TARGET" = "scheduled-daily-intra" ]; then
             daily_args+=("--scheduled-date=$SCHEDULED_DATE")
+            daily_args+=("--scheduled-at=$SCHEDULED_AT")
             intra_args+=("--scheduled-date=$SCHEDULED_DATE")
           fi
           if [ -n "$DAILY_SESSION_SOURCE" ]; then daily_args+=("--session-source=$DAILY_SESSION_SOURCE"); fi
@@ -238,9 +246,10 @@ jobs:
         env:
           TARGET: ${{ inputs.target }}
           SCHEDULED_DATE: ${{ inputs.scheduled_date }}
+          SCHEDULED_AT: ${{ inputs.scheduled_at }}
         run: |
           args=()
-          if [ "$TARGET" = "scheduled-margin" ]; then args+=("--scheduled-date=$SCHEDULED_DATE"); fi
+          if [ "$TARGET" = "scheduled-margin" ]; then args+=("--scheduled-date=$SCHEDULED_DATE" "--scheduled-at=$SCHEDULED_AT"); fi
           pnpm ingest:vwap-margin "${args[@]}"
       # archive 前に producer が cwd/.vwap-summaries/ へ原本 bytes を保持する。
       # 保管失敗 (413 UNKNOWN 等) でも summary が ephemeral runner と共に消えない。
@@ -268,13 +277,14 @@ jobs:
       cancel-in-progress: false
       queue: max
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 360
     outputs:
       intra_exit: ${{ steps.intra.outputs.intra_exit }}
     env:
       NOTION_MAX_RPS: "1.6"
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/record-job-clock
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:

@@ -488,7 +488,7 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
   it("JPX待機は実8303の主要write・Phase6・完了記録の後、以降の金融write0", async () => {
     const targetDate = "2026-10-14";
     vi.mocked(Date.now).mockReturnValue(Date.parse(`${targetDate}T10:16:00Z`));
-    vi.stubEnv("STOCK_SYNC_TARGET", "scheduled-stocks"); vi.stubEnv("SCHEDULED_DATE", targetDate);
+    vi.stubEnv("STOCK_SYNC_TARGET", "scheduled-stocks"); vi.stubEnv("SCHEDULED_DATE", targetDate); vi.stubEnv("SCHEDULED_AT", `${targetDate}T10:16:00.000Z`);
     // N225/JPlegは既存harnessのtransport投影。8303金融値は保存実原本のまま。
     vi.mocked(fetchChart).mockImplementation(chartWithRaw(sessionChart(targetDate)));
     vi.spyOn(jpLegModule, "captureMacroJpLeg").mockResolvedValue({ ok: true, reason: "JP leg transport projection" });
@@ -504,7 +504,7 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
       return diagnostic;
     });
     await runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect, sendOverlayBatch: makeTxBatchSender(sqlite, { sends: 0 }), jpLegStore: { get: async () => null, put: async () => { throw Error("unexpected JP write in transport projection"); } } });
-    expect(collectOfficialRightsCustody).toHaveBeenCalledExactlyOnceWith("2026-10-14");
+    expect(collectOfficialRightsCustody).toHaveBeenCalledExactlyOnceWith("2026-10-14", expect.any(Function));
     expect(sqlite.prepare("SELECT total_changes() AS n").get()).toEqual(changesBeforeCustody);
     const batch = vi.mocked(recordPrimaryData).mock.calls.find(([input]) => input.key.startsWith("price-sync-batch-"))![0];
     expect(JSON.parse(new TextDecoder().decode(batch.files![0].bytes)).officialRightsCustody).toEqual([diagnostic]);
@@ -721,6 +721,37 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
     expect(sqlite.prepare("SELECT count(*) AS n FROM swing_daily_ohlcv").get()).toEqual({ n: 130 });
     expect(sqlite.prepare("SELECT count(*) AS n FROM p_momentum").get()).toEqual({ n: 1 });
     expect(sqlite.prepare("SELECT count(*) AS n FROM swing_sector_daily").get()).toEqual({ n: 0 });
+    expect(collectOfficialRightsCustody).not.toHaveBeenCalled();
+  });
+
+  it.each(["scheduled", "manual"])("%sのsource停止でも実8303原本を閉鎖して正常金融writeを保存し、次銘柄は未取得のまま失敗する", async (mode) => {
+    const db = freshDb(); seedTarget(1, "8303"); seedTarget(2, "1332");
+    const date = "2026-10-14";
+    const sourceStop = `${date}T${mode === "scheduled" ? "14:00:00" : "11:45:00"}.000Z`;
+    vi.mocked(Date.now).mockReturnValue(Date.parse(sourceStop) - 1000);
+    vi.stubEnv("STOCK_SYNC_TARGET", mode === "scheduled" ? "scheduled-stocks" : "stocks");
+    if (mode === "scheduled") {
+      vi.stubEnv("SCHEDULED_DATE", date);
+      vi.stubEnv("SCHEDULED_AT", `${date}T09:00:00.000Z`);
+    } else {
+      vi.stubEnv("BATCH_JOB_STARTED_AT", `${date}T06:30:00.000Z`);
+    }
+    vi.mocked(fetchChart).mockImplementation(chartWithRaw(sessionChart(date)));
+    vi.spyOn(jpLegModule, "captureMacroJpLeg").mockResolvedValue({ ok: true, reason: "JP leg transport projection" });
+    const bodies = JSON.parse(gunzipSync(readFileSync(new URL("../shared/yahoo/fixtures/stock-daily-scopes-20261014.json.gz", import.meta.url))).toString());
+    const source = saved8303Source(bodies);
+    const actual = await parseSavedStockRawData("8303", source);
+    vi.mocked(fetchStockRawData).mockImplementationOnce(async (...args) => {
+      await stockWithRaw(actual)(...args);
+      vi.mocked(Date.now).mockReturnValue(Date.parse(sourceStop));
+      return actual;
+    });
+    await expect(runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect,
+      sendOverlayBatch: makeTxBatchSender(sqlite, { sends: 0 }), jpLegStore: { get: async () => null, put: async () => {} } }))
+      .rejects.toThrow("新規取得期限");
+    expect(fetchStockRawData).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(archiveYahooRawBatch).mock.calls.at(-1)![0].stage).toBe("stocks-first");
+    expect(sqlite.prepare("SELECT stock_id,data_date FROM core_stock_financials").all()).toEqual([{ stock_id: 1, data_date: date }]);
     expect(collectOfficialRightsCustody).not.toHaveBeenCalled();
   });
 

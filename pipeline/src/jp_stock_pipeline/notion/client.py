@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 
 import httpx
 import requests
+from ..request_guard import assert_request_allowed
 from notion_client import Client
 from notion_client.errors import APIResponseError, HTTPResponseError, RequestTimeoutError
 
@@ -222,6 +223,7 @@ class NotionClient:
         last_exc: Exception | None = None
         for attempt in range(MAX_RETRIES):
             self._throttle.wait()
+            assert_request_allowed()
             try:
                 return fn(**kwargs)
             except (
@@ -427,6 +429,7 @@ class NotionClient:
             raise NotionConfigError("Notion 添付 URL の形式が不正")
         if max_bytes is not None and (type(max_bytes) is not int or max_bytes <= 0):
             raise NotionConfigError("Notion 添付サイズ上限が不正")
+        assert_request_allowed()
         try:
             options = {"stream": True} if max_bytes is not None else {}
             response = requests.get(url, timeout=120, allow_redirects=False, **options)

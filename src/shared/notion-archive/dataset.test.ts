@@ -301,6 +301,42 @@ describe("適時開示の未知送信は次行の取得を停止", () => {
     }
   });
 
+  it.each(["session", "second-source", "received-pdf"])("%s待機中のsoft到達では新sourceを止め、受信済PDFだけ閉鎖する", async (phase) => {
+    pageError = null;
+    const deadline = Date.now() + 10_000;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(deadline - 1);
+    const persisted = vi.fn();
+    try {
+      if (phase === "session") {
+        const base = vi.mocked(queryUniqueRow).getMockImplementation()!;
+        vi.mocked(queryUniqueRow).mockImplementationOnce(async (...args) => {
+          clock.mockReturnValue(deadline);
+          return base(...args);
+        });
+      } else {
+        vi.stubGlobal("fetch", vi.fn(async () => {
+          clock.mockReturnValue(deadline);
+          return phase === "received-pdf" ? new Response("%PDF-test") :
+            new Response("", { status: 404, headers: { } });
+        }));
+      }
+      const { upsertDisclosuresByStock } = await import("./dataset.js");
+      const result = await upsertDisclosuresByStock({ service: "source-deadline-test", tagOptions: [], deadlineMs: deadline,
+        rows: [{ ...row, documentUrl: "https://www.release.tdnet.info/inbs/140120260810517386.pdf" }, { ...row, key: "T2" }],
+        onPagePersisted: persisted });
+      expect(result.reachedDeadline).toBe(true);
+      expect(fetch).toHaveBeenCalledTimes(phase === "session" ? 0 : 1);
+      expect(result.created).toBe(phase === "received-pdf" ? 1 : 0);
+      expect(result.skippedNoFile).toBe(0);
+      expect(result.deadlineRemainderKeys).toEqual(phase === "received-pdf" ? ["T2"] : ["T1", "T2"]);
+      expect(uploadFile).toHaveBeenCalledTimes(phase === "received-pdf" ? 1 : 0);
+      expect(verifyArchivedAttachments).toHaveBeenCalledTimes(phase === "received-pdf" ? 1 : 0);
+      expect(persisted).toHaveBeenCalledTimes(phase === "received-pdf" ? 1 : 0);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("31日を超えても取得を試み、404 の tdnetId を記録する", async () => {
     const pubdate = new Date(Date.now() - 32 * 86_400_000).toISOString();
     vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 404 })));

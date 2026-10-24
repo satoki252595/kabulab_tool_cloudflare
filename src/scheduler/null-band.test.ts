@@ -18,7 +18,6 @@ import {
   CONTEXT_DISPATCH_CRON,
   CONTEXT_READCHECK_CRON,
   DISPATCH_CRON,
-  DISPATCH_START_DEADLINE_MINUTES,
   READCHECK_CRON,
   evaluateReadcheck,
   resolveRunDate,
@@ -131,8 +130,8 @@ describe("株式 dispatch は null 帯の外（修正前の 13 17 では落ち�
     const scheduled = Date.parse("2026-10-08T09:00:00.000Z");
     expect(resolveRunDate("dispatch", scheduled, scheduled + 30_000)).toBe(D);
     expect(jstDate(scheduled)).toBe(D);
-    expect(DISPATCH_START_DEADLINE_MINUTES).toBe(60);
-    expect(() => resolveRunDate("dispatch", scheduled, scheduled + 61 * 60_000)).toThrow("開始期限");
+    expect(resolveRunDate("dispatch", scheduled, scheduled + 61 * 60_000)).toBe(D);
+    expect(() => resolveRunDate("dispatch", scheduled, Date.parse(`${D}T14:00:00.000Z`))).toThrow("開始期限");
     const saturday = Date.parse("2026-10-10T09:00:00.000Z");
     expect(() => resolveRunDate("dispatch", saturday, saturday + 30_000)).toThrow("土日");
   });
