@@ -53,7 +53,7 @@ describe("stock-sync.yml target routing", () => {
       yml.indexOf("      - uses: DeterminateSystems/nix-installer-action@main"),
       yml.indexOf("      - name: market context sync")
     );
-    const conditions = [...sectorSteps.matchAll(/^        if: (.+)$/gm)].map((m) => m[1]);
+    const conditions = [...sectorSteps.matchAll(/^ {8}if: (.+)$/gm)].map((m) => m[1]);
     expect(conditions).toHaveLength(4);
     for (const condition of conditions) {
       expect(condition).toBe("always() && !cancelled() && (steps.daily.outcome == 'success' || steps.daily.outcome == 'failure')");
