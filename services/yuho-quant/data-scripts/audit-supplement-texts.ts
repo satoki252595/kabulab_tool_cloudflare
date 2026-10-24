@@ -13,7 +13,7 @@ import { parseStockCode } from "../../../src/shared/jpx/stock-code.js";
 import { findUniqueBackupChildByTitle } from "../../../src/shared/notion-archive/archive.js";
 import { notionRequest, notionStats } from "../../../src/shared/notion-archive/client.js";
 import { NotionConfigError, notionEnv } from "../../../src/shared/notion-archive/env.js";
-import { loadSupplementRows, normalizeSupplementText, readSupplementRowFully, SUPPLEMENT_DB_TITLE, type SupplementRow } from "../../../src/shared/notion-archive/stock-supplement.js";
+import { loadSupplementRows, normalizeSupplementText, readSupplementRowFully, SUPPLEMENT_DB_TITLE, SUPPLEMENT_PROPS, type SupplementRow } from "../../../src/shared/notion-archive/stock-supplement.js";
 import { installCatchupDeadline } from "../../../scripts/sync/catchup-launch.js";
 import { loadLatestDocs, type BiztagSourceDb, type LatestDoc } from "../src/biztag/source.js";
 import { hasUsableText, rowTextSyncReceipt } from "../src/biztag/plan.js";
@@ -31,10 +31,18 @@ type Document = typeof schema.yuhoDocuments.$inferSelect;
 type CellReason = "matched" | "source_value_missing_in_notion" | "source_target_absent" | "source_or_identity_insufficient" | "time_difference" | "unverified";
 class AuditObservationChangedError extends Error {}
 class AuditBodyDifferenceError extends Error {}
-type AuditStage = "configuration" | "d1_latest" | "notion_database" | "notion_schema" | "notion_rows" | "code_admission" |
+type AuditStage = "configuration" | "d1_latest" | "notion_database" | "notion_schema" | "existing_schema_missing" | "notion_rows" | "code_admission" |
   "notion_current39" | "d1_source_document" | "notion_saved_zip" | "notion_source_body" | "verify_current_snapshot";
 class AuditConfigurationError extends Error {
   constructor(readonly keys: string[]) { super("audit_configuration_invalid"); }
+}
+class AuditSchemaMissingError extends Error {
+  constructor(readonly keys: string[]) { super("audit_existing_schema_missing"); }
+}
+export function assertAuditSupplementSchema(properties: Record<string, { id: string }>) {
+  const missing = Object.entries(SUPPLEMENT_PROPS).filter(([, title]) => typeof properties[title]?.id !== "string" || properties[title].id.length === 0).map(([key]) => key);
+  missing.push(...TEXT_SECTIONS.filter(s => typeof properties[s.title]?.id !== "string" || properties[s.title].id.length === 0).map(s => `text:${s.key}`));
+  if (missing.length > 0) throw new AuditSchemaMissingError(missing);
 }
 /** Validate typed accessors before the first HTTP; never print values or create missing configuration. */
 export function auditConfiguration() {
@@ -53,6 +61,7 @@ export function auditConfiguration() {
 /** Finite stage/code only. Raw error messages can contain URLs, SQL or credentials. */
 export function auditFailure(stage: AuditStage, error: unknown) {
   if (error instanceof AuditConfigurationError) return { stage, code: "configuration_invalid", configKeys: error.keys };
+  if (error instanceof AuditSchemaMissingError) return { stage: "existing_schema_missing" as const, code: "required_properties_missing", propertyKeys: error.keys };
   const codes = { audit_deadline: "deadline_exceeded", audit_request_limit: "request_limit",
     audit_source_get_forbidden: "read_only_guard", audit_mutation_forbidden: "read_only_guard", audit_notion_write_forbidden: "read_only_guard",
     audit_d1_write_forbidden: "read_only_guard", audit_post_forbidden: "read_only_guard" } as Record<string, string>;
@@ -210,6 +219,7 @@ export async function main(argv = process.argv.slice(2)) {
     assert(supplementId !== null, "existing_supplement_db_required");
     stage = "notion_schema";
     const structure = await notionRequest<{ properties: Record<string, { id: string }> }>("GET", `/databases/${supplementId}`);
+    assertAuditSupplementSchema(structure.properties);
     stage = "notion_rows";
     const rows = await loadSupplementRows(supplementId, Object.fromEntries(Object.entries(structure.properties).map(([name, value]) => [name, value.id])), { codes: options.codes });
     for (const code of options.codes) {

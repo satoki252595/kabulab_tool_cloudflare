@@ -5,12 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
-import { auditFailure, auditOne, classifyAuditCells, installReadOnlyAuditGuard, main, parseAuditArgs, qualifyAuditSource } from "./audit-supplement-texts.js";
+import { assertAuditSupplementSchema, auditFailure, auditOne, classifyAuditCells, installReadOnlyAuditGuard, main, parseAuditArgs, qualifyAuditSource } from "./audit-supplement-texts.js";
 import { NotionConfigError } from "../../../src/shared/notion-archive/env.js";
 import { TEXT_SECTIONS } from "../src/services/edinet/text-sections.js";
 import { withTextSyncReceipt, type TextSyncReceipt } from "../src/biztag/plan.js";
 import type { LatestDoc } from "../src/biztag/source.js";
-import type { SupplementRow } from "../../../src/shared/notion-archive/stock-supplement.js";
+import { SUPPLEMENT_PROPS, type SupplementRow } from "../../../src/shared/notion-archive/stock-supplement.js";
 import type { yuhoDocuments } from "../src/db/schema.js";
 
 const fixture = new URL("../src/tests/fixtures/ingest-csv-reingest-6963/", import.meta.url);
@@ -138,4 +138,14 @@ it("stage/error codes never serialize upstream errors, signed URLs, SQL or secre
   const sensitive = "https://file.notion.so/control?signature=protocol-secret SELECT confidential";
   expect(auditFailure("d1_latest", new Error(sensitive))).toEqual({ stage: "d1_latest", code: "read_failed" });
   expect(auditFailure("notion_schema", new NotionConfigError(sensitive))).toEqual({ stage: "notion_schema", code: "read_contract_invalid" });
+});
+
+it("legacy schema missing the three nullable lineage columns stops honestly before querying current rows", () => {
+  // Property schema boundary projection only; no Notion row values or added columns are persisted.
+  const properties = Object.fromEntries([...Object.values(SUPPLEMENT_PROPS), ...TEXT_SECTIONS.map(s => s.title)].map(name => [name, { id: name }]));
+  expect(() => assertAuditSupplementSchema(properties)).not.toThrow();
+  for (const key of ["textSyncReceipt", "textInputSha256", "tagInputSha256"] as const) delete properties[SUPPLEMENT_PROPS[key]];
+  let failure;
+  try { assertAuditSupplementSchema(properties); } catch (error) { failure = auditFailure("notion_schema", error); }
+  expect(failure).toEqual({ stage: "existing_schema_missing", code: "required_properties_missing", propertyKeys: ["textSyncReceipt", "textInputSha256", "tagInputSha256"] });
 });
