@@ -30,6 +30,7 @@ from ..http import FetchError
 from ..licensing import LicenseTag, source_license
 from ..models import ConvertStatus, Provenance, RawArtifact, Source, now_jst
 from ..notion import file_upload, saved_edinet, upsert
+from ..notion.client import NotionUnknownResultError
 from ..transform import normalize
 from ..transform.direct_roa import _dei
 from ..transform.direct_roa_table import has_roa_table_candidate
@@ -599,7 +600,7 @@ def execute(ctx: JobContext) -> None:
                 excluded_nonlisted += 1
                 continue  # 財務保存の成功件数には数えない。
             ctx.add_success()
-        except (FetchError, file_upload.RawUploadError):
+        except (FetchError, file_upload.RawUploadError, NotionUnknownResultError):
             raise  # 取得・原本保管が不明なまま次の書類を取得しない。
         except Exception as exc:
             ctx.add_failure(doc.get("docID", "?"), f"書類処理失敗: {exc}")

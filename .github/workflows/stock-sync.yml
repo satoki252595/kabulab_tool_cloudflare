@@ -122,20 +122,19 @@ jobs:
           STOCK_SYNC_TARGET: ${{ github.event.inputs.target }}
         run: pnpm sync:daily:core --stocks-only
 
-      # sector33 のみ同期。株式 daily 成功＋trade_date 非空の直後、moneyflow 前。
-      # context/monthly 単独では daily が skip されるため走らない。
-      # 失敗 (partial 含む) は sync job を落として moneyflow を止める。
+      # sector33は価格非依存。株式処理が失敗しても実行し、context/monthlyでは実行しない。
+      # 同じjobのYahoo/Notion通信枠と、moneyflowの価格資格条件は維持する。
       - uses: DeterminateSystems/nix-installer-action@main
-        if: steps.daily.conclusion == 'success' && steps.daily.outputs.trade_date != ''
+        if: always() && !cancelled() && (steps.daily.outcome == 'success' || steps.daily.outcome == 'failure')
       - uses: DeterminateSystems/magic-nix-cache-action@main
         with:
           use-flakehub: false
-        if: steps.daily.conclusion == 'success' && steps.daily.outputs.trade_date != ''
+        if: always() && !cancelled() && (steps.daily.outcome == 'success' || steps.daily.outcome == 'failure')
       - name: Sync pipeline dependencies
-        if: steps.daily.conclusion == 'success' && steps.daily.outputs.trade_date != ''
+        if: always() && !cancelled() && (steps.daily.outcome == 'success' || steps.daily.outcome == 'failure')
         run: nix develop -c bash -c 'cd pipeline && uv sync --frozen'
       - name: sector33 sync
-        if: steps.daily.conclusion == 'success' && steps.daily.outputs.trade_date != ''
+        if: always() && !cancelled() && (steps.daily.outcome == 'success' || steps.daily.outcome == 'failure')
         env:
           CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

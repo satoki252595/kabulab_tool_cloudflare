@@ -246,6 +246,37 @@ def test_relation_dry_run_has_no_claim_archive_or_patch(actual):
     assert actual.bucket.puts == actual.archives == actual.patches == []
 
 
+def test_native_529_after_applied_patch_keeps_durable_pending_and_prevents_next_send(actual, monkeypatch):
+    import requests
+
+    from jp_stock_pipeline.notion.client import NotionClient, NotionUnknownResultError
+
+    a, native = actual, NotionClient("test-token-not-a-credential")
+    patch = a.client.raw_api
+
+    def send(method, url, **kwargs):
+        patch(method, url.removeprefix("https://api.notion.com/v1/"), json_body=kwargs["json"])
+        response = requests.Response()
+        response.status_code = 529
+        response.headers["Retry-After"] = "9"
+        return response
+
+    monkeypatch.setattr(native._session, "request", send)
+    monkeypatch.setattr(native._throttle, "wait", lambda: None)
+    a.client.raw_api = native.raw_api
+    try:
+        with pytest.raises(NotionUnknownResultError, match="HTTP 529"):
+            _repair(a)
+        assert len(a.patches) == 1 and len(a.archives) == 1
+        assert next(iter(a.bucket.objects.values()))["status"] == "pending"
+        with pytest.raises(RuntimeError, match="再PATCH禁止"):
+            _repair(a)
+        assert len(a.patches) == 1 and next(iter(a.bucket.objects.values()))["status"] == "pending"
+    finally:
+        native._client.close()
+        native._session.close()
+
+
 @pytest.mark.parametrize("phase", ["cas", "post"])
 def test_incomplete_cas_or_post_after_claim_stops_whole_run_not_next_candidate(actual, phase):
     a = actual
