@@ -1,22 +1,23 @@
-import { describe, expect, it } from "vitest";
-import { SHARED_WRITER_KEY, currentPublishingWriter, initializeSharedPublishingWriter, publishingReadOnly, withSharedPublishingWriter, type PublishingStore } from "./shared-writer.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { R2PutRejectedError, R2PutUnknownError } from "../vwap/lib/r2.js";
+import { SHARED_WRITER_KEY, currentPublishingWriter, fenceUnconfirmedPublishingInitialization, initializeSharedPublishingWriter, publishingReadOnly, withSharedPublishingWriter, type PublishingStore } from "./shared-writer.js";
 
 /** Protocol-only CAS server. No financial values or production credentials. */
 function server(seed = true) {
   let version = 0;
   const objects = new Map<string, { body: string; etag: string }>();
-  const puts: string[] = [];
+  const puts: string[] = [], reads: string[] = [];
   if (seed) objects.set(SHARED_WRITER_KEY, { body: JSON.stringify({ version: 1, baselineSha256: "0".repeat(64), owner: null, pending: null }) + "\n", etag: "initial" });
   let unknownRequest = false;
   const store: PublishingStore = {
-    async get(key, maxBytes) { const value = objects.get(key); if (!value) return null; expect(Buffer.byteLength(value.body)).toBeLessThanOrEqual(maxBytes); return { ...value }; },
+    async get(key, maxBytes) { reads.push(key); const value = objects.get(key); if (!value) return null; expect(Buffer.byteLength(value.body)).toBeLessThanOrEqual(maxBytes); return { ...value }; },
     async put(key, body, etag) {
       if ((objects.get(key)?.etag ?? null) !== etag) throw new Error("412 protocol CAS rejection");
       puts.push(key); objects.set(key, { body, etag: `version-${++version}` });
       if (unknownRequest && key.endsWith("/request.json")) throw new Error("protocol ACK unknown");
     },
   };
-  return { store, objects, puts, unknown: () => { unknownRequest = true; } };
+  return { store, objects, puts, reads, unknown: () => { unknownRequest = true; } };
 }
 describe("cross-host publication owner and sticky pending", () => {
   it("missing shared baseline cannot be replaced by an empty Linux/local state", async () => {
@@ -99,5 +100,57 @@ describe("cross-host publication owner and sticky pending", () => {
     const s = server(false);
     await expect(initializeSharedPublishingWriter({ protocol: "empty local state" }, s.store)).rejects.toThrow("Mac");
     expect(s.puts).toEqual([]);
+  });
+});
+
+describe("explicit fence of an unconfirmed old initializer", () => {
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!, arch = Object.getOwnPropertyDescriptor(process, "arch")!;
+  beforeEach(() => { Object.defineProperty(process, "platform", { value: "darwin" }); Object.defineProperty(process, "arch", { value: "arm64" }); });
+  afterEach(() => { Object.defineProperty(process, "platform", platform); Object.defineProperty(process, "arch", arch); });
+  const plan = { baseline: '{"protocol":"qualified canonical snapshot"}\n', initialCursors: { "yutai-summary": '{"cursor":"0123456789abcdef"}\n' },
+    owner: { id: "00000000-0000-4000-8000-000000000001", startedAt: "2026-10-25T00:00:00.000Z" } };
+  it("a confirmed fence rejects a late old writer and accepts only the same cursor when its old conditional create wins", async () => {
+    const s = server(false), get = s.store.get, put = s.store.put;
+    let late = false, cursorRace = false;
+    s.store.get = async (key, maximum) => {
+      const found = await get(key, maximum);
+      if (key === SHARED_WRITER_KEY && !late) {
+        late = true; expect(JSON.parse(found!.body).owner).toEqual(plan.owner);
+        await expect(put(key, '{"protocol":"old late terminal"}', null)).rejects.toThrow("412");
+      }
+      return found;
+    };
+    s.store.put = async (key, body, etag) => {
+      if (key.endsWith("/cursors/yutai-summary.json") && !cursorRace) {
+        cursorRace = true; await put(key, body, null); // Old request commits the same canonical bytes first.
+        throw new R2PutRejectedError(key, "PreconditionFailed", 412, { $metadata: { httpStatusCode: 412 } });
+      }
+      await put(key, body, etag);
+    };
+    await fenceUnconfirmedPublishingInitialization(plan, s.store);
+    expect(late && cursorRace).toBe(true); expect(s.puts[0]).toBe(SHARED_WRITER_KEY);
+    expect(s.puts.at(-1)).toBe(SHARED_WRITER_KEY); expect(s.puts.filter(key => key === SHARED_WRITER_KEY)).toHaveLength(2);
+    expect(JSON.parse(s.objects.get(SHARED_WRITER_KEY)!.body)).toMatchObject({ owner: null, pending: null });
+    expect(s.objects.get("mechanical-publishing/v1/cursors/yutai-summary.json")!.body).toBe(plan.initialCursors["yutai-summary"]);
+  });
+  it("an old writer that wins first is preserved and no baseline, cursor or release is attempted", async () => {
+    const s = server(), before = [...s.objects.entries()];
+    await expect(fenceUnconfirmedPublishingInitialization(plan, s.store)).rejects.toThrow("412");
+    expect(s.reads).toEqual([]); expect(s.puts).toEqual([]); expect([...s.objects.entries()]).toEqual(before);
+  });
+  it("an applied fence with an unknown ACK retains the owner and performs no further read or write", async () => {
+    const s = server(false), put = s.store.put;
+    s.store.put = async (key, body, etag) => { await put(key, body, etag); throw new R2PutUnknownError(key, "offline_fault", 500, null); };
+    await expect(fenceUnconfirmedPublishingInitialization(plan, s.store)).rejects.toBeInstanceOf(R2PutUnknownError);
+    expect(s.puts).toEqual([SHARED_WRITER_KEY]); expect(s.reads).toEqual([]);
+    expect(JSON.parse(s.objects.get(SHARED_WRITER_KEY)!.body)).toMatchObject({ owner: plan.owner, pending: null });
+    await expect(withSharedPublishingWriter(async () => { throw new Error("must not enter"); }, s.store)).rejects.toThrow("期限では解除しません");
+  });
+  it("a different existing cursor is never replaced and the migration fence stays held", async () => {
+    const s = server(false), key = "mechanical-publishing/v1/cursors/yutai-summary.json";
+    const old = { body: '{"protocol":"different saved cursor"}\n', etag: "old" }; s.objects.set(key, old);
+    await expect(fenceUnconfirmedPublishingInitialization(plan, s.store)).rejects.toThrow("canonical入力と異なります");
+    expect(s.objects.get(key)).toBe(old); expect(s.puts).toHaveLength(2); expect(s.puts.filter(k => k === SHARED_WRITER_KEY)).toHaveLength(1);
+    expect(JSON.parse(s.objects.get(SHARED_WRITER_KEY)!.body).owner).toEqual(plan.owner);
   });
 });
