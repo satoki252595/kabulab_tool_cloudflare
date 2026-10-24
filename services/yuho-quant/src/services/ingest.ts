@@ -41,6 +41,7 @@ import {
   recordEdinetZip,
   type DocCustody,
 } from "./edinet/archive.js";
+import { edinetArchiveMetadata } from "./edinet/archive-metadata.js";
 import type { IssuedShareObservation } from "./edinet/issued-shares.js";
 import { parseEdinetCsvZip } from "./edinet/csv.js";
 import {
@@ -306,6 +307,7 @@ export async function ingestDocument(
       `[ingest] archiveToNotion=false は未対応のため DB 書込の前に STOP します (raw-before-DB 契約): docID=${doc.docID}`
     );
   }
+  const sourceMetadata = edinetArchiveMetadata(doc, periodEnd);
 
   // 1) 軽量な CSV で受注・海外売上 開示の有無を確定。どちらも無ければ重い XBRL を
   //    落とさない (帯域節約)。CSV は全テキストブロックを平坦化して含むので、開示が
@@ -350,9 +352,7 @@ export async function ingestDocument(
     await recordEdinetZip({
       service: NOTION_SERVICE, docID: doc.docID, type: 5, zip: csvZip,
       source: `EDINET API v2 /documents/${doc.docID}?type=5`, fetchedAt: csvFetchedAt,
-      metadata: { docID: doc.docID, edinetCode: doc.edinetCode, secCode: doc.secCode,
-        filerName: doc.filerName, docTypeCode: doc.docTypeCode, periodStart: doc.periodStart,
-        periodEnd, submitDateTime: doc.submitDateTime, ...reportedDocumentMetadata(doc),
+      metadata: { ...sourceMetadata, ...reportedDocumentMetadata(doc),
         ingestPhase: "csv-reingest-rejected", csvParseStatus: "parse_error" }, force,
     });
     throw new Error(`[ingest] 既存文書のCSV再解析に失敗したため旧facts/本文を置換せず停止: docID=${doc.docID}`);
@@ -384,9 +384,7 @@ export async function ingestDocument(
           // T1の既知源失敗でも取得済CSVを失わない。保管未知はこのthrowより先に伝播。
           await recordEdinetZip({service: NOTION_SERVICE, docID: doc.docID, type: 5, zip: csvZip,
             source: `EDINET API v2 /documents/${doc.docID}?type=5`, fetchedAt: csvFetchedAt,
-            metadata: {docID: doc.docID, edinetCode: doc.edinetCode, secCode: doc.secCode,
-              filerName: doc.filerName, docTypeCode: doc.docTypeCode, periodEnd,
-              submitDateTime: doc.submitDateTime, ingestPhase: "partial-source", failedType: 1}, force});
+            metadata: {...sourceMetadata, ingestPhase: "partial-source", failedType: 1}, force});
         }
         throw e;
       }
@@ -506,15 +504,8 @@ export async function ingestDocument(
   // metadata は DBid 非依存 (text ポインタのみ DBid 解決後)。
   if (archiveToNotion) {
     const metadata = {
-      docID: doc.docID,
-      edinetCode: doc.edinetCode,
-      secCode: doc.secCode,
-      filerName: doc.filerName,
-      docTypeCode: doc.docTypeCode,
+      ...sourceMetadata,
       docDescription: doc.docDescription,
-      periodStart: doc.periodStart,
-      periodEnd,
-      submitDateTime: doc.submitDateTime,
       ...reportedDocumentMetadata(doc),
       parseStatus,
       honbunFile,

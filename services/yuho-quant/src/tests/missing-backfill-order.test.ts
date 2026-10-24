@@ -352,7 +352,9 @@ describe("missing-docs raw-before-DB 契約", () => {
         const meta = c[0].metadata as Record<string, unknown>;
         expect("docRowId" in meta).toBe(false);
         expect("documentId" in meta).toBe(false);
-        expect(meta.docID).toBe("S100MISS1");
+        expect(meta).toMatchObject({docID: "S100MISS1", edinetCode: "E00001", secCode: "10010",
+          filerName: "テスト提出者", docTypeCode: "120", periodStart: "2024-04-01", periodEnd: "2025-03-31",
+          submitDateTime: "2026-09-24 15:00"});
       }
       // 実 DB 行 + facts + ポインタ書戻し。
       const row = sqlite
@@ -487,8 +489,26 @@ describe("missing-docs raw-before-DB 契約", () => {
       else await expect(run).rejects.toBe(failure);
       expect(tally).toEqual({error: 1});
       expect(record.mock.calls.map(([a]) => a.type)).toEqual([5]);
+      expect(record.mock.calls[0][0].metadata).toMatchObject({docID: "S100MPART1", edinetCode: "E00001", secCode: "10010",
+        filerName: "テスト提出者", docTypeCode: "120", periodStart: "2024-04-01", periodEnd: "2025-03-31",
+        submitDateTime: "2026-09-24 15:00", ingestPhase: "partial-source", failedType: 1});
       expect(sender).not.toHaveBeenCalled();
       expect(sqlite.prepare("SELECT count(*) AS n FROM yuho_documents").get()).toEqual({n: 0});
+    } finally {sqlite.close(); restore();}
+  });
+
+  it("native原本metadataのキー欠けはZIP取得前に停止する", async () => {
+    const restore = silenceConsole();
+    const {sqlite, db} = setupDb();
+    try {
+      setupParserBridges();
+      const {deps, download, record, sender, tally} = setupDeps(sqlite);
+      const doc = {...annualDoc("S100META1"), periodStart: undefined} as unknown as EdinetDoc;
+      await processMissingDoc(db, deps, {doc, stockId: 11, force: false});
+      expect(tally).toEqual({error: 1});
+      expect(download).not.toHaveBeenCalled();
+      expect(record).not.toHaveBeenCalled();
+      expect(sender).not.toHaveBeenCalled();
     } finally {sqlite.close(); restore();}
   });
 

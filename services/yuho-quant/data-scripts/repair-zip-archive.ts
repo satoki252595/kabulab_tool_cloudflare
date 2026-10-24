@@ -1,163 +1,146 @@
-/**
- * Notion 一次データ (EDINET 物理 ZIP) のギャップ修復 (Node → D1 HTTP 読取 + Notion 書込)。
- *
- * P6 完成監査で見つけた「D1 にある通の `一次データ｜yuho-quant` 行が無い」
- * ギャップを埋める。D1 行は既存のため再取込はせず、EDINET から ZIP を
- * 取り直して `recordPrimaryData()` (唯一の窓口。ルール6) で記録する。
- * 既記録の通はスキップ (冪等・再開可能)。
- *
- * 冪等・再開可能: type 別 key (`{docID}:type1/5`) の完全一致で既存判定する。
- *
- * 必要env(.env): EDINET_API_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID,
- *               D1_DATABASE_ID, NOTION_*(ルール6)。
- *
- * 実行: pnpm yuho:repair:zip -- --doc=S100XXXX,S100YYYY [--force]
- */
-import "dotenv/config";
+/** Source-only finite repair. A physical native date-list receipt is mandatory; D1 never supplies raw metadata. */
+import { createHash } from "node:crypto";
+import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { eq } from "drizzle-orm";
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
+import { stocks } from "../../../src/shared/db/core-schema.js";
 import { recordEdinetZip } from "../src/services/edinet/archive.js";
-import {
-  downloadDocument,
-  EdinetNotFoundError,
-  EdinetDocumentFetchError,
-  EdinetDocumentArchiveError,
-} from "../src/services/edinet/client.js";
+import { edinetArchiveMetadata } from "../src/services/edinet/archive-metadata.js";
+import { listSnapshotSchema, readListSnapshot, type ListSnapshot } from "../src/services/edinet/list-snapshot.js";
+import { loadEdinetTickerMap } from "../src/services/edinet/identity.js";
+import { assertReportedDocumentUsable, reportedDocumentMetadata, reportedStandaloneHold } from "../src/services/edinet/reported-changes.js";
+import { isAnnualSecuritiesReport, parseSubmitDateTime, resolveReportPeriodEnd, secCodeToTicker, type EdinetDoc } from "../src/services/edinet/types.js";
+import { downloadDocument, EdinetNotFoundError, EdinetDocumentFetchError, EdinetDocumentArchiveError } from "../src/services/edinet/client.js";
 import * as yuhoSchema from "../src/db/schema.js";
 
-const arg = (n: string) =>
-  process.argv.find((a) => a.startsWith(`--${n}=`))?.split("=")[1];
-const force = process.argv.includes("--force");
-const docIds = arg("doc")
-  ? arg("doc")!
-      .split(",")
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0)
-  : [];
-if (docIds.length === 0) {
-  console.error("usage: --doc=DOCID[,DOCID...] [--force]");
-  process.exit(2);
+export class ZipRepairQualificationError extends Error {
+  constructor(readonly code: string) { super(code); this.name = "ZipRepairQualificationError"; }
+}
+function requireSource(condition: unknown, code: string): asserts condition {
+  if (!condition) throw new ZipRepairQualificationError(code);
+}
+export function zipRepairArguments(args: string[]) {
+  const values = new Map<string, string>();
+  for (const arg of args) {
+    const match = /^--(doc|source-snapshot|source-snapshot-sha256)=(.+)$/.exec(arg);
+    requireSource(match && !values.has(match[1]), "arguments_invalid");
+    values.set(match[1], match[2]);
+  }
+  const docIds = values.get("doc")?.split(",");
+  const sourceSnapshot = values.get("source-snapshot"), sourceSnapshotSha256 = values.get("source-snapshot-sha256");
+  requireSource(docIds && docIds.length > 0 && docIds.length <= 5 && new Set(docIds).size === docIds.length &&
+    docIds.every(id => /^S[0-9A-Z]{7}$/.test(id)) && sourceSnapshot && sourceSnapshotSha256 &&
+    /^[a-f0-9]{64}$/.test(sourceSnapshotSha256), "arguments_invalid");
+  return { docIds, sourceSnapshot, sourceSnapshotSha256 };
+}
+function readReceipt(path: string, expectedSha256: string): ListSnapshot {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const stat = fstatSync(fd);
+    requireSource(stat.isFile() && stat.uid === process.getuid?.() && (stat.mode & 0o777) === 0o600 && stat.size <= 65_536,
+      "snapshot_receipt_invalid");
+    const bytes = readFileSync(fd);
+    requireSource(bytes.length === stat.size && createHash("sha256").update(bytes).digest("hex") === expectedSha256,
+      "snapshot_receipt_sha_mismatch");
+    return listSnapshotSchema.parse(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
+  } finally { closeSync(fd); }
+}
+type SavedDocument = Pick<typeof yuhoSchema.yuhoDocuments.$inferSelect,
+  "docId" | "edinetCode" | "filerName" | "docTypeCode" | "periodStart" | "periodEnd" | "submittedAt"> & { stockCode: string };
+
+/** Native issuer, period and submission clock must agree with the existing document; none is reconstructed. */
+export function qualifyZipRepairSource(doc: EdinetDoc, row: SavedDocument, snapshot: ListSnapshot) {
+  requireSource(isAnnualSecuritiesReport(doc) && !reportedStandaloneHold(doc) && doc.withdrawalStatus === "0" &&
+    doc.docInfoEditStatus === "0" && doc.disclosureStatus === "0" && doc.csvFlag === "1", "source_state_unqualified");
+  const periodEnd = resolveReportPeriodEnd(doc);
+  requireSource(periodEnd !== null && doc.docID === row.docId && doc.edinetCode === row.edinetCode &&
+    doc.filerName === row.filerName && doc.docTypeCode === row.docTypeCode && doc.periodStart === row.periodStart &&
+    periodEnd === row.periodEnd && secCodeToTicker(doc.secCode) === row.stockCode, "source_identity_mismatch");
+  requireSource(doc.submitDateTime !== null && /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}$/.test(doc.submitDateTime) &&
+    snapshot.date === doc.submitDateTime.slice(0, 10) && row.submittedAt instanceof Date &&
+    Number.isFinite(row.submittedAt.getTime()) && parseSubmitDateTime(doc.submitDateTime).getTime() === row.submittedAt.getTime(),
+    "source_submission_mismatch");
+  return { ...edinetArchiveMetadata(doc, periodEnd), ...reportedDocumentMetadata(doc),
+    sourceListSnapshot: snapshot, repairedBy: "source-qualified-zip-repair-v1" };
 }
 
-const db = createD1HttpDb(yuhoSchema);
-const { yuhoDocuments } = yuhoSchema;
+// Every physical archive failure stops the whole finite run, including ordinary type5/type1 and readback unknowns.
+async function archive(input: Parameters<typeof recordEdinetZip>[0]) {
+  try { return await recordEdinetZip(input); }
+  catch (cause) { throw new EdinetDocumentArchiveError({ cause }); }
+}
 
-const tally: Record<string, number> = {
-  recorded: 0,
-  skipped_existing: 0,
-  unknown_doc: 0,
-  edinet_not_found: 0,
-  error: 0,
-};
-for (const docId of docIds) {
-  const rows = await db
-    .select({
-      edinetCode: yuhoDocuments.edinetCode,
-      filerName: yuhoDocuments.filerName,
-      docTypeCode: yuhoDocuments.docTypeCode,
-      periodEnd: yuhoDocuments.periodEnd,
-      submittedAt: yuhoDocuments.submittedAt,
-    })
-    .from(yuhoDocuments)
-    .where(eq(yuhoDocuments.docId, docId))
-    .limit(1);
-  const row = rows[0];
-  if (!row) {
-    console.warn(`[zip-repair] skip(未知の文書ID) ${docId}`);
-    tally.unknown_doc += 1;
-    continue;
+export async function repairZipArchives(options: ReturnType<typeof zipRepairArguments>) {
+  const snapshot = readReceipt(options.sourceSnapshot, options.sourceSnapshotSha256);
+  requireSource(snapshot.qualified && snapshot.httpStatus === 200, "snapshot_unqualified");
+  const list = await readListSnapshot(snapshot);
+  const db = createD1HttpDb(yuhoSchema), { yuhoDocuments } = yuhoSchema;
+  const qualified: Array<{ doc: EdinetDoc; metadata: ReturnType<typeof qualifyZipRepairSource> }> = [];
+  // Qualify the entire explicitly requested subset before the first new ZIP GET or archive write.
+  for (const docId of options.docIds) {
+    const candidates = list.results.filter(doc => doc.docID === docId);
+    requireSource(candidates.length === 1, "snapshot_document_not_unique");
+    const rows = await db.select({ docId: yuhoDocuments.docId, edinetCode: yuhoDocuments.edinetCode,
+      filerName: yuhoDocuments.filerName, docTypeCode: yuhoDocuments.docTypeCode, periodStart: yuhoDocuments.periodStart,
+      periodEnd: yuhoDocuments.periodEnd, submittedAt: yuhoDocuments.submittedAt, stockCode: stocks.code })
+      .from(yuhoDocuments).innerJoin(stocks, eq(stocks.id, yuhoDocuments.stockId))
+      .where(eq(yuhoDocuments.docId, docId)).limit(2);
+    requireSource(rows.length === 1, "existing_document_not_unique");
+    const metadata = qualifyZipRepairSource(candidates[0], rows[0], snapshot);
+    requireSource((await loadEdinetTickerMap(db, [rows[0].edinetCode])).get(rows[0].edinetCode) === rows[0].stockCode,
+      "current_issuer_mismatch");
+    await assertReportedDocumentUsable(db, docId);
+    qualified.push({ doc: candidates[0], metadata });
   }
-  try {
+  const tally = { recorded: 0, skipped_existing: 0, edinet_not_found: 0 };
+  for (const { doc, metadata } of qualified) {
+    // A changed/withdrawn observation arriving during qualification must not be ignored.
+    await assertReportedDocumentUsable(db, doc.docID);
     let csvZip: Awaited<ReturnType<typeof downloadDocument>>;
-    let csvFetchedAt: string;
-    try {
-      csvZip = await downloadDocument(docId, 5);
-      csvFetchedAt = new Date().toISOString();
-    } catch (e) {
-      if (e instanceof EdinetNotFoundError) {
-        console.warn(`[zip-repair] skip(EDINETに無い) ${docId}`);
-        tally.edinet_not_found += 1;
-        continue;
-      }
-      throw e;
+    try { csvZip = await downloadDocument(doc.docID, 5); }
+    catch (error) {
+      if (!(error instanceof EdinetNotFoundError)) throw error;
+      tally.edinet_not_found += 1; continue; // client already physically archived the known HTTP404
     }
+    const csvFetchedAt = new Date().toISOString();
     let xbrlZip: Awaited<ReturnType<typeof downloadDocument>> | null = null;
     let xbrlFetchedAt: string | null = null;
-    try {
-      xbrlZip = await downloadDocument(docId, 1);
-      xbrlFetchedAt = new Date().toISOString();
-    } catch (e) {
-      if (!(e instanceof EdinetNotFoundError)) {
-        if (e instanceof EdinetDocumentFetchError) {
-          try {await recordEdinetZip({service: "yuho-quant", docID: docId, type: 5, zip: csvZip,
-            source: `EDINET API v2 /documents/${docId}?type=5`, fetchedAt: csvFetchedAt,
-            metadata: {docID: docId, edinetCode: row.edinetCode, filerName: row.filerName,
-              docTypeCode: row.docTypeCode, periodEnd: row.periodEnd,
-              submitDateTime: row.submittedAt instanceof Date ? row.submittedAt.toISOString()
-                : new Date((row.submittedAt as unknown as number) * 1000).toISOString(),
-              repairedBy: "p6-zip-gap", ingestPhase: "partial-source", failedType: 1}, force});
-          } catch (cause) {throw new EdinetDocumentArchiveError({cause});}
-        }
-        throw e;
+    try { xbrlZip = await downloadDocument(doc.docID, 1); xbrlFetchedAt = new Date().toISOString(); }
+    catch (error) {
+      if (!(error instanceof EdinetNotFoundError)) {
+        // Close already received CSV before stopping a known type1 source failure. Archive unknown stops immediately.
+        if (error instanceof EdinetDocumentFetchError) await archive({ service: "yuho-quant", docID: doc.docID, type: 5,
+          zip: csvZip, source: `EDINET API v2 /documents/${doc.docID}?type=5`, fetchedAt: csvFetchedAt,
+          metadata: { ...metadata, ingestPhase: "partial-source", failedType: 1 }, force: false });
+        throw error;
       }
     }
-    const submittedAt =
-      row.submittedAt instanceof Date
-        ? row.submittedAt
-        : new Date((row.submittedAt as unknown as number) * 1000);
-    // type 別 key で各実体を記録する (共通契約)。各 key の既存は
-    // recordPrimaryData 側で冪等スキップし、Type5 済みは Type1 を抑止しない。
-    const metadata = {
-      docID: docId,
-      edinetCode: row.edinetCode,
-      filerName: row.filerName,
-      docTypeCode: row.docTypeCode,
-      periodEnd: row.periodEnd,
-      submitDateTime: submittedAt.toISOString(),
-      repairedBy: "p6-zip-gap",
-      // XBRL 未取得 (EdinetNotFound) = 公式未提供の文書化。T1 行不在時の
-      // not-applicable 判定が同通 T5 行のこの flag を見る。
-      xbrlUnavailable: xbrlZip === null,
-    };
-    const r5 = await recordEdinetZip({
-      service: "yuho-quant",
-      docID: docId,
-      type: 5,
-      zip: csvZip,
-      source: `EDINET API v2 /documents/${docId}?type=5`,
-      fetchedAt: csvFetchedAt,
-      metadata,
-      force,
-    });
+    const completeMetadata = { ...metadata, xbrlUnavailable: xbrlZip === null };
+    const r5 = await archive({ service: "yuho-quant", docID: doc.docID, type: 5, zip: csvZip,
+      source: `EDINET API v2 /documents/${doc.docID}?type=5`, fetchedAt: csvFetchedAt, metadata: completeMetadata, force: false });
     let r1Outcome = "skipped_no_xbrl";
-    if (xbrlZip) {
-      if (xbrlFetchedAt === null) throw new Error("XBRL受信完了時刻がありません");
-      const r1 = await recordEdinetZip({
-        service: "yuho-quant",
-        docID: docId,
-        type: 1,
-        zip: xbrlZip,
-        source: `EDINET API v2 /documents/${docId}?type=1`,
-        fetchedAt: xbrlFetchedAt,
-        metadata,
-        force,
-      });
+    if (xbrlZip !== null) {
+      requireSource(xbrlFetchedAt !== null, "xbrl_clock_missing");
+      const r1 = await archive({ service: "yuho-quant", docID: doc.docID, type: 1, zip: xbrlZip,
+        source: `EDINET API v2 /documents/${doc.docID}?type=1`, fetchedAt: xbrlFetchedAt, metadata: completeMetadata, force: false });
       r1Outcome = r1.outcome;
     }
-    console.info(`[zip-repair] ${docId}: t5=${r5.outcome} t1=${r1Outcome}`);
-    tally[
-      r5.outcome === "recorded" || r1Outcome === "recorded"
-        ? "recorded"
-        : "skipped_existing"
-    ] += 1;
-  } catch (e) {
-    tally.error += 1;
-    console.warn(`[zip-repair] 失敗 ${docId}: ${(e as Error).message}`);
-    if (e instanceof EdinetDocumentFetchError || e instanceof EdinetDocumentArchiveError) throw e;
+    tally[r5.outcome === "recorded" || r1Outcome === "recorded" ? "recorded" : "skipped_existing"] += 1;
   }
+  return tally;
 }
 
-console.info("[zip-repair] 完了: " + Object.entries(tally).map(([k, v]) => `${k}=${v}`).join(" "));
-if (tally.unknown_doc + tally.edinet_not_found + tally.error > 0) {
-  process.exitCode = 1;
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  try {
+    const tally = await repairZipArchives(zipRepairArguments(process.argv.slice(2)));
+    console.info("[zip-repair] " + JSON.stringify(tally));
+    if (tally.edinet_not_found > 0) process.exitCode = 1;
+  } catch (error) {
+    const code = error instanceof ZipRepairQualificationError ? error.code :
+      error instanceof EdinetDocumentArchiveError ? "archive_unclosed_no_retry" :
+      error instanceof EdinetDocumentFetchError ? "source_failed_no_retry" : "repair_stopped_no_retry";
+    console.error(`[zip-repair] ${code}`); process.exitCode = 1;
+  }
 }

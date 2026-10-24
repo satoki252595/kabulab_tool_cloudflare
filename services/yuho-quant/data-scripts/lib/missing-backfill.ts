@@ -20,6 +20,7 @@ import {
 } from "../../src/db/schema.js";
 import { EdinetNotFoundError, EdinetDocumentFetchError, EdinetDocumentArchiveError } from "../../src/services/edinet/client.js";
 import { reportedDocumentMetadata, reportedStandaloneHold, assertReportedDocumentUsable, ReportedDocumentHoldError, reportedDocumentAtomicGuard } from "../../src/services/edinet/reported-changes.js";
+import { edinetArchiveMetadata } from "../../src/services/edinet/archive-metadata.js";
 import { parseEdinetCsvZip } from "../../src/services/edinet/csv.js";
 import {
   parseOrderData,
@@ -238,6 +239,7 @@ export async function processMissingDoc(
       deps.tally("skipped_no_period");
       return;
     }
+    const sourceMetadata = edinetArchiveMetadata(doc, periodEnd);
     const csvZip = await deps.downloadDocument(doc.docID, 5);
     const csvFetchedAt = new Date().toISOString();
     let hasOrder = false;
@@ -266,9 +268,7 @@ export async function processMissingDoc(
           if (e instanceof EdinetDocumentFetchError) {
             try {await deps.recordEdinetZip({service: "yuho-quant", docID: doc.docID, type: 5, zip: csvZip,
               source: `EDINET API v2 /documents/${doc.docID}?type=5`, fetchedAt: csvFetchedAt,
-              metadata: {docID: doc.docID, edinetCode: doc.edinetCode, secCode: doc.secCode,
-                filerName: doc.filerName, docTypeCode: doc.docTypeCode, periodEnd,
-                submitDateTime: doc.submitDateTime, ingestPhase: "partial-source", failedType: 1}});
+              metadata: {...sourceMetadata, ingestPhase: "partial-source", failedType: 1}});
             } catch (cause) {throw new EdinetDocumentArchiveError({cause});}
           }
           throw e;
@@ -346,10 +346,8 @@ export async function processMissingDoc(
     // DB batch より先に置く: 記録に失敗したら D1 は旧値のまま残り再実行できる。
     const submittedAt = parseSubmitDateTime(doc.submitDateTime);
     const metadata = {
-      docID: doc.docID, edinetCode: doc.edinetCode, secCode: doc.secCode,
-      filerName: doc.filerName, docTypeCode: doc.docTypeCode,
-      docDescription: doc.docDescription, periodStart: doc.periodStart,
-      periodEnd, submitDateTime: doc.submitDateTime,
+      ...sourceMetadata,
+      docDescription: doc.docDescription,
       ...reportedDocumentMetadata(doc),
       parseStatus, honbunFile, factCount: deduped.length,
       overseasParseStatus, overseasHonbunFile, overseasFactCount: overseasFacts.length,

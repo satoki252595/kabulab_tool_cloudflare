@@ -72,7 +72,12 @@ it.each(["force", "pointer-missing"] as const)("failed CSV reingest preserves al
     const raw = vi.mocked(recordEdinetZip).mock.calls[0]![0];
     expect(raw.type).toBe(5); expect(Buffer.from(raw.zip).equals(zip)).toBe(true);
     expect(raw.force).toBe(mode === "force");
-    expect(raw.metadata).toMatchObject({ docID: doc.docID, ingestPhase: "csv-reingest-rejected", csvParseStatus: "parse_error" });
+    expect(raw.metadata).toMatchObject({
+      docID: doc.docID, edinetCode: doc.edinetCode, secCode: doc.secCode,
+      filerName: doc.filerName, docTypeCode: doc.docTypeCode, periodStart: doc.periodStart,
+      periodEnd: doc.periodEnd, submitDateTime: doc.submitDateTime,
+      ingestPhase: "csv-reingest-rejected", csvParseStatus: "parse_error",
+    });
     // An archive unknown must propagate identically and must not be relabelled as a known CSV stop.
     const unknown = new Error("declared archive unknown transport fault");
     vi.mocked(recordEdinetZip).mockRejectedValueOnce(unknown);
