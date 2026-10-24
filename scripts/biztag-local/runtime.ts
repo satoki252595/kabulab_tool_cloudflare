@@ -104,7 +104,10 @@ async function withCanonicalPublishingInitialization(execute: (baseline: unknown
 }
 
 export async function initializePublishingFromMac(): Promise<void> {
-  await withCanonicalPublishingInitialization((baseline, cursors) => initializeSharedPublishingWriter(baseline, publishingStore(), cursors));
+  await withCanonicalPublishingInitialization((baseline, cursors, state) => {
+    if (existsSync(join(state, "shared-publishing-initialization-fence.intent.json"))) throw new Error("既存fence intentを通常初期化で迂回しません");
+    return initializeSharedPublishingWriter(baseline, publishingStore(), cursors);
+  });
 }
 
 /** The failed attempt stays unknown. This explicit cutover fences its terminal authority instead of retrying it. */

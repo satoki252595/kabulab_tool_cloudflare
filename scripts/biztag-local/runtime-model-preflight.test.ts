@@ -6,8 +6,8 @@ import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { assertClefJournalReady, createClefJournal, type ClefJournalInput } from "./clef-journal.js";
-import { fencePublishingInitializationFromMac, withBiztagWriter } from "./runtime.js";
-import { fenceUnconfirmedPublishingInitialization } from "../mechanical-publishing/shared-writer.js";
+import { fencePublishingInitializationFromMac, initializePublishingFromMac, withBiztagWriter } from "./runtime.js";
+import { fenceUnconfirmedPublishingInitialization, publishingStore } from "../mechanical-publishing/shared-writer.js";
 import { initializationMode } from "../mechanical-publishing/initialize.js";
 
 const io = vi.hoisted(() => ({ directory: "", locked: false, gets: 0, puts: 0, version: 0, body: "", etag: "", order: [] as string[], fsyncActual: (_fd: number) => {} }));
@@ -30,7 +30,7 @@ vi.mock("node:child_process", async original => {
 });
 vi.mock("../mechanical-publishing/shared-writer.js", async original => {
   const actual = await original<typeof import("../mechanical-publishing/shared-writer.js")>();
-  return { ...actual, fenceUnconfirmedPublishingInitialization: vi.fn<typeof actual.fenceUnconfirmedPublishingInitialization>(async () => { throw new Error("offline fence boundary"); }),
+  return { ...actual, publishingStore: vi.fn(actual.publishingStore), fenceUnconfirmedPublishingInitialization: vi.fn<typeof actual.fenceUnconfirmedPublishingInitialization>(async () => { throw new Error("offline fence boundary"); }),
     withSharedPublishingWriter: (execute: () => Promise<unknown>) => actual.withSharedPublishingWriter(execute, {
     async get() { io.gets++; io.order.push("r2-get"); return { body: io.body, etag: io.etag }; },
     async put(_key, body, etag) { expect(etag).toBe(io.etag); io.puts++; io.body = body; io.etag = `version-${++io.version}`; },
@@ -47,6 +47,7 @@ beforeEach(() => {
     body: JSON.stringify({ version: 1, baselineSha256: "0".repeat(64), owner: null, pending: null }) + "\n" });
   Object.defineProperty(process, "platform", { value: "darwin" }); Object.defineProperty(process, "arch", { value: "arm64" });
   vi.mocked(fsyncSync).mockClear().mockImplementation(io.fsyncActual);
+  vi.mocked(publishingStore).mockClear();
   vi.mocked(fenceUnconfirmedPublishingInitialization).mockClear().mockImplementation(async () => { throw new Error("offline fence boundary"); });
 });
 afterEach(() => {
@@ -121,6 +122,15 @@ it("explicit fence fixes exact inputs durably before the shared helper and refus
   await expect(fencePublishingInitializationFromMac(log.hash)).rejects.toThrow("EEXIST");
   expect(fenceUnconfirmedPublishingInitialization).toHaveBeenCalledOnce(); expect(readFileSync(intentPath)).toEqual(before);
   expect(readFileSync(log.path, "utf8")).toBe(log.body); expect(io.gets + io.puts).toBe(0);
+});
+it("normal initialization cannot bypass an existing fence intent before creating a shared store", async () => {
+  failedMigrationLog();
+  const path = join(state, "shared-publishing-initialization-fence.intent.json"), body = "offline retained fence intent\n";
+  writeFileSync(path, body, { mode: 0o600 });
+  await expect(initializePublishingFromMac()).rejects.toThrow("既存fence intent");
+  expect(io.locked).toBe(true); expect(publishingStore).not.toHaveBeenCalled();
+  expect(fenceUnconfirmedPublishingInitialization).not.toHaveBeenCalled(); expect(io.gets + io.puts).toBe(0);
+  expect(readFileSync(path, "utf8")).toBe(body);
 });
 it.each(["sha", "mode", "marker"])("invalid failed-log %s stops before intent or shared access", async kind => {
   const log = failedMigrationLog();
