@@ -214,6 +214,14 @@ function scoreRow(r: EdinetCsvRow, consolidatedNote: boolean): number {
   return s;
 }
 
+/** Same target allowlist as extraction; a matched empty element is not an absent element. */
+export function matchesTextSection(r: EdinetCsvRow, def: TextSectionDef): boolean {
+  const element = localName(r.elementId), title = normalizeTitle(r.itemName);
+  return element.endsWith("TextBlock") && (title === NORMALIZED_TITLES.get(def.key) ||
+    def.consolidatedElement === element && title === normalizeTitle(def.title.replace("財務諸表", "連結財務諸表")) ||
+    def.ifrs !== undefined && r.elementId === def.ifrs.elementId && title === normalizeTitle(def.ifrs.title));
+}
+
 /**
  * CSV 行から開示テキスト39項目を抜く。1 セクション最大 1 行。
  * マッチも抽出も純粋関数 (テスト容易・副作用なし)。
@@ -221,18 +229,16 @@ function scoreRow(r: EdinetCsvRow, consolidatedNote: boolean): number {
 export function extractTextSections(rows: EdinetCsvRow[]): ExtractedSection[] {
   const out: ExtractedSection[] = [];
   for (const def of TEXT_SECTIONS) {
-    const want = NORMALIZED_TITLES.get(def.key)!;
     const consolidatedTitle = def.consolidatedElement === undefined ? null
       : normalizeTitle(def.title.replace("財務諸表", "連結財務諸表"));
     let best: EdinetCsvRow | null = null;
     let bestScore = -1;
     for (const r of rows) {
       const element = localName(r.elementId);
-      if (!element.endsWith("TextBlock")) continue;
       const title = normalizeTitle(r.itemName);
       const consolidatedNote = element === def.consolidatedElement && title === consolidatedTitle;
       const ifrsNote = def.ifrs !== undefined && r.elementId === def.ifrs.elementId && title === normalizeTitle(def.ifrs.title);
-      if (title !== want && !consolidatedNote && !ifrsNote) continue;
+      if (!matchesTextSection(r, def)) continue;
       const s = scoreRow(r, consolidatedNote || ifrsNote);
       if (s > bestScore) {
         bestScore = s;
