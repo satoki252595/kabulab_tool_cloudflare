@@ -47,6 +47,14 @@ export function scheduledExecutionWindow(absoluteDeadline: number, nowMs: number
   return { deadline, sourceDeadline: deadline - closureMinutes * 60_000 };
 }
 
+/** 同jobの手動/月次入口。外部job時計のないSSHでは期限を補作しない。 */
+export function nativeJobExecutionWindow(nowMs: number, jobStartedAt: string | undefined,
+  timeoutMinutes: number, closureMinutes: number) {
+  if (jobStartedAt === undefined) return undefined;
+  return scheduledExecutionWindow(parseScheduledAt(jobStartedAt) + timeoutMinutes * 60_000,
+    nowMs, jobStartedAt, timeoutMinutes, closureMinutes);
+}
+
 /** 開始済み通信にも絶対期限を届ける。unknownを成功・再送可能へ変換しない。 */
 export function installScheduledDeadline(deadline: number, assertAllowed?: () => void): () => void {
   const assertActive = () => {

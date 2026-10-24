@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
-import { installScheduledDeadline, scheduledAtForDate, scheduledExecutionWindow } from "./scheduled-admission.js";
-import { scheduledStockSyncWindow, assertStockSyncSource } from "./stock-sync-window.js";
+import { installScheduledDeadline, nativeJobExecutionWindow, scheduledAtForDate, scheduledExecutionWindow } from "./scheduled-admission.js";
+import { scheduledStockSyncWindow, assertStockSyncSource, stockSyncExecutionWindow } from "./stock-sync-window.js";
 
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
@@ -20,6 +20,16 @@ it("株式は原本全量の閉鎖30分と後続600秒をnative360分の前へ�
   expect(window.deadline + 600_000).toBeLessThan(window.start + 360 * 60_000);
   const workflow = readFileSync(".github/workflows/stock-sync.yml", "utf8");
   expect(workflow).toContain("timeout-minutes: 360");
+  expect(workflow).toContain("uses: ./.github/actions/record-job-clock");
+});
+
+it.each([false, true])("手動/定時(%s)も実job時計からsource/閉鎖/sector600秒/終了5分をnative360分に収める", (scheduled) => {
+  const start = Date.parse(`2026-10-23T${scheduled ? "09:00" : "06:30"}:00.000Z`);
+  const window = stockSyncExecutionWindow("2026-10-23", scheduled, start + 60_000, new Date(start).toISOString());
+  expect(window.deadline - window.sourceDeadline).toBe(30 * 60_000);
+  expect(window.deadline + 600_000 + 5 * 60_000).toBeLessThanOrEqual(start + 360 * 60_000);
+  if (scheduled) expect(window.deadline).toBe(scheduledStockSyncWindow("2026-10-23").deadline);
+  else expect(window.deadline).toBe(start + 345 * 60_000);
 });
 
 it.each([0, 19, 60, 300])("VWAPは%d分遅れでも固定23:30・job native360分より先に閉鎖する", (delay) => {
@@ -39,6 +49,18 @@ it("SSHの同CLIは外部killが無いため固定期限を使い、誤ったjob
   expect(scheduledExecutionWindow(deadline, now, undefined, 360, 10).deadline).toBe(deadline);
   for (const started of ["", "invalid", new Date(now + 1).toISOString()]) {
     expect(() => scheduledExecutionWindow(deadline, now, started, 360, 10)).toThrow();
+  }
+});
+
+it("同job末尾の月次にも元jobの残時間だけを渡し、CLI開始時計へ更新しない", () => {
+  const start = "2026-10-23T06:30:00.000Z", at = Date.parse(start);
+  expect(nativeJobExecutionWindow(at + 340 * 60_000, start, 360, 10)).toEqual({
+    sourceDeadline: at + 345 * 60_000, deadline: at + 355 * 60_000,
+  });
+  expect(nativeJobExecutionWindow(at + 356 * 60_000, start, 360, 10)?.deadline).toBe(at + 355 * 60_000);
+  expect(nativeJobExecutionWindow(at, undefined, 360, 10)).toBeUndefined();
+  for (const value of ["", "invalid", new Date(at + 1).toISOString()]) {
+    expect(() => nativeJobExecutionWindow(at, value, 360, 10)).toThrow();
   }
 });
 

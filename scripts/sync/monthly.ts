@@ -17,10 +17,22 @@ import {
   createMonthlyRebuildDb,
   runMonthlyRebuild,
 } from "../../src/cron/monthly.js";
+import { sharedEnv } from "../../src/shared/env.js";
+import { installScheduledDeadline, nativeJobExecutionWindow, ScheduledSourceDeadlineError } from "../../src/shared/scheduled-admission.js";
 
 async function main(): Promise<void> {
+  const window = nativeJobExecutionWindow(Date.now(), sharedEnv.BATCH_JOB_STARTED_AT(), 360, 10);
+  const assertSource = () => {
+    if (window !== undefined && Date.now() >= window.sourceDeadline) {
+      throw new ScheduledSourceDeadlineError("月次再計算の新規取得予算がありません（未完）");
+    }
+  };
+  assertSource();
+  const restore = window === undefined ? undefined : installScheduledDeadline(window.deadline);
+  try {
   const db = createMonthlyRebuildDb();
-  await runMonthlyRebuild(db);
+  await runMonthlyRebuild(db, { beforeSourceRequest: assertSource });
+  } finally { restore?.(); }
 }
 
 main().catch((e) => {

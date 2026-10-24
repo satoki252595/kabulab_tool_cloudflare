@@ -52,8 +52,8 @@ import {
   type JssAnnualRow,
 } from "../shared/db/jss-financials.js";
 import { sharedEnv } from "../shared/env.js";
-import { installScheduledDeadline, scheduledAtForDate, scheduledMacroWindow, ScheduledSourceDeadlineError } from "../shared/scheduled-admission.js";
-import { assertStockSyncDeadline, assertStockSyncSource, assertStockSyncStart, stockSyncDeadline, stockSyncSourceDeadline, stockSyncRunDate } from "../shared/stock-sync-window.js";
+import { installScheduledDeadline, nativeJobExecutionWindow, scheduledAtForDate, scheduledMacroWindow, ScheduledSourceDeadlineError } from "../shared/scheduled-admission.js";
+import { assertStockSyncDeadline, assertStockSyncStart, stockSyncExecutionWindow, stockSyncRunDate } from "../shared/stock-sync-window.js";
 import {
   ensurePriceSyncDb,
   recordPriceSyncLog,
@@ -1252,18 +1252,24 @@ async function runDailySyncAndRecord(
     throw new Error("定時株式同期にはJP leg保存接続が必須です");
   }
   const rawRunId = priceSyncBatchRunId(startedAt);
+  const stockWindow = stockSyncExecutionWindow(targetDate, scheduledStocks, startedAt, sharedEnv.BATCH_JOB_STARTED_AT());
   const assertStockDeadline = () => {
     assertStockSyncDeadline(targetDate, Date.now(), scheduledStocks);
+    if (Date.now() >= stockWindow.deadline) throw new Error("株式jobの原本閉鎖期限です（未完・再送なし）");
   };
-  const assertStockSource = () => assertStockSyncSource(targetDate, Date.now(), scheduledStocks);
+  const assertStockSource = () => {
+    if (Date.now() >= stockWindow.sourceDeadline) {
+      throw new ScheduledSourceDeadlineError("株式の新規取得期限です。取得済み原本の閉鎖を優先し未取得は未完にします");
+    }
+  };
   // 定時の開始窓はscheduled_at。23:30の新規IOは実時計。
   if (scheduledStocks) {
     assertStockSyncStart(scheduledAtForDate(sharedEnv.SCHEDULED_AT(), targetDate, startedAt), targetDate);
-    assertStockDeadline();
-    assertStockSource();
   } else {
     assertStockSyncStart(startedAt);
   }
+  assertStockDeadline();
+  assertStockSource();
   // 母集団は価格取得とは独立して更新する。N225 の欠測で上場廃止の適用を止めない。
   // HOLD 残があれば不完全失敗を throw し、株価 fetch へ進まない。
   const overlay = await ensureUniverseOverlay(db, {
@@ -1396,7 +1402,7 @@ async function runDailySyncAndRecord(
   const queue = [...targets];
   const firstPassFailures: DailyRecoveryFailure<(typeof targets)[number]>[] =
     [];
-  const stockStartGate = createDailyStockStartGate(STOCK_START_INTERVAL_MS, stockSyncSourceDeadline(targetDate, scheduledStocks));
+  const stockStartGate = createDailyStockStartGate(STOCK_START_INTERVAL_MS, stockWindow.sourceDeadline);
   let succeeded = 0; // 当日金融・短期指標の更新数。全機能成功数は履歴HOLDを後で差し引く。
 
   // 年次は月曜 UTC の run でのみ書く (L-49)。年 1 回変わるものに毎日
@@ -1464,8 +1470,8 @@ async function runDailySyncAndRecord(
         });
       } catch (e) {
         if (isYahooSourceStop(e)) sourceStop = e instanceof Error ? e : new Error(String(e));
-        if (Date.now() >= stockSyncSourceDeadline(targetDate, scheduledStocks)) sourceStop = e instanceof Error ? e : new Error(String(e));
-        if (Date.now() >= stockSyncDeadline(targetDate, scheduledStocks)) custodyStop = e instanceof Error ? e : new Error(String(e));
+        if (Date.now() >= stockWindow.sourceDeadline) sourceStop = e instanceof Error ? e : new Error(String(e));
+        if (Date.now() >= stockWindow.deadline) custodyStop = e instanceof Error ? e : new Error(String(e));
         const msg = rootCauseMessage(e);
         stockStartGate.observeFailure(msg);
         firstPassFailures.push({ target, error: msg });
@@ -1537,7 +1543,7 @@ async function runDailySyncAndRecord(
   let recoveredStocks = 0;
   const recoveryAttempts = new Map<string, number>();
   const recoveryDeadlineMs = Math.min(startedAt + RECOVERY_TIME_BUDGET_MS,
-    stockSyncSourceDeadline(targetDate, scheduledStocks));
+    stockWindow.sourceDeadline);
   const recovery = await recoverTransientDailyFailures(
     recoveryTargets,
     async (recoveryTarget) => {
@@ -1605,7 +1611,7 @@ async function runDailySyncAndRecord(
         }
         recoveredStocks++;
       } catch (error) {
-        if (Date.now() >= stockSyncDeadline(targetDate, scheduledStocks)) custodyStop = error instanceof Error ? error : new Error(String(error));
+        if (Date.now() >= stockWindow.deadline) custodyStop = error instanceof Error ? error : new Error(String(error));
         // 2 パス目も 429 を尊重する (L-57)。初回と同じゲートへ観測を流す。
         stockStartGate.observeFailure(rootCauseMessage(error));
         throw error;
@@ -1731,12 +1737,7 @@ async function runDailySyncAndRecord(
 
   const elapsedSec = (Date.now() - startedAt) / 1000;
   if (marketContextOk === undefined) throw new Error("マクロ同期結果を確認できません");
-  if (Date.now() >= stockSyncDeadline(targetDate, scheduledStocks)) {
-    throw new Error(
-      `株式同期が ${targetDate} の${scheduledStocks ? "23:30 JST期限" : "翌06:00 JST基準"}を超えました。` +
-      "基準後の値は過去レポートに使えません。日次レポートの欠損と同期遅延を確認してください。"
-    );
-  }
+  assertStockDeadline();
   console.info(
     `[sync-daily] 完了: 成功=${fullySucceeded} 失敗=${failures.length} 当日更新=${succeeded} RSI履歴HOLD=${historyHolds.length} 所要=${elapsedSec.toFixed(1)}s`
   );
@@ -1818,13 +1819,23 @@ export async function runMarketContextSync(db: Db, jpLegStore?: MacroJpLegStore)
       throw new Error("定時マクロの保存期限22:00 UTCを超過しました");
     }
   }
+  const nativeWindow = nativeJobExecutionWindow(startedAt, sharedEnv.BATCH_JOB_STARTED_AT(), 360, 10);
+  let deadline = scheduled ? scheduledMacroWindow(targetDate).deadline : undefined;
+  let sourceDeadline = scheduled ? scheduledMacroWindow(targetDate).sourceDeadline : undefined;
+  if (nativeWindow !== undefined) {
+    deadline = deadline === undefined ? nativeWindow.deadline : Math.min(deadline, nativeWindow.deadline);
+    sourceDeadline = sourceDeadline === undefined ? nativeWindow.sourceDeadline : Math.min(sourceDeadline, nativeWindow.sourceDeadline);
+  }
   const assertSource = () => {
-    if (scheduled && Date.now() >= scheduledMacroWindow(targetDate).sourceDeadline) {
-      throw new ScheduledSourceDeadlineError("定時マクロの21:50 UTC新規取得期限です（未完）");
+    if (sourceDeadline !== undefined && Date.now() >= sourceDeadline) {
+      throw new ScheduledSourceDeadlineError("マクロの新規取得期限です（未完）");
     }
   };
+  const assertActive = () => {
+    if (deadline !== undefined && Date.now() >= deadline) throw new Error("マクロの原本閉鎖期限です（未完）");
+  };
   assertSource();
-  const restore = scheduled ? installScheduledDeadline(scheduledMacroWindow(targetDate).deadline) : undefined;
+  const restore = deadline === undefined ? undefined : installScheduledDeadline(deadline);
   try {
   const ny = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "numeric",
@@ -1854,7 +1865,7 @@ export async function runMarketContextSync(db: Db, jpLegStore?: MacroJpLegStore)
   }
   const saved = await archiveAndPersistMarketContext(db, startedAt, context.draft, context.collector,
     scheduled ? targetDate : undefined,
-    context.sourceStop ? () => { throw context.sourceStop; } : undefined, jpLeg?.reference);
+    () => { if (nativeWindow !== undefined) assertActive(); if (context.sourceStop) throw context.sourceStop; }, jpLeg?.reference);
   if (context.sourceStop) throw context.sourceStop;
   return saved;
   } finally { restore?.(); }

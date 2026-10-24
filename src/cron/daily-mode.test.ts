@@ -824,6 +824,16 @@ describe("定時マクロの予定日・開始窓・保存期限", () => {
     expect(calls).toEqual([]);
   });
 
+  it("手動all末尾のcontextも元jobの残source予算がなければJP読取/米国取得/D1を始めない", async () => {
+    vi.stubEnv("STOCK_SYNC_TARGET", "all");
+    vi.stubEnv("BATCH_JOB_STARTED_AT", new Date(Date.now() - 345 * 60_000).toISOString());
+    const { db, calls } = recordingDb();
+    await expect(runMarketContextSync(db, emptyJpStore)).rejects.toThrow("新規取得期限");
+    expect(jpLegModule.loadMacroJpLeg).not.toHaveBeenCalled();
+    expect(fetchChart).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
+
   it("予定日と原本確定日が一致すればcontextだけを保存する", async () => {
     mockMacro(ALIGNED);
     const { db, calls, params } = recordingDb();

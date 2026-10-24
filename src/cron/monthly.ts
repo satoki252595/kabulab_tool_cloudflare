@@ -75,7 +75,7 @@ export function createMonthlyRebuildDb() {
 
 export async function runMonthlyRebuild(
   db: Db,
-  deps: { collectOverlay?: OverlayCollectFn; sendOverlayBatch?: OverlayBatchSender } = {}
+  deps: { collectOverlay?: OverlayCollectFn; sendOverlayBatch?: OverlayBatchSender; beforeSourceRequest?: () => void } = {}
 ): Promise<MonthlyRebuildResult> {
   const startedAt = Date.now();
 
@@ -83,6 +83,7 @@ export async function runMonthlyRebuild(
   // HOLD 残があれば不完全失敗を throw し、再構築へ進まない。
   const overlay = await ensureUniverseOverlay(db, {
     eligibilityAsOf: runDateKeys(startedAt).runDate,
+    beforeSourceRequest: deps.beforeSourceRequest,
     collect:
       deps.collectOverlay ??
       withBasicEvidence((input) => collectUniverseOfficialEvents(input)),

@@ -724,12 +724,18 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
     expect(collectOfficialRightsCustody).not.toHaveBeenCalled();
   });
 
-  it("23時source停止でも実8303原本を閉鎖して正常金融writeを保存し、次銘柄は未取得のまま失敗する", async () => {
+  it.each(["scheduled", "manual"])("%sのsource停止でも実8303原本を閉鎖して正常金融writeを保存し、次銘柄は未取得のまま失敗する", async (mode) => {
     const db = freshDb(); seedTarget(1, "8303"); seedTarget(2, "1332");
     const date = "2026-10-14";
-    vi.mocked(Date.now).mockReturnValue(Date.parse(`${date}T13:59:59.000Z`));
-    vi.stubEnv("STOCK_SYNC_TARGET", "scheduled-stocks"); vi.stubEnv("SCHEDULED_DATE", date);
-    vi.stubEnv("SCHEDULED_AT", `${date}T09:00:00.000Z`);
+    const sourceStop = `${date}T${mode === "scheduled" ? "14:00:00" : "11:45:00"}.000Z`;
+    vi.mocked(Date.now).mockReturnValue(Date.parse(sourceStop) - 1000);
+    vi.stubEnv("STOCK_SYNC_TARGET", mode === "scheduled" ? "scheduled-stocks" : "stocks");
+    if (mode === "scheduled") {
+      vi.stubEnv("SCHEDULED_DATE", date);
+      vi.stubEnv("SCHEDULED_AT", `${date}T09:00:00.000Z`);
+    } else {
+      vi.stubEnv("BATCH_JOB_STARTED_AT", `${date}T06:30:00.000Z`);
+    }
     vi.mocked(fetchChart).mockImplementation(chartWithRaw(sessionChart(date)));
     vi.spyOn(jpLegModule, "captureMacroJpLeg").mockResolvedValue({ ok: true, reason: "JP leg transport projection" });
     const bodies = JSON.parse(gunzipSync(readFileSync(new URL("../shared/yahoo/fixtures/stock-daily-scopes-20261014.json.gz", import.meta.url))).toString());
@@ -737,7 +743,7 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
     const actual = await parseSavedStockRawData("8303", source);
     vi.mocked(fetchStockRawData).mockImplementationOnce(async (...args) => {
       await stockWithRaw(actual)(...args);
-      vi.mocked(Date.now).mockReturnValue(Date.parse(`${date}T14:00:00.000Z`));
+      vi.mocked(Date.now).mockReturnValue(Date.parse(sourceStop));
       return actual;
     });
     await expect(runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect,

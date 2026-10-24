@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { assertStockSyncDeadline, assertStockSyncStart, installStockSyncDeadline, scheduledStockSyncWindow, stockSyncRunDate } from "./stock-sync-window.js";
+import { assertStockSyncDeadline, assertStockSyncStart, installStockSyncDeadline, scheduledStockSyncWindow, stockSyncExecutionWindow, stockSyncRunDate } from "./stock-sync-window.js";
 
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
@@ -45,5 +45,20 @@ describe("通常株式UTC対象日と実clockの窓", () => {
       expect(native).toHaveBeenCalledTimes(1);
     } finally { restore(); }
     expect(globalThis.fetch).toBe(native);
+  });
+  it("手動Actionsもnative閉鎖の端で次HTTP0、SSHの旧絶対窓は維持する", async () => {
+    const date = "2026-10-14", jobStartedAt = `${date}T06:30:00.000Z`;
+    const { deadline } = stockSyncExecutionWindow(date, false, Date.parse(jobStartedAt), jobStartedAt);
+    expect(stockSyncExecutionWindow(date, false, deadline).deadline).toBe(Date.parse(`${date}T21:00:00.000Z`));
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(deadline - 1000);
+    const native = vi.fn<typeof fetch>(async () => new Response("known")); vi.stubGlobal("fetch", native);
+    const restore = installStockSyncDeadline(date, { scheduled: false, jobStartedAt });
+    try {
+      await fetch("https://example.invalid");
+      vi.setSystemTime(deadline);
+      expect(() => fetch("https://example.invalid", { method: "POST" })).toThrow("jobの原本閉鎖期限");
+      expect(native).toHaveBeenCalledTimes(1);
+    } finally { restore(); }
   });
 });

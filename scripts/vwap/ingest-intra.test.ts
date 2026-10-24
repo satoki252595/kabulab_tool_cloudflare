@@ -54,7 +54,7 @@ vi.mock("../../src/shared/notion-archive/index.js", () => ({
 }));
 vi.mock("../../src/shared/env.js", () => ({
   sharedEnv: {
-    BATCH_JOB_STARTED_AT: () => process.env.BATCH_JOB_STARTED_AT,
+    BATCH_JOB_STARTED_AT: () => process.env.BATCH_JOB_STARTED_AT?.trim() || undefined,
     LOCAL_OUT: () => undefined,
     R2_BUCKET: () => "test-bucket",
     R2_ACCOUNT_ID: () => "t",

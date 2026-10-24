@@ -79,6 +79,7 @@ jobs:
       NOTION_PRICE_SYNC_DB_ID: ${{ secrets.NOTION_PRICE_SYNC_DB_ID }}
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/record-job-clock
 
       - uses: pnpm/action-setup@v4
 

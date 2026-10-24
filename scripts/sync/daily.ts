@@ -28,7 +28,7 @@ import { r2GetVersion, r2Put } from "../vwap/lib/r2.js";
 import type { MacroJpLegStore } from "../../src/cron/macro-jp-leg.js";
 import { notionStats } from "../../src/shared/notion-archive/client.js";
 import { scheduledAtForDate } from "../../src/shared/scheduled-admission.js";
-import { assertStockSyncDeadline, assertStockSyncStart, installStockSyncDeadline, stockSyncDeadline } from "../../src/shared/stock-sync-window.js";
+import { assertStockSyncDeadline, assertStockSyncStart, installStockSyncDeadline, stockSyncExecutionWindow, stockSyncRunDate } from "../../src/shared/stock-sync-window.js";
 
 const MAX_CODES_PER_ERROR = 50;
 const MAX_ERROR_GROUPS = 20;
@@ -87,16 +87,22 @@ async function main(): Promise<void> {
     return;
   }
   let restore: (() => void) | undefined;
-  if (sharedEnv.STOCK_SYNC_TARGET() === "scheduled-stocks") {
-    const date = sharedEnv.SCHEDULED_DATE();
+  const scheduled = sharedEnv.STOCK_SYNC_TARGET() === "scheduled-stocks";
+  const jobStartedAt = sharedEnv.BATCH_JOB_STARTED_AT();
+  if (scheduled || jobStartedAt !== undefined) {
+    const date = scheduled ? sharedEnv.SCHEDULED_DATE() : stockSyncRunDate(Date.now());
     if (date === undefined) throw new Error("定時株式にはSCHEDULED_DATEが必須です");
-    assertStockSyncStart(scheduledAtForDate(sharedEnv.SCHEDULED_AT(), date, Date.now()), date);
-    restore = installStockSyncDeadline(date);
-    const assertActive = () => assertStockSyncDeadline(date, Date.now(), true);
+    if (scheduled) assertStockSyncStart(scheduledAtForDate(sharedEnv.SCHEDULED_AT(), date, Date.now()), date);
+    const { deadline } = stockSyncExecutionWindow(date, scheduled, Date.now(), jobStartedAt);
+    restore = installStockSyncDeadline(date, { scheduled, jobStartedAt });
+    const assertActive = () => {
+      assertStockSyncDeadline(date, Date.now(), scheduled);
+      if (Date.now() >= deadline) throw new Error("株式jobの原本閉鎖期限です（未完・再送なし）");
+    };
     jpLegStore.get = key => {
       assertActive();
       return r2GetVersion(key, { singleAttempt: true, beforeAttempt: assertActive,
-        abortSignal: AbortSignal.timeout(stockSyncDeadline(date, true) - Date.now()) });
+        abortSignal: AbortSignal.timeout(deadline - Date.now()) });
     };
     jpLegStore.put = (key, body, version) => { assertActive(); return r2Put(key, body, version); };
   }
