@@ -5,6 +5,7 @@ import { gunzipSync } from "node:zlib";
 import { collectOfficialRightsCustody } from "./rights-official-custody.js";
 import { recordPrimaryData, verifyArchivedAttachments } from "../shared/notion-archive/index.js";
 import { NotionUnknownResultError } from "../shared/notion-archive/client.js";
+import { ScheduledSourceDeadlineError } from "../shared/scheduled-admission.js";
 vi.mock("../shared/notion-archive/index.js", async original => ({ ...await original<typeof import("../shared/notion-archive/index.js")>(), recordPrimaryData: vi.fn(), verifyArchivedAttachments: vi.fn() }));
 const indexUrl = "https://www.jpx.co.jp/listing/others/ex-rights/index.html";
 const html = gunzipSync(readFileSync(new URL("../shared/jpx/__fixtures__/ex-rights-20261016/index.html.gz", import.meta.url))).toString("utf8");
@@ -47,6 +48,18 @@ it("取得失敗の実bodyもlossless保管しsource incompleteのまま、次XL
   expect(result).toMatchObject({ status: "incomplete", reason: "source", sourceCount: 1, completeSources: 0, physicalVerified: true });
   const files = vi.mocked(recordPrimaryData).mock.calls[0][0].files!;
   expect(gunzipSync(files[0].bytes).toString()).toBe(oneVersion); expect(send).toHaveBeenCalledTimes(1);
+});
+
+it("新source期限で次XLSを送らず、取得済みindexを不完全原本として物理保管する", async () => {
+  let count = 0;
+  const guard = () => { if (++count > 1) throw new ScheduledSourceDeadlineError("source deadline"); };
+  const result = await collectOfficialRightsCustody("2026-10-17", guard);
+  expect(result).toMatchObject({ status: "incomplete", reason: "source", physicalVerified: true });
+  expect(send).toHaveBeenCalledTimes(1); expect(recordPrimaryData).toHaveBeenCalledTimes(1);
+  const files = vi.mocked(recordPrimaryData).mock.calls[0][0].files!;
+  expect(Buffer.from(files[0].bytes).toString()).toBe(oneVersion);
+  expect(JSON.parse(new TextDecoder().decode(files.at(-1)!.bytes))).toMatchObject({ complete: false,
+    sources: [expect.objectContaining({ complete: true }), expect.objectContaining({ failure: "not-started", retainedBytes: null })] });
 });
 
 it("config欠測は取得0、index不明は原本保持、archive unknownは同run再送0", async () => {

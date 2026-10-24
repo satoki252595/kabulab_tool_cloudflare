@@ -31,6 +31,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 import re
 from datetime import date, datetime
 from urllib.parse import urljoin
@@ -144,7 +145,8 @@ def _cell_text(row: lxml.html.HtmlElement, klass: str) -> str:
 
 
 def fetch_list_pages(
-    settings: Settings, target_date: date
+    settings: Settings, target_date: date, *, before_fetch: Callable[[], None] | None = None,
+    on_raw: Callable[[RawArtifact], None] | None = None,
 ) -> list[tuple[RawArtifact, list[DisclosureRecord]]]:
     """指定日の一覧を全ページ取得する（1ページ=1原本 §5.1）。
 
@@ -156,6 +158,8 @@ def fetch_list_pages(
     known_pages = {1}
     page_no = 1
     while page_no <= MAX_PAGES and page_no in known_pages:
+        if before_fetch is not None:
+            before_fetch()
         url = page_url(target_date, page_no)
         try:
             resp = fetch(url)
@@ -186,6 +190,8 @@ def fetch_list_pages(
             license_tag=source_license(Source.TDNET),
             base_dir=settings.raw_data_dir,
         )
+        if on_raw is not None:
+            on_raw(artifact)
         records = parse_official_page(
             html_text, target_date, fetched_at=artifact.fetched_at
         )

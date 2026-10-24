@@ -1566,7 +1566,7 @@ function parseQuoteSummaryResponse(json: unknown, code: string): QuoteSummaryRes
 export async function fetchStockRawData(
   code: string,
   range = "5y",
-  options?: { onChartRaw?: FetchChartOptions["onRaw"]; onSummaryRaw?: FetchChartOptions["onRaw"]; stockDailyScopes?: true }
+  options?: { onChartRaw?: FetchChartOptions["onRaw"]; onSummaryRaw?: FetchChartOptions["onRaw"]; stockDailyScopes?: true; beforeRequest?: () => void }
 ): Promise<StockRawData & { rsiHistoryHold?: RsiHistoryHold }> {
   if (options?.stockDailyScopes) assertStockDailyScopeRequest(code, range, options.onChartRaw);
   if (!JP_STOCK_PATTERN.test(code)) {
@@ -1578,7 +1578,7 @@ export async function fetchStockRawData(
   // Yahoo に並列送信しない。制限なら相方を取得せず STOP。
   // 非制限の parse 失敗では従来どおり相方の原文を capture してから失敗を返す。
   const results = await Promise.allSettled([
-    fetchChart(code, range, { onRaw: options?.onChartRaw, stockDailyScopes: options?.stockDailyScopes }),
+    fetchChart(code, range, { onRaw: options?.onChartRaw, stockDailyScopes: options?.stockDailyScopes, beforeRequest: options?.beforeRequest }),
   ]);
   const chartAttempt = results[0];
   if (chartAttempt.status === "rejected" &&
@@ -1586,7 +1586,7 @@ export async function fetchStockRawData(
     throw chartAttempt.reason;
   }
   const summaryResults = await Promise.allSettled([
-    fetchQuoteSummary(code, { onRaw: options?.onSummaryRaw }),
+    fetchQuoteSummary(code, { onRaw: options?.onSummaryRaw, beforeRequest: options?.beforeRequest }),
   ]);
   // 相方のparse失敗に先行されても、原文超過のrun STOPを失わない。
   for (const result of [...results, ...summaryResults]) {

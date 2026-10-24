@@ -583,7 +583,8 @@ class TestWorkflowCrons:
         assert not re.search(r"^\s+schedule:", live, re.MULTILINE)
         assert "workflow_dispatch:" in live and "scheduled_at:" in live
         assert "SCHEDULED_AT: ${{ inputs.scheduled_at }}" in live
-        assert 'args+=(--scheduled-at "$SCHEDULED_AT")' in live
+        assert 'args+=(--scheduled-at "$SCHEDULED_AT" --job-started-at "$BATCH_JOB_STARTED_AT")' in live
+        assert "actions: read" in live and "uses: ./.github/actions/record-job-clock" in live
         assert f"jp_stock_pipeline.jobs.{name}" in live
         scheduler = (REPO_ROOT / "src/scheduler/timed.ts").read_text()
         assert re.search(r'cron:\s*"' + re.escape(cron) + r'"[^\n]+workflow:\s*"' + name + r'\.yml"', scheduler)

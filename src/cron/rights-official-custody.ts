@@ -21,13 +21,13 @@ export interface OfficialRightsCustody {
 }
 
 /** 同じ公表日でもbytes訂正は別key。元版をforceで置換しない。 */
-export async function collectOfficialRightsCustody(fetchedDateJST: string): Promise<OfficialRightsCustody> {
+export async function collectOfficialRightsCustody(fetchedDateJST: string, beforeSourceRequest?: () => void): Promise<OfficialRightsCustody> {
   const result: OfficialRightsCustody = { family: "jpx-ex-rights", status: "incomplete", reason: "configuration",
     financialQualification: "unqualified", sourceCount: 0, completeSources: 0, archiveKey: null, archivePageId: null, physicalVerified: false, error: null };
   let indexUrl: string;
   try { notionEnv.NOTION_TOKEN(); notionEnv.NOTION_ARCHIVE_PAGE_ID(); indexUrl = sharedEnv.JPX_EX_RIGHTS_URL(); assertExRightsIndexUrl(indexUrl); }
   catch (error) { result.error = rootCauseMessage(error); return result; }
-  const sources: ExRightsSource[] = [], index = await fetchExRightsSource(indexUrl, null); sources.push(index); result.reason = "source";
+  const sources: ExRightsSource[] = [], index = await fetchExRightsSource(indexUrl, null, beforeSourceRequest); sources.push(index); result.reason = "source";
   let complete = false;
   if (index.failure === null && index.bytes !== null) {
     let versions;
@@ -36,7 +36,7 @@ export async function collectOfficialRightsCustody(fetchedDateJST: string): Prom
     if (versions !== undefined) {
       complete = true;
       for (const version of versions) {
-        const source = await fetchExRightsSource(indexUrl, version); sources.push(source);
+        const source = await fetchExRightsSource(indexUrl, version, beforeSourceRequest); sources.push(source);
         if (source.failure !== null) { complete = false; break; }
       }
     }

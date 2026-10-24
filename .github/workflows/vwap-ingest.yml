@@ -68,6 +68,7 @@ concurrency:
   queue: max
 
 permissions:
+  actions: read
   contents: read
   issues: write  # 失敗時に Issue を立てるため
 
@@ -98,7 +99,7 @@ jobs:
       cancel-in-progress: false
       queue: max # pending同士の後着cancelを防ぐ。Yahoo取得は引き続き1 jobずつ。
     runs-on: ubuntu-latest
-    timeout-minutes: 300 # 原本保管追加後の全量時間は初回正常runで計測する。
+    timeout-minutes: 360 # CLIはこの外部終了の15分前にsource停止、5分前までに閉鎖。
     outputs:
       daily_exit: ${{ steps.prices.outputs.daily_exit }}
       daily_closed: ${{ steps.admission.outcome == 'success' && steps.prices.outputs.daily_closed }}
@@ -106,6 +107,7 @@ jobs:
       NOTION_MAX_RPS: ${{ (inputs.target == 'scheduled-margin' || inputs.target == 'margin') && '1.0' || '1.6' }}
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/record-job-clock
 
       - uses: pnpm/action-setup@v4 # packageManager (pnpm@9.15.9) を読む
 
@@ -275,13 +277,14 @@ jobs:
       cancel-in-progress: false
       queue: max
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 360
     outputs:
       intra_exit: ${{ steps.intra.outputs.intra_exit }}
     env:
       NOTION_MAX_RPS: "1.6"
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/record-job-clock
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:

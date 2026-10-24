@@ -15,6 +15,7 @@ concurrency:
   queue: max
 
 permissions:
+  actions: read
   contents: read
   issues: write  # 失敗時に Issue を立てるため
 
@@ -24,6 +25,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/record-job-clock
       - uses: DeterminateSystems/nix-installer-action@main
       - uses: DeterminateSystems/magic-nix-cache-action@main
         with:
@@ -48,7 +50,7 @@ jobs:
         run: |
           set -euo pipefail
           args=()
-          if [ -n "${SCHEDULED_AT:-}" ]; then args+=(--scheduled-at "$SCHEDULED_AT"); fi
+          if [ -n "${SCHEDULED_AT:-}" ]; then args+=(--scheduled-at "$SCHEDULED_AT" --job-started-at "$BATCH_JOB_STARTED_AT"); fi
           nix develop -c bash -c 'cd pipeline && uv run python -m jp_stock_pipeline.jobs.supply_daily --require-cloud "$@"' _ "${args[@]}"
 
       - name: 失敗したら Issue を立てる

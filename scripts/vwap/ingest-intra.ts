@@ -16,6 +16,7 @@ import { proveIntraRecoveryCapture, resolveIntraRecoveryWindow, type IntraRecove
 import { scheduledVwapGuard } from "./lib/scheduled-window.js";
 import { jstDateSec, type IntraSourceStatus } from "../../src/shared/vwap/proof.js";
 import { notionStats } from "../../src/shared/notion-archive/client.js";
+import { ScheduledSourceDeadlineError } from "../../src/shared/scheduled-admission.js";
 
 export async function main() {
   const startedAt = new Date().toISOString();
@@ -25,7 +26,11 @@ export async function main() {
       new Set(only.split(",")).size !== only.split(",").length || arg("limit") !== undefined)) {
     throw new Error("有限5分足は重複のない1〜100コードを明示し、limitを併用しないでください");
   }
-  const schedule = scheduledVwapGuard({ plannedDate: arg("scheduled-date"), runId, phase: "intra", maxStartSeconds });
+  const schedule = scheduledVwapGuard({ plannedDate: arg("scheduled-date"), runId, phase: "intra", maxStartSeconds,
+    jobStartedAt: sharedEnv.BATCH_JOB_STARTED_AT() });
+  const restore = schedule.installDeadline();
+  try {
+  schedule.assertSource();
   // knob は main 内で型付き取得する (未設定・不正値は final catch で exit 2)。
   // 通常値は vwap-ingest.yml・.env.example で明示宣言。黙示既定なし。
   const { delayMs: DELAY, keepDays: KEEP_DAYS } = sharedEnv.vwapKnobs();
@@ -50,6 +55,15 @@ export async function main() {
   const CONC = 1; // Yahoo取得は環境変数によらず直列。実HTTP間隔は共有clientで制御。
   let written = 0, empty = 0, errors = 0, rateLimited = 0, invalid = 0, skipped = 0, done = 0;
   let consecRL = 0, aborted = false, fatal = false;
+  let sourceStopped = false;
+  const sourceAllowed = () => {
+    try { schedule.assertSource(); return true; }
+    catch (error) {
+      if (!(error instanceof ScheduledSourceDeadlineError)) throw error;
+      sourceStopped = true;
+      return false;
+    }
+  };
   let rawCustodyError: unknown;
   let putBarrier: Promise<void> = Promise.resolve();
   const unknownCodes: string[] = [];
@@ -68,7 +82,8 @@ export async function main() {
       console.error(`  ${code}: R2 fault のため新規作業を停止します: ${sanitizeLogText(text).slice(0, 200)}`);
     }
   };
-  for (let offset = 0; offset < codes.length && !aborted && !fatal;) {
+  for (let offset = 0; offset < codes.length && !aborted && !fatal && !sourceStopped;) {
+    if (!sourceAllowed()) break;
     const batchStart = offset;
     let rawBytes = 0;
     const captures: YahooRawAttempt[] = [];
@@ -76,7 +91,7 @@ export async function main() {
     const writes: Array<() => Promise<void>> = [];
     // ponytail: 最大30銘柄まで先行取得し、Notion呼出しを減らす (PUT unknown検知前の取得済が最大30)。
     for (let wave = 0; wave < 30 && offset < codes.length && !aborted && !fatal &&
-      offset - batchStart < 30 && rawBytes < MAX_YAHOO_RAW_BYTES; wave++) {
+      offset - batchStart < 30 && rawBytes < MAX_YAHOO_RAW_BYTES && !sourceStopped; wave++) {
       const waveCodes = codes.slice(offset, offset + Math.min(CONC, 30 - (offset - batchStart)));
       offset += waveCodes.length;
       const captureStart = captures.length;
@@ -84,7 +99,7 @@ export async function main() {
         if (aborted || fatal) return;                        // ブロック/故障検知後は残りを叩かない
         await sleep(DELAY);
         if (aborted || fatal) return;                        // delay 後に再確認してから source へ
-        schedule.assertActive();
+        if (!sourceAllowed()) return;
         done++;
         // 途中で timeout kill されても進捗が分かるよう定期的に出す(60d バックフィルは長時間)。
         if (done % 500 === 0) console.info(JSON.stringify({ progress: done, total: codes.length, range: RANGE, written, empty, errors, rateLimited }));
@@ -95,13 +110,13 @@ export async function main() {
         try {
           fresh = await retry(async () => {
             if (fatal || aborted) throw new Error("新規Yahoo取得はraw/R2 faultまたはABORTで停止済みです");
-            schedule.assertActive();
+            schedule.assertSource();
             attempt++;
             let captured = false;
             try {
               let rawCapture: YahooRawCapture | undefined;
               const options = {
-                beforeRequest: schedule.assertActive,
+                beforeRequest: schedule.assertSource,
                 onRaw: (capture: YahooRawCapture) => {
                   captures.push({ api: "intra", attempt, capture });
                   rawCapture = capture;
@@ -132,8 +147,13 @@ export async function main() {
                 error: sanitizeLogText(e instanceof Error ? e.message : String(e)), failedAt: new Date().toISOString() });
               throw e;
             }
-          }, 1, 1000, () => !fatal && !aborted);
+          }, 1, 1000, error => !fatal && !aborted && !(error instanceof ScheduledSourceDeadlineError));
         } catch (e) {
+          if (e instanceof ScheduledSourceDeadlineError) {
+            sourceStopped = true;
+            outcomes[code] = { status: "notStarted", latestSourceBar: null, bodySha: null };
+            return;
+          }
           // 429/503の初回で全体を中断する。期限や連続数に関係なく同run再取得なし。
           if ((e as { name?: string })?.name === "YahooRateLimitError") {
             rateLimited++; consecRL++;
@@ -294,7 +314,7 @@ export async function main() {
   console.info(JSON.stringify({ codes: codes.length, range: RANGE, written, skipped, empty, errors, invalid, rateLimited, keepDays: KEEP_DAYS, aborted, fatal, unknown: unknown.length, rejected: rejected.length }));
   // run 粒度バッチ保管 (per-stock 鏡像は作らない)。通常 intra に必須接続。
   // 保管失敗は fatal exit 2 にする (未保管の成功なし)。
-  const summary = buildIngestSummary({ kind: "intra", range: RANGE, ...(sourceWindow === null ? {} : { sourceWindow }), runId, codes: codes.length, written, skipped, empty, errors, invalid, rateLimited, keepDays: KEEP_DAYS, aborted, startedAt, finishedAt, unknown, rejected, universe: universePin(codes), outcomes: sortedOutcomes });
+  const summary = buildIngestSummary({ kind: "intra", range: RANGE, ...(sourceWindow === null ? {} : { sourceWindow }), runId, codes: codes.length, written, skipped, empty, errors, invalid, rateLimited, keepDays: KEEP_DAYS, aborted: aborted || sourceStopped, startedAt, finishedAt, unknown, rejected, universe: universePin(codes), outcomes: sortedOutcomes });
   if (schedule.admission !== null) {
     summary.metadata.scheduledWindow = schedule.admission;
     const body = JSON.parse(new TextDecoder().decode(summary.files[0].bytes));
@@ -327,7 +347,8 @@ export async function main() {
   }
   // errors/invalid/rateLimited 計数があれば非0終了 (銘柄 PUT0 は上で確定済み)。
   // R2 fault (fatal) は 2。
-  process.exitCode = resolveExitCode({ aborted, fatalUnknown: fatal, errors, invalid, rateLimited });
+  process.exitCode = resolveExitCode({ aborted: aborted || sourceStopped, fatalUnknown: fatal, errors, invalid, rateLimited });
+  } finally { restore(); }
 }
 // loadCodes/config 等の想定外失敗は exit 2。sanitized 1 行のみ、再試行なし。
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

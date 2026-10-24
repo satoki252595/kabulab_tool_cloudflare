@@ -90,7 +90,7 @@ async function main(): Promise<void> {
   if (sharedEnv.STOCK_SYNC_TARGET() === "scheduled-stocks") {
     const date = sharedEnv.SCHEDULED_DATE();
     if (date === undefined) throw new Error("定時株式にはSCHEDULED_DATEが必須です");
-    assertStockSyncStart(scheduledAtForDate(sharedEnv.SCHEDULED_AT(), date), date);
+    assertStockSyncStart(scheduledAtForDate(sharedEnv.SCHEDULED_AT(), date, Date.now()), date);
     restore = installStockSyncDeadline(date);
     const assertActive = () => assertStockSyncDeadline(date, Date.now(), true);
     jpLegStore.get = key => {

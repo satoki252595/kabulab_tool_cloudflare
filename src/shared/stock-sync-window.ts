@@ -1,4 +1,5 @@
 /** 通常株式同期のUTC対象日・開始窓・書込期限。元の実時計を変更しない。 */
+import { ScheduledSourceDeadlineError } from "./scheduled-admission.js";
 export function stockSyncRunDate(startedAt: number): string {
   return new Date(startedAt).toISOString().split("T")[0];
 }
@@ -9,7 +10,18 @@ export function scheduledStockSyncWindow(date: string) {
       new Date(start).toISOString().slice(0, 10) !== date || [0, 6].includes(new Date(start).getUTCDay())) {
     throw new Error("定時株式の予定日が不正です");
   }
-  return { start, latestStart: start + 120 * 60_000, deadline: Date.parse(`${date}T14:30:00.000Z`) };
+  const deadline = Date.parse(`${date}T14:30:00.000Z`);
+  return { start, latestStart: start + 120 * 60_000, deadline, sourceDeadline: deadline - 30 * 60_000 };
+}
+
+export function stockSyncSourceDeadline(date: string, scheduled = false): number {
+  return scheduled ? scheduledStockSyncWindow(date).sourceDeadline : stockSyncDeadline(date);
+}
+
+export function assertStockSyncSource(date: string, now: number, scheduled = false): void {
+  if (!Number.isFinite(now) || now >= stockSyncSourceDeadline(date, scheduled)) {
+    throw new ScheduledSourceDeadlineError("株式の新規取得期限です。取得済み原本の閉鎖を優先し未取得は未完にします");
+  }
 }
 
 export function assertStockSyncStart(startedAt: number, scheduledDate?: string): void {

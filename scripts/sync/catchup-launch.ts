@@ -41,7 +41,7 @@ export function assertCatchupInvocation(part: CatchupPart, eventName: string | u
   const day = new Date(floor);
   const scheduledDate = new Date(scheduledMs).toISOString().slice(0, 10);
   // 19:00〜19:05はscheduled_at。19:53は実時計の後続締切。
-  if (!Number.isFinite(floor) || day.toISOString().slice(0, 10) !== date || day.getUTCDay() === 0 || day.getUTCDay() === 6 || scheduledDate !== date || scheduledMs > nowMs || nowMs >= cutoff || (part === "all" && (scheduledMs < floor || scheduledMs > floor + 5 * 60_000))) {
+  if (!Number.isFinite(floor) || day.toISOString().slice(0, 10) !== date || day.getUTCDay() === 0 || day.getUTCDay() === 6 || scheduledDate !== date || scheduledMs > nowMs || nowMs >= cutoff || scheduledMs < floor || scheduledMs > floor + 5 * 60_000) {
     throw new Error("catchupの予定日/平日/19:00〜19:05初回/19:53後続窓が一致しません（再送なし）");
   }
   return cutoff;

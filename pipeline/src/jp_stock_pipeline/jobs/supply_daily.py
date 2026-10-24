@@ -23,7 +23,7 @@ from ..licensing import LicenseTag
 from ..models import Provenance, Source, SupplyRecord, now_jst
 from ..rawstore import save_raw
 from .runner import JobContext, apply_limit, build_parser, main_exit, run_job
-from .scheduled import add_scheduled_argument, assert_scheduled_io, scheduled_target
+from .scheduled import add_scheduled_argument, assert_scheduled_io, assert_scheduled_source, scheduled_target
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ _LATEST_COLUMNS = (
 
 def _fetch_and_store(ctx: JobContext, name: str, datatype: str):
     """CSV を取得し ⑤原本として保存する。原本が残らなければ None。"""
-    assert_scheduled_io(ctx.args, now_jst())
+    assert_scheduled_source(ctx.args, now_jst())
     content = jsf.fetch_csv(name)
     artifact = save_raw(
         content,

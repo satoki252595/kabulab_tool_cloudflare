@@ -256,9 +256,11 @@ export async function parseDailyMarginPdf(
  * 指定日の場合は PDF 本文の基準日が一致しなければ throw する
  * (JPX 側の取り違えを別日の値として保存しない)。
  */
-export async function fetchDailyMargin(requestedDate?: string): Promise<MarginDailyData> {
+export async function fetchDailyMargin(requestedDate?: string, beforeSource?: () => void): Promise<MarginDailyData> {
+  beforeSource?.();
   const url =
     requestedDate === undefined ? await latestDailyMarginPdfUrl() : await dailyMarginPdfUrlForDate(requestedDate);
+  beforeSource?.();
   const buf = await (await fetch(url, { headers: { "User-Agent": UA } })).arrayBuffer();
   const bytes = new Uint8Array(buf);
   const rawSha256 = createHash("sha256").update(bytes).digest("hex");

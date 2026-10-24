@@ -42,6 +42,7 @@ concurrency:
   queue: max
 
 permissions:
+  actions: read # reusable moneyflowの実job開始時計にも必要。
   contents: read
   issues: write  # 失敗時に Issue を立てるため
 
@@ -53,7 +54,7 @@ jobs:
       cancel-in-progress: false
       queue: max # pending同士の後着cancelを防ぐ。Yahoo取得は引き続き1 jobずつ。
     runs-on: ubuntu-latest
-    timeout-minutes: 210
+    timeout-minutes: 360 # 23:00取得停止→23:30閉鎖。最早18時job開始より前に終了する。
     # 株式 step の実成功出力 (後続 moneyflow の起動条件)。step skip 時は空。
     outputs:
       trade_date: ${{ steps.daily.outputs.trade_date }}

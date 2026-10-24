@@ -30,7 +30,7 @@ from .runner import (
     main_exit,
     run_job,
 )
-from .scheduled import add_scheduled_argument, assert_scheduled_io, scheduled_target
+from .scheduled import add_scheduled_argument, assert_scheduled_io, assert_scheduled_source, scheduled_target
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ def _collect(ctx: JobContext, target_date: date) -> list[tuple[RawArtifact, list
 
     返り値: [(原本, records, doc_id→XBRL URL), ...]（公式は1ページ=1原本 §5.1）
     """
-    assert_scheduled_io(ctx.args, now_jst())
+    assert_scheduled_source(ctx.args, now_jst())
     target = target_date.strftime("%Y%m%d")
     artifact, records = tdnet_yanoshin.list_disclosures(
         ctx.settings, target, limit=YANOSHIN_LIMIT
@@ -55,13 +55,17 @@ def _collect(ctx: JobContext, target_date: date) -> list[tuple[RawArtifact, list
     convert_artifact(artifact, "json")  # §5.2 ペア保存 (JSON→CSV+Parquet)
     batches = [(artifact, records, tdnet_yanoshin.xbrl_url_map(payload))]
     if len(records) >= YANOSHIN_LIMIT:
+        # 次の上流取得より先に、取得済み一覧を物理保管する。
+        ctx.upload_raw(artifact, sha_map_date=target_date)
         logger.warning(
             "やのしん一覧が上限 %d 件に到達。公式TDnetページで補完する (§11)",
             YANOSHIN_LIMIT,
         )
         seen = {r.doc_id for r in records}
         for page_artifact, page_records in tdnet_official_fallback.fetch_list_pages(
-            ctx.settings, target_date
+            ctx.settings, target_date,
+            before_fetch=lambda: assert_scheduled_source(ctx.args, now_jst()),
+            on_raw=lambda raw: ctx.upload_raw(raw, sha_map_date=target_date),
         ):
             extra = [r for r in page_records if r.doc_id not in seen]
             seen |= {r.doc_id for r in extra}
@@ -84,7 +88,7 @@ def _process_financial_xbrl(
     master_resolved=True のとき master_id(事前①マップ由来)を ③ relation に使い、
     内部の find_stock_master_page(① per-record 検索)を省く (§8.3)。
     """
-    assert_scheduled_io(ctx.args, now_jst())
+    assert_scheduled_source(ctx.args, now_jst())
     resp = fetch(xbrl_url)
     artifact = save_raw(
         resp.content,
@@ -182,7 +186,6 @@ def execute(ctx: JobContext) -> None:
         and json.loads(batches[0][0].local_path.read_bytes())["items"] == []
     )
     if observed_empty:
-        assert_scheduled_io(ctx.args, now_jst())
         ctx.upload_raw(batches[0][0], sha_map_date=target_date)
         ctx.confirm_zero_work(STATUS_OBSERVED_EMPTY)
         return
@@ -227,7 +230,7 @@ def execute(ctx: JobContext) -> None:
             )
 
         for record in apply_limit(records, ctx.args.limit):
-            assert_scheduled_io(ctx.args, now_jst())
+            assert_scheduled_source(ctx.args, now_jst())
             record.provenance.raw_page_id = raw_page_id
             # ① relation 解決: 事前マップ優先(miss は relation 欠落のみ=benign)、未取得時は
             # per-record 検索へ degrade。検索失敗も relation 無しで本体は書く(§3-2)。

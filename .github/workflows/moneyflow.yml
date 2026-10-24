@@ -112,6 +112,7 @@ concurrency:
   queue: max
 
 permissions:
+  actions: read
   contents: read
   issues: write # 失敗時に Issue を立てるため
 
@@ -150,6 +151,7 @@ jobs:
       NOTION_MAX_RPS: "1.0"
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/record-job-clock
 
       - uses: pnpm/action-setup@v4 # packageManager (pnpm@9.15.9) を読む
 
@@ -200,6 +202,7 @@ jobs:
       NOTION_MAX_RPS: "1.6"
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/record-job-clock
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:

@@ -42,7 +42,7 @@ from .runner import (
     main_exit,
     run_job,
 )
-from .scheduled import add_scheduled_argument, assert_scheduled_io, scheduled_target
+from .scheduled import add_scheduled_argument, assert_scheduled_io, assert_scheduled_source, scheduled_target
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +140,7 @@ def _fetch_financial_tidy(
     tidy 変換の失敗では原本を失わない: convert_status=失敗 を記録して
     原本はそのまま ⑤ アップロードに進める (§5.2「変換失敗時も原本保存は成立」)。
     """
-    assert_scheduled_io(ctx.args, now_jst())
+    assert_scheduled_source(ctx.args, now_jst())
     if csv_flag == "1":
         artifact = edinet.fetch_document(
             ctx.settings, doc_id, 5, code=code, data_date=data_date
@@ -237,7 +237,7 @@ def _roa_table_original(
         edinet_code=issuer, fiscal_period_end=before.fiscal_period_end,
     )
     if full is None:
-        assert_scheduled_io(ctx.args, now_jst())
+        assert_scheduled_source(ctx.args, now_jst())
         full = edinet.fetch_document(
             ctx.settings, doc_id, 1, code=artifact.scope, data_date=artifact.data_date
         )
@@ -289,7 +289,7 @@ def load_issuer_codelist(ctx: JobContext, not_before: date) -> RawArtifact:
     """通常の保存loader→明示不足時だけ公式1 ZIP→共通物理archive。"""
     artifact = saved_edinet.read_saved_codelist(ctx.client, ctx.settings, not_before=not_before)
     if artifact is None:
-        assert_scheduled_io(ctx.args, now_jst())
+        assert_scheduled_source(ctx.args, now_jst())
         artifact = edinet_codelist.fetch_codelist(ctx.settings)
         artifact.notion_page_id = ctx.upload_raw(artifact)
     if artifact.notion_page_id is None:
@@ -386,7 +386,7 @@ def _process_document(
     # 一覧に未提供と明示された PDF は要求しない。通信・保管失敗は続行しない。
     pdf_flag = doc.get("pdfFlag")
     if pdf_flag == "1":
-        assert_scheduled_io(ctx.args, now_jst())
+        assert_scheduled_source(ctx.args, now_jst())
         pdf_artifact = edinet.fetch_document(
             ctx.settings, doc_id, 2, code=code, data_date=data_date
         )
@@ -522,7 +522,7 @@ def execute(ctx: JobContext) -> None:
         sha_map = None
 
     # 1-4. 書類一覧取得・原本⑤UL（本番共通 strict: Notion⑤未保管で中止 §8.1-4）
-    assert_scheduled_io(ctx.args, now_jst())
+    assert_scheduled_source(ctx.args, now_jst())
     list_artifact, docs = edinet.list_documents(ctx.settings, target_date)
     json_to_parquet.convert_artifact(list_artifact, "json")
     list_page_id = ctx.upload_raw(list_artifact, sha_map=sha_map, sha_map_date=target_date)
@@ -585,7 +585,7 @@ def execute(ctx: JobContext) -> None:
 
     excluded_nonlisted = 0
     for doc in targets:
-        assert_scheduled_io(ctx.args, now_jst())
+        assert_scheduled_source(ctx.args, now_jst())
         try:
             outcome = _process_document(
                 ctx, doc, list_page_id,

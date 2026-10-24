@@ -1,5 +1,6 @@
 import { marketClosure, type MarketClosure } from "../shared/market-calendar.js";
-import { parseScheduledAt, scheduledAtIso } from "../shared/scheduled-admission.js";
+import { parseScheduledAt, scheduledAtIso, scheduledMacroWindow } from "../shared/scheduled-admission.js";
+import { scheduledStockSyncWindow } from "../shared/stock-sync-window.js";
 import { assertVwapAdmission, scheduledVwapWindow, VWAP_DISPATCH_CRON, VWAP_READCHECK_CRON } from "../shared/vwap-schedule.js";
 export { VWAP_DISPATCH_CRON, VWAP_READCHECK_CRON } from "../shared/vwap-schedule.js";
 
@@ -32,7 +33,6 @@ export const CATCHUP_READCHECK_CRON = "5 11 * * MON-FRI";
 export const CATCHUP_START_TIME = "10:00:00.000Z";
 export const CATCHUP_JOIN_CUTOFF_TIME = "10:53:00.000Z";
 export const CATCHUP_COMPLETION_CUTOFF_TIME = "10:54:00.000Z";
-const CONTEXT_START_DEADLINE_MINUTES = 30;
 
 /** dispatch 先 repo は固定 (設定で差し替えない)。 */
 export const GITHUB_OWNER = "satoki252595";
@@ -42,13 +42,6 @@ export const GITHUB_API_VERSION = "2026-03-10";
 export const DISPATCH_TARGET = "scheduled-stocks";
 export const GITHUB_USER_AGENT =
   "kabulab-stock-scheduler/1.0 (+https://github.com/satoki252595/kabulab_tool_cloudflare)";
-
-/**
- * dispatch 開始期限。CF cron は通常ほぼ定刻に発火するため、予定時刻から
- * 60 分を超えた起動は異常 (旧 GH schedule 遅配と同種の事故) として POST 前に
- * 落とす。各CLIの完了期限への波及を待たない。
- */
-export const DISPATCH_START_DEADLINE_MINUTES = 60;
 
 /**
  * 株式 step 完了の上限。D 23:30 JST = 14:30 UTC。
@@ -189,7 +182,7 @@ export function resolveRunDate(
       // 17:00〜17:10は起動受付窓。23:30は終値NULL帯の新規IO締切で、実時計のまま残す。
       if (Math.floor(scheduledTimeMs / 60_000) !== window.start / 60_000) throw new Error("VWAP予定時刻が17:00 JSTの分ではありません");
       assertVwapAdmission(scheduledDate, scheduledTimeMs);
-      if (nowMs >= window.completionCutoff) {
+      if (nowMs >= window.sourceCutoff) {
         throw new Error("VWAP完了期限の範囲外です (予定日23:30 JSTより前)。新規取得・価格PUTしません");
       }
     }
@@ -200,18 +193,14 @@ export function resolveRunDate(
     if (scheduledTimeMs < floor || scheduledTimeMs > floor + 5 * 60_000) {
       throw new Error("dispatch 開始期限を超過しました: 予定時刻が19:00〜19:05 JSTの範囲外です");
     }
-    if (nowMs >= join) throw new Error("catchupの絶対締切です（未完・再送なし）");
+    if (nowMs >= join - 10 * 60_000) throw new Error("catchupの新規取得/絶対締切です（未完・再送なし）");
   }
   if (route === "dispatch" || route === "context-dispatch" || route === "moneyflow-dispatch") {
-    const delayMs = nowMs - scheduledTimeMs;
-    const deadlineMinutes = route === "context-dispatch"
-      ? CONTEXT_START_DEADLINE_MINUTES : DISPATCH_START_DEADLINE_MINUTES;
-    if (delayMs > deadlineMinutes * 60 * 1000) {
-      throw new Error(
-        `dispatch 開始期限を超過しました: 遅延=${Math.floor(delayMs / 60000)}分` +
-          ` (上限 ${deadlineMinutes}分)`
-      );
-    }
+    const window = route === "dispatch" ? scheduledStockSyncWindow(scheduledDate) :
+      route === "context-dispatch" ? scheduledMacroWindow(scheduledDate) :
+      { start: Date.parse(`${scheduledDate}T09:15:00.000Z`), sourceDeadline: Date.parse(`${scheduledDate}T14:30:00.000Z`) };
+    if (Math.floor(scheduledTimeMs / 60_000) !== window.start / 60_000) throw new Error("dispatch予定時刻がcronの分ではありません");
+    if (nowMs >= window.sourceDeadline) throw new Error("dispatch 開始期限です。新規取得の実締切前に原本閉鎖予算が必要です");
   }
   return scheduledDate;
 }
@@ -403,6 +392,7 @@ interface DispatchDeps {
   scheduledAt?: string;
   nowMs: number;
   fetchFn: typeof fetch;
+  beforePost?: () => void;
 }
 
 export function runStockDispatch(deps: DispatchDeps): Promise<DispatchOutcome> {
@@ -446,6 +436,7 @@ export async function runWorkflowDispatch(deps: DispatchDeps & {
   key: string; workflow: string; inputs: Record<string, string>; scheduledAt?: string;
   claimWindowMs?: number;
 }): Promise<DispatchOutcome> {
+  deps.beforePost?.();
   const key = deps.key;
   const slot = deps.scheduledAt === undefined ? {} : { scheduledAt: deps.scheduledAt };
   const { claimed, etag } = await claimReceipt(deps.bucket, key, {
@@ -479,6 +470,7 @@ export async function runWorkflowDispatch(deps: DispatchDeps & {
     );
     return { status: "duplicate", workflowRunId };
   }
+  deps.beforePost?.();
   const details = await postWorkflowDispatch(deps.fetchFn, deps.token, deps.workflow, deps.inputs);
   await saveDispatchResult(deps.bucket, key, etag, {
     version: RECEIPT_VERSION,
@@ -816,13 +808,12 @@ function parseStoredReceipt(
   if (!Number.isFinite(dispatchedMs)) {
     throw new Error(`receipt の dispatchedAt が時刻として不正です: ${key}`);
   }
-  if (
-    utcDate(claimedMs) !== expectedDate ||
-    utcDate(dispatchedMs) !== expectedDate
-  ) {
+  if (expectedAt === undefined && (
+    utcDate(claimedMs) !== expectedDate || utcDate(dispatchedMs) !== expectedDate
+  )) {
     throw new Error(`receipt の時刻が予定日と一致しません: ${key}`);
   }
-  if (expectedAt !== undefined && (claimedMs < Date.parse(expectedAt) || claimedMs > Date.parse(expectedAt) + claimWindowMs)) {
+  if (expectedAt !== undefined && (claimedMs < Date.parse(expectedAt) || claimedMs >= Date.parse(expectedAt) + claimWindowMs || dispatchedMs >= Date.parse(expectedAt) + claimWindowMs)) {
     throw new Error(`receipt のclaimが予定slotの受付外です: ${key}`);
   }
   if (claimedMs > dispatchedMs) {
@@ -1089,16 +1080,17 @@ export async function handleStockScheduled(
   const nowMs = deps.nowMs ?? Date.now();
   const scheduledDate = resolveRunDate(route, controller.scheduledTime, nowMs);
   const scheduledAt = scheduledAtIso(controller.scheduledTime);
+  const beforePost = () => { resolveRunDate(route, controller.scheduledTime, deps.nowMs ?? Date.now()); };
   if (route === "catchup-dispatch" || route === "catchup-readcheck") {
     const common = { bucket: env.BUCKET, token: schedulerToken(env), scheduledDate, fetchFn: deps.fetchFn ?? fetch };
     return route === "catchup-dispatch"
-      ? runCatchupDispatch({ ...common, cron: controller.cron, nowMs, scheduledAt })
+      ? runCatchupDispatch({ ...common, cron: controller.cron, nowMs, scheduledAt, beforePost })
       : runCatchupDeadlineReadcheck(common);
   }
   if (route === "moneyflow-dispatch" || route === "moneyflow-readcheck") {
     const common = { bucket: env.BUCKET, token: schedulerToken(env), scheduledDate, fetchFn: deps.fetchFn ?? fetch };
     return route === "moneyflow-dispatch"
-      ? runScheduledDispatch({ ...common, cron: controller.cron, nowMs, scheduledAt }, "moneyflow")
+      ? runScheduledDispatch({ ...common, cron: controller.cron, nowMs, scheduledAt, beforePost }, "moneyflow")
       : runMoneyflowDeadlineReadcheck(common);
   }
   // 株式はJPX、同日マクロはJPX+NYSE双方の取引日だけが対象。
@@ -1117,7 +1109,7 @@ export async function handleStockScheduled(
   if (route === "vwap-dispatch" || route === "vwap-readcheck") {
     const common = { bucket: env.BUCKET, token, scheduledDate, fetchFn };
     return route === "vwap-dispatch"
-      ? runVwapDispatch({ ...common, cron: controller.cron, nowMs, scheduledAt })
+      ? runVwapDispatch({ ...common, cron: controller.cron, nowMs, scheduledAt, beforePost })
       : runVwapDeadlineReadcheck(common);
   }
   if (route === "dispatch" || route === "context-dispatch") {
@@ -1130,6 +1122,7 @@ export async function handleStockScheduled(
       cron: controller.cron,
       scheduledDate,
       scheduledAt,
+      beforePost,
       nowMs,
       fetchFn,
     }, route === "dispatch" ? "stocks" : "context");

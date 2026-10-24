@@ -143,6 +143,8 @@ export const sharedEnv = {
    * 定時targetの起動受付に使う。未設定は undefined。定時経路の呼び出し側が落とす。
    */
   SCHEDULED_AT: () => optional("SCHEDULED_AT"),
+  /** Actionsが最初のstepで記録する実開始時計。ローカル/SSHは外部job timeoutなし。 */
+  BATCH_JOB_STARTED_AT: () => optional("BATCH_JOB_STARTED_AT"),
   /**
    * stock-sync workflow の実行 target (dispatch input を env 経由で受ける)。
    * `scheduled-stocks` / `scheduled-context` のとき SCHEDULED_DATE を必須にする。

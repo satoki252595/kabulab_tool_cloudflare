@@ -40,11 +40,11 @@ describe("公表取得のCF起動は予定slot保持・one-shot", () => {
     }
     expect(isTimedCron("0 9 * * MON-FRI")).toBe(false);
   });
-  it("秒は切り捨てるが5分受付を52秒延長せず、未来・土日・slot違いをclaim前に停止", async () => {
+  it("秒は切り捨てるが次slotまでの実開始期限を延長せず、未来・土日・slot違いをclaim前に停止", async () => {
     expect(timedDispatchPlan(controller, start + 300_000).scheduledAt).toBe("2026-10-23T00:00:00Z");
     const { store, data } = bucket(), fetchFn = vi.fn<typeof fetch>();
     for (const [c, now] of [
-      [controller, start + 300_001], [controller, start],
+      [controller, start + 3_600_000], [controller, start],
       [{ cron, scheduledTime: start + 60_000 }, start + 60_000],
       [{ cron, scheduledTime: start + 11 * 3_600_000 }, start + 11 * 3_600_000],
       [{ cron, scheduledTime: start + 86_400_000 }, start + 86_400_000],
@@ -80,5 +80,40 @@ describe("公表取得のCF起動は予定slot保持・one-shot", () => {
       dispatchedAt: new Date().toISOString(), workflowRunId: 101, runUrl: dispatch.run_url, htmlUrl: dispatch.html_url }));
     await expect(handleTimedScheduled(controller, env, { fetchFn })).rejects.toThrow("予定slot");
     expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(TIMED_WORKFLOWS)("$nameは5分超配送でもCLI開始期限まで同じslotで1回だけdispatchする", async profile => {
+    const planned = start + profile.hours[0] * 3_600_000 + profile.minute * 60_000;
+    const c = { cron: profile.cron, scheduledTime: planned + 52_000 };
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(planned + 19 * 60_000);
+    const { store } = bucket(), fetchFn = vi.fn<typeof fetch>().mockImplementation(async () => new Response(JSON.stringify(dispatch), { status: 200 }));
+    const env = { BUCKET: store, GITHUB_ACTIONS_TOKEN: "test-token" };
+    expect((await handleTimedScheduled(c, env, { fetchFn })).status).toBe("dispatched");
+    expect((await handleTimedScheduled(c, env, { fetchFn })).status).toBe("duplicate");
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    const plan = timedDispatchPlan(c, Date.now());
+    vi.setSystemTime(planned + plan.claimWindowMs);
+    await expect(handleTimedScheduled(c, env, { fetchFn })).rejects.toThrow();
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("EDINET翌日配送も元予定日/slotに束縛し、UTC日跨ぎのduplicateを追加POSTしない", async () => {
+    const c = { cron: "0 12 * * MON-FRI", scheduledTime: Date.parse("2026-10-22T12:00:52Z") };
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime("2026-10-23T00:30:00Z");
+    const { store, data } = bucket(), fetchFn = vi.fn<typeof fetch>().mockImplementation(async () => new Response(JSON.stringify(dispatch), { status: 200 }));
+    const env = { BUCKET: store, GITHUB_ACTIONS_TOKEN: "test-token" };
+    expect((await handleTimedScheduled(c, env, { fetchFn })).status).toBe("dispatched");
+    expect((await handleTimedScheduled(c, env, { fetchFn })).status).toBe("duplicate");
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(fetchFn.mock.calls[0][1]?.body)).inputs.scheduled_at).toBe("2026-10-22T12:00:00Z");
+    expect(JSON.parse([...data.values()][0])).toMatchObject({ scheduledDate: "2026-10-22", claimedAt: "2026-10-23T00:30:00.000Z" });
+  });
+
+  it("claim待機中に実開始締切を跨いだらPOST0でclaimedを保持する", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(start + 19 * 60_000);
+    const { store, data } = bucket(), put = store.put.bind(store), fetchFn = vi.fn<typeof fetch>();
+    store.put = async (...args) => { const saved = await put(...args); vi.setSystemTime(start + 60 * 60_000); return saved; };
+    await expect(handleTimedScheduled(controller, { BUCKET: store, GITHUB_ACTIONS_TOKEN: "test-token" }, { fetchFn })).rejects.toThrow("開始期限");
+    expect(fetchFn).not.toHaveBeenCalled(); expect(JSON.parse([...data.values()][0]).status).toBe("claimed");
   });
 });

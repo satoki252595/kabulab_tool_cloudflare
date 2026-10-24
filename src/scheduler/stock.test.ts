@@ -175,11 +175,12 @@ describe("定時マクロの独立dispatchと期限確認", () => {
     ],
   }, { name: "moneyflow", run_id: 101, status: "completed", conclusion: "skipped" }];
 
-  it("専用cronを識別し30分遅延を超えるdispatchを拒否する", () => {
+  it("専用cronを識別し21:50 UTCの新規取得期限まで配送を受ける", () => {
     expect(routeCron(CONTEXT_DISPATCH_CRON)).toBe("context-dispatch");
     expect(routeCron(CONTEXT_READCHECK_CRON)).toBe("context-readcheck");
     expect(resolveRunDate("context-dispatch", started, started + 30 * 60_000)).toBe(date);
-    expect(() => resolveRunDate("context-dispatch", started, started + 30 * 60_000 + 1)).toThrow("開始期限");
+    expect(resolveRunDate("context-dispatch", started, started + 30 * 60_000 + 1)).toBe(date);
+    expect(() => resolveRunDate("context-dispatch", started, started + 50 * 60_000)).toThrow("開始期限");
   });
 
   it("株式とは別receiptをclaimしscheduled-contextを1回だけPOSTする", async () => {
@@ -285,10 +286,10 @@ const jsonRes = (body: unknown, status = 200, link: string | null = null) =>
     headers: link ? { Link: link } : {},
   });
 
-// 2026-09-30 (水) 17:13 UTC。開始期限・日跨ぎのガード用（定時の 09:00 UTC とは別の時刻）。
-const TUE_1713 = Date.parse("2026-09-30T17:13:00.000Z");
+// 2026-09-30 (水) 09:00 UTC。定時slotと同じ予定を日跨ぎ/受付境界にも使う。
+const TUE_1713 = Date.parse("2026-09-30T09:00:00.000Z");
 const TUE_1713_30S = TUE_1713 + 30_000;
-const SAT_1713 = Date.parse("2026-10-03T17:13:00.000Z");
+const SAT_1713 = Date.parse("2026-10-03T09:00:00.000Z");
 const TOKEN = "tok-fake-secret";
 
 describe("catchup専用定時入口", () => {
@@ -450,11 +451,11 @@ describe("resolveRunDate", () => {
     const nextDay = Date.parse("2026-10-01T00:05:00.000Z");
     expect(() => resolveRunDate("dispatch", TUE_1713, nextDay)).toThrow("日跨ぎ");
   });
-  it("dispatch 開始期限 (60分) 超過は落とす", () => {
+  it("dispatchは遅配後も23:00 JSTの新規取得期限前まで受け、期限端で拒否する", () => {
     expect(() =>
-      resolveRunDate("dispatch", TUE_1713, TUE_1713 + 61 * 60_000)
+      resolveRunDate("dispatch", TUE_1713, Date.parse("2026-09-30T14:00:00.000Z"))
     ).toThrow("開始期限");
-    expect(resolveRunDate("dispatch", TUE_1713, TUE_1713 + 59 * 60_000)).toBe(
+    expect(resolveRunDate("dispatch", TUE_1713, TUE_1713 + 61 * 60_000)).toBe(
       "2026-09-30"
     );
   });
@@ -1256,8 +1257,9 @@ describe("資金フロー独立取得元のCF起動", () => {
     await expect(runMoneyflowDeadlineReadcheck({ bucket, token: TOKEN, scheduledDate: date, fetchFn })).rejects.toThrow();
   });
 
-  it("開始60分超過をPOST前に拒否する", () => {
-    expect(() => resolveRunDate("moneyflow-dispatch", start, start + 60 * 60_000 + 1)).toThrow("開始期限");
+  it("moneyflowは遅配後も23:30 JST新source期限前まで受け、期限端で拒否する", () => {
+    expect(resolveRunDate("moneyflow-dispatch", start, start + 60 * 60_000 + 1)).toBe(date);
+    expect(() => resolveRunDate("moneyflow-dispatch", start, Date.parse(`${date}T14:30:00.000Z`))).toThrow("開始期限");
   });
 
   it("片側欠落/重複/skipとjoin欠落・実queue遅配を成功にしない", () => {

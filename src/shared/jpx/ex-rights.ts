@@ -1,6 +1,7 @@
 /** JPXの現在掲載版を発見・受領するだけ。株式種別・権利係数・価格適用は資格化しない。 */
 import assert from "node:assert/strict";
 import { assertPageTitle, extractTables, parseIsoDate } from "./official-html.js";
+import { ScheduledSourceDeadlineError } from "../scheduled-admission.js";
 
 export const EX_RIGHTS_LIMITS = Object.freeze({ sources: 6, versions: 5, indexBytes: 1024 ** 2, xlsBytes: 4 * 1024 ** 2, timeoutMs: 30_000 });
 export interface ExRightsVersion { announcedDate: string; url: string }
@@ -14,7 +15,7 @@ export interface ExRightsSource {
   /** 受領したprefixも破棄しない。complete=falseなら全原本とは扱わない。 */
   bytes: Uint8Array | null;
   complete: boolean;
-  failure: "transport" | "body-limit" | "http" | "format" | null;
+  failure: "not-started" | "transport" | "body-limit" | "http" | "format" | null;
 }
 
 /** 実HTMLの唯一component-file/2列表だけ。リンク0・重複・未来日・推定URLを許さない。 */
@@ -56,7 +57,7 @@ export function parseExRightsIndex(bytes: Uint8Array, fetchedDateJST: string, in
 }
 
 /** 既存Notion clientの外で行う公式source GET。最大6件・直列・各30秒・redirect/retry0。 */
-export async function fetchExRightsSource(indexUrl: string, version: ExRightsVersion | null): Promise<ExRightsSource> {
+export async function fetchExRightsSource(indexUrl: string, version: ExRightsVersion | null, beforeSourceRequest?: () => void): Promise<ExRightsSource> {
   assertExRightsIndexUrl(indexUrl);
   const url = version === null ? indexUrl : version.url;
   if (version !== null) {
@@ -72,6 +73,12 @@ export async function fetchExRightsSource(indexUrl: string, version: ExRightsVer
     fetchedAt: new Date().toISOString(), status: null, contentType: null, lastModified: null, bytes: null, complete: false, failure: null };
   const maximum = version === null ? EX_RIGHTS_LIMITS.indexBytes : EX_RIGHTS_LIMITS.xlsBytes;
   const parts: Uint8Array[] = []; let retained = 0;
+  try { beforeSourceRequest?.(); }
+  catch (error) {
+    if (!(error instanceof ScheduledSourceDeadlineError)) throw error;
+    out.failure = "not-started";
+    return out;
+  }
   try {
     const response = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(EX_RIGHTS_LIMITS.timeoutMs),
       headers: { "user-agent": "kabulab-rights-custody/1.0" } });

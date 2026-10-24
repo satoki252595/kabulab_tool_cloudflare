@@ -1,6 +1,7 @@
 import type { MoneyflowNotYetPublishedReason } from "../../../services/moneyflow/lib/source-spec.js";
 import { isoWeekLabelOf } from "../../../services/moneyflow/lib/iso-week.js";
 import { isCalendarDateString } from "../../../src/shared/vwap/proof.js";
+import { installScheduledDeadline } from "../../../src/shared/scheduled-admission.js";
 
 /** source選択の正本はingest.tsのSOURCES。ここでは集合の重複とlaneだけを検証する。 */
 export type MoneyflowLane = "non-yahoo" | "yahoo";
@@ -54,16 +55,10 @@ export function moneyflowScheduledWindow(plannedDate: string, nowMs: number): { 
 }
 
 /** 定時laneだけのHTTP期限。待機後のNotion/Yahoo送信も元signalと共に止める。 */
-export function installMoneyflowDeadline(date: string): () => void {
+export function installMoneyflowDeadline(date: string, executionDeadline?: number): () => void {
   const { cutoff } = moneyflowScheduledWindow(date, Date.now());
-  const nativeFetch = globalThis.fetch, signal = AbortSignal.timeout(cutoff - Date.now());
-  const guarded: typeof fetch = (input, init) => {
-    moneyflowScheduledWindow(date, Date.now());
-    const original = init?.signal !== undefined ? init.signal : input instanceof Request ? input.signal : undefined;
-    return nativeFetch(input, { ...init, signal: original ? AbortSignal.any([original, signal]) : signal });
-  };
-  globalThis.fetch = guarded;
-  return () => { if (globalThis.fetch === guarded) globalThis.fetch = nativeFetch; };
+  return installScheduledDeadline(executionDeadline === undefined ? cutoff : Math.min(cutoff, executionDeadline),
+    () => { moneyflowScheduledWindow(date, Date.now()); });
 }
 
 interface SummaryContext {

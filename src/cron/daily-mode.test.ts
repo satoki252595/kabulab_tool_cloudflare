@@ -732,6 +732,16 @@ describe("SCHEDULED_DATE 検証 (CF scheduler 経由の一致確認のみ)", () 
     }
   });
 
+  it("同日の未来scheduled_atはoverlay・市場原本の取得より前に拒否する", async () => {
+    vi.setSystemTime(new Date("2026-09-28T06:00:00.000Z"));
+    process.env.SCHEDULED_DATE = "2026-09-28";
+    process.env.SCHEDULED_AT = "2026-09-28T09:00:00.000Z";
+    process.env.STOCK_SYNC_TARGET = "scheduled-stocks";
+    const { db, calls } = recordingDb();
+    await expect(runDailySync(db, { stocksOnly: true, jpLegStore: emptyJpStore })).rejects.toThrow("未来");
+    expect(calls).toEqual([]); expect(fetchChart).not.toHaveBeenCalled(); expect(fetchStockRawData).not.toHaveBeenCalled();
+  });
+
   it("定時stocksが20時を過ぎてqueueから出た場合は原本取得/金融保存を開始しない", async () => {
     vi.setSystemTime(new Date("2026-09-28T11:00:00.001Z"));
     process.env.SCHEDULED_DATE = "2026-09-28"; process.env.SCHEDULED_AT = "2026-09-28T11:00:00.001Z"; process.env.STOCK_SYNC_TARGET = "scheduled-stocks";
@@ -805,6 +815,14 @@ describe("定時マクロの予定日・開始窓・保存期限", () => {
     });
   });
   afterEach(() => vi.unstubAllEnvs());
+
+  it("未来scheduled_atは保存JP原本の読取や米国取得より前に拒否する", async () => {
+    vi.setSystemTime(new Date("2026-09-29T20:00:00.000Z"));
+    const { db, calls } = recordingDb();
+    await expect(runMarketContextSync(db, emptyJpStore)).rejects.toThrow("未来");
+    expect(jpLegModule.loadMacroJpLeg).not.toHaveBeenCalled(); expect(fetchChart).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
 
   it("予定日と原本確定日が一致すればcontextだけを保存する", async () => {
     mockMacro(ALIGNED);

@@ -10,8 +10,9 @@ export function scheduledVwapWindow(plannedDate: string) {
       ![1, 3, 5].includes(new Date(start).getUTCDay())) {
     throw new Error("VWAP plannedDateは実在する月水金のYYYY-MM-DDが必要です");
   }
+  const completionCutoff = Date.parse(`${plannedDate}T14:30:00.000Z`);
   return { start, admissionCutoff: start + VWAP_START_DEADLINE_MINUTES * 60_000,
-    completionCutoff: Date.parse(`${plannedDate}T14:30:00.000Z`) };
+    sourceCutoff: completionCutoff - 10 * 60_000, completionCutoff };
 }
 
 export function assertVwapAdmission(plannedDate: string, nowMs: number): void {

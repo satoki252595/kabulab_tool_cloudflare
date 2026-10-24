@@ -8,7 +8,7 @@ from unittest.mock import Mock
 import pytest
 
 from jp_stock_pipeline.jobs import edinet_daily, supply_daily, tdnet_hourly
-from jp_stock_pipeline.jobs.scheduled import ScheduledWindowError, assert_scheduled_io, scheduled_target
+from jp_stock_pipeline.jobs.scheduled import ScheduledWindowError, assert_scheduled_io, assert_scheduled_source, scheduled_target
 from jp_stock_pipeline.models import JST
 
 POLICIES = [
@@ -93,3 +93,33 @@ def test_expired_window_blocks_following_source_operations(monkeypatch):
     with pytest.raises(ScheduledWindowError):
         supply_daily._fetch_and_store(ctx, "zandaka", "zandaka")
     source.assert_not_called()
+
+
+@pytest.mark.parametrize(("job", "slot", "last_start", "absolute"), POLICIES)
+def test_native_timeout_reserves_ten_minutes_for_custody_and_five_for_job_exit(job, slot, last_start, absolute):
+    opened = datetime.fromisoformat(slot)
+    start = opened + timedelta(minutes=19)
+    args = argparse.Namespace(scheduled_at=slot, date=None, job_started_at=start.strftime("%Y-%m-%dT%H:%M:%S.000Z"))
+    assert scheduled_target(job, args, start + timedelta(minutes=1)) == opened.astimezone(JST).date()
+    minutes = {"tdnet_hourly": 30, "supply_daily": 60, "edinet_daily": 120}[job]
+    hard = min(absolute, start + timedelta(minutes=minutes - 5))
+    soft = hard - timedelta(minutes=10)
+    assert_scheduled_source(args, soft - timedelta(microseconds=1))
+    with pytest.raises(ScheduledWindowError, match="新規取得期限"):
+        assert_scheduled_source(args, soft)
+    assert_scheduled_io(args, soft)  # 開始済み原本は閉鎖できる。
+    assert_scheduled_io(args, hard - timedelta(microseconds=1))
+    with pytest.raises(ScheduledWindowError, match="締切"):
+        assert_scheduled_io(args, hard)
+    assert hard < start + timedelta(minutes=minutes)
+
+
+def test_native_setup_consumed_budget_and_future_clock_are_rejected_before_source():
+    now = datetime(2026, 10, 23, 9, 19, tzinfo=JST)
+    args = argparse.Namespace(scheduled_at="2026-10-23T00:00:00Z", job_started_at="2026-10-23T00:00:00.000Z")
+    with pytest.raises(ScheduledWindowError, match="時間予算"):
+        scheduled_target("tdnet_hourly", args, now)
+    for started in ["", "invalid", "2026-10-23T00:20:00.000Z"]:
+        args.job_started_at = started
+        with pytest.raises(ScheduledWindowError, match="job開始時計"):
+            scheduled_target("tdnet_hourly", args, now)

@@ -21,7 +21,7 @@ export { scheduledMarginWindow };
 function marginDeadline(argv: readonly string[]) {
   const args = argv.filter(arg => arg.startsWith("--scheduled-date="));
   if (args.length > 1) throw new Error("信用残の予定日が重複しています");
-  if (args.length === 0) return { assertActive() {}, restore() {}, readOptions: undefined };
+  if (args.length === 0) return { assertActive() {}, assertSource() {}, restore() {}, readOptions: undefined };
   if (parseDateArg(argv) !== undefined) throw new Error("定時信用残で手動基準日は指定できません");
   const atArgs = argv.filter(arg => arg.startsWith("--scheduled-at="));
   if (atArgs.length !== 1) throw new Error("scheduled_atが無いかUTC時刻として不正です");
@@ -43,7 +43,10 @@ function marginDeadline(argv: readonly string[]) {
     return nativeFetch(input, { ...init, signal: original ? AbortSignal.any([original, signal]) : signal });
   };
   globalThis.fetch = guarded;
-  return { assertActive, restore() { if (globalThis.fetch === guarded) globalThis.fetch = nativeFetch; },
+  return { assertActive, assertSource() {
+    assertActive();
+    if (Date.now() >= window.sourceDeadline) throw new Error("信用残の17:20 JST新規取得期限です（原本閉鎖へ移行）");
+  }, restore() { if (globalThis.fetch === guarded) globalThis.fetch = nativeFetch; },
     readOptions: { singleAttempt: true, beforeAttempt: assertActive, abortSignal: signal } };
 }
 
@@ -132,8 +135,8 @@ export async function main(): Promise<void> {
   const guard = marginDeadline(process.argv.slice(2));
   try {
   const requested = parseDateArg(process.argv.slice(2));
-  guard.assertActive();
-  const data = await fetchDailyMargin(requested);
+  guard.assertSource();
+  const data = await fetchDailyMargin(requested, guard.assertSource);
   // 全 PUT (R2) より前に検証する — 保管失敗時の部分保存を防ぐため。
   validateDailyMarginSnapshot(data.snapshot);
   const basis = data.snapshot.basisDate;
