@@ -81,8 +81,7 @@ export async function executeMonthly(runtime: string, state: string, scope: stri
     const output = await run(runtime, { name: "competitor-prepare-only", script, args: stage.args, timeoutMs: 7 * 60_000, capture: true });
     acceptPrepareStage(stage, output, deadline);
   }
-  await run(runtime, { name: "yutai-summary-mechanical", script: "services/otakara-yutai/data-scripts/summary-local.ts",
-    args: ["--limit", "60", "--state-dir", join(dirname(state), "yutai-local")], timeoutMs: 30 * 60_000, capture: false });
+
 }
 
 export async function monthlyMain(options: { runtime: string; preflight: boolean }, check = verifyMonthlyRuntime, execute = executeMonthly): Promise<void> {
@@ -91,8 +90,8 @@ export async function monthlyMain(options: { runtime: string; preflight: boolean
   if (scope !== undefined && (scope.length === 0 || scope.length > 100 || new Set(scope).size !== scope.length ||
       scope.some(code => parseStockCode(code) !== code))) throw new Error("競合準備の固定scopeが不正です");
   console.info(JSON.stringify({ status: "monthly_manual_preflight_pass", runtime: options.runtime, revision: flight.revision,
-    biztagBudgetMinutes: 20, competitorPrepareConfigured: scope !== undefined, yutaiLimit: 60,
-    plannedStages: ["biztag", ...(scope === undefined ? [] : ["competitor-prepare-only"]), "yutai-summary-mechanical"],
+    biztagBudgetMinutes: 20, competitorPrepareConfigured: scope !== undefined,
+    plannedStages: ["biztag", ...(scope === undefined ? [] : ["competitor-prepare-only"])],
     dailyReceiptUpdated: false, wholeDataComplete: false }));
   if (options.preflight) return;
   await execute(options.runtime, flight.state, scope);

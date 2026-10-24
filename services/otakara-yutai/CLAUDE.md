@@ -81,9 +81,10 @@ services/otakara-yutai/
 pnpm dev                  # ローカル開発サーバー起動 (wrangler dev)
 pnpm sync:monthly:core    # is_yutai=true のみ otakara_stock_scores 再計算
 # 月次Actions: universe → pnpm yutai:fetch → sync:monthly:core
-# Macの旧自動起動は廃止。月次手動で機械要約を最大60群ずつ処理する。
+# Macの旧自動起動は廃止。優待機械要約は独立Linux/Actionsで最大60群ずつ。
+# 初回canonical journalの共有移行後だけ有効化する。docs/mechanical-publishing.md参照。
 pnpm yutai:fetch           # 原本・更新前全行をNotion物理照合してから取込
-pnpm biztag:monthly --runtime .runtime/mac-main554-20261020 --preflight
+pnpm biztag:monthly --runtime .runtime/mac-publishing-20261025 --preflight
 # 実行コマンドは docs/mac-monthly-manual.md。旧日次launcherは起動しない。
 # 未対応の群は理由付きHOLDで旧値・時計を保持し、未完を成功扱いしない。
 # ローカルモデルを使う場合だけ、運用者が通常CLIへ --allow-model を明示する。

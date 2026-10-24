@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { canonicalizeForHash } from "../../../../../src/shared/notion-archive/biztag-ledger.js";
 import type { SupplementRow } from "../../../../../src/shared/notion-archive/stock-supplement.js";
 import { TEXT_SECTIONS } from "../../services/edinet/text-sections.js";
-import { hasUsableText, planWork, readInputReceipt, readTextSyncReceipt } from "../plan.js";
+import { hasUsableText, planWork, readInputReceipt, rowTextSyncReceipt } from "../plan.js";
 import type { LatestDoc } from "../source.js";
 import { formatPeriodJa } from "../evidence.js";
 import { PREFILTER_SECTIONS } from "../prefilter.js";
@@ -41,7 +41,9 @@ export function prepareCandidateInputs(rows: SupplementRow[], calibration: Compe
   // 新prepare入力世代の選定母集団。選出後の資格失敗で候補を消す処理ではない。
   const eligible = rows.filter(row => {
     const qualification = qualifyPreparedDocument(byCode.get(row.stockCode), row);
-    const reason = qualification.status === "hold" ? qualification.reason : row.tagStatus === "判定済" ? null : "tag-not-judged";
+    const reason = qualification.status === "hold" ? qualification.reason : row.tagStatus !== "判定済" ? "tag-not-judged" :
+      row.tagDoc?.split(" ", 1)[0] !== qualification.doc.docId ? "tag-document-provenance-mismatch" :
+      row.textInputSha256 != null && row.tagInputSha256 != null && row.textInputSha256 !== row.tagInputSha256 ? "tag-input-changed" : null;
     if (reason !== null) { excluded.push({ stockCode: row.stockCode, reason }); return false; }
     return true;
   });
@@ -76,7 +78,7 @@ export function qualifyPreparedCompany(latest: LatestDoc | undefined, corpusRow:
     const item = planWork([latest], [fullRow], today)[0];
     if (fullRow.tagStatus !== "判定済" || item.kind !== "skip" || item.qualificationHeld) return hold("tag-or-text-sync-needs-work");
     if (fullRow.tagDoc !== `${doc.docId} ${formatPeriodJa(doc.periodEnd)}` || fullRow.judgeInput === undefined) return hold("tag-document-provenance-missing");
-    const sync = readTextSyncReceipt(fullRow.judgeInput), judgment = readInputReceipt(fullRow.judgeInput);
+    const sync = rowTextSyncReceipt(fullRow), judgment = readInputReceipt(fullRow.judgeInput);
     // Notionの空rich_textはpublisherがクリアしたNULL。未知の欠落列は上で拒否する。
     const textsSha256 = hash(TEXT_SECTIONS.map(({ title }) => [title, fullRow.texts[title] === "" ? null : fullRow.texts[title]]));
     if (sync === null || sync.docId !== doc.docId || sync.textPageId !== doc.notionDocPageId) return hold("39-text-sync-receipt-mismatch");

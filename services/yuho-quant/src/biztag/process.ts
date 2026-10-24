@@ -4,8 +4,9 @@
  * I/O は全て `ProcessDeps` 経由で注入する (テストでは実際の Notion/jev を叩かない)。
  *
  * **不変条件**: `事業タグの状態 = 判定済` になるのは、実際に判定が完了し
- * `事業タグの根拠書類` の docID が (今書き込む) `有報書類ID` と一致するときだけ
- * (§3.1)。書類が変わったとき (`sync_and_tag`/`retag`) は、書き込む
+ * `事業タグの根拠書類` と判定入力SHAをその判定の原本へ束縛するときだけ。
+ * 機械本文同期は最新本文だけを更新し、旧タグの根拠書類/入力を保持する。
+ * 意味判定を更新するとき (`sync_and_tag`/`retag`) は、書き込む
  * `SupplementRowInput` が常にタグ列 (`upstream`/`downstream`/`themes`/`uncertain`)
  * を明示的な新しい値 (空配列/null を含む) で置き換えるため、古い書類のタグが
  * 新しい書類のものとして残ることは無い。
@@ -29,7 +30,7 @@ import { docTypeLabelOf } from "./doc-type.js";
 import { formatPeriodJa } from "./evidence.js";
 import { buildJudgeInput, type DocMeta } from "./excerpt.js";
 import { judgeCandidates, type BtThresholds } from "./judge.js";
-import { INITIAL_CLEF_INPUT_PREFIX, INITIAL_SEMIF_INPUT_PREFIX, readInputReceipt, readTextSyncReceipt,
+import { INITIAL_CLEF_INPUT_PREFIX, INITIAL_SEMIF_INPUT_PREFIX, readInputReceipt, rowTextSyncReceipt,
   withInputReceipt, withTextSyncReceipt, type InputReceipt, type TextSyncReceipt, type WorkItem } from "./plan.js";
 import { sha256Hex } from "../../../../src/shared/sha256.js";
 import { isPrefilterSection, prefilter, PREFILTER_SECTIONS, type PrefilterSectionKey } from "./prefilter.js";
@@ -116,7 +117,7 @@ function nextRetryDate(today: string, attemptsAfter: number): string {
  * PRE物理保管→新根拠全文verify→properties/readback→旧根拠退役を行う。
  * 新規行はPOSTに根拠をchildrenとして同梱する。
  */
-function savedRowGuard(row: NonNullable<WorkItem["row"]>): Record<string, unknown> {
+export function savedRowGuard(row: NonNullable<WorkItem["row"]>): Record<string, unknown> {
   if (row.judgeInput === undefined) throw new Error("旧判定入力の読取が不明。旧値を保持してHOLD");
   return {
     ...buildSupplementProperties({ companyName: row.companyName, stockCode: row.stockCode, sector33: row.sector33,
@@ -124,6 +125,7 @@ function savedRowGuard(row: NonNullable<WorkItem["row"]>): Record<string, unknow
       upstream: row.upstream, downstream: row.downstream, distribution: row.distribution, themes: row.themes,
       uncertain: row.uncertain, evidenceText: row.evidenceText, tagDoc: row.tagDoc, vocabVersion: row.vocabVersion,
       judgedAt: row.judgedAt, candidateCount: row.candidateCount, judgeInput: row.judgeInput,
+      textSyncReceipt: row.textSyncReceipt, textInputSha256: row.textInputSha256, tagInputSha256: row.tagInputSha256,
       attempts: row.attempts, nextRetryAt: row.nextRetryAt, error: row.error }),
     [SUPPLEMENT_PROPS.textStatus]: { select: row.textStatus === null ? null : { name: row.textStatus } },
     [SUPPLEMENT_PROPS.tagStatus]: { select: row.tagStatus === null ? null : { name: row.tagStatus } },
@@ -174,7 +176,7 @@ function allTextColumnsCleared(): Record<string, string | null> {
   return out;
 }
 
-function textColumnsOf(sections: StockTextSection[]): Record<string, string | null> {
+export function textColumnsOf(sections: StockTextSection[]): Record<string, string | null> {
   const texts = allTextColumnsCleared(), seen = new Set<string>();
   for (const s of sections) {
     const title = TITLE_BY_SECTION_KEY.get(s.sectionKey);
@@ -246,7 +248,7 @@ async function verifyTexts(item: WorkItem, deps: ProcessDeps): Promise<ProcessOu
     if (JSON.stringify(savedRowGuard(current)) !== JSON.stringify(savedRowGuard(item.row)) || current.masterLinked !== item.row.masterLinked) {
       throw new SupplementWriteHeldError("本文検査中に補足メタ/判定が変更。現在値を保持してHOLD");
     }
-    const receipt = readTextSyncReceipt(current.judgeInput);
+    const receipt = rowTextSyncReceipt(current);
     if (receipt !== null) textObservation.textPageId = receipt.textPageId;
     if (receipt === null || receipt.docId !== item.doc.docId || receipt.textPageId !== item.doc.notionDocPageId) throw new SupplementWriteHeldError("現在本文検査の同期出典が不一致です");
     if (digest === (receipt.notionTextsSha256 === undefined ? receipt.textsSha256 : receipt.notionTextsSha256)) {
@@ -265,7 +267,7 @@ async function verifyTexts(item: WorkItem, deps: ProcessDeps): Promise<ProcessOu
   }
 }
 
-async function textReceipt(doc: Doc, texts: Record<string, string | null>, judgment: InputReceipt | null) {
+export async function textReceipt(doc: Doc, texts: Record<string, string | null>, judgment: InputReceipt | null) {
   if (doc.notionDocPageId === null) throw new Error("39本文同期のpointerがありません");
   const notionText = (value: string | null) => { const normalized = normalizeSupplementText(value); return normalized === "" ? null : normalized; };
   const receipt: TextSyncReceipt = { docId: doc.docId, textPageId: doc.notionDocPageId,
@@ -304,7 +306,7 @@ async function syncTexts(item: WorkItem, deps: ProcessDeps, expectedTexts?: Reco
   if (sections.length === 0) throw new Error("39本文の同期元が空です。旧値を保持してHOLD");
   const judgment = readInputReceipt(item.row.judgeInput);
   const texts = textColumnsOf(sections), receipt = await textReceipt(item.doc, texts, judgment);
-  const previous = readTextSyncReceipt(item.row.judgeInput);
+  const previous = rowTextSyncReceipt(item.row);
   if (item.repairTextDrift && (previous === null || previous.textsSha256 !== receipt.textsSha256)) {
     return { stockCode: item.stockCode, kind: item.kind, outcome: "skipped", tagStatus: item.row.tagStatus,
       candidateCount: item.row.candidateCount, textMismatch: previous?.notionTextsSha256 !== undefined,
@@ -587,6 +589,9 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
         uncertain: null,
         evidenceText: null,
         tagStatus: "判定済",
+        tagInputSha256: sectionsSha256,
+        textInputSha256: sectionsSha256,
+        textSyncReceipt: JSON.stringify(syncedTexts),
         tagDoc,
         vocabVersion: deps.vocab.version,
         judgedAt: deps.today,
@@ -664,6 +669,9 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
         uncertain: tagOutcome.uncertainText,
         evidenceText: tagOutcome.evidenceText,
         tagStatus: "判定済",
+        tagInputSha256: sectionsSha256,
+        textInputSha256: sectionsSha256,
+        textSyncReceipt: JSON.stringify(syncedTexts),
         tagDoc,
         vocabVersion: deps.vocab.version,
         judgedAt: deps.localJudgeDate && localJudge ? deps.localJudgeDate() : deps.today,

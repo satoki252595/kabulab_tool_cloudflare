@@ -561,5 +561,9 @@ export async function runPublicFactsBackfillCLI() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  runPublicFactsBackfillCLI().catch(() => { console.error("優待条件の保全・計画・適用・全列照合のいずれかで停止。原文はprivate証跡を確認し、自動再送しないでください。"); process.exitCode = 1; });
+  (async () => {
+    const mode = process.argv[2];
+    if (mode === "apply" || mode?.startsWith("apply-") || mode?.startsWith("resume-")) throw new Error("standalone_public_facts_apply_retired");
+    await runPublicFactsBackfillCLI();
+  })().catch(() => { console.error("優待条件の単体適用は停止済み、または計画資格を確認できません。通常の共有機械publisherを使用し、既存未完は保全してください。"); process.exitCode = 1; });
 }

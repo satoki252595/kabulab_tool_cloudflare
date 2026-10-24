@@ -1,9 +1,12 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, realpathSync, statSync } from "node:fs";
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "dotenv";
 import { biztagLocalEnv } from "./env.js";
+import { createSupplementPublicationJournal } from "./publication-journal.js";
+import { initializeSharedPublishingWriter, publishingStore, withSharedPublishingWriter } from "../mechanical-publishing/shared-writer.js";
 
 export function assertRevision(expected: string, actual: string, dirty: string): void {
   if (actual !== expected) throw new Error("runtime HEADがBIZTAG_LOCAL_ACCEPTED_REVISIONと一致しません。");
@@ -34,7 +37,7 @@ export function preflight(root: string, mechanicalOnly = false): { revision: str
 }
 
 /** kernel flockが正。ファイル残存をrunningとせず、プロセス終端で自動解放する。 */
-export async function withBiztagWriter<T>(execute: () => Promise<T>, mechanicalOnly = false): Promise<T> {
+async function withLocalBiztagWriter<T>(execute: () => Promise<T>, mechanicalOnly = false): Promise<T> {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
   const { revision, state } = preflight(root, mechanicalOnly);
   const python = execFileSync("which", ["python3.12"], { encoding: "utf8" }).trim();
@@ -55,4 +58,43 @@ export async function withBiztagWriter<T>(execute: () => Promise<T>, mechanicalO
   } finally {
     closeSync(descriptor);
   }
+}
+
+/** The kernel lock still protects the canonical model/state; R2 also protects every remote publisher. */
+export async function withBiztagWriter<T>(execute: () => Promise<T>, mechanicalOnly = false): Promise<T> {
+  return withLocalBiztagWriter(() => withSharedPublishingWriter(execute), mechanicalOnly);
+}
+
+/** Explicit migration only. The immutable baseline pins closed old journals; no old bytes are changed. */
+export async function initializePublishingFromMac(): Promise<void> {
+  if (!(process.platform === "darwin" && process.arch === "arm64")) throw new Error("共有publisherの移行は受入済みMacで実行してください");
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+  const canonical = join(dirname(realpathSync(join(root, ".env"))), "tmp");
+  // Check before normal preflight can mkdir: an empty replacement state is not migration evidence.
+  for (const path of [join(canonical, "biztag-local"), join(canonical, "biztag-local/supplement-publications"), join(canonical, "yutai-local")]) {
+    const stat = lstatSync(path);
+    if (!stat.isDirectory() || stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0) throw new Error("移行元の既存canonical stateが必要です");
+  }
+  await withLocalBiztagWriter(async () => {
+    const { revision, state } = preflight(root);
+    createSupplementPublicationJournal(state).assertReady();
+    const yutaiState = join(dirname(state), "yutai-local");
+    if (existsSync(join(yutaiState, "pending-write.json"))) throw new Error("旧優待の未閉鎖intentを移行で解除しません");
+    const progress = join(yutaiState, "progress.json");
+    let yutaiProgress: string | null = null;
+    if (existsSync(progress)) {
+      const stat = lstatSync(progress);
+      if (!stat.isFile() || stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0 || stat.size > 16_384) throw new Error("旧優待cursorの私有ファイル資格が不正です");
+      yutaiProgress = readFileSync(progress, "utf8");
+      const value = JSON.parse(yutaiProgress);
+      if (value === null || typeof value !== "object" || Object.keys(value).length !== 1 || typeof value.cursor !== "string" || !/^[a-f0-9]{16}$/.test(value.cursor)) throw new Error("旧優待cursorの形が不正です");
+    }
+    const publications = join(state, "supplement-publications");
+    const completed = readdirSync(publications).sort().map(key => ({ key,
+      completedSha256: createHash("sha256").update(readFileSync(join(publications, key, "completed.json"))).digest("hex") }));
+    await initializeSharedPublishingWriter({ version: 1, source: "accepted-mac-canonical-journals", revision,
+      completed, unresolvedPublications: 0, yutaiPending: false,
+      yutaiProgressSha256: yutaiProgress === null ? null : createHash("sha256").update(yutaiProgress).digest("hex"),
+      observedAt: new Date().toISOString() }, publishingStore(), yutaiProgress === null ? {} : { "yutai-summary": yutaiProgress });
+  });
 }

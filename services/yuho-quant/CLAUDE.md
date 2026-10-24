@@ -124,6 +124,8 @@ mono-repo CLAUDE.md のルール1/2/3/6 に加え、以下を厳守する(違反
 - Notion への書込は `src/shared/notion-archive/` 経由のみ(ルール6)。
   `api.notion.com` を biztag から直接叩かない。
 
+- **2026-10-25の機械同期分離**: 本文39/基本補足は`sync:mechanical --target=supplement`の有限Linux job。語彙/較正/モデルに依存させず、旧タグのdoc/入力/根拠を保持する。現本文と旧判定の根拠doc/4節SHAを別列に保存し、最新判定と偽らない。Mac/Actions/月次優待取込は同じ非期限R2 CAS ownerと物理PRE/完全POSTを使い、初回旧canonical journalの明示移行が先。[手順](../../docs/mechanical-publishing.md)。
+
 ### 競合他社(competitors)固有のルール
 
 事業タグ・「事業の内容」から他銘柄との競合関係を jev で判定し、

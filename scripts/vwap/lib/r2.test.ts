@@ -487,6 +487,20 @@ describe("r2GetVersion contract", () => {
 });
 
 describe("binary原本も既存CAS/unknown契約を共有する", () => {
+  it("publisherのhard signalと送信直前guardをSDKへ伝え、期限済みなら送信0", async () => {
+    const send = vi.spyOn(S3Client.prototype, "send").mockImplementation(async () => okPut());
+    const abort = new AbortController(), beforeAttempt = vi.fn();
+    await r2PutBytes("protocol.json", new Uint8Array([123, 125]), null, "raw-bucket", "application/json", undefined,
+      { abortSignal: abort.signal, beforeAttempt });
+    expect(beforeAttempt).toHaveBeenCalledTimes(1);
+    const signal = (send.mock.calls[0][1] as { abortSignal: AbortSignal }).abortSignal;
+    abort.abort(); expect(signal.aborted).toBe(true);
+    await expect(r2PutBytes("protocol.json", new Uint8Array([123, 125]), null, "raw-bucket", "application/json", undefined,
+      { abortSignal: abort.signal })).rejects.toThrow();
+    await expect(r2PutBytes("protocol.json", new Uint8Array([123, 125]), null, "raw-bucket", "application/json", undefined,
+      { beforeAttempt: () => { throw new Error("hard expired"); } })).rejects.toThrow("hard expired");
+    expect(send).toHaveBeenCalledTimes(1);
+  });
   it("非UTF8 bytesと明示bucketを読書きで保持する", async () => {
     const body = new Uint8Array([0, 255, 254, 128]);
     const send = vi.spyOn(S3Client.prototype, "send");

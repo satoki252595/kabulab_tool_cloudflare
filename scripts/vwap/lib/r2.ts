@@ -250,7 +250,7 @@ function redactDiagnostic(value: string): string {
 }
 
 function logToken(value: string): string {
-  const redacted = redactDiagnostic(value).replace(/[\s\u0000-\u001f]+/g, "");
+  const redacted = [...redactDiagnostic(value)].filter(char => !/\s/u.test(char) && char.codePointAt(0)! >= 32).join("");
   return redacted.length > 0 ? redacted : "none";
 }
 
@@ -278,7 +278,7 @@ export async function r2Put(key: string, body: string, observedVersion: string |
 }
 
 /** 原本バイナリも同じ単発/CAS契約で保存する。bucketはcallerが明示する。 */
-export async function r2PutBytes(key: string, body: Uint8Array, observedVersion: string | null, bucket: string | undefined, contentType: string, metadata?: Record<string, string>): Promise<void> {
+export async function r2PutBytes(key: string, body: Uint8Array, observedVersion: string | null, bucket: string | undefined, contentType: string, metadata?: Record<string, string>, opts?: Pick<R2ReadOptions, "abortSignal" | "beforeAttempt">): Promise<void> {
   if (!contentType.trim()) throw new Error("R2 content type must be explicit");
   if (observedVersion !== null && (typeof observedVersion !== "string" || observedVersion.trim().length === 0 || observedVersion.trim() === "*")) {
     throw new Error("R2 write requires an observed ETag or explicit missing-object null");
@@ -296,11 +296,13 @@ export async function r2PutBytes(key: string, body: Uint8Array, observedVersion:
   }
   if (typeof bucket !== "string" || !bucket.trim()) throw new Error("R2 bucket must be explicit");
   let res: unknown;
+  if (opts?.beforeAttempt !== undefined) await opts.beforeAttempt();
+  opts?.abortSignal?.throwIfAborted();
   try {
     res = await client().send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: contentType,
       ...(observedVersion === null ? { IfNoneMatch: "*" } : { IfMatch: observedVersion }),
       ...(metadata === undefined ? {} : { Metadata: metadata }),
-    }), { abortSignal: AbortSignal.timeout(60_000) });
+    }), { abortSignal: opts?.abortSignal === undefined ? AbortSignal.timeout(60_000) : AbortSignal.any([opts.abortSignal, AbortSignal.timeout(60_000)]) });
   } catch (e) {
     const { code, status } = r2CauseOf(e);
     logR2PutFailure(key, e, status);
