@@ -12,7 +12,7 @@ import { selectSummaryTasks, type BenefitRow } from "../../data-scripts/summary-
 
 const dirs: string[] = [];
 const cursorKey = "mechanical-publishing/v1/cursors/yutai-summary.json";
-afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => { vi.useRealTimers(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 function state() {
   const path = mkdtempSync(join(tmpdir(), "yutai-mechanical-unit-")); dirs.push(path); return path;
 }
@@ -130,4 +130,18 @@ describe("Linux mechanical summary / shared writer", () => {
     await expect(runMechanicalSummary({ stateDir: state(), limit: 60 }, create, memory.store)).rejects.toThrow("未閉鎖");
     expect(create).not.toHaveBeenCalled(); expect(deps.generate).not.toHaveBeenCalled();
   });
+});
+
+it("expired batch admission stops before owner/deps; an already admitted atomic batch closes after soft", async () => {
+  vi.useFakeTimers(); const start = Date.parse("2026-10-25T19:17:00.000Z"); vi.setSystemTime(start);
+  const memory = storeFixture(), { deps } = dependencies([row(1)], memory.events), create = vi.fn(() => deps);
+  await expect(runMechanicalSummary({ stateDir: state(), limit: 60, sourceDeadlineMs: start }, create, memory.store))
+    .rejects.toThrow("start_deadline");
+  expect(create).not.toHaveBeenCalled(); expect(memory.store.get).not.toHaveBeenCalled();
+  const archive = deps.archive; deps.archive = vi.fn(async (...args: Parameters<LocalDependencies["archive"]>) => {
+    vi.setSystemTime(start + 60_001); await archive(...args);
+  });
+  expect(await runMechanicalSummary({ stateDir: state(), limit: 60, sourceDeadlineMs: start + 60_000 }, create, memory.store))
+    .toMatchObject({ accepted: 1, modelCalls: 0 });
+  expect(memory.current()).toMatchObject({ owner: null, pending: null });
 });

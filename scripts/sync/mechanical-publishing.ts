@@ -5,11 +5,13 @@ import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { sharedEnv } from "../../src/shared/env.js";
+import { nativeJobExecutionWindow, installScheduledDeadline } from "../../src/shared/scheduled-admission.js";
 import { parseStockCode } from "../../src/shared/jpx/stock-code.js";
 import { runMechanicalPublishing } from "../../services/yuho-quant/src/biztag/mechanical-publishing.js";
 import { runMechanicalSummary } from "../../services/otakara-yutai/data-scripts/summary-mechanical.js";
 import { publishingStore, withSharedPublishingWriter } from "../mechanical-publishing/shared-writer.js";
-import { installCatchupDeadline, launchEnv } from "./catchup-launch.js";
+import { launchEnv } from "./catchup-launch.js";
 
 export function parseMechanicalPublishingArgs(argv: string[]) {
   const { values } = parseArgs({ args: argv, strict: true, options: {
@@ -27,21 +29,35 @@ export function parseMechanicalPublishingArgs(argv: string[]) {
   return { target: values.target, limit, budgetMs, codes, stateDir: values["state-dir"] };
 }
 
+/** 元のCLI予算とnative killの両方から、同じsoft/hardを各publisherへ渡す。 */
+export function mechanicalPublishingWindow(budgetMs: number, nowMs: number, jobStartedAt: string | undefined,
+  github: boolean) {
+  assert(Number.isSafeInteger(budgetMs) && budgetMs > 0 && budgetMs <= 15 * 60_000);
+  assert(!github || jobStartedAt !== undefined, "GitHub job開始時計がありません。取得前に停止します");
+  const native = nativeJobExecutionWindow(nowMs, jobStartedAt, 30, 5);
+  const requested = nowMs + budgetMs + 5 * 60_000;
+  const deadline = native === undefined ? requested : Math.min(requested, native.deadline);
+  const sourceDeadline = deadline - 5 * 60_000;
+  assert(Number.isSafeInteger(deadline) && sourceDeadline > nowMs, "機械同期の新規開始予算が残っていません");
+  return { sourceDeadline, deadline };
+}
+
 export async function main(argv = process.argv.slice(2)) {
   const options = parseMechanicalPublishingArgs(argv);
   if (launchEnv.eventName() !== undefined) {
     assert(["schedule", "workflow_dispatch"].includes(launchEnv.eventName()!));
     assert.equal(launchEnv.eventRef(), "refs/heads/main");
+    assert(sharedEnv.BATCH_JOB_STARTED_AT() !== undefined, "GitHub job開始時計がありません。取得前に停止します");
     const head = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
     assert.equal(head, launchEnv.eventSha()); execFileSync("git", ["diff", "--quiet", "HEAD", "--"], { stdio: "ignore" });
   }
-  // Ten minutes for new body units by default, five to close an admitted unit; outer job reserves setup/exit time.
-  const deadlineMs = Date.now() + options.budgetMs + 5 * 60_000;
-  const restore = installCatchupDeadline(deadlineMs), store = publishingStore(deadlineMs);
+  const window = mechanicalPublishingWindow(options.budgetMs, Date.now(), sharedEnv.BATCH_JOB_STARTED_AT(), launchEnv.eventName() !== undefined);
+  const restore = installScheduledDeadline(window.deadline);
   try {
+    const store = publishingStore(window.deadline);
     const result = options.target === "supplement"
-      ? await withSharedPublishingWriter(() => runMechanicalPublishing({ limit: options.limit, budgetMs: options.budgetMs, codes: options.codes }), store)
-      : await runMechanicalSummary({ limit: options.limit, stateDir: resolve(options.stateDir!), allowModel: false }, undefined, store);
+      ? await withSharedPublishingWriter(() => runMechanicalPublishing({ limit: options.limit, budgetMs: options.budgetMs, codes: options.codes, sourceDeadlineMs: window.sourceDeadline, deadlineMs: window.deadline }), store)
+      : await runMechanicalSummary({ limit: options.limit, stateDir: resolve(options.stateDir!), allowModel: false, sourceDeadlineMs: window.sourceDeadline }, undefined, store);
     console.info(`[mechanical-publishing] ${JSON.stringify({ target: options.target, ...result })}`);
     return options.target === "supplement" && "held" in result && (Array.isArray(result.held) && result.held.length > 0 || "unstarted" in result && result.unstarted > 0) ||
       "rejected" in result && result.rejected > 0 ? 1 : 0;

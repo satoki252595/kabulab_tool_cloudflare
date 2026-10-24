@@ -3,8 +3,10 @@ import { DatabaseSync } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readVerifiedDocText } from "../services/text-backup.js";
+vi.mock("../services/text-backup.js", () => ({ readVerifiedDocText: vi.fn(async () => []) }));
 import { yuhoEnv } from "../env.js";
-import { assertLatestDocCurrent, loadLatestDocs, loadNewStockEligibility } from "./source.js";
+import { assertLatestDocCurrent, loadLatestDocs, loadNewStockEligibility, readQualifiedBiztagDocText, BiztagTextQualificationError } from "./source.js";
 
 // 公開済みの実 JPX イベント断片。未来/破損等の変更は資格拒否のための unit input。
 const batch = JSON.parse(readFileSync(new URL("../../../../src/cron/__fixtures__/overlay-atomic/batch-excerpt.json", import.meta.url), "utf8"));
@@ -29,6 +31,8 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(() => { throw new Error("ネットワークは禁止"); }));
   queries = [];
   responses = [];
+  vi.mocked(readVerifiedDocText).mockReset().mockResolvedValue([{ sectionKey: "business", itemName: "事業の内容", text: "明示的な合成プロトコル本文" }]);
+  vi.stubEnv("NOTION_YUHO_TEXT_DB_ID", "11111111-1111-1111-1111-111111111111");
   sqlite = new DatabaseSync(":memory:");
   sqlite.exec(readFileSync(new URL("../../../../drizzle/d1/0034_edinet_reported_resolutions.sql", import.meta.url), "utf8"));
   sqlite.exec(`
@@ -284,4 +288,16 @@ describe("最新有報の決定的な選択", () => {
     await expect(assertLatestDocCurrent(db(), "1414", expected)).rejects.toThrow("旧値を保持してHOLD");
     expect(queries).toHaveLength(1); expect(fetch).not.toHaveBeenCalled();
   });
+  it("consumer rechecks only its exact D1 doc/issuer before shared seven-property reader", async () => {
+    latestFixture(); const current = (await loadLatestDocs(db()))[0]; queries = []; responses = [];
+    await readQualifiedBiztagDocText(db(), current.stockCode, current.doc!);
+    expect(queries).toHaveLength(1); expect(queries[0]).toContain('limit ?');
+    expect(responses[0].params).toContain(current.stockCode); expect(responses[0].params).toContain(current.doc!.docId);
+    expect(readVerifiedDocText).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ stockCode: current.stockCode,
+      docId: current.doc!.docId, d1DocumentId: 2, rowPageId: current.doc!.notionDocPageId, deriveCountsFromBody: true }));
+    vi.mocked(readVerifiedDocText).mockClear();
+    await expect(readQualifiedBiztagDocText(db(), "6963", current.doc!)).rejects.toBeInstanceOf(BiztagTextQualificationError);
+    expect(readVerifiedDocText).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+  });
+
 });

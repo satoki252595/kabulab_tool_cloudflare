@@ -16,17 +16,27 @@ import {
 
 /** モデル許可は入口で拒否する。deps生成時にもモデル実行やモデル用env読取は行わない。 */
 export async function runMechanicalSummary(
-  options: LocalOptions,
+  options: LocalOptions & { sourceDeadlineMs?: number },
   createDependencies: () => LocalDependencies = dependencies,
   store?: PublishingStore,
 ): Promise<LocalReport> {
   if (options.allowModel === true) throw new Error("mechanical_summary_model_forbidden");
   if (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 60 || !options.stateDir.trim())
     throw new Error("mechanical_summary_invalid_options");
-  return withSharedPublishingWriter(() => runLocalSummary({ ...options, allowModel: false }, {
-    ...createDependencies(),
-    generate: async () => { throw new Error("mechanical_summary_model_forbidden"); },
-  }), store);
+  const assertStart = () => {
+    if (options.sourceDeadlineMs !== undefined &&
+        (!Number.isSafeInteger(options.sourceDeadlineMs) || Date.now() >= options.sourceDeadlineMs))
+      throw new Error("mechanical_summary_start_deadline");
+  };
+  assertStart();
+  return withSharedPublishingWriter(() => {
+    // 最大60群の原子batch。開始前だけsoftを確認し、開始済PRE→POSTは共通hardまで閉鎖する。
+    assertStart();
+    return runLocalSummary({ ...options, allowModel: false }, {
+      ...createDependencies(),
+      generate: async () => { throw new Error("mechanical_summary_model_forbidden"); },
+    });
+  }, store);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

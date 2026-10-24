@@ -8,11 +8,11 @@ import { SHARED_WRITER_KEY, withSharedPublishingWriter, type PublishingStore } f
 import { mechanicalSelection, mechanicalTextInput, publishingCursor, runMechanicalPublishing } from "./mechanical-publishing.js";
 import { planWork, withInputReceipt } from "./plan.js";
 import { TEXT_SECTIONS } from "../services/edinet/text-sections.js";
-import type { LatestDoc } from "./source.js";
+import { BiztagTextQualificationError, type LatestDoc } from "./source.js";
 
-const io = vi.hoisted(() => ({ latest: vi.fn(), rows: vi.fn(), full: vi.fn(), source: vi.fn(), replace: vi.fn(), create: vi.fn() }));
+const io = vi.hoisted(() => ({ latest: vi.fn(), rows: vi.fn(), full: vi.fn(), source: vi.fn(), qualified: vi.fn(), replace: vi.fn(), create: vi.fn() }));
 vi.mock("../../../../src/shared/db/d1-http-client.js", () => ({ createD1HttpDb: () => ({}) }));
-vi.mock("./source.js", async original => ({ ...await original<typeof import("./source.js")>(), loadLatestDocs: io.latest, assertLatestDocCurrent: vi.fn() }));
+vi.mock("./source.js", async original => ({ ...await original<typeof import("./source.js")>(), loadLatestDocs: io.latest, assertLatestDocCurrent: vi.fn(), readQualifiedBiztagDocText: io.qualified }));
 vi.mock("../../../../src/shared/notion-archive/index.js", async original => ({ ...await original<typeof import("../../../../src/shared/notion-archive/index.js")>(),
   ensureSupplementDb: vi.fn(async () => ({ dbId: "protocol-db", propertyIds: {} })), loadSupplementRows: io.rows,
   loadStockMasterIndex: vi.fn(async () => ({ index: new Map([["6103", "protocol-master"]]), duplicates: new Set() })),
@@ -44,9 +44,10 @@ function store(): PublishingStore {
 beforeEach(() => {
   vi.clearAllMocks(); vi.stubGlobal("fetch", vi.fn(() => { throw new Error("network forbidden"); }));
   io.latest.mockResolvedValue([latest]); io.rows.mockResolvedValue([row()]); io.full.mockResolvedValue(row()); io.source.mockResolvedValue(sections);
+  io.qualified.mockImplementation(async (_db, _code, doc) => io.source(doc.notionDocPageId, true));
   io.replace.mockResolvedValue(undefined); io.create.mockResolvedValue("protocol-new");
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 it("new qualified body preserves old semantic columns and makes monthly retag detectable", async () => {
   const old = row(); old.docId = "S100OLD"; old.tagDoc = "S100OLD 2025年3月期";
@@ -67,13 +68,13 @@ it("same doc changed four-section input is retag work, never current judgment re
   const input = await mechanicalTextInput(latest, saved, sections, null);
   expect(planWork([latest], [{ ...saved, ...input } as SupplementRow], "2026-10-25")[0]).toMatchObject({ kind: "retag", checkSourceInput: true });
 });
-it("finite full target verification avoids source read when unchanged, but repairs a user-cleared cell with semantic state intact", async () => {
+it("finite full target verification qualifies source even when unchanged, and repairs a user-cleared cell with semantic state intact", async () => {
   const saved = row(), input = await mechanicalTextInput(latest, saved, sections, "protocol-master");
   Object.assign(saved, input); saved.texts = row().texts;
   io.rows.mockResolvedValue([saved]); io.full.mockResolvedValue(saved);
   const run = () => withSharedPublishingWriter(() => runMechanicalPublishing({ codes: ["6103"], limit: 1, budgetMs: 60_000 }), store());
   expect(await run()).toMatchObject({ unchanged: 1, synced: 0, modelCalls: 0 });
-  expect(io.full).toHaveBeenCalledTimes(1); expect(io.source).not.toHaveBeenCalled();
+  expect(io.full).toHaveBeenCalledTimes(1); expect(io.qualified).toHaveBeenCalledTimes(1); expect(io.source).toHaveBeenCalledTimes(1);
   io.full.mockResolvedValue({ ...saved, texts: { ...saved.texts, "事業の内容": "" } });
   expect(await run()).toMatchObject({ synced: 1, modelCalls: 0 });
   expect(io.source).toHaveBeenCalledWith(latest.doc!.notionDocPageId, true);
@@ -105,4 +106,29 @@ it("changed-document and rotation selectors use real saved rows, bounded SQL out
     expect(sqls.every(sql => sql.includes("limit ?") && sql.includes('"is_active"') && sql.includes('"instrument_type"'))).toBe(true);
     expect(io.source).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
   } finally { sqlite.close(); }
+});
+
+it("one admitted body can close after soft; the next body never starts and both keep the exact hard bound", async () => {
+  vi.useFakeTimers(); const start = Date.parse("2026-10-25T19:17:00.000Z"); vi.setSystemTime(start);
+  const soft = start + 60_000, hard = soft + 5 * 60_000;
+  io.latest.mockResolvedValue([latest, { ...latest, stockCode: "6104" }]);
+  io.source.mockImplementation(async () => { vi.setSystemTime(soft + 1); return sections; });
+  const result = await withSharedPublishingWriter(() => runMechanicalPublishing({ codes: ["6103", "6104"], limit: 2,
+    budgetMs: 600_000, sourceDeadlineMs: soft, deadlineMs: hard }), store());
+  expect(result).toMatchObject({ synced: 1, processed: 1, unstarted: 1 });
+  expect(io.source).toHaveBeenCalledTimes(1); expect(io.replace).toHaveBeenCalledTimes(1);
+  vi.setSystemTime(hard);
+  await expect(withSharedPublishingWriter(() => runMechanicalPublishing({ codes: ["6103"], limit: 1, budgetMs: 600_000,
+    sourceDeadlineMs: soft, deadlineMs: hard }), store())).rejects.toThrow();
+  expect(io.source).toHaveBeenCalledTimes(1);
+});
+
+it("mechanical source metadata HOLD creates no publication or business write", async () => {
+  io.qualified.mockRejectedValueOnce(new BiztagTextQualificationError(new Error("7メタ不一致")));
+  const memory = store(), put = vi.spyOn(memory, "put");
+  await expect(withSharedPublishingWriter(() => runMechanicalPublishing({ codes: ["6103"], limit: 1, budgetMs: 60_000 }), memory))
+    .rejects.toThrow("publishing_read_only_failed");
+  expect(io.qualified).toHaveBeenCalledWith(expect.anything(), "6103", latest.doc);
+  expect(io.replace).not.toHaveBeenCalled(); expect(io.create).not.toHaveBeenCalled();
+  expect(put.mock.calls.some(([key]) => key.includes("/operations/"))).toBe(false);
 });

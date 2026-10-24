@@ -7,13 +7,13 @@ import { createD1HttpDb } from "../../../../src/shared/db/d1-http-client.js";
 import { parseStockCode } from "../../../../src/shared/jpx/stock-code.js";
 import { currentPublishingWriter, publishingReadOnly } from "../../../../scripts/mechanical-publishing/shared-writer.js";
 import { buildSupplementProperties, createSupplementRow, ensureSupplementDb, loadStockMasterIndex, loadSupplementRows,
-  notionStats, readStockTextRow, replaceEvidenceBlock, resetNotionStats, type SupplementRow, type SupplementRowInput } from "../../../../src/shared/notion-archive/index.js";
+  notionStats, replaceEvidenceBlock, resetNotionStats, type SupplementRow, type SupplementRowInput } from "../../../../src/shared/notion-archive/index.js";
 import { normalizeSupplementText, readSupplementRowFully, SupplementWriteHeldError } from "../../../../src/shared/notion-archive/stock-supplement.js";
 import { NotionConfigError } from "../../../../src/shared/notion-archive/env.js";
 import { sha256Hex } from "../../../../src/shared/sha256.js";
 import * as schema from "../db/schema.js";
 import { TEXT_SECTIONS } from "../services/edinet/text-sections.js";
-import { assertLatestDocCurrent, loadLatestDocs, type BiztagSourceDb, type LatestDoc } from "./source.js";
+import { assertLatestDocCurrent, loadLatestDocs, readQualifiedBiztagDocText, type BiztagSourceDb, type LatestDoc } from "./source.js";
 import { displayName, hasUsableText, readInputReceipt, rowTextSyncReceipt } from "./plan.js";
 import { savedRowGuard, textColumnsOf, textReceipt } from "./process.js";
 import { PREFILTER_SECTIONS } from "./prefilter.js";
@@ -70,13 +70,18 @@ export async function mechanicalTextInput(latest: LatestDoc, row: SupplementRow 
   return input;
 }
 
-export async function runMechanicalPublishing(options: { limit: number; budgetMs: number; codes?: string[] }) {
+export async function runMechanicalPublishing(options: { limit: number; budgetMs: number; codes?: string[]; sourceDeadlineMs?: number; deadlineMs?: number }) {
   assert(Number.isSafeInteger(options.limit) && options.limit > 0 && options.limit <= 50);
   assert(Number.isSafeInteger(options.budgetMs) && options.budgetMs > 0 && options.budgetMs <= 15 * 60_000);
   if (options.codes) assert(options.codes.length > 0 && options.codes.length <= options.limit && new Set(options.codes).size === options.codes.length && options.codes.every(code => parseStockCode(code) === code));
   const writer = currentPublishingWriter(); assert(writer, "機械同期には共有writerが必要です");
-  await writer.assertReady(); const start = Date.now(), soft = start + options.budgetMs;
-  const active = () => { if (Date.now() >= soft + 5 * 60_000) throw new NotionConfigError("機械同期の閉鎖期限を超えました"); };
+  const start = Date.now();
+  assert((options.sourceDeadlineMs === undefined) === (options.deadlineMs === undefined));
+  const soft = options.sourceDeadlineMs === undefined ? start + options.budgetMs : options.sourceDeadlineMs;
+  const hard = options.deadlineMs === undefined ? soft + 5 * 60_000 : options.deadlineMs;
+  assert(Number.isSafeInteger(soft) && Number.isSafeInteger(hard) && soft > start && hard - soft === 5 * 60_000);
+  await writer.assertReady();
+  const active = () => { if (Date.now() >= hard) throw new NotionConfigError("機械同期の閉鎖期限を超えました"); };
   resetNotionStats();
   const cursor = publishingCursor(await writer.readCursor("supplement-texts"), start);
   const db = createD1HttpDb(schema) as unknown as BiztagSourceDb;
@@ -125,14 +130,14 @@ export async function runMechanicalPublishing(options: { limit: number; budgetMs
           active();
           const full = row === null ? null : await publishingReadOnly(() => readSupplementRowFully(row.pageId, supplement.dbId, TEXT_SECTIONS.map(s => s.title), active));
           if (full !== null) assert(full.stockCode === item.stockCode && JSON.stringify(savedRowGuard(full)) === JSON.stringify(savedRowGuard(row!)), "補足メタ/判定が限定plan後に変更されています");
-          // A receipt alone cannot detect a user-cleared cell. Verify the finite current target,
-          // then avoid rereading the saved source when its complete normalized digest still matches.
+          // 旧receiptだけではsource所属を証明できない。unchanged候補も同じ資格readerを1回通す。
+          const sections = await publishingReadOnly(() => readQualifiedBiztagDocText(db, item.stockCode, item.doc!));
+          active();
           if (current && full !== null && full.masterLinked && full.companyName === item.companyName && full.sector33 === item.sector33 &&
               await sha256Hex(JSON.stringify(TEXT_SECTIONS.map(({ title }) => [title, normalizeSupplementText(full.texts[title]) || null]))) === prior!.notionTextsSha256) {
             unchanged++; done.add(item.stockCode); continue;
           }
-          const sections = await publishingReadOnly(() => readStockTextRow(item.doc!.notionDocPageId!, true));
-          active(); const input = await mechanicalTextInput(item, full, sections, masterId);
+          const input = await mechanicalTextInput(item, full, sections, masterId);
           const beforeWrite = async () => { active(); await assertLatestDocCurrent(db, item.stockCode, item.doc, { companyName: item.companyName, sector33: item.sector33 }); };
           if (full === null) { await beforeWrite(); await createSupplementRow(supplement.dbId, input, null, writer.supplementJournal()); }
           else await replaceEvidenceBlock(full.pageId, undefined, input, { ...savedRowGuard(full), ...buildSupplementProperties({ texts: full.texts }) }, beforeWrite, writer.supplementJournal());
