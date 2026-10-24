@@ -1,6 +1,6 @@
 # 本番定期処理とSSH補完
 
-確認日: 2026-10-25。予定時刻・先行条件・LLM利用の正本は[READMEの定期処理表](../README.md#本番の定期処理先行条件llm利用)。機能・取得元・手動/停止/未実装の全件は[データ一覧](batch-data-inventory.md)。日次の本体はGitHub Actions。本文39・基本補足・優待機械要約は[Linux日次](mechanical-publishing.md)へ分離し、初回共有状態移行・本番受入・有効化を先行条件とする。Mac自動起動は廃止を維持し、Clef判定・競合入力準備は[月次手動](mac-monthly-manual.md)。SSHのnipogiは有限補完用。
+確認日: 2026-10-25。予定時刻・先行条件・LLM利用の正本は[READMEの定期処理表](../README.md#本番の定期処理先行条件llm利用)。機能・取得元・手動/停止/未実装の全件は[データ一覧](batch-data-inventory.md)。日次の本体はGitHub Actions。本文39・基本補足・優待機械要約は[Linux日次](mechanical-publishing.md)へ分離し、共有状態移行・有限本番確認後に有効化済み。初回Actionsは本文31社同期/今回未着手19・優待60件保留/適用0・モデル0でFAILURE終了し、[受入台帳](work-plans/production-completion-20261025.md)へ分離する。Mac自動起動は廃止を維持し、Clef判定・競合入力準備は[月次手動](mac-monthly-manual.md)。SSHのnipogiは有限補完用。
 
 ## 起動と担当
 
@@ -12,12 +12,12 @@
 | Actions `moneyflow.yml` | CF dispatch／株式成功後のworkflow_call | 独立28取得元、または価格依存の業種資金フロー | 閉鎖済み非Yahoo→独立Yahoo→両lane成功時のjoin。既知のsource失敗と保存結果不明を区別し、不明なら後続停止 | なし |
 | Actions `catchup.yml` | CF dispatch | TDnet→Node有報・保有明細 | 共通資格・保存設定が成功すればTDnet失敗でもEDINETを実行。取消・資格失敗では停止。旧biztag定期writerは停止 | なし |
 | ActionsのPython処理 | CF dispatch: `supply_daily.yml`／`tdnet_hourly.yml`／`edinet_daily.yml`、毎月1日06時: `master_sync.yml` | 日証金、TDnet速報、財務サマリ、公式提出者マスタ | 予定日時・受付/追加IO締切と各原本の日付・主体・writer契約を検査 | なし |
-| Actions `mechanical-publishing.yml` | 毎日04:17、初回移行・有効化後 | 保存済み本文39・基本補足（最大50社）→優待機械要約（最大60群） | 本文の既知HOLDでも独立した優待へ進む。共有owner/pendingが未閉鎖なら後続の依存生成前に停止。原文取込・Macとも同じR2共有writer | なし |
+| Actions `mechanical-publishing.yml` | 毎日04:17、有効化済み | 保存済み本文39・基本補足（最大50社）→優待機械要約（最大60群） | 本文の既知HOLDでも独立した優待へ進む。共有owner/pendingが未閉鎖なら後続の依存生成前に停止。原文取込・Macとも同じR2共有writer | なし |
 | Actionsの監視 | `ops_check.yml`（日次）／`cloud_check.yml`（手動）／CF期限確認 | 鮮度・実run・schema・公開資格・配備 | 取得失敗でも判定を実行。自動的な再取得で埋めない | なし |
 | Mac月次手動 | Calendar予定＋メール通知のコマンド | 適格新規/実入力変更のClef判定、競合入力準備 | 旧LaunchAgentの2labelはdisable＋bootout。受入済みruntime・state・未完intent・原本を保持し、共有writerを使用 | Clef判定のみあり |
 | SSH nipogi | 対象・入力・期限を固定した手動補完 | 本番と同じ通常CLIで価格・保有・原本等を補完 | kabulab-cf用のSSH日次cronは未登録。定期writerと競合させない | なし |
 
-GitHubのYAMLは15本、宣言23 jobs。歴史RAW全量用`raw_index_backfill.yml`の1 jobは意図的無効で、残る14 workflow／22 jobsのうち機械publisherの2 jobsは初回移行・本番受入後の`MECHANICAL_PUBLISHING_ENABLED=true`設定まで実行しない。`backfill.yml`・`roa_saved_raw_publish.yml`は手動用。予定日時・受付・締切の正本は[時刻契約](stock-scheduler.md#取得処理の時刻契約)。設定有効・自然定期の成功・全データ充足は別に確認する。
+GitHubのYAMLは15本、宣言23 jobs。歴史RAW全量用`raw_index_backfill.yml`の1 jobは意図的無効で、残る14 workflow／22 jobsには移行済み機械publisherの2 jobsを含む。`MECHANICAL_PUBLISHING_ENABLED=true`は読戻し済み。`backfill.yml`・`roa_saved_raw_publish.yml`は手動用。予定日時・受付・締切の正本は[時刻契約](stock-scheduler.md#取得処理の時刻契約)。設定有効・自然定期の成功・全データ充足は別に確認する。
 
 時刻契約を持つActions CLIは、`record-job-clock`が取得した元jobの実開始時刻を使い、段階ごとのCLI開始でnative上限を延長しない。固定JST締切とnative終了前の余裕を両方守り、新source停止後も取得済み原本の保管・照合をhardまで進める。機械publisherは各job30分、hardは「CLI開始＋元budget＋5分」と「job実開始＋25分」の早い方、softはhardの5分前。clock欠落・残時間不足では共有owner取得前に停止する。HTTPとR2も同じhardを使い、送信済み結果不明は未完のまま保持する。
 

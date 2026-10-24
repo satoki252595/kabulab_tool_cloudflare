@@ -1,8 +1,8 @@
 # データ取得・更新・監視の全件一覧
 
-確認日: 2026-10-23。対象は本repoの15 workflow、宣言23 jobs（歴史RAWの無効1 jobを除き有効14 workflow／22 jobs。機械publisher2jobは移行後のenableが先）、CFの14 trigger、通常CLI、Macの2 LaunchAgent。GitHubが動的生成するDependency Graphは業務バッチに含めない。各行はデータ機能単位で、列の欠測や同じ原本の再利用を「新規取得成功」と数えない。
+確認日: 2026-10-25。対象は本repoの15 workflow、宣言23 jobs（歴史RAWの無効1 jobを除き有効14 workflow／22 jobs）、CFの14 trigger、通常CLI、Macの2 LaunchAgent。GitHubが動的生成するDependency Graphは業務バッチに含めない。各行はデータ機能単位で、列の欠測や同じ原本の再利用を「新規取得成功」と数えない。
 
-**Macの2定期設定はユーザー指示でdisable＋bootout済み。本文39/基本補足/優待機械要約は[独立Linux定期](mechanical-publishing.md)へ分離し、Clefと既存競合入力準備は[月次手動](mac-monthly-manual.md)とする。初回共有状態移行前は新定期を有効化しない。** 他のCF／Actions定期は継続する。以下の「自動」は設定上の入口であり、全件充足・直近実行成功の保証ではない。全時刻はJST。
+**Macの2定期設定はユーザー指示でdisable＋bootout済み。本文39/基本補足/優待機械要約は[独立Linux定期](mechanical-publishing.md)へ分離し、共有状態移行・有限本番確認後に有効化済み。Clefと既存競合入力準備は[月次手動](mac-monthly-manual.md)。** 他のCF／Actions定期は継続する。以下の「自動」は設定上の入口であり、全件充足・直近実行成功の保証ではない。全時刻はJST。
 
 ## CF／Actionsの通常取得・更新
 
@@ -20,7 +20,7 @@
 | D08 | RSI14、5年RSI百分位・標本数 | 株式run、同じ調整終値系列 | 自動 |
 | D09 | SMA5/20/25/60/75、ATR14/率、MACD/signal/histogram | 同上 | 自動 |
 | D10 | 20日高安・値幅、Fibonacci38.2/50/61.8、平均売買代金・出来高・出来高倍率、前日騰落率 | 同上 | 自動 |
-| D11 | long/shortトレンド・パーフェクトオーダー、流動性/ボラティリティ/トレンドの3条件と総合flag | 株式run、D09/D10 | 自動。需給・決算カレンダーの2条件は未対応 |
+| D11 | long/shortトレンド・パーフェクトオーダー、流動性/ボラティリティ/トレンドの3条件と総合flag | 株式run、D09/D10 | 自動。需給・2週間以内のカタリストの2条件は未対応 |
 | D12 | ブレイクアウト、押し目/戻り、出来高急増、gap follow/fade、決算後型の価格パターン | 株式run、同run指標 | 自動。決算後型は決算日原本の取得ではない |
 | D13 | 成立シグナルのentry・stop・目標・RR・強度、旧signalの除去 | D12後 | 自動 |
 | D14 | モメンタム用90本投影、鮮度確定、旧対象除去 | 株式runの保存後 | 自動 |
@@ -49,7 +49,7 @@
 | D37 | MA乖離/RSI/MACDの各点数とファンダ/テクニカル/総合score | 月次。MA乖離比較は財務日＝指標日。他項目は保存入力 | 自動 |
 | D38 | 日本市場脚：日経平均確定終値・前日終値・日経VI | 株式側原本から対象日へ保持 | 自動 |
 | D39 | S&P500・VIX・日経先物snapshot | 火〜土06時、保存日本市場脚と予定日を照合 | 自動 |
-| D40 | 日経/S&P騰落、先物gap、マクロ判定と理由 | D38/D39一致・必須値充足 | 条件付き自動。TOPIX売買代金比率は未対応 |
+| D40 | 日経/S&P騰落、先物gap、マクロ判定と理由 | D38/D39一致・必須値充足 | 条件付き自動。東証プライム売買代金の20日平均比は未対応 |
 
 根拠: [stock-sync](../.github/workflows/stock-sync.yml)、[VWAP](../.github/workflows/vwap-ingest.yml)、[Node catchup](../.github/workflows/catchup.yml)、[日次本体](../src/cron/daily.ts)、[月次本体](../src/cron/monthly.ts)、[Python jobs](../pipeline/src/jp_stock_pipeline/jobs/)。
 
@@ -93,15 +93,15 @@
 
 ## 旧Mac自動起動と月次手動の対象機能
 
-**M01/M02/M06はLinux/Actionsへ分離する実装。初回共有状態移行・少量本番受入の後だけ新定期を有効化する。M03/M04/M05は月次手動。** plist・env・モデル・原本・進捗・未完journalを保持し、2labelを永続disable/unloadした。月次手動では受入済みMac runtimeと既存の未完状態・writer排他を使う。23:30の旧Mac日次receipt期待は廃止し、月次手動を旧日次成功へ偽装しない。共通の旧validatorと原本は保全する。
+**M01/M02/M06はLinux/Actionsの日次機械処理として移行・有効化済み。M03/M04/M05はMac月次手動。** plist・env・モデル・原本・進捗・未完journalを保持し、2labelを永続disable/unloadした。月次手動では受入済みMac runtimeと既存の未完状態・writer排他を使う。23:30の旧Mac日次receipt期待は廃止し、月次手動を旧日次成功へ偽装しない。初回Actionsは本文31社同期/今回未着手19・優待60件保留/適用0・モデル0でFAILURE終了。詳細と全データ充足の境界は[受入台帳](work-plans/production-completion-20261025.md)を参照。
 
-| ID | 機能 | 旧予定 | LLM | 移設の境界 |
+| ID | 機能 | 現在の予定 | LLM | 移設の境界 |
 |---|---|---|---|---|
 | M01 | 補足DBの基本情報・マスタrelation | 毎日04:17 Linux/Actions | なし | 変更＋巡回の有限50社、本文/意味判断を分離 |
-| M02 | 補足DBへの39本文同期・不一致修復・実値/欠測観測 | M01と同じ最大50社 | なし | 完全target確認、変更分だけ保存原本GET。旧タグ根拠を保持し新本文と区別 |
-| M03 | keywords/excludes、候補抽出、上流/下流タグ・テーマ導出、同入力判定再利用 | 同上 | なし | 既存no/uncertainを単語一致だけで覆さない |
-| M04 | 適格新規・実入力変更の事業タグClef判定 | 同上 | **あり** | 現行torch-MPS専用でMacの月次手動。モデル約19GB。別ホストへ移設せず既存受入runtimeを使う |
-| M05 | 競合入力・質問・候補の機械準備 | 20時job成功後、設定対象から最大5社 | なし | 現envキーは設定あり。同じMac runtimeのcursor/pendingを再利用。意味判定は行わない |
+| M02 | 補足DBへの39本文同期・不一致修復・実値/欠測観測 | M01と同じ最大50社 | なし | 毎回、選択済み原本の所属/7メタ/strict全文とtargetを資格確認。原文SHA・Notion SHA・旧receipt・targetが一致する時だけ書込0。旧タグ根拠は保持 |
+| M03 | keywords/excludes、候補抽出、上流/下流タグ・テーマ導出、同入力判定再利用 | Mac月次手動の通常biztag内 | なし | 既存no/uncertainを単語一致だけで覆さない。日次本文同期から独立 |
+| M04 | 適格新規・実入力変更の事業タグClef判定 | M03と同じ月次手動 | **あり** | 現行torch-MPS専用、モデル約19GB。受入済みruntimeで実行し、旧モデル結果不明の停止を維持 |
+| M05 | 競合入力・質問・候補の機械準備 | 月次biztag成功後、設定対象から最大5社 | なし | 現envキーは設定あり。同じMac runtimeのcursor/pendingを再利用。意味判定は行わない |
 | M06 | 優待の機械要約、金額/条件検証、PRE/CAS/POST | 本文job終了後、Linux/Actions最大60群 | なし | 既知本文HOLDとは独立。原文取込とも同じ共有writer、機械未対応は保留 |
 | M07 | 旧日次の30分期限・R2 receipt（保全）、共有lock・原文/journal | 両処理共通 | なし | 月次はstageごとの独立期限。旧日次receiptは更新せず、既存stateを使う |
 
@@ -158,12 +158,12 @@
 | X09 | 歴史RAW全量ミラー/索引 | workflowはdisabled_manually、全量コピーを再開しない | なし |
 | X10 | 必要RAW限定補完・保存済み固定ROA原本公開 | raw:required/roa_saved_raw_publish手動 | なし |
 | X11 | Notion索引更新・移設・重複解消、schema適用、unknownの照合/ACK | 手動管理。保存結果不明を自動再送しない | なし |
-| X12 | 内部API/MCPの成功認証通し確認 | 既存キーを使う成功probeは未受入・定期未配線。cloud_checkで代用しない | なし |
+| X12 | 内部API/MCPの成功認証通し確認 | 旧認証3ケース＋新REST7ケース/77行・MCP3ケースを段階受入済み。公開5ケースもPASS。定期probeではなく、全API/全データの保証へ広げない | なし |
 | X13 | ローカルPostgreSQL/端末B FastAPI、XBRL全facts/textblock別ミラー | 任意コード残存。root/退役Mac/SSH.envの関連11キー未定義、GH secret/注入もなし。本番必須依存ではない。接続/起動状態は未調査 | なし |
 | X14 | LOCAL_OUT | ローカルFSへ向ける検証用。R2本番保存実績の代用不可 | なし |
 | X15 | sync:daily等の手動一括wrapper | 定期とは別入口。sync:monthlyは今回Mac要約起動を除去 | なし |
-| X16 | スイング需給条件の信用倍率接続、カタリストの決算カレンダー | screenerの5条件中この2条件は未対応。日証金/信用残の取得済みと機能接続済みは別 | 未実装 |
-| X17 | マクロのTOPIX売買代金比率 | 現在常にnull | 未実装 |
+| X16 | 個別④買残高/出来高の比率、⑤2週間以内のカタリスト | 自動接続は未対応。対象日/集計期間や将来イベントを推定しない。#572で元仕様に沿う手動案内へ修正済み | 未実装 |
+| X17 | マクロの東証プライム売買代金の20日平均比 | `topixTurnoverRatio`は現在null。コード名から対象をTOPIX構成銘柄へ変えない | 未実装 |
 | X18 | 全分割・併合・増資の公式イベント解析/法的日付・価格basis/保有適用 | 一部診断・観測・原本custodyは定期接続済み。全イベントの金融資格化は未完 | 未実装部分あり |
 | X19 | 公開coreへのTDnet予想配当利回り | 利用資格・定義・期/株数basis未解決。公開経路は未採用 | 停止 |
 | X20 | DCF/Gordon・CAPM/β・Black-Scholes/Greeks・EMH探索、VWAP/POC/価格帯出来高の表示計算 | 保存データ/入力からリクエスト時に機械計算する機能。独立した蓄積バッチではない | なし |
@@ -172,6 +172,6 @@
 
 ## 月次手動の順序
 
-Mac専用分は[月次手動スクリプト](mac-monthly-manual.md)で、受入済みruntime・既存stateを明示し、通常biztag→設定済みscopeの競合準備→優待機械要約の順に実行する。失敗時は後続STOP、未完intentを維持し再試行しない。既存クラウド月次は毎月10日10:30。案内は2026-11-11から毎月11日09:00 JSTのGoogle Calendar予定・開始0分前メール通知として設定を読戻し確認済み。初回メール受信と手動処理成功は未検証。
+Mac専用分は[月次手動スクリプト](mac-monthly-manual.md)で、受入済みruntime・既存stateを明示し、通常biztag→設定済みscopeの競合準備の順に実行する。優待機械要約は独立Linux日次。失敗時は後続STOP、未完intentを維持し再試行しない。既存クラウド月次は毎月10日10:30。案内は2026-11-11から毎月11日09:00 JSTのGoogle Calendar予定・開始0分前メール通知と、短いコマンド/本手順への参照を読戻し済み。初回メール受信・月次の本モデル実行は未観測。
 
 private証跡は`tmp/feature-audit-20261020/mac-retirement-inventory-v1/`と`local-manual-dependencies-audit-v1/`。停止前snapshotと各disable/bootout1回、postcheck、env/plist保全を記録した。

@@ -17,7 +17,6 @@ concurrency:
 permissions:
   contents: read
   actions: read
-  issues: write
 # Same existing raw bucket as the accepted Mac .env. Root explicitly bootstraps the
 # canonical old journals before enabling MECHANICAL_PUBLISHING_ENABLED=true.
 env:
@@ -52,12 +51,6 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: 本文39・基本補足（最大50社・新規開始10分＋閉鎖5分）
         run: pnpm sync:mechanical --target=supplement --limit=50 --budget-min=10
-      - name: 失敗・HOLDを通知
-        if: failure()
-        uses: ./.github/actions/notify-failure
-        with:
-          title: "[ジョブ失敗] mechanical-publishing supplement"
-          summary: "本文の有限同期が未完です。共有unknownは自動解除せず、実行summaryを確認してください。"
   yutai:
     needs: supplement
     # A known body HOLD is not a semantic dependency. Unknown shared owner blocks this
@@ -78,9 +71,3 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: 優待機械要約（最大60群・モデル禁止）
         run: pnpm sync:mechanical --target=yutai --limit=60 --budget-min=15 --state-dir="${{ runner.temp }}/yutai-mechanical"
-      - name: 失敗・HOLDを通知
-        if: failure()
-        uses: ./.github/actions/notify-failure
-        with:
-          title: "[ジョブ失敗] mechanical-publishing yutai"
-          summary: "優待の有限機械要約が未完です。モデルへ代替せず、実行summary・共有pendingを確認してください。"
