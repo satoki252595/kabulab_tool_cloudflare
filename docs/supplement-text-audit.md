@@ -28,3 +28,5 @@ HTTPはNotionのGET/読取query/search、Notion-hosted添付GET、D1の単一SEL
 既存DBに必要な列がなければ`stage=existing_schema_missing`と固定の不足キーを残し、行query前に停止する。旧`judgeInput`形式の来歴は読めるが、物理schemaの新3列（`textSyncReceipt`・`textInputSha256`・`tagInputSha256`）不存在を実空値へ補作しない。通常の機械同期bootstrap/`ensureSupplementDb`で列を準備してから、新しい有限診断を行う。診断CLI自身はschemaを書き換えない。
 
 10/20の旧7,074空欄のうち6,251セルは、当時のper-code doc/SHA/空欄mapが残っていない。その個別対応を現在の再読から逆算しない。新しい診断のコード・doc・pointer・39列SHA・原本SHA・観測時刻を別の母集団として保存する。既存根拠は[10/20復旧記録](test-logs/recovery-functional-status-20261020.md)を参照。本CLIの本番実行・現在件数は、実行後の私有reportと別の受入記録で確定する。
+
+保存原本の不足は[EDINET ZIPの有限復旧](edinet-archive-repair.md)で、明示した一次日付一覧receiptと同doc/主体/期を確認してから対応する。診断CLI自身のread-only契約は変わらない。

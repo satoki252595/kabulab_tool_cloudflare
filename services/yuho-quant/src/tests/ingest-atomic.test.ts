@@ -808,10 +808,25 @@ describe("raw-before-DB 契約 (原本 mandatory)", () => {
       const call = vi.mocked(recordPrimaryData).mock.calls[0][0];
       expect(call.key).toBe("S100PART1:type5");
       expect(call.files![0].bytes).toEqual(new Uint8Array(csv));
-      expect(call.metadata).toMatchObject({ingestPhase: "partial-source", failedType: 1});
+      expect(call.metadata).toMatchObject({docID: "S100PART1", edinetCode: "E00001", secCode: "10010",
+        filerName: "テスト提出者", docTypeCode: "120", periodStart: "2024-04-01", periodEnd: "2025-03-31",
+        submitDateTime: "2026-09-24 15:00", ingestPhase: "partial-source", failedType: 1});
       expect(verifyArchivedAttachments).toHaveBeenCalledTimes(1);
       expect(counters.batches).toBe(0);
       expect(sqlite.prepare("SELECT count(*) AS n FROM yuho_documents").get()).toEqual({n: 0});
+    } finally {sqlite.close(); restore();}
+  });
+
+  it("native原本metadataのキー欠けはZIP取得前に停止する", async () => {
+    const restore = silenceConsole();
+    const {sqlite, db, counters} = setupBindingDb();
+    try {
+      setupParserBridges();
+      const doc = {...annualDoc("S100META1"), secCode: undefined} as unknown as EdinetDoc;
+      await expect(ingestDocument(db, {stockId: 11, stockCode: "1001", doc})).rejects.toThrow("edinet_archive_metadata_incomplete");
+      expect(downloadDocument).not.toHaveBeenCalled();
+      expect(recordPrimaryData).not.toHaveBeenCalled();
+      expect(counters.batches).toBe(0);
     } finally {sqlite.close(); restore();}
   });
 
