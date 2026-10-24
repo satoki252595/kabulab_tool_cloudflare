@@ -6,7 +6,7 @@ import { parseScheduledAt } from "../../src/shared/scheduled-admission.js";
 import { CATCHUP_START_TIME, CATCHUP_JOIN_CUTOFF_TIME } from "../../src/scheduler/stock.js";
 
 type CatchupPart = "all" | "tdnet" | "edinet";
-const launchEnv = {
+export const launchEnv = {
   eventName: (): string | undefined => process.env.GITHUB_EVENT_NAME,
   eventRef: (): string | undefined => process.env.GITHUB_REF,
   eventSha: (): string | undefined => process.env.GITHUB_SHA,

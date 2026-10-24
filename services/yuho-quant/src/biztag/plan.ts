@@ -20,7 +20,7 @@ export const INITIAL_CLEF_INPUT_PREFIX = "Clef-Flash新規銘柄の初回判定"
 export const INPUT_RECEIPT_PREFIX = "\n[biztag-input-v1] ";
 const TEXT_SYNC_RECEIPT_PREFIX = "\n[biztag-text-sync-v1] ";
 // 現active/同一コードの表示比較だけ。提出主体のstrict legal identityには使用しない。
-const displayName = (value: string) => value.normalize("NFKC").trim().replace(/^(?:株式会社|\(株\))|(?:株式会社|\(株\))$/u, "").trim();
+export const displayName = (value: string) => value.normalize("NFKC").trim().replace(/^(?:株式会社|\(株\))|(?:株式会社|\(株\))$/u, "").trim();
 
 /** 現在の39本文同期の証拠。歴史的なタグ判定入力の証拠とは分ける。 */
 export interface TextSyncReceipt {
@@ -63,6 +63,12 @@ export function withTextSyncReceipt(value: string | null, receipt: TextSyncRecei
 
 function isInitialLocalInput(value: string): boolean {
   return value.startsWith(INITIAL_SEMIF_INPUT_PREFIX) || value.startsWith(INITIAL_CLEF_INPUT_PREFIX);
+}
+
+/** Current body provenance is independent of the immutable historical judgment input. */
+export function rowTextSyncReceipt(row: Pick<SupplementRow, "textSyncReceipt" | "judgeInput">): TextSyncReceipt | null {
+  return row.textSyncReceipt === undefined || row.textSyncReceipt === null
+    ? readTextSyncReceipt(row.judgeInput) : readTextSyncReceipt(withTextSyncReceipt(null, JSON.parse(row.textSyncReceipt)));
 }
 
 /** 判定入力列の既存の説明を保持し、今後の入力照合に必要な来歴だけを添える。 */
@@ -247,20 +253,28 @@ function planOne(
     const savedTagDocId = row.tagDoc === null ? null : row.tagDoc.split(" ", 1)[0];
     const hasTagOrUncertain = row.upstream.length > 0 || row.downstream.length > 0 ||
       row.distribution.length > 0 || (row.uncertain !== null && row.uncertain.length > 0);
-    if (row.docId === null || row.docId.trim().length === 0 || savedTagDocId !== row.docId ||
+    if (row.docId === null || row.docId.trim().length === 0 || savedTagDocId === null || savedTagDocId.trim().length === 0 ||
         row.vocabVersion === null || row.vocabVersion.trim().length === 0 ||
         (hasTagOrUncertain && (row.evidenceText === null || row.evidenceText.trim().length === 0))) {
       return { ...base, kind: "skip", qualificationHeld: true, reason: "判定済みの保存根拠が欠落・不整合のため HOLD。タグと根拠を保持し上書きしない" };
     }
     let receipt: InputReceipt | null, textSync: TextSyncReceipt | null;
-    try { receipt = readInputReceipt(row.judgeInput); textSync = readTextSyncReceipt(row.judgeInput); }
+    try { receipt = readInputReceipt(row.judgeInput); textSync = rowTextSyncReceipt(row); }
     catch { return { ...base, kind: "skip", qualificationHeld: true, reason: "判定入力の来歴が不正のため HOLD。保存済み結果を保持" }; }
+    if (savedTagDocId !== row.docId && (row.textSyncReceipt == null || textSync?.docId !== row.docId ||
+        typeof row.textInputSha256 !== "string" || !/^[a-f0-9]{64}$/.test(row.textInputSha256))) {
+      return { ...base, kind: "skip", qualificationHeld: true, reason: "本文/旧タグの独立した同期来歴が不明なため HOLD。保存済み結果を保持" };
+    }
     if (receipt !== null && (receipt.docId !== savedTagDocId || receipt.vocabVersion !== row.vocabVersion)) {
       return { ...base, kind: "skip", qualificationHeld: true, reason: "判定入力の書類・版が保存済み結果と不一致のため HOLD" };
     }
     if (savedTagDocId !== doc.docId) {
       return { ...base, kind: "retag", sourceChangedLocalJudge: true,
         reason: `判定根拠の書類が最新と異なる (${savedTagDocId} → ${doc.docId})。最新39本文とローカル再判定を同期` };
+    }
+    if (row.textInputSha256 !== undefined && row.textInputSha256 !== null && receipt !== null && row.textInputSha256 !== receipt.sectionsSha256) {
+      return { ...base, kind: "retag", sourceChangedLocalJudge: true, checkSourceInput: true,
+        reason: "同じ書類の現在本文4節SHAが保存判定と不同。旧タグを保持して月次ローカル再判定" };
     }
     if (row.companyName.trim() !== "" && displayName(row.companyName) !== displayName(latest.companyName) ||
         row.docType !== null && row.docType !== (doc.docTypeCode === "120" ? "有報" : "訂正有報") ||

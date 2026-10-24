@@ -18,6 +18,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual, parseArgs } from "node:util";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { withBiztagWriter } from "../../../scripts/biztag-local/runtime.js";
+import { currentPublishingWriter, publishingReadOnly } from "../../../scripts/mechanical-publishing/shared-writer.js";
 import { createD1HttpBatchSender } from "../../../src/shared/db/d1-http-client.js";
 import { recordPrimaryData, verifyArchivedAttachments } from "../../../src/shared/notion-archive/index.js";
 import {
@@ -297,7 +298,21 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
   privateDir(state);
   const pendingWrite = join(state, "pending-write.json");
   if (existsSync(pendingWrite)) throw new Error("previous_write_unresolved");
-  const rows = await deps.loadRows();
+  const writer = currentPublishingWriter();
+  const cursorPath = join(state, "progress.json");
+  // R2がhost共通の正本。Macの旧cursorは初回移行時だけ取り込み、毎回上書きしない。
+  const savedCursor = writer === undefined
+    ? (existsSync(cursorPath) ? readFileSync(cursorPath, "utf8") : null)
+    : await writer.readCursor("yutai-summary");
+  let cursor: string | null = null;
+  if (savedCursor !== null) {
+    let saved: unknown;
+    try { saved = JSON.parse(savedCursor); } catch { throw new Error("invalid_progress"); }
+    const parsed = z.strictObject({ cursor: z.string().check(z.regex(/^[0-9a-f]{16}$/)) }).safeParse(saved);
+    if (!parsed.success) throw new Error("invalid_progress");
+    cursor = parsed.data.cursor;
+  }
+  const rows = await publishingReadOnly(() => deps.loadRows());
   const allTasks = selectSummaryTasks(rows);
   if (allTasks.length === 0)
     return {
@@ -314,19 +329,6 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
       deterministic: 0,
       outcome: "empty",
     };
-  let cursor: string | null = null;
-  const cursorPath = join(state, "progress.json");
-  if (existsSync(cursorPath)) {
-    let saved: unknown;
-    try {
-      saved = JSON.parse(readFileSync(cursorPath, "utf8"));
-    } catch {
-      throw new Error("invalid_progress");
-    }
-    const parsed = z.strictObject({ cursor: z.string().check(z.regex(/^[0-9a-f]{16}$/)) }).safeParse(saved);
-    if (!parsed.success) throw new Error("invalid_progress");
-    cursor = parsed.data.cursor;
-  }
   const tasks = selectFairBatch(allTasks, cursor, options.limit, rows);
   const clock = new Date().toISOString();
   const runDir = join(state, randomUUID());
@@ -362,7 +364,7 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
       reason: "qualified_company_per_grant" })), ...model.amountReasons] };
   writePrivate(join(runDir, "results.jsonl"), generated.resultsText);
   writePrivate(join(runDir, "qualification.json"), JSON.stringify(generated));
-  const fresh = await deps.loadRows();
+  const fresh = await publishingReadOnly(() => deps.loadRows());
   const plan = planSummaryImport({
     tasks,
     resultsText: generated.resultsText,
@@ -397,14 +399,13 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
       run: runDir.split("/").at(-1),
     }),
   );
+  const publication = writer === undefined ? undefined : await writer.reserve("yutai-summary",
+    { clock, tasksSHA256: sha(tasksText), deterministicRule: DETERMINISTIC_SUMMARY_RULE }, plain.toString("utf8"));
   await deps.archive(bundle, clock, "pre", generation); // No D1 mutation if physical/archive/readback fails.
-  const nextCursor = join(state, `progress-${randomUUID()}.json`);
-  writePrivate(nextCursor, JSON.stringify({ cursor: tasks[tasks.length - 1].taskId }));
-  renameSync(nextCursor, cursorPath);
   if (plan.updates.length > 0) {
     await deps.apply(fresh, plan);
   }
-  const post = plan.updates.length > 0 ? await deps.loadRows() : fresh;
+  const post = plan.updates.length > 0 || publication !== undefined ? await publishingReadOnly(() => deps.loadRows()) : fresh;
   const updates = new Map(plan.updates.flatMap((u) => u.ids.map((id) => [id, u] as const)));
   if (post.length !== fresh.length || new Set(post.map((r) => r.id)).size !== post.length)
     throw new Error("summary_post_mismatch");
@@ -450,7 +451,8 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
     JSON.stringify(post.filter((r) => tasks.some((t) => t.taskId === benefitKey(r.stockCode, r.description)))),
   );
   writePrivate(join(runDir, "post-verified.json"), JSON.stringify(report));
-  if (plan.updates.length > 0) {
+  let postSHA256: string | null = null;
+  if (plan.updates.length > 0 || publication !== undefined) {
     const postClock = new Date().toISOString();
     const postPlain = Buffer.from(
       JSON.stringify({
@@ -464,10 +466,17 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
       }),
     );
     const postBundle = gzipSync(postPlain);
+    postSHA256 = sha(postBundle);
     if (!gunzipSync(postBundle).equals(postPlain)) throw new Error("bundle_roundtrip");
     writePrivate(join(runDir, "post-import.json.gz"), postBundle);
     await deps.archive(postBundle, postClock, "post", generation);
   }
+  if (publication !== undefined) await publication.complete({ preBundleSHA256: sha(bundle), postSHA256, report });
+  const nextProgress = JSON.stringify({ cursor: tasks[tasks.length - 1].taskId });
+  if (writer !== undefined) await writer.writeCursor("yutai-summary", nextProgress);
+  const nextCursor = join(state, `progress-${randomUUID()}.json`);
+  writePrivate(nextCursor, nextProgress);
+  renameSync(nextCursor, cursorPath);
   writePrivate(join(runDir, "complete.json"), JSON.stringify(report));
   unlinkSync(pendingWrite);
   return report;
@@ -508,7 +517,7 @@ function generate(tasksPath: string, runDir: string): Promise<string> {
   });
 }
 
-function dependencies(): LocalDependencies {
+export function dependencies(): LocalDependencies {
   const db = openOtakaraD1();
   return {
     loadRows: () => loadBenefitRows(db, "active-equity"),

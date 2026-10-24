@@ -13,6 +13,7 @@
  */
 import { inArray } from "drizzle-orm";
 import { createSupplementPublicationJournal } from "../../../../scripts/biztag-local/publication-journal.js";
+import { currentPublishingWriter } from "../../../../scripts/mechanical-publishing/shared-writer.js";
 import { readSupplementRowFully, type SupplementPublicationJournal } from "../../../../src/shared/notion-archive/stock-supplement.js";
 import { parseStockCode } from "../../../../src/shared/jpx/stock-code.js";
 import type { ClefJournalInput } from "../../../../scripts/biztag-local/clef-journal.js";
@@ -274,8 +275,8 @@ function makeDryRunLedgerWrites(): {
 }
 
 export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
-  const publicationJournal = opts.publicationJournal ?? createSupplementPublicationJournal();
-  publicationJournal.assertReady(); // Cross-run unknown stops before metadata HTTP or model initialization.
+  const publicationJournal = opts.publicationJournal ?? currentPublishingWriter()?.supplementJournal() ?? createSupplementPublicationJournal();
+  await publicationJournal.assertReady(); // Cross-run unknown stops before metadata HTTP or model initialization.
   if (opts.codes !== undefined && (!Array.isArray(opts.codes) || opts.codes.length === 0 ||
       Array.from(opts.codes).some(code => typeof code !== "string" || parseStockCode(code) !== code))) {
     throw new Error("明示codesには空でない正準証券コード一覧が必要です。全量実行はcodesを省略してください");
@@ -469,7 +470,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     uncertain: 0, noCandidates: 0, held: 0, remaining: 0 } : undefined;
 
   for (let i = 0; i < items.length; i++) {
-    publicationJournal.assertReady();
+    await publicationJournal.assertReady();
     const item: WorkItem = items[i];
     publicationJournal.bindSource?.({ stockCode: item.stockCode, docId: item.doc === null ? null : item.doc.docId,
       sourcePageId: item.doc === null ? null : item.doc.notionDocPageId });
@@ -543,7 +544,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
   }
 
   // 7. 見直し材料 (review packet) を台帳へ反映 (内容が変わったときだけ)。
-  publicationJournal.assertReady();
+  await publicationJournal.assertReady();
   if (codes === undefined) {
     const packet = buildReviewPacket(rows, vocab, new Date(start).toISOString());
     await refreshReviewPacketLedger({

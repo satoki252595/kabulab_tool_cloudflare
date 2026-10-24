@@ -49,7 +49,7 @@ function assertCreateIdentity(raw: Uint8Array, input: { dbId: string; stockCode:
 }
 
 /** The existing kernel writer owns this state. A partial directory or record blocks every later run. */
-export function createSupplementPublicationJournal(state = canonicalPublicationState()): SupplementPublicationJournal {
+export function createSupplementPublicationJournal(state = canonicalPublicationState()) {
   return makeJournal(state);
 }
 export function canonicalPublicationState(): string { return join(dirname(realpathSync(fileURLToPath(new URL("../../.env", import.meta.url)))), "tmp/biztag-local"); }
@@ -58,7 +58,7 @@ interface PreArchiveResume {
   stockCode: string; nextDocId: string; sourcePageId: string; sourceBound: boolean;
   createRequest: SupplementPreArchiveRequest; beforeWrite(): Promise<void>; qualified: boolean; consumed: boolean;
 }
-function makeJournal(state: string, resume?: PreArchiveResume, appliedSemantic = false): SupplementPublicationJournal {
+function makeJournal(state: string, resume?: PreArchiveResume, appliedSemantic = false) {
   let stopped = false, pending = false, stored = 0;
   const root = join(state, "supplement-publications");
   const guard = <T>(action: () => T): T => {
@@ -130,7 +130,7 @@ function makeJournal(state: string, resume?: PreArchiveResume, appliedSemantic =
     ...(resume === undefined ? {} : { bindSource(input: { stockCode: string; docId: string | null; sourcePageId: string | null }) { guard(() => {
       assert.equal(input.stockCode, resume.stockCode); assert.equal(input.docId, resume.nextDocId); assert.equal(input.sourcePageId, resume.sourcePageId); resume.sourceBound = true;
     }); } }),
-    reserveCreate(input) { return guard(() => {
+    reserveCreate(input: Parameters<NonNullable<SupplementPublicationJournal["reserveCreate"]>>[0]) { return guard(() => {
       assert(resume === undefined, "reconciliation cannot create another target");
       assertReady(); const request = Buffer.from(input.snapshot), requestSha256 = sha(request);
       assert(request.length <= PRE_MAX && stored + request.length + 2 * RECORD_MAX <= STORE_MAX, "publication complete-tail budget");
@@ -141,14 +141,14 @@ function makeJournal(state: string, resume?: PreArchiveResume, appliedSemantic =
       pending = true; mkdirSync(directory, { mode: 0o700 }); syncParent(directory); put(join(directory, "request.json"), request);
       const raw = JSON.stringify({ version: 1, ...identity, bytes: request.length, at: new Date().toISOString() }) + "\n";
       assert(Buffer.byteLength(raw) <= RECORD_MAX); put(join(directory, "intent.json"), raw); stored += request.length + Buffer.byteLength(raw);
-      return { complete(output) { guard(() => {
+      return { complete(output: { pageId: string; postPageSha256: string }) { guard(() => {
         assert(pending); assert.equal(sha(read(join(directory, "request.json"), PRE_MAX)), requestSha256); assert.equal(read(join(directory, "intent.json"), RECORD_MAX).toString("utf8"), raw);
         assert(typeof output.pageId === "string" && output.pageId.length > 0); assert.match(output.postPageSha256, /^[a-f0-9]{64}$/);
         const completed = JSON.stringify({ version: 1, ...identity, intentSha256: sha(raw), ...output, at: new Date().toISOString() }) + "\n";
         assert(Buffer.byteLength(completed) <= RECORD_MAX && stored + Buffer.byteLength(completed) <= STORE_MAX); put(join(directory, "completed.json"), completed); stored += Buffer.byteLength(completed); pending = false;
       }); } };
     }); },
-    reserve(input) { return guard(() => {
+    reserve(input: Parameters<SupplementPublicationJournal["reserve"]>[0]) { return guard(() => {
       assertReady(); const pre = Buffer.from(input.snapshot), preSha256 = sha(pre);
       assert(pre.length <= PRE_MAX && stored + pre.length + 2 * RECORD_MAX <= STORE_MAX, "publication complete-tail budget");
       for (const value of [input.pageId, input.archiveKey]) assert(typeof value === "string" && value.length > 0);
@@ -166,7 +166,7 @@ function makeJournal(state: string, resume?: PreArchiveResume, appliedSemantic =
         raw = JSON.stringify({ version: 1, pageId: input.pageId, oldDocId, nextDocId: input.nextDocId, archiveKey: input.archiveKey, preSha256, bytes: pre.length, at: new Date().toISOString() }) + "\n";
         put(join(directory, "intent.json"), raw); stored += pre.length + Buffer.byteLength(raw);
       }
-      return { ...(resume === undefined ? {} : { preArchive: { pageId: resume.archivePageId, createRequest: resume.createRequest, beforeWrite: resume.beforeWrite } }), complete(output) { guard(() => {
+      return { ...(resume === undefined ? {} : { preArchive: { pageId: resume.archivePageId, createRequest: resume.createRequest, beforeWrite: resume.beforeWrite } }), complete(output: { archivePageId: string; postPageSha256: string }) { guard(() => {
         assert(pending); assert.equal(sha(read(join(directory, "pre.json"), PRE_MAX)), preSha256); assert.equal(read(join(directory, "intent.json"), RECORD_MAX).toString("utf8"), raw);
         assert(typeof output.archivePageId === "string" && output.archivePageId.length > 0); assert.match(output.postPageSha256, /^[a-f0-9]{64}$/);
         if (resume !== undefined) assert.equal(output.archivePageId, resume.archivePageId);

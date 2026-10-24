@@ -58,7 +58,11 @@ export const SUPPLEMENT_PROPS = {
   error: "判定エラー",
   attempts: "再試行回数",
   nextRetryAt: "次回再試行日",
+  textSyncReceipt: "本文同期根拠",
+  textInputSha256: "本文の事業タグ入力SHA256",
+  tagInputSha256: "事業タグの判定入力SHA256",
 } as const;
+export const TAG_TEXT_FRESHNESS_COLUMN = "事業タグと現在本文の対応";
 
 export type TextStatus = "取得済" | "本文なし" | "読込失敗";
 export type TagStatus = "判定済" | "本文なし" | "読込失敗" | "判定不能" | "未判定";
@@ -152,6 +156,11 @@ function buildDbProperties(spec: SupplementSchemaSpec): Record<string, unknown> 
     [SUPPLEMENT_PROPS.error]: { rich_text: {} },
     [SUPPLEMENT_PROPS.attempts]: { number: {} },
     [SUPPLEMENT_PROPS.nextRetryAt]: { date: {} },
+    [SUPPLEMENT_PROPS.textSyncReceipt]: { rich_text: {} },
+    [SUPPLEMENT_PROPS.textInputSha256]: { rich_text: {} },
+    [SUPPLEMENT_PROPS.tagInputSha256]: { rich_text: {} },
+    [TAG_TEXT_FRESHNESS_COLUMN]: { formula: { expression:
+      'if(prop("事業タグの状態") != "判定済", "未判定", if(empty(prop("事業タグの根拠書類")), "根拠書類未確認", if(substring(prop("事業タグの根拠書類"), 0, length(prop("有報書類ID")) + 1) != prop("有報書類ID") + " ", "旧書類のタグ（再判定待ち）", if(or(empty(prop("本文の事業タグ入力SHA256")), empty(prop("事業タグの判定入力SHA256"))), "判定入力未確認", if(prop("本文の事業タグ入力SHA256") == prop("事業タグの判定入力SHA256"), "現在本文の入力と一致", "本文入力が変更（再判定待ち）")))))' } },
   };
   for (const col of spec.textColumns) {
     // 開示テキスト列名が固定列名と衝突することは無い前提 (TEXT_SECTIONS 側で
@@ -225,6 +234,10 @@ function buildMissingPatch(
     if (!cur) {
       patch[name] = wantDef;
       continue;
+    }
+    if ([SUPPLEMENT_PROPS.textSyncReceipt, SUPPLEMENT_PROPS.textInputSha256, SUPPLEMENT_PROPS.tagInputSha256, TAG_TEXT_FRESHNESS_COLUMN].includes(name) &&
+        cur.type !== (name === TAG_TEXT_FRESHNESS_COLUMN ? "formula" : "rich_text")) {
+      throw new NotionConfigError("本文/判定の独立根拠列の型が不同です。既存列を上書きせず停止します");
     }
     const kind = optionKindOf(wantDef);
     if (kind && cur.type === kind) {
@@ -325,6 +338,9 @@ export interface SupplementRow {
   candidateCount: number | null;
   /** 既存の判定入力列。旧unit行の未読取はundefinedであり、新規判定の証明ではない。 */
   judgeInput?: string | null;
+  textSyncReceipt?: string | null;
+  textInputSha256?: string | null;
+  tagInputSha256?: string | null;
   attempts: number | null;
   nextRetryAt: string | null;
   error: string | null;
@@ -409,6 +425,8 @@ function parseSupplementRow(page: NotionPage, textColumns: string[]): Supplement
     textStatus: readSelectEnum(p[SUPPLEMENT_PROPS.textStatus], TEXT_STATUS_VALUES, "本文の状態"),
     tagStatus: readSelectEnum(p[SUPPLEMENT_PROPS.tagStatus], TAG_STATUS_VALUES, "事業タグの状態"),
     tagDoc: readRich(p[SUPPLEMENT_PROPS.tagDoc]) || null,
+    ...Object.fromEntries((["textSyncReceipt", "textInputSha256", "tagInputSha256"] as const).filter(key => p[SUPPLEMENT_PROPS[key]] !== undefined)
+      .map(key => [key, readRich(p[SUPPLEMENT_PROPS[key]]) || null])),
     vocabVersion: p[SUPPLEMENT_PROPS.vocabVersion]?.select?.name ?? null,
     judgedAt: readDate(p[SUPPLEMENT_PROPS.judgedAt]),
     candidateCount: readNumber(p[SUPPLEMENT_PROPS.candidateCount]),
@@ -508,7 +526,8 @@ export function assertCompleteSupplementPage(page: NotionPage, dbId: string, tex
   if (typeof page.id !== "string" || page.id.length === 0 || page.archived !== false || page.in_trash !== false ||
       page.parent?.type !== "database_id" || page.parent.database_id?.replaceAll("-", "") !== dbId.replaceAll("-", "")) stop();
   const rich = [SUPPLEMENT_PROPS.code, SUPPLEMENT_PROPS.docId, SUPPLEMENT_PROPS.tagDoc, SUPPLEMENT_PROPS.judgeInput,
-    SUPPLEMENT_PROPS.uncertain, SUPPLEMENT_PROPS.evidenceText, SUPPLEMENT_PROPS.error, ...textColumns];
+    SUPPLEMENT_PROPS.uncertain, SUPPLEMENT_PROPS.evidenceText, SUPPLEMENT_PROPS.error, ...textColumns,
+    ...[SUPPLEMENT_PROPS.textSyncReceipt, SUPPLEMENT_PROPS.textInputSha256, SUPPLEMENT_PROPS.tagInputSha256].filter(name => Object.hasOwn(page.properties, name))];
   for (const name of rich) {
     const p = page.properties[name];
     if (p?.type !== "rich_text" || p.has_more === true || !Array.isArray(p.rich_text) ||
@@ -645,6 +664,9 @@ export interface SupplementRowInput {
   judgedAt?: string | null;
   candidateCount?: number | null;
   judgeInput?: string | null;
+  textSyncReceipt?: string | null;
+  textInputSha256?: string | null;
+  tagInputSha256?: string | null;
   error?: string | null;
   attempts?: number | null;
   nextRetryAt?: string | null;
@@ -722,20 +744,11 @@ function relationValue(pageId: string | null | undefined): { relation: Array<{ i
  * `null` は明示的にクリアする (ルール2: 黙って既定値で埋めない代わりに、
  * 「値が無い」という事実を明示的に書く)。
  *
- * **フィールドの並び順が壊れやすい不変条件を守っている**: `chunkPropertiesByBytes`
- * は `Object.entries(props)` の順に貪欲に詰めるため、1 要求 (400KB) に収まらない
- * ときは並び順どおりに複数の PATCH に分割される (§3.1「本文列は…複数の PATCH に
- * 分ける」)。途中の PATCH で中断される (GH Actions の強制終了等) と、それより前の
- * 並びのプロパティだけが確定した状態になりうる。`有報書類ID`(docId) が
- * `事業タグの状態`(tagStatus)/`事業タグの根拠書類`(tagDoc)/`単語帳の版`
- * (vocabVersion) より先に確定すると、「docId は新しい書類を指すのに tagStatus/
- * tagDoc は古い書類のまま」という**不変条件違反の状態**が生まれ、かつ
- * `docId` が最新と一致してしまうため `planWork` の差分検知(`row.docId !==
- * doc.docId`)が二度と拾えず、恒久的に取り残される (docs §3.1 不変条件)。
- * そのため `docId`/`docType`/`periodEnd`/`submittedAt` は、この書類に関する
- * 判定結果一式 (`tagStatus`/`tagDoc`/`vocabVersion` および判定メタ情報) と
- * まとめて **最後** に書く。中断が起きても「書類の入れ替わりだけが先に見える」
- * 状態を作らない (中断前の状態のまま = 次回の `planWork` が正しく再処理する)。
+ * 大きい本文は複数PATCHに分かれる。本文のdoc/期/同期receiptは最後にまとめ、
+ * 通常publisherのPRE/CAS/完全POSTと未閉鎖journalで途中適用を保護する。
+ * 本文とタグは独立した原本を持つ。本文更新は旧tagDoc/判定入力を変更せず、
+ * 「事業タグと現在本文の対応」とplanWorkが根拠doc/4節SHAの差を検出する。
+ * タグ判定を更新する場合はタグ列とその判定根拠を同じpublicationに含める。
  */
 /** 本文列の送信表現だけを揃える。原文mapや他metadataへは適用しない。 */
 export function normalizeSupplementText(value: string | null): string | null {
@@ -746,6 +759,10 @@ export function buildSupplementProperties(
   input: SupplementRowInput
 ): Record<string, unknown> {
   const props: Record<string, unknown> = {};
+  for (const key of ["textSyncReceipt", "textInputSha256", "tagInputSha256"] as const) if (input[key] !== undefined) {
+    if (key !== "textSyncReceipt" && input[key] !== null && !/^[a-f0-9]{64}$/.test(input[key])) throw new NotionConfigError("本文/判定入力の照合SHAが不正です");
+    props[SUPPLEMENT_PROPS[key]] = clearableRichText(input[key], SUPPLEMENT_PROPS[key]);
+  }
 
   if (input.companyName !== undefined) {
     props[SUPPLEMENT_PROPS.name] = { title: splitRichText(input.companyName) };
@@ -899,7 +916,7 @@ export async function createSupplementRow(
   journal: SupplementPublicationJournal
 ): Promise<string> {
   if (!journal || typeof journal.assertReady !== "function" || typeof journal.reserveCreate !== "function") throw new NotionConfigError("補足createのdurable journalがありません");
-  journal.assertReady();
+  await journal.assertReady();
   if (typeof dbId !== "string" || dbId.length === 0 || typeof input.stockCode !== "string" || input.stockCode.length === 0 ||
       !(input.docId === null || typeof input.docId === "string" && input.docId.length > 0)) throw new NotionConfigError("補足createのDB/銘柄/原文書資格がありません");
   if (evidence !== undefined && evidence !== null) evidenceValue(evidence);
@@ -913,7 +930,7 @@ export async function createSupplementRow(
     body.children = [evidence];
   }
   const target = { ...body, properties: props };
-  const publication = journal.reserveCreate({ dbId, stockCode: input.stockCode, nextDocId: input.docId,
+  const publication = await journal.reserveCreate({ dbId, stockCode: input.stockCode, nextDocId: input.docId,
     snapshot: JSON.stringify(canonicalizeForHash(target)) });
   try {
     const created = await notionRequest<{ id: string }>("POST", "/pages", body, { singleAttempt: true });
@@ -925,7 +942,7 @@ export async function createSupplementRow(
     for (const [name, expected] of Object.entries(props)) if (JSON.stringify(propertyValue(after.properties[name])) !== JSON.stringify(propertyValue(expected))) throw new Error(`補足createの全文読戻し不一致: ${name}`);
     const children = await evidenceChildren(created.id);
     if (children.length !== (evidence === null || evidence === undefined ? 0 : 1) || children.some(child => JSON.stringify(evidenceValue(child)) !== JSON.stringify(evidenceValue(evidence)))) throw new Error("補足createの根拠読戻し不一致");
-    publication.complete({ pageId: created.id, postPageSha256: await sha256Hex(JSON.stringify(canonicalizeForHash(after))) });
+    await publication.complete({ pageId: created.id, postPageSha256: await sha256Hex(JSON.stringify(canonicalizeForHash(after))) });
     return created.id;
   } catch (cause) {
     throw new NotionUnknownResultError("補足createの結果確認が未完。別PRE/新runで再作成せずintentと現値を照合してください", { cause });
@@ -1128,19 +1145,19 @@ export class SupplementWriteHeldError extends Error {
 
 /** Node production supplies the same durable sink for every normal publisher call. */
 export interface SupplementPublicationJournal {
-  assertReady(): void;
+  assertReady(): void | Promise<void>;
   /** Explicit reconciliation additionally binds the normal planner's current source pointer. */
   bindSource?(input: { stockCode: string; docId: string | null; sourcePageId: string | null }): void;
   /** Creation has no previous page ID; bind the actual target before the first POST. */
-  reserveCreate?(input: { dbId: string; stockCode: string; nextDocId: string | null; snapshot: string }): {
-    complete(output: { pageId: string; postPageSha256: string }): void;
-  };
-  reserve(input: { pageId: string; nextDocId: string | null; archiveKey: string; snapshot: string }): {
+  reserveCreate?(input: { dbId: string; stockCode: string; nextDocId: string | null; snapshot: string }): MaybeAsyncPublication<{ pageId: string; postPageSha256: string }>;
+  reserve(input: { pageId: string; nextDocId: string | null; archiveKey: string; snapshot: string }): MaybeAsyncPublication<{ archivePageId: string; postPageSha256: string }>;
+}
+type Publication<T> = {
     /** Explicit, once-only reconciliation of a PRE archive POST; never an unknown business write. */
     preArchive?: { pageId: string; createRequest: SupplementPreArchiveRequest; beforeWrite(): Promise<void> };
-    complete(output: { archivePageId: string; postPageSha256: string }): void;
-  };
-}
+    complete(output: T): void | Promise<void>;
+};
+type MaybeAsyncPublication<T> = Publication<T> | Promise<Publication<T>>;
 
 export interface SupplementPreArchiveRequest {
   parent: { database_id: string };
@@ -1188,7 +1205,7 @@ export async function replaceEvidenceBlock(
   journal: SupplementPublicationJournal
 ): Promise<void> {
   if (!journal || typeof journal.assertReady !== "function" || typeof journal.reserve !== "function") throw new NotionConfigError("補足publisherのdurable journalがありません");
-  journal.assertReady(); // Any unresolved prior operation stops before the first HTTP, even if PRE/page/source changed.
+  await journal.assertReady(); // Any unresolved prior operation stops before the first HTTP, even if PRE/page/source changed.
   const props = buildSupplementProperties(input);
   const chunks = chunkPropertiesByBytes(props);
   if (typeof beforeWrite !== "function" || Object.keys(expectedProperties).length === 0) throw new Error("補足の書込前guardがありません");
@@ -1222,7 +1239,7 @@ export async function replaceEvidenceBlock(
   }
   const archiveKey = `biztag-pre/${pageId}/${executionKey}`;
   // Reserve before physical PRE archive calls: upload/page-create unknown is also sticky across runs.
-  const publication = journal.reserve({ pageId, nextDocId: input.docId, archiveKey, snapshot });
+  const publication = await journal.reserve({ pageId, nextDocId: input.docId, archiveKey, snapshot });
   const filename = "biztag-pre.json";
   const file = { filename, bytes: new TextEncoder().encode(snapshot), contentType: "application/json" };
   let archivePageId: string;
@@ -1302,7 +1319,7 @@ export async function replaceEvidenceBlock(
   } catch (cause) {
     throw new NotionUnknownResultError(`旧根拠退役の結果確認が未完。再送せずPREと現値を照合してください。PRE=${archivePageId}`, { cause });
   }
-  publication.complete({ archivePageId, postPageSha256 });
+  await publication.complete({ archivePageId, postPageSha256 });
 }
 
 export interface AppliedSupplementSnapshot {

@@ -8,9 +8,10 @@
 
 | 順序 | 処理 | 範囲・LLM |
 |---|---|---|
-| 1 | 補足DBの基本情報・39本文・事業タグ | 既存biztag通常CLI。20分の有限処理。適格新規/実入力変更だけ既存Clef、同入力判定は再利用 |
+| 1 | 事業タグの意味判定（必要な本文資格確認を含む） | 既存biztag通常CLI。20分の有限処理。適格新規/実入力変更だけ既存Clef、同入力判定は再利用 |
 | 2 | 競合入力の機械準備 | 既存envで固定scopeが設定された場合だけ最大5社。意味判定/モデル実行はなし |
-| 3 | 優待の機械要約・条件/金額検証・保存 | 既存CLIで最大60群。--allow-modelは使わず、未対応は保留 |
+
+本文39・基本補足・優待機械要約は[独立Linux定期](mechanical-publishing.md)へ分離する。月次driverは優待stageを実行しない。
 
 受入済みruntimeとそのprivate.envを明示指定し、既存のcanonical state・writer lock・原本・未完intentを再利用する。新規install/enable/bootstrap、モデル取得、別モデルへの置換、自動再試行は行わない。
 
@@ -22,7 +23,7 @@
 
 ```sh
 cd /Users/satoki252595/projects/kabulab-cf
-nix develop --offline --no-write-lock-file --command env -u NODE_PATH pnpm biztag:monthly --runtime .runtime/mac-main554-20261020 --preflight
+nix develop --offline --no-write-lock-file --command env -u NODE_PATH pnpm biztag:monthly --runtime .runtime/mac-publishing-20261025 --preflight
 ```
 
 preflightが成功した場合だけ実行する。出力には原本・判定の診断が含まれるためprivateログへ保存する。
@@ -30,10 +31,10 @@ preflightが成功した場合だけ実行する。出力には原本・判定�
 ```sh
 umask 077
 monthly_log="tmp/biztag-local/monthly-$(date +%Y%m%dT%H%M%S)-$$.log"
-nix develop --offline --no-write-lock-file --command env -u NODE_PATH pnpm biztag:monthly --runtime .runtime/mac-main554-20261020 >"$monthly_log" 2>&1
+nix develop --offline --no-write-lock-file --command env -u NODE_PATH pnpm biztag:monthly --runtime .runtime/mac-publishing-20261025 >"$monthly_log" 2>&1
 ```
 
-初期の受入runtimeは`4cb4867d9a9f189684b07efa89be81a085e03f51`。通常CLI・モデル・private.envの版は固定したまま使う。root側の月次driverはCIが通ったmainから実行する。ログを確認する際もファイル全体を公開しない。
+旧受入runtimeは`4cb4867d9a9f189684b07efa89be81a085e03f51`。上記の新runtime名は切替計画であり、[初回移行](mechanical-publishing.md)で新mainの受入・同canonical env/stateの保持・旧runtimeの版不一致停止を確認してから使う。Calendarの説明欄も同じ新runtimeへ更新する。root側の月次driverはCIが通ったmainから実行する。ログを確認する際もファイル全体を公開しない。
 
 runtimeのHEAD・acceptedRevision・main包含・clean・env権限・Nix依存をpreflightで確認する。受入済みruntimeを勝手にpull/resetせず、変更時はCI確認と未完状態保全を先に行う。実行ログはprivateな既存stateへ保存し、本文・判断入力・秘密値をメールやGitへ貼らない。
 
