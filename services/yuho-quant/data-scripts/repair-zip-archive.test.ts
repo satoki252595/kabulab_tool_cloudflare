@@ -8,11 +8,11 @@ import { fileURLToPath } from "node:url";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import { NotionUnknownResultError } from "../../../src/shared/notion-archive/client.js";
-import { recordEdinetZip } from "../src/services/edinet/archive.js";
+import { recordEdinetZip, readSavedEdinetZip, SavedEdinetZipMissingError, SavedEdinetZipQualificationError } from "../src/services/edinet/archive.js";
 import { edinetArchiveMetadata } from "../src/services/edinet/archive-metadata.js";
 import { readListSnapshot, type ListSnapshot } from "../src/services/edinet/list-snapshot.js";
 import { loadEdinetTickerMap } from "../src/services/edinet/identity.js";
-import { downloadDocument, EdinetDocumentArchiveError, EdinetDocumentFetchError } from "../src/services/edinet/client.js";
+import { downloadDocument, EdinetNotFoundError, EdinetDocumentArchiveError, EdinetDocumentFetchError } from "../src/services/edinet/client.js";
 import type { Database } from "../src/db/client.js";
 import type { EdinetDoc } from "../src/services/edinet/types.js";
 import { openActualSnapshot, readSnapshot, type Snapshot } from "./lib/saved-overseas-atomic.js";
@@ -22,7 +22,7 @@ vi.mock("../../../src/shared/db/d1-http-client.js", async original => ({
   ...await original<typeof import("../../../src/shared/db/d1-http-client.js")>(), createD1HttpDb: vi.fn(),
 }));
 vi.mock("../src/services/edinet/archive.js", async original => ({
-  ...await original<typeof import("../src/services/edinet/archive.js")>(), recordEdinetZip: vi.fn(),
+  ...await original<typeof import("../src/services/edinet/archive.js")>(), recordEdinetZip: vi.fn(), readSavedEdinetZip: vi.fn(),
 }));
 vi.mock("../src/services/edinet/client.js", async original => ({
   ...await original<typeof import("../src/services/edinet/client.js")>(), downloadDocument: vi.fn(),
@@ -65,6 +65,7 @@ beforeEach(() => {
   vi.mocked(createD1HttpDb).mockReturnValue(db as ReturnType<typeof createD1HttpDb>);
   vi.mocked(loadEdinetTickerMap).mockResolvedValue(new Map([["E01953", "6963"]]));
   source([native]);
+  vi.mocked(readSavedEdinetZip).mockRejectedValue(new SavedEdinetZipMissingError("declared exact key0 transport"));
   vi.mocked(downloadDocument).mockImplementation(async (_id, type) => type === 5 ? csv : xbrl);
   vi.mocked(recordEdinetZip).mockResolvedValue({ pageId: snapshot.pageId, outcome: "recorded", fileTooLarge: false, manifestMatch: "written" });
 });
@@ -72,7 +73,7 @@ afterEach(() => { sqlite.close(); rmSync(dir, { recursive: true }); vi.unstubAll
 
 it("uses all8 native fields unchanged for each type, without D1 or business changes", async () => {
   const before = readSnapshot(sqlite, saved.item.stockId);
-  expect(await repairZipArchives(options)).toEqual({ recorded: 1, skipped_existing: 0, edinet_not_found: 0 });
+  expect(await repairZipArchives(options)).toEqual({ recorded: 1, skipped_existing: 0, reused_existing_types: 0, not_applicable_types: 0, edinet_not_found: 0 });
   expect(readListSnapshot).toHaveBeenCalledExactlyOnceWith(snapshot);
   expect(vi.mocked(recordEdinetZip).mock.calls.map(([args]) => args.type)).toEqual([5, 1]);
   for (const [args] of vi.mocked(recordEdinetZip).mock.calls) {
@@ -82,6 +83,54 @@ it("uses all8 native fields unchanged for each type, without D1 or business chan
   expect(vi.mocked(downloadDocument).mock.calls.map(args => args[1])).toEqual([5, 1]);
   expect(readSnapshot(sqlite, saved.item.stockId)).toEqual(before); expect(queries.length).toBeGreaterThan(0);
   expect(fetch).not.toHaveBeenCalled();
+});
+function stored(type: 1 | 5) {
+  const bytes = type === 1 ? xbrl : csv;
+  return { pageId: snapshot.pageId, bytes, sha256: createHash("sha256").update(bytes).digest("hex"),
+    metadata: { ...edinetArchiveMetadata(native, "2026-03-31"), edinetDocType: type }, originalManifest: "known" as const };
+}
+it("a qualified stored type1 is reused and only missing type5 is obtained and recorded", async () => {
+  const raw = stored(1);
+  vi.mocked(readSavedEdinetZip).mockImplementation(async (_docID, type) => {
+    if (type === 1) return raw;
+    throw new SavedEdinetZipMissingError("declared exact key0 transport");
+  });
+  expect(await repairZipArchives(options)).toEqual({ recorded: 1, skipped_existing: 0, reused_existing_types: 1, not_applicable_types: 0, edinet_not_found: 0 });
+  expect(vi.mocked(downloadDocument).mock.calls.map(args => args[1])).toEqual([5]);
+  expect(vi.mocked(recordEdinetZip).mock.calls.map(([args]) => args.type)).toEqual([5]);
+  expect(vi.mocked(recordEdinetZip).mock.calls[0][0].metadata.xbrlUnavailable).toBe(false);
+});
+it("both qualified stored types are reused without SOURCE GET or record", async () => {
+  vi.mocked(readSavedEdinetZip).mockImplementation(async (_id, type) => stored(type));
+  expect(await repairZipArchives(options)).toEqual({ recorded: 0, skipped_existing: 1, reused_existing_types: 2, not_applicable_types: 0, edinet_not_found: 0 });
+  expect(downloadDocument).not.toHaveBeenCalled(); expect(recordEdinetZip).not.toHaveBeenCalled();
+});
+it.each(["native8", "manifest", "qualification", "unknown"] as const)("stored %s failure stops the entire subset before any SOURCE", async fault => {
+  vi.mocked(readSavedEdinetZip).mockImplementation(async (_id, type) => {
+    if (type === 5) throw new SavedEdinetZipMissingError("declared exact key0 transport");
+    if (fault === "qualification") throw new SavedEdinetZipQualificationError("declared typed archive qualification fault");
+    if (fault === "unknown") throw new NotionUnknownResultError("declared saved archive read unknown");
+    const saved = stored(1);
+    return fault === "manifest" ? { ...saved, originalManifest: "unknown" } : { ...saved, metadata: { ...saved.metadata, secCode: "26830" } };
+  });
+  await expect(repairZipArchives(options)).rejects.toThrow();
+  expect(downloadDocument).not.toHaveBeenCalled(); expect(recordEdinetZip).not.toHaveBeenCalled();
+});
+it("verified type5 non-provision stays not-applicable instead of a physical type1 or a new GET", async () => {
+  vi.mocked(readSavedEdinetZip).mockImplementation(async (_id, type) => {
+    if (type === 1) throw new SavedEdinetZipMissingError("declared exact key0 transport");
+    const saved = stored(5); return { ...saved, metadata: { ...saved.metadata, xbrlUnavailable: true } };
+  });
+  expect(await repairZipArchives(options)).toEqual({ recorded: 0, skipped_existing: 1, reused_existing_types: 1, not_applicable_types: 1, edinet_not_found: 0 });
+  expect(downloadDocument).not.toHaveBeenCalled(); expect(recordEdinetZip).not.toHaveBeenCalled();
+});
+it("a late existing CSV cannot inherit a newly requested non-provision marker", async () => {
+  vi.mocked(readSavedEdinetZip).mockRejectedValueOnce(new SavedEdinetZipMissingError("declared key0"))
+    .mockRejectedValueOnce(new SavedEdinetZipMissingError("declared key0")).mockResolvedValueOnce(stored(5));
+  vi.mocked(downloadDocument).mockResolvedValueOnce(csv).mockRejectedValueOnce(new EdinetNotFoundError(native.docID, 1));
+  vi.mocked(recordEdinetZip).mockResolvedValueOnce({ pageId: snapshot.pageId, outcome: "skipped_existing", fileTooLarge: false, manifestMatch: "unknown" });
+  await expect(repairZipArchives(options)).rejects.toMatchObject({ name: "EdinetDocumentArchiveError",
+    cause: { code: "existing_archive_nonprovision_mismatch" } });
 });
 it.each(["secCode", "periodStart"] as const)("a missing native %s never comes from existing D1", async key => {
   const missing = { ...native }; delete (missing as Partial<EdinetDoc>)[key]; source([missing]);
@@ -120,7 +169,7 @@ it("preserves native metadata on CSV closure after a known type1 source failure"
   expect(recordEdinetZip).toHaveBeenCalledTimes(1);
   expect(vi.mocked(recordEdinetZip).mock.calls[0][0].metadata).toMatchObject({ ...edinetArchiveMetadata(native, "2026-03-31"), ingestPhase: "partial-source" });
 });
-it.each(["type5", "type1", "partial"] as const)("an archive unknown at %s never proceeds to the next document", async phase => {
+it.each(["type5", "type1", "partial", "saved-read"] as const)("an archive unknown at %s never proceeds to the next document", async phase => {
   // Clone metadata only as a declared two-document transport control, not an actual second filing.
   const second = { ...native, docID: "S100YF42", seqNumber: 2 };
   const row = saved.d1.yuho_documents[0];
@@ -131,7 +180,14 @@ it.each(["type5", "type1", "partial"] as const)("an archive unknown at %s never 
   if (phase === "type1") vi.mocked(recordEdinetZip).mockResolvedValueOnce({ pageId: snapshot.pageId, outcome: "recorded", fileTooLarge: false, manifestMatch: "written" }).mockRejectedValueOnce(unknown);
   else vi.mocked(recordEdinetZip).mockRejectedValueOnce(unknown);
   if (phase === "partial") vi.mocked(downloadDocument).mockResolvedValueOnce(csv).mockRejectedValueOnce(new EdinetDocumentFetchError(native.docID, 1, "declared source failure"));
+  if (phase === "saved-read") vi.mocked(readSavedEdinetZip).mockImplementation(async (id, type) => {
+    if (id === second.docID && type === 1) throw unknown;
+    throw new SavedEdinetZipMissingError("declared exact key0 transport");
+  });
   const error = await repairZipArchives({ ...options, docIds: [native.docID, second.docID] }).then(() => null, error => error);
+  if (phase === "saved-read") {
+    expect(error).toBe(unknown); expect(downloadDocument).not.toHaveBeenCalled(); expect(recordEdinetZip).not.toHaveBeenCalled(); return;
+  }
   expect(error).toBeInstanceOf(EdinetDocumentArchiveError); expect(error.cause).toBe(unknown);
   expect(vi.mocked(downloadDocument).mock.calls.every(([id]) => id === native.docID)).toBe(true);
   expect(recordEdinetZip).toHaveBeenCalledTimes(phase === "type1" ? 2 : 1);

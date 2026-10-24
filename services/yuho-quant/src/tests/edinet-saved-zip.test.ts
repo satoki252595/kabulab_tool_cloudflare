@@ -2,12 +2,12 @@
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
-import { readSavedEdinetZip, SavedEdinetZipQualificationError } from "../services/edinet/archive.js";
+import { readSavedEdinetZip, SavedEdinetZipQualificationError, SavedEdinetZipMissingError } from "../services/edinet/archive.js";
 import { inputFingerprint } from "../../../../src/shared/notion-archive/archive.js";
-const io = vi.hoisted(() => ({ row: vi.fn(), files: vi.fn(), download: vi.fn() }));
+const io = vi.hoisted(() => ({ db: vi.fn(), row: vi.fn(), files: vi.fn(), download: vi.fn() }));
 vi.mock("../../../../src/shared/notion-archive/archive.js", async original => ({
   ...await original<typeof import("../../../../src/shared/notion-archive/archive.js")>(),
-  findUniqueBackupChildByTitle: async () => "3e1d74ff84cd812ebc79f7aff3f2d7ca", queryUniqueRow: io.row,
+  findUniqueBackupChildByTitle: io.db, queryUniqueRow: io.row,
 }));
 vi.mock("../../../../src/shared/notion-archive/page-file.js", () => ({ listPageFiles: io.files }));
 vi.mock("../../../../src/shared/notion-archive/archived-download.js", async original => ({
@@ -24,6 +24,7 @@ function page(metadata: unknown, sourceKey = key) {
 beforeEach(() => {
   vi.clearAllMocks(); vi.stubEnv("NOTION_ARCHIVE_PAGE_ID", "3e1d74ff84cd812ebc79f7aff3f2d7ca");
   vi.stubGlobal("fetch", vi.fn(() => { throw new Error("network forbidden"); }));
+  io.db.mockResolvedValue("3e1d74ff84cd812ebc79f7aff3f2d7ca");
   io.row.mockResolvedValue(page({ docID: "S100YF41", edinetDocType: 5 }));
   io.files.mockResolvedValue([{ name, kind: "file", url: "offline-file-transport-control" }]);
   io.download.mockResolvedValue(bytes);
@@ -47,4 +48,23 @@ it.each(["wrong-key", "wrong-type", "missing-row"])("%s never falls back to a di
   io.row.mockResolvedValue(fault === "missing-row" ? null : page({ docID: "S100YF41", edinetDocType: fault === "wrong-type" ? 1 : 5 }, fault === "wrong-key" ? "S100YF41:type1" : key));
   await expect(readSavedEdinetZip("S100YF41", 5)).rejects.toBeInstanceOf(SavedEdinetZipQualificationError);
   expect(io.download).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+});
+
+it("only an exact typed-key0 row in an existing canonical DB is missing", async () => {
+  io.row.mockResolvedValue(null);
+  await expect(readSavedEdinetZip("S100YF41", 5)).rejects.toBeInstanceOf(SavedEdinetZipMissingError);
+  expect(io.download).not.toHaveBeenCalled();
+  io.db.mockResolvedValue(null);
+  const error = await readSavedEdinetZip("S100YF41", 5).then(() => null, error => error);
+  expect(error).toBeInstanceOf(SavedEdinetZipQualificationError); expect(error).not.toBeInstanceOf(SavedEdinetZipMissingError);
+});
+it.each(["archived", "parent", "metadata-only"])("%s is never classified as a missing typed key", async fault => {
+  const saved = page({ docID: "S100YF41", edinetDocType: 5 });
+  if (fault === "archived") saved.archived = true;
+  if (fault === "parent") saved.parent.database_id = "403d74ff84cd8120be71e7ec5a5f66f5";
+  if (fault === "metadata-only") io.files.mockResolvedValue([]);
+  io.row.mockResolvedValue(saved);
+  const error = await readSavedEdinetZip("S100YF41", 5).then(() => null, error => error);
+  expect(error).toBeInstanceOf(SavedEdinetZipQualificationError); expect(error).not.toBeInstanceOf(SavedEdinetZipMissingError);
+  expect(io.download).not.toHaveBeenCalled();
 });
