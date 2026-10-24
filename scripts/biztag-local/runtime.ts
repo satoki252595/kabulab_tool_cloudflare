@@ -1,12 +1,13 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { createHash } from "node:crypto";
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "dotenv";
 import { biztagLocalEnv } from "./env.js";
 import { createSupplementPublicationJournal } from "./publication-journal.js";
-import { initializeSharedPublishingWriter, publishingStore, withSharedPublishingWriter } from "../mechanical-publishing/shared-writer.js";
+import { syncParent } from "./clef-journal.js";
+import { fenceUnconfirmedPublishingInitialization, initializeSharedPublishingWriter, publishingStore, withSharedPublishingWriter, type PublishingInitializationFence } from "../mechanical-publishing/shared-writer.js";
 
 export function assertRevision(expected: string, actual: string, dirty: string): void {
   if (actual !== expected) throw new Error("runtime HEADがBIZTAG_LOCAL_ACCEPTED_REVISIONと一致しません。");
@@ -69,7 +70,7 @@ export async function withBiztagWriter<T>(execute: () => Promise<T>, mechanicalO
 }
 
 /** Explicit migration only. The immutable baseline pins closed old journals; no old bytes are changed. */
-export async function initializePublishingFromMac(): Promise<void> {
+async function withCanonicalPublishingInitialization(execute: (baseline: unknown, cursors: PublishingInitializationFence["initialCursors"], state: string) => Promise<void>): Promise<void> {
   if (!(process.platform === "darwin" && process.arch === "arm64")) throw new Error("共有publisherの移行は受入済みMacで実行してください");
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
   const canonical = join(dirname(realpathSync(join(root, ".env"))), "tmp");
@@ -95,9 +96,35 @@ export async function initializePublishingFromMac(): Promise<void> {
     const publications = join(state, "supplement-publications");
     const completed = readdirSync(publications).sort().map(key => ({ key,
       completedSha256: createHash("sha256").update(readFileSync(join(publications, key, "completed.json"))).digest("hex") }));
-    await initializeSharedPublishingWriter({ version: 1, source: "accepted-mac-canonical-journals", revision,
+    await execute({ version: 1, source: "accepted-mac-canonical-journals", revision,
       completed, unresolvedPublications: 0, yutaiPending: false,
       yutaiProgressSha256: yutaiProgress === null ? null : createHash("sha256").update(yutaiProgress).digest("hex"),
-      observedAt: new Date().toISOString() }, publishingStore(), yutaiProgress === null ? {} : { "yutai-summary": yutaiProgress });
+      observedAt: new Date().toISOString() }, yutaiProgress === null ? {} : { "yutai-summary": yutaiProgress }, state);
+  });
+}
+
+export async function initializePublishingFromMac(): Promise<void> {
+  await withCanonicalPublishingInitialization((baseline, cursors) => initializeSharedPublishingWriter(baseline, publishingStore(), cursors));
+}
+
+/** The failed attempt stays unknown. This explicit cutover fences its terminal authority instead of retrying it. */
+export async function fencePublishingInitializationFromMac(failedLogSha256: string): Promise<void> {
+  if (!/^[a-f0-9]{64}$/.test(failedLogSha256)) throw new Error("失敗ログのSHA256指定が必要です");
+  await withCanonicalPublishingInitialization(async (baseline, initialCursors, state) => {
+    const log = join(state, "shared-publishing-initialize.log"), stat = lstatSync(log);
+    if (!stat.isFile() || stat.uid !== process.getuid?.() || (stat.mode & 0o777) !== 0o600 || stat.size <= 0 || stat.size > 65_536) throw new Error("失敗ログの私有ファイル資格が不正です");
+    const raw = readFileSync(log), hash = (body: string | Uint8Array) => createHash("sha256").update(body).digest("hex");
+    const lines = new TextDecoder("utf-8", { fatal: true }).decode(raw).split(/\r?\n/);
+    if (raw.length !== stat.size || hash(raw) !== failedLogSha256 ||
+        lines.filter(line => line === "[mechanical-publishing] initialization_stopped_no_retry").length !== 1 ||
+        lines.some(line => line.includes("shared_writer_initialized"))) throw new Error("失敗ログの指定SHA/停止記録が一致しません");
+    const plan: PublishingInitializationFence = { baseline: JSON.stringify(baseline) + "\n", initialCursors,
+      owner: { id: randomUUID(), startedAt: new Date().toISOString() } };
+    const intent = JSON.stringify({ version: 1, kind: "fence-unconfirmed-initialization", failedLogSha256,
+      baselineSha256: hash(plan.baseline), cursorSha256: Object.fromEntries(Object.entries(initialCursors).map(([name, body]) => [name, hash(body)])), plan }) + "\n";
+    const path = join(state, "shared-publishing-initialization-fence.intent.json"), fd = openSync(path, "wx", 0o600);
+    try { writeFileSync(fd, intent); fsyncSync(fd); } finally { closeSync(fd); }
+    syncParent(path); // Failure here leaves the exact intent and never starts remote IO.
+    await fenceUnconfirmedPublishingInitialization(plan);
   });
 }

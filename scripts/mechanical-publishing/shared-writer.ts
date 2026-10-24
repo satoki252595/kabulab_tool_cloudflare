@@ -4,7 +4,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import { sharedEnv } from "../../src/shared/env.js";
 import type { SupplementPublicationJournal } from "../../src/shared/notion-archive/stock-supplement.js";
-import { r2GetBytesVersion, r2PutBytes } from "../vwap/lib/r2.js";
+import { R2PutRejectedError, r2GetBytesVersion, r2PutBytes } from "../vwap/lib/r2.js";
 
 export const SHARED_WRITER_KEY = "mechanical-publishing/v1/writer.json";
 const MAX_STATE = 16_384, MAX_SNAPSHOT = 64 * 1024 ** 2;
@@ -89,6 +89,47 @@ export async function initializeSharedPublishingWriter(baseline: unknown, store 
     await putVerified(store, `mechanical-publishing/v1/cursors/${name}.json`, body, null, MAX_STATE);
   }
   await putVerified(store, SHARED_WRITER_KEY, encode({ version: 1, baselineSha256, owner: null, pending: null }), null, MAX_STATE);
+}
+
+export interface PublishingInitializationFence {
+  baseline: string; initialCursors: Partial<Record<"supplement-texts" | "yutai-summary", string>>;
+  owner: NonNullable<State["owner"]>;
+}
+/** Explicit operator recovery only. Fence the old create-once terminal key before writing any new migration object. */
+export async function fenceUnconfirmedPublishingInitialization(plan: PublishingInitializationFence, store = publishingStore()): Promise<void> {
+  assert(process.platform === "darwin" && process.arch === "arm64", "共有publisherの初期化は受入済みMacからだけ行います");
+  assert(Buffer.byteLength(plan.baseline) > 0 && Buffer.byteLength(plan.baseline) <= MAX_SNAPSHOT);
+  JSON.parse(plan.baseline);
+  for (const [name, body] of Object.entries(plan.initialCursors)) {
+    assert(["supplement-texts", "yutai-summary"].includes(name));
+    assert(typeof body === "string" && Buffer.byteLength(body) > 0 && Buffer.byteLength(body) <= MAX_STATE); JSON.parse(body);
+  }
+  const baselineSha256 = sha(plan.baseline), fenceBody = encode({ version: 1, baselineSha256, owner: plan.owner, pending: null });
+  stateOf(fenceBody);
+  // No preceding negative read authorizes this write. A late old initializer competes on this same atomic key.
+  const fence = await putVerified(store, SHARED_WRITER_KEY, fenceBody, null, MAX_STATE);
+  const exact = async (key: string, body: string, maximum: number) => {
+    const existing = await store.get(key, maximum);
+    if (existing !== null) {
+      assert(typeof existing.etag === "string" && existing.etag.length > 0 && existing.body === body, "移行対象の既存全文がcanonical入力と異なります"); return;
+    }
+    try { await putVerified(store, key, body, null, maximum); }
+    catch (error) {
+      // Only a typed, definitive create conflict may be read back. Unknown PUTs never continue.
+      if (!(error instanceof R2PutRejectedError) || (error.cause as { $metadata?: { httpStatusCode?: unknown } } | null)?.$metadata?.httpStatusCode !== 412) throw error;
+      const raced = await store.get(key, maximum);
+      assert(raced && typeof raced.etag === "string" && raced.etag.length > 0 && raced.body === body, "移行対象の競合全文がcanonical入力と異なります");
+    }
+  };
+  await exact(`mechanical-publishing/v1/baselines/${baselineSha256}.json`, plan.baseline, MAX_SNAPSHOT);
+  for (const name of ["supplement-texts", "yutai-summary"] as const) {
+    const key = `mechanical-publishing/v1/cursors/${name}.json`, body = plan.initialCursors[name];
+    if (body === undefined) assert.equal(await store.get(key, MAX_STATE), null, "canonicalにない既存cursorは保持して停止します");
+    else await exact(key, body, MAX_STATE);
+  }
+  const owned = await store.get(SHARED_WRITER_KEY, MAX_STATE);
+  assert(owned && owned.body === fenceBody && owned.etag === fence.etag, "移行fenceの所有権が変わりました");
+  await putVerified(store, SHARED_WRITER_KEY, encode({ version: 1, baselineSha256, owner: null, pending: null }), owned.etag, MAX_STATE);
 }
 
 export async function withSharedPublishingWriter<T>(execute: () => Promise<T>, store = publishingStore()): Promise<T> {

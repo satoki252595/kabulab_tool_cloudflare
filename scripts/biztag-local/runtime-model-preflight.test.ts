@@ -1,17 +1,20 @@
 /** Offline boundary controls: actual journal scan/shared CAS, mocked platform/env/kernel admission; no model or remote IO. */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { assertClefJournalReady, createClefJournal, type ClefJournalInput } from "./clef-journal.js";
-import { withBiztagWriter } from "./runtime.js";
+import { fencePublishingInitializationFromMac, withBiztagWriter } from "./runtime.js";
+import { fenceUnconfirmedPublishingInitialization } from "../mechanical-publishing/shared-writer.js";
+import { initializationMode } from "../mechanical-publishing/initialize.js";
 
-const io = vi.hoisted(() => ({ directory: "", locked: false, gets: 0, puts: 0, version: 0, body: "", etag: "", order: [] as string[] }));
+const io = vi.hoisted(() => ({ directory: "", locked: false, gets: 0, puts: 0, version: 0, body: "", etag: "", order: [] as string[], fsyncActual: (_fd: number) => {} }));
 vi.mock("node:fs", async original => {
   const actual = await original<typeof import("node:fs")>();
-  return { ...actual, realpathSync: (path: string) => path.endsWith("/.env") ? join(io.directory, ".env") : actual.realpathSync(path) };
+  io.fsyncActual = actual.fsyncSync;
+  return { ...actual, fsyncSync: vi.fn(actual.fsyncSync), realpathSync: (path: string) => path.endsWith("/.env") ? join(io.directory, ".env") : actual.realpathSync(path) };
 });
 vi.mock("dotenv", () => ({ config: () => ({ parsed: {} }) }));
 vi.mock("./env.js", () => ({ biztagLocalEnv: { acceptedRevision: () => "0".repeat(40) } }));
@@ -27,7 +30,8 @@ vi.mock("node:child_process", async original => {
 });
 vi.mock("../mechanical-publishing/shared-writer.js", async original => {
   const actual = await original<typeof import("../mechanical-publishing/shared-writer.js")>();
-  return { ...actual, withSharedPublishingWriter: (execute: () => Promise<unknown>) => actual.withSharedPublishingWriter(execute, {
+  return { ...actual, fenceUnconfirmedPublishingInitialization: vi.fn<typeof actual.fenceUnconfirmedPublishingInitialization>(async () => { throw new Error("offline fence boundary"); }),
+    withSharedPublishingWriter: (execute: () => Promise<unknown>) => actual.withSharedPublishingWriter(execute, {
     async get() { io.gets++; io.order.push("r2-get"); return { body: io.body, etag: io.etag }; },
     async put(_key, body, etag) { expect(etag).toBe(io.etag); io.puts++; io.body = body; io.etag = `version-${++io.version}`; },
   }) };
@@ -36,12 +40,14 @@ const sha = (value: string | Uint8Array) => createHash("sha256").update(value).d
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!, arch = Object.getOwnPropertyDescriptor(process, "arch")!;
 let state: string;
 beforeEach(() => {
-  io.directory = mkdtempSync(join(tmpdir(), "clef-pre-shared-control-"));
+  io.directory = realpathSync(mkdtempSync(join(tmpdir(), "clef-pre-shared-control-")));
   writeFileSync(join(io.directory, ".env"), "# Offline environment admission control only\n", { mode: 0o600 });
   state = join(io.directory, "tmp/biztag-local"); mkdirSync(state, { recursive: true, mode: 0o700 });
   Object.assign(io, { locked: false, gets: 0, puts: 0, version: 0, etag: "initial", order: [],
     body: JSON.stringify({ version: 1, baselineSha256: "0".repeat(64), owner: null, pending: null }) + "\n" });
   Object.defineProperty(process, "platform", { value: "darwin" }); Object.defineProperty(process, "arch", { value: "arm64" });
+  vi.mocked(fsyncSync).mockClear().mockImplementation(io.fsyncActual);
+  vi.mocked(fenceUnconfirmedPublishingInitialization).mockClear().mockImplementation(async () => { throw new Error("offline fence boundary"); });
 });
 afterEach(() => {
   Object.defineProperty(process, "platform", platform); Object.defineProperty(process, "arch", arch);
@@ -93,4 +99,47 @@ it("a generic writer without the tag callback retains its former path and does n
   writeFileSync(join(directory, "partial.json"), "offline protocol fault", { mode: 0o600 });
   await expect(withBiztagWriter(async () => "mechanical", true)).resolves.toBe("mechanical");
   expect(io.order).not.toContain("clef-scan"); expect(io.puts).toBe(2);
+});
+
+function failedMigrationLog() {
+  // Existing canonical-directory qualification controls only, not a fabricated production migration.
+  mkdirSync(join(state, "supplement-publications"), { mode: 0o700 });
+  mkdirSync(join(io.directory, "tmp/yutai-local"), { mode: 0o700 });
+  const path = join(state, "shared-publishing-initialize.log"), body = "[mechanical-publishing] initialization_stopped_no_retry\n";
+  writeFileSync(path, body, { mode: 0o600 }); return { path, body, hash: sha(body) };
+}
+it("explicit fence fixes exact inputs durably before the shared helper and refuses a second attempt", async () => {
+  const log = failedMigrationLog(), intentPath = join(state, "shared-publishing-initialization-fence.intent.json");
+  vi.mocked(fenceUnconfirmedPublishingInitialization).mockImplementationOnce(async plan => {
+    expect(io.locked).toBe(true); expect(vi.mocked(fsyncSync)).toHaveBeenCalledTimes(2);
+    const intent = JSON.parse(readFileSync(intentPath, "utf8"));
+    expect(intent).toMatchObject({ version: 1, failedLogSha256: log.hash, baselineSha256: sha(plan.baseline), plan });
+    expect(statSync(intentPath).mode & 0o777).toBe(0o600); throw new Error("offline fence boundary");
+  });
+  await expect(fencePublishingInitializationFromMac(log.hash)).rejects.toThrow("offline fence boundary");
+  const before = readFileSync(intentPath);
+  await expect(fencePublishingInitializationFromMac(log.hash)).rejects.toThrow("EEXIST");
+  expect(fenceUnconfirmedPublishingInitialization).toHaveBeenCalledOnce(); expect(readFileSync(intentPath)).toEqual(before);
+  expect(readFileSync(log.path, "utf8")).toBe(log.body); expect(io.gets + io.puts).toBe(0);
+});
+it.each(["sha", "mode", "marker"])("invalid failed-log %s stops before intent or shared access", async kind => {
+  const log = failedMigrationLog();
+  if (kind === "mode") chmodSync(log.path, 0o644);
+  if (kind === "marker") writeFileSync(log.path, "offline non-terminal log\n");
+  await expect(fencePublishingInitializationFromMac(kind === "sha" ? "0".repeat(64) : sha(readFileSync(log.path)))).rejects.toThrow("失敗ログ");
+  expect(fenceUnconfirmedPublishingInitialization).not.toHaveBeenCalled();
+  expect(existsSync(join(state, "shared-publishing-initialization-fence.intent.json"))).toBe(false);
+});
+it.each([1, 2])("intent fsync failure at step %i preserves the intent without starting shared IO", async failAt => {
+  const log = failedMigrationLog(); let syncs = 0;
+  vi.mocked(fsyncSync).mockImplementation(fd => { if (++syncs === failAt) throw new Error("offline fsync failure"); io.fsyncActual(fd); });
+  await expect(fencePublishingInitializationFromMac(log.hash)).rejects.toThrow("offline fsync failure");
+  expect(existsSync(join(state, "shared-publishing-initialization-fence.intent.json"))).toBe(true);
+  expect(fenceUnconfirmedPublishingInitialization).not.toHaveBeenCalled(); expect(io.gets + io.puts).toBe(0);
+});
+it("normal initialization and SHA-bound fence are separate explicit CLI modes", () => {
+  expect(initializationMode(["--initialize-from-accepted-mac"])).toEqual({ kind: "normal" });
+  expect(initializationMode(["--fence-unconfirmed-initialization", `--failed-log-sha256=${"a".repeat(64)}`])).toEqual({ kind: "fence", failedLogSha256: "a".repeat(64) });
+  for (const args of [[], ["--fence-unconfirmed-initialization"], ["--initialize-from-accepted-mac", "--fence-unconfirmed-initialization"],
+    ["--fence-unconfirmed-initialization", "--failed-log-sha256=invalid"], ["--initialize-from-accepted-mac", "--unknown"]]) expect(() => initializationMode(args)).toThrow();
 });
