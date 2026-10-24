@@ -25,3 +25,5 @@ GitHub両jobは既存record-job-clockとnativeJobExecutionWindowを再利用す�
 本文sourceは変更のない選択対象も共通qualified readerを1回通すよう変更した。初回候補のsource GET0という費用説明は現行の保証ではない。選択1docのD1照会、Notion page所属/7メタ、strict本文を同じ資格helperで検証する。consumerの件数は実本文のcodepointから算出し、producerの独立件数/全文照合は維持した。原本ZIP/全市場メタ読込/モデル追加は0。
 
 Nix関連6suite157件PASS、global tscと対象lint PASS。主な追加回帰はsetup11分時のnative hard短縮/clock欠落/soft到達、開始済みbody後の次unit停止、優待原子batchの閉鎖、7メタ欠落・別issuer、限定1doc SELECT、通常Mac/tagとmechanicalの資格HOLDでpublication/forward 0。初回本番のNotion request数・秒・processedはrootの切替時に別途実測し、コードテストから処理量を推定しない。
+
+main #560を通常mergeした追補候補で、Nix Node全体6867件PASS/0FAIL/既存465SKIP、global tsc/lint、Wrangler deploy --dry-run（実配備なし）を確認。モデル/上流取得/業務APIは0。私有検証ログは`tmp/mechanical-native-validation/`、全Node JSON SHA256 `f0cf90be34aeb26e351ea0560aa961f4416d5683ea742b3b21bf21de19c0f158`。
