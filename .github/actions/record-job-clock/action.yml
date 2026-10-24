@@ -8,5 +8,5 @@ runs:
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        clock=$(timeout 30s gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" | python3 scripts/ci/job-clock.py)
+        clock=$(timeout 30s python3 scripts/ci/job-clock.py --github)
         echo "BATCH_JOB_STARTED_AT=$clock" >> "$GITHUB_ENV"
