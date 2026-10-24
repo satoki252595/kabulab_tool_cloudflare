@@ -22,7 +22,14 @@ from ..models import JST, DisclosureRecord, Provenance, RawArtifact, Source, now
 from ..notion import file_upload, upsert
 from ..rawstore import save_raw
 from ..transform import normalize
-from .runner import JobContext, apply_limit, build_parser, main_exit, run_job
+from .runner import (
+    STATUS_OBSERVED_EMPTY,
+    JobContext,
+    apply_limit,
+    build_parser,
+    main_exit,
+    run_job,
+)
 from .scheduled import add_scheduled_argument, assert_scheduled_io, scheduled_target
 
 logger = logging.getLogger(__name__)
@@ -169,6 +176,16 @@ def execute(ctx: JobContext) -> None:
     target_date = planned_date if planned_date is not None else ctx.args.date or default_target_date(started)
     logger.info("TDnet対象日=%s (実起動=%s)", target_date, started.isoformat())
     batches = _collect(ctx, target_date)
+    # records=0だけではparserの取りこぼしと区別できない。検証済みitems=[]だけを候補にする。
+    observed_empty = (
+        len(batches) == 1 and not batches[0][1]
+        and json.loads(batches[0][0].local_path.read_bytes())["items"] == []
+    )
+    if observed_empty:
+        assert_scheduled_io(ctx.args, now_jst())
+        ctx.upload_raw(batches[0][0], sha_map_date=target_date)
+        ctx.confirm_zero_work(STATUS_OBSERVED_EMPTY)
+        return
 
     # ① relation マップ(全件・有界)と ④ dedup マップ(対象日のみ)を1回ずつ事前ロード。
     # 毎時実行は同一日の一覧を丸ごと再処理するため、開示ごとの ① 検索・④ 検索(各1req)が

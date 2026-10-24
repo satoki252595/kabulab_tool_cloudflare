@@ -164,6 +164,7 @@ pnpm biztag:monthly --runtime .runtime/mac-main554-20261020 --preflight # 月次
 予定日時はCFからCLIへ渡し、環境準備後の実時計で受付を再検査する。日証金・TDnet・EDINETは予定JST日の資料を対象とし、原本に記された基準日・公表日は保持する。受付を過ぎたrunは停止し、翌日分へ読み替えない。各受付・締切は[時刻契約](docs/stock-scheduler.md#取得処理の時刻契約)を参照。
 
 現行CF／Actionsの定期は機械処理。Mac専用分は[月次手動](docs/mac-monthly-manual.md)とし、日次の自動起動は再開しない。機械未対応分を自動でモデルへ渡さない。
+取得結果は[ゼロ・不該当・未公表・欠測の区分](docs/batch-result-states.md)で確認する。空欄や処理0件だけで失敗・補完対象とは判定しない。
 詳細なworkflow・保存先・SSHの実行コマンド・過去分の制約は[本番定期処理一覧](docs/production-job-inventory.md)を参照。
 
 先行条件は、月次では **母集団→優待原文→スコア再計算**、有報では **原本・主体確認→本文→タグ→競合の機械準備**。

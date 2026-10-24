@@ -189,7 +189,7 @@ function targetBarFromBars(bars: NullBarsFailureInput["bars"], target: string | 
     h: valueFlag(bar.high),
     l: valueFlag(bar.low),
     c: valueFlag(bar.close),
-    v: bar.volume === null ? "nil" : volumeNumber(bar.volume),
+    v: bar.volume === null ? "null" : volumeNumber(bar.volume),
     prev: prev === undefined ? "-" : valueFlag(prev.close),
   };
 }
@@ -222,9 +222,8 @@ function prevFlag(series: unknown[] | null, index: number): "N" | "V" | "-" {
 }
 
 function volumeToken(series: unknown[] | null, index: number): string {
-  if (series === null || index < 0 || index >= series.length || series[index] === null || series[index] === undefined) {
-    return "nil";
-  }
+  if (series === null || index < 0 || index >= series.length || series[index] === undefined) return "missing";
+  if (series[index] === null) return "null";
   return volumeNumber(series[index]);
 }
 

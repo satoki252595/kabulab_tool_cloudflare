@@ -1,3 +1,7 @@
+import type { MoneyflowNotYetPublishedReason } from "../../../services/moneyflow/lib/source-spec.js";
+import { isoWeekLabelOf } from "../../../services/moneyflow/lib/iso-week.js";
+import { isCalendarDateString } from "../../../src/shared/vwap/proof.js";
+
 /** source選択の正本はingest.tsのSOURCES。ここでは集合の重複とlaneだけを検証する。 */
 export type MoneyflowLane = "non-yahoo" | "yahoo";
 export interface MoneyflowSummary {
@@ -9,7 +13,7 @@ export interface MoneyflowSummary {
   dryRun: boolean;
   startedAt: string;
   finishedAt: string;
-  outcomes: readonly { source: string; ok: boolean; detail: string }[];
+  outcomes: readonly { source: string; ok: boolean; detail: string; reason?: MoneyflowNotYetPublishedReason }[];
   notion: { requests: number; rateLimited: number; transientRetries: number };
 }
 
@@ -73,8 +77,23 @@ function qualifySummary(raw: unknown, options: SummaryContext, allowKnownFailure
   for (let i = 0; i < s.outcomes.length; i++) {
     const outcome = s.outcomes[i];
     if (outcome === null || typeof outcome !== "object" || outcome.source !== s.only[i] ||
-        (outcome.ok !== true && !(allowKnownFailures && outcome.ok === false)) ||
+        typeof outcome.ok !== "boolean" ||
         typeof outcome.detail !== "string" || outcome.detail.trim() === "") throw new Error("moneyflow sourceに欠落/重複/失敗があります");
+    const reason = outcome.reason;
+    if (reason !== undefined && (reason === null || typeof reason !== "object" || outcome.source !== "cftc-cot-jpy" || outcome.ok !== false ||
+        reason.code !== "not_yet_published" || !isCalendarDateString(reason.expectedAsOfDate) ||
+        !isCalendarDateString(reason.expectedReleaseDate) || !isCalendarDateString(reason.latestPublishedAsOfDate) ||
+        reason.latestPublishedAsOfDate >= reason.expectedAsOfDate ||
+        new Date(`${reason.expectedAsOfDate}T00:00:00Z`).getUTCDay() !== 2 ||
+        Date.parse(reason.expectedReleaseDate) - Date.parse(reason.expectedAsOfDate) !== 3 * 86_400_000 ||
+        reason.period !== isoWeekLabelOf(new Date(`${reason.expectedAsOfDate}T00:00:00Z`)))) {
+      throw new Error("moneyflow未公表理由のsource/期間/予定日が不正です");
+    }
+    if (!outcome.ok && !allowKnownFailures) {
+      if (reason !== undefined) throw new Error(`moneyflow not_yet_published: ${outcome.source} ${reason.period} ` +
+        `(基準日=${reason.expectedAsOfDate}, 公表予定=${reason.expectedReleaseDate}, 観測最新=${reason.latestPublishedAsOfDate}) は未充足です`);
+      throw new Error("moneyflow sourceに欠落/重複/失敗があります");
+    }
   }
   return s;
 }

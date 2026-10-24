@@ -494,9 +494,43 @@ class TestEdinetDailyTargetDate:
         assert code == (0 if archive_outcome == "closed" else 1)
         if archive_outcome == "closed":
             assert "検証済み空一覧" in caplog.text
+            assert runner.STATUS_OBSERVED_EMPTY in caplog.text
             assert "processed=0 failed=0" in caplog.text
             assert len(_ops_with_prop(captured_clients[0], S.RAW_PROP_SHA256)) == 1
+        else:
+            assert runner.STATUS_OBSERVED_EMPTY not in caplog.text
         assert _ops_with_prop(captured_clients[0], S.DISC_PROP_DOC_ID) == []
+
+    @pytest.mark.parametrize("selection", ["outside_type", "excluded_nonlisted", "unidentified", "truncated"])
+    def test_zero_targets_are_classified_only_after_complete_selection(
+        self, monkeypatch, tmp_path, selection
+    ):
+        import argparse
+
+        from jp_stock_pipeline.config import load_settings
+
+        doc = json.loads((Path(__file__).parent / "fixtures/edinet/nonlisted-issuer.json").read_text())["doc"]
+        events = []
+        ctx = runner.JobContext(
+            settings=load_settings(env=_env(tmp_path), dry_run=True),
+            client=NotionClient(None, dry_run=True),
+            args=argparse.Namespace(date=date(2026, 10, 16), limit=1 if selection == "truncated" else None),
+        )
+        ctx.upload_raw = lambda *a, **kw: events.append("custody_closed") or "saved-list"
+        monkeypatch.setattr(edinet_daily.file_upload, "load_raw_page_map", lambda *a, **kw: {})
+        # 同じ保存入力の重複配送control。limitで未着手が残る場合は除外完了としない。
+        docs = [doc, doc] if selection == "truncated" else [doc]
+        monkeypatch.setattr(edinet, "list_documents", lambda *a: ("list", docs))
+        monkeypatch.setattr(edinet_daily.json_to_parquet, "convert_artifact", lambda *a: None)
+        monkeypatch.setattr(edinet, "is_target_document", lambda d: selection != "outside_type")
+        monkeypatch.setattr(edinet, "has_identifiable_company", lambda d: selection != "unidentified")
+        monkeypatch.setattr(edinet_daily, "_load_master_maps", lambda _: ({}, {}, True))
+        monkeypatch.setattr(edinet_daily.upsert, "load_disclosure_page_entries", lambda *a, **kw: {})
+        monkeypatch.setattr(edinet_daily, "_process_document", lambda *a, **kw: "excluded_nonlisted")
+        edinet_daily.execute(ctx)
+        assert events == ["custody_closed"] and ctx.processed == 0
+        expected = None if selection in ("unidentified", "truncated") else runner.STATUS_OUTSIDE_SCOPE
+        assert ctx.verified_zero_status == expected
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -903,6 +937,44 @@ class TestWorkflowManualDate:
 
 
 class TestRunJobExit:
+    @pytest.mark.parametrize("zero_status", sorted(runner.VERIFIED_ZERO_STATUSES))
+    @pytest.mark.parametrize("failure", [None, "crash", "source", "cloud", "history_unknown"])
+    def test_verified_zero_terminal_does_not_hide_failure_or_history_unknown(
+        self, monkeypatch, tmp_path, zero_status, failure, caplog
+    ):
+        from types import SimpleNamespace
+
+        from jp_stock_pipeline.cloud_store import d1, ops
+
+        saved = []
+        monkeypatch.setattr(d1, "D1Store", lambda *a, **kw: object())
+
+        def record(store, **kwargs):
+            saved.append(kwargs)
+            return failure != "history_unknown"
+
+        monkeypatch.setattr(ops, "safe_record_job_run", record)
+
+        def fn(ctx):
+            ctx.cloud = SimpleNamespace(settings=SimpleNamespace(d1_enabled=lambda: True))
+            ctx.confirm_zero_work(zero_status)
+            if failure == "crash":
+                raise file_upload.RawUploadError("unclosed custody")
+            if failure == "source":
+                ctx.add_failure("source", "unknown")
+            if failure == "cloud":
+                ctx.cloud_failed += 1
+
+        with caplog.at_level("INFO"):
+            code = runner.run_job("edinet_daily", fn, ["--dry-run"], env=_env(tmp_path))
+        assert code == (0 if failure is None else 1)
+        assert len(saved) == 1  # 実行履歴の適用不明も再送しない。
+        expected = zero_status if failure in (None, "history_unknown") else runner.STATUS_FAILURE
+        assert saved[0]["status"] == expected
+        assert saved[0]["failed_codes"] == (["source"] if failure == "source" else [])
+        if failure == "history_unknown":
+            assert f"edinet_daily: {runner.STATUS_FAILURE}" in caplog.text
+
     @pytest.mark.parametrize("missing", ["CF_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "CF_API_TOKEN", "CF_D1_DATABASE_ID"])
     def test_required_cloud_missing_stops_before_clients_or_source(self, monkeypatch, tmp_path, missing):
         from jp_stock_pipeline.config import ConfigError

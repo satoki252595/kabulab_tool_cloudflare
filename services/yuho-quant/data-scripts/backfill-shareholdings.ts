@@ -15,7 +15,7 @@ import { selectLatestHoldingsDocuments } from "./lib/shareholdings-backfill.js";
 import { parseShareholdingsData, type ShareholdingsSource, type ShareholdingsNotApplicable } from "../src/services/edinet/shareholdings.js";
 import type { IssuedShareObservation } from "../src/services/edinet/issued-shares.js";
 import { HoldingsPriceIndex, parseHoldingsCodeList, qualifyHoldingValuation, type ArchivedSource } from "../src/services/edinet/shareholdings-valuation.js";
-import { readSavedHoldingsZip, publishVerifiedShareholdings } from "../../../src/shared/notion-archive/shareholdings.js";
+import { isExplicitNotApplicableHoldings, readSavedHoldingsZip, publishVerifiedShareholdings } from "../../../src/shared/notion-archive/shareholdings.js";
 import { verifyArchivedAttachments } from "../../../src/shared/notion-archive/readback.js";
 import { edinetArchiveFilename, recordEdinetZip } from "../src/services/edinet/archive.js";
 import { guardedHoldingsMutation, saveHoldingsReceipt, writeHoldingsArtifact } from "../../../scripts/notion/shareholdings.js";
@@ -114,7 +114,7 @@ export async function applyLatestHoldings(dir: string, maxRows: number): Promise
     if (evidence) for (const source of [evidence.codeList, ...evidence.prices]) {
       await verifyArchivedAttachments(source.archivePageId, [{ filename: source.filename, bytes: source.bytes }], "保有明細backfillの価格/同定原本");
     }
-    let usedRows = 0, published = 0, held = 0, pending = 0;
+    let usedRows = 0, published = 0, held = 0, pending = 0, explicitNotApplicable = 0;
     for (const item of plan.items) {
       assert.equal(item.parserSourceSha256, PARSER_SOURCE_SHA256, "item parser SHA不一致");
       assertParserSourceUnchanged();
@@ -130,7 +130,10 @@ export async function applyLatestHoldings(dir: string, maxRows: number): Promise
         const previous = read(heldReceipt);
         assert.deepEqual(previous.source, item.source); assert.equal(previous.zipSha256, item.zipSha256);
         assert.equal(previous.result.status, "held"); assert.notEqual(previous.result.pending, true);
-        held++; continue;
+        if (isExplicitNotApplicableHoldings(previous.result)) {
+          assert.deepEqual(previous.result.notApplicable, item.notApplicable); explicitNotApplicable++;
+        } else held++;
+        continue;
       }
       const explicitAbsence = item.status === "held" && item.notApplicable !== undefined;
       if (item.status !== "ready" && !explicitAbsence) { held++; continue; }
@@ -192,6 +195,9 @@ export async function applyLatestHoldings(dir: string, maxRows: number): Promise
         assert.equal(result.reasonCode, "explicit_not_applicable"); assert.equal(result.parsed, 0);
         assert.notEqual(result.pending, true); assert.deepEqual(result.notApplicable, item.notApplicable);
       }
+      if (isExplicitNotApplicableHoldings(result)) {
+        assert.ok(explicitAbsence); explicitNotApplicable++; save(heldReceipt, proof); continue;
+      }
       if (result.status === "held") {
         if (result.pending === true) {
           assert.ok(Number.isSafeInteger(result.usedRows) && result.usedRows! > 0 && result.usedRows! <= windowRows);
@@ -209,7 +215,8 @@ export async function applyLatestHoldings(dir: string, maxRows: number): Promise
       published++;
       save(receipt, proof);
     }
-    return { usedRows, published, held, pending, upstreamRequests: 0 };
+    return { usedRows, published, held, pending, upstreamRequests: 0,
+      ...(explicitNotApplicable === 0 ? {} : { explicitNotApplicable }) };
   });
   if (result.held > 0 || result.pending > 0) process.exitCode = 1;
 }

@@ -33,7 +33,15 @@ from ..notion import file_upload, saved_edinet, upsert
 from ..transform import normalize
 from ..transform.direct_roa import _dei
 from ..transform.direct_roa_table import has_roa_table_candidate
-from .runner import JobContext, apply_limit, build_parser, main_exit, run_job
+from .runner import (
+    STATUS_OBSERVED_EMPTY,
+    STATUS_OUTSIDE_SCOPE,
+    JobContext,
+    apply_limit,
+    build_parser,
+    main_exit,
+    run_job,
+)
 from .scheduled import add_scheduled_argument, assert_scheduled_io, scheduled_target
 
 logger = logging.getLogger(__name__)
@@ -522,20 +530,23 @@ def execute(ctx: JobContext) -> None:
     # 大量保有報告書(350/360)は保有者が提出するため secCode が入らない。実測で
     # 992件中956件(96%)が空で、secCode だけで絞ると ほぼ全て取りこぼしていた。
     # 対象会社は issuerEdinetCode から ① の EDINETコード逆引きで解決する。
-    targets = [
-        d for d in docs
-        if edinet.is_target_document(d) and edinet.has_identifiable_company(d)
-    ]
+    target_documents = [d for d in docs if edinet.is_target_document(d)]
+    targets = [d for d in target_documents if edinet.has_identifiable_company(d)]
     targets = apply_limit(targets, ctx.args.limit)
+    selection_complete = len(targets) == len(target_documents)
     logger.info("対象書類 %d / 一覧 %d 件", len(targets), len(docs))
 
     if not docs:
-        # 公式 v2 の正常な空応答。原本保管後、実行履歴は processed=0 のまま残す。
-        # 連続空振りは既存 ops_check (直近5実行中3件) が検知する。日全体の確定ではない。
+        # 原本保管後、この観測時点の空一覧を記録する。日全体の確定ではない。
+        ctx.confirm_zero_work(STATUS_OBSERVED_EMPTY)
         logger.warning(
             "EDINET 検証済み空一覧: date=%s count=0（この観測時点の提出書類なし）",
             target_date.isoformat(),
         )
+        return
+
+    if not target_documents:
+        ctx.confirm_zero_work(STATUS_OUTSIDE_SCOPE)
         return
 
     # ① relation マップ(全件・有界)と ④ dedup マップ(対象日のみ)を1回ずつ事前ロード。
@@ -594,6 +605,8 @@ def execute(ctx: JobContext) -> None:
             ctx.add_failure(doc.get("docID", "?"), f"書類処理失敗: {exc}")
 
     logger.info("EDINET 母集団外: excluded_nonlisted=%d (取得一覧の原本は保管済み)", excluded_nonlisted)
+    if targets and selection_complete and excluded_nonlisted == len(targets):
+        ctx.confirm_zero_work(STATUS_OUTSIDE_SCOPE)
 
 
 def _existing_page_id(pid: str) -> str:

@@ -68,7 +68,7 @@ class ZandakaRow:
     @property
     def ratio(self) -> float | None:
         """信用倍率相当（融資残高 / 貸株残高）。分母 0 は None（無限大を作らない）。"""
-        if not self.loan_bal or not self.stock_bal:
+        if self.loan_bal is None or self.stock_bal is None or self.stock_bal == 0:
             return None
         return round(self.loan_bal / self.stock_bal, 4)
 

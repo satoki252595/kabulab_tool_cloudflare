@@ -4,7 +4,10 @@
  * 「取得元へ取りに行くか」「何を保管し何を書いたか」を検証する。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MoneyflowFetchError, type MoneyflowSourceSpec, type ObservationDraft } from "../../../services/moneyflow/lib/source-spec.js";
+import { readFileSync } from "node:fs";
+import { MoneyflowFetchError, MoneyflowNotYetPublishedError, type MoneyflowSourceSpec, type ObservationDraft } from "../../../services/moneyflow/lib/source-spec.js";
+import { cftcCotJpySpec } from "../../../services/moneyflow/lib/adapters/cftc-cot-jpy.js";
+import { NotionUnknownResultError } from "../../../src/shared/notion-archive/client.js";
 
 // source-spec.ts が observationKey を同モジュールから import しているため、
 // 実物に被せる形で mock する (被せないと validateDrafts の呼び出しで落ちる)。
@@ -109,9 +112,32 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("runSpec", () => {
+  it.each(["recorded", "unknown", "verify-unknown", "too-large", "dry-run"])("実CFTC未公表原本の%sでは観測0、保管未確定は未公表へ戻さない", async outcome => {
+    const bytes = readFileSync(new URL("../../../services/moneyflow/lib/sources/fixtures/public/cftc-cot-jpy/cftc-cot-jpy-legacy-futures-only.json", import.meta.url));
+    const fetch = vi.fn(async () => new Response(bytes)); vi.stubGlobal("fetch", fetch);
+    const unknown = new NotionUnknownResultError("archive result unknown");
+    if (outcome === "unknown") notion.recordPrimaryData.mockRejectedValueOnce(unknown);
+    if (outcome === "verify-unknown") archived.verifyArchivedAttachments.mockRejectedValueOnce(unknown);
+    if (outcome === "too-large") notion.recordPrimaryData.mockResolvedValueOnce({ pageId: "primary-1", outcome: "recorded", fileTooLarge: true });
+    const { runSpec } = await import("./run-spec.js");
+    const error = await runSpec(cftcCotJpySpec, { ...ctx(outcome === "dry-run"), now: new Date("2026-10-03T00:00:00Z") }).catch(error => error);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(notion.upsertObservationBatch).not.toHaveBeenCalled(); expect(notion.isArchived).not.toHaveBeenCalled();
+    if (outcome === "unknown" || outcome === "verify-unknown") expect(error).toBe(unknown);
+    else if (outcome === "too-large") expect(error).not.toBeInstanceOf(MoneyflowNotYetPublishedError);
+    else expect(error).toBeInstanceOf(MoneyflowNotYetPublishedError);
+    if (outcome === "dry-run") expect(notion.recordPrimaryData).not.toHaveBeenCalled();
+    else expect(notion.recordPrimaryData).toHaveBeenCalledWith(expect.objectContaining({
+      key: expect.stringMatching(/^not-yet-published-cftc-cot-jpy-2026-W40-[a-f0-9]{64}$/),
+      metadata: expect.objectContaining({ publication: expect.objectContaining({ code: "not_yet_published", period: "2026-W40" }) }),
+      files: [expect.objectContaining({ bytes: new Uint8Array(bytes) })],
+    }));
+    if (outcome === "recorded") expect(archived.verifyArchivedAttachments).toHaveBeenCalledTimes(1);
+  });
   it.each([undefined, Date.parse("2026-10-16T14:40:00.000Z")])("deadline %s は定時だけresolveへ第3引数で渡す", async deadlineMs => {
     const {runSpec}=await import("./run-spec.js"),{spec}=makeSpec();const resolve=vi.spyOn(spec,"resolve");const context=ctx();
     await runSpec(spec,{...context,...(deadlineMs===undefined?{}:{deadlineMs})});

@@ -56,6 +56,7 @@ FRESHNESS_SQL = (
 # 「うるさいが安全な誤警報」で済む。安全側に倒す。
 DIAGNOSTIC_JOBS: tuple[str, ...] = ("ops_check", "cloud_check", PROBE_JOB_NAME)
 
+# 原本検証済み0件/対象外は専用の成功statusで残る。理由不明の「成功」だけを数える。
 # 直近の実行で「処理ゼロの成功」が続いていないか。EDINET の 11 営業日は
 # これで拾える。D1 の compound SELECT 上限を避けて 1 文にする。
 #

@@ -1008,7 +1008,7 @@ async function recordPriceSyncFailureSafely(
  */
 export type PriceSyncFailureCategory =
   | "history_hold"
-  | "genuine_source_gap"
+  | "source_unavailable"
   | "priceguard"
   | "networkparse"
   | "savefailure"
@@ -1017,7 +1017,8 @@ export type PriceSyncFailureCategory =
 export function categorizeSyncFailure(error: string): PriceSyncFailureCategory {
   if (error.startsWith("RSI 5y履歴HOLD:")) return "history_hold";
   if (error.includes("10倍超乖離")) return "priceguard";
-  if (error.includes("実日足が未取得")) return "genuine_source_gap";
+  // Yahoo未提供だけでは無約定・配信欠測のどちらかを確定できない。
+  if (error.includes("実日足が未取得")) return "source_unavailable";
   if (isTransientDailySyncFailure(error)) return "networkparse";
   if (
     /^D1 HTTP|D1 .*error|constraint|UNIQUE|SQLITE|database .*error/i.test(
@@ -1090,7 +1091,7 @@ export function buildPriceSyncBatch(input: PriceSyncBatchInput): {
 } {
   const categories: Record<PriceSyncFailureCategory, number> = {
     history_hold: 0,
-    genuine_source_gap: 0,
+    source_unavailable: 0,
     priceguard: 0,
     networkparse: 0,
     savefailure: 0,
@@ -1116,6 +1117,7 @@ export function buildPriceSyncBatch(input: PriceSyncBatchInput): {
     },
     failureCollection: input.failureCollection,
     categories,
+    sourceUnavailableMeaning: "対象日の実価格は未提供。売買不成立か配信欠測かは未確定で、取得成功・出来高0には変換しない。",
     failures: input.failures,
     originalError: input.originalError,
     ...(input.corporateDiagnostics === undefined ? {} : { corporateDiagnostics: input.corporateDiagnostics }),

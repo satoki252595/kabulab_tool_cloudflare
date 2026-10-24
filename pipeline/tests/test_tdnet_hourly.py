@@ -9,12 +9,14 @@ monkeypatch/差し替えて `save_raw` 呼び出しの引数だけを検証す�
 from __future__ import annotations
 
 import argparse
+import json
 import types
 from datetime import date, datetime, timezone
 
 import pytest
 
 from jp_stock_pipeline.config import load_settings
+from jp_stock_pipeline.jobs import runner
 from jp_stock_pipeline.jobs import tdnet_hourly as mod
 from jp_stock_pipeline.jobs.runner import JobContext
 from jp_stock_pipeline.licensing import LicenseTag
@@ -107,6 +109,68 @@ def _record(doc_id: str = "81234567") -> DisclosureRecord:
         doc_type="短信",
         has_xbrl=True,
     )
+
+
+@pytest.mark.parametrize(("items", "custody_unknown"), [([], False), ([], True), ([{}], False)])
+def test_empty_items_require_closed_custody_and_do_not_hide_unparsed_items(
+    monkeypatch, tmp_path, items, custody_unknown
+):
+    """空/未解析itemはprotocol境界control。金融値・開示本文は作らない。"""
+    from jp_stock_pipeline.notion import file_upload
+
+    path = tmp_path / "list.json"
+    path.write_text(json.dumps({"items": items}))
+    artifact = types.SimpleNamespace(local_path=path)
+    ctx = _ctx(str(tmp_path))
+    ctx.args = argparse.Namespace(date=date(2026, 9, 11), limit=None)
+    monkeypatch.setattr(mod, "_collect", lambda *a: [(artifact, [], {})])
+    def read_map(*a, **kw):
+        if items == []:
+            pytest.fail("検証済み空一覧後の全件map読取")
+        return {}
+
+    monkeypatch.setattr(mod, "_load_master_map", lambda _: (read_map(), True))
+    monkeypatch.setattr(mod.upsert, "load_disclosure_page_entries", read_map)
+    monkeypatch.setattr(mod.file_upload, "load_raw_page_map", read_map)
+    events = []
+
+    def upload(*a, **kw):
+        events.append("custody")
+        assert ctx.verified_zero_status is None
+        if custody_unknown:
+            raise file_upload.RawUploadError("unknown custody")
+        return "saved-list"
+
+    ctx.upload_raw = upload
+    if custody_unknown:
+        with pytest.raises(file_upload.RawUploadError, match="unknown"):
+            mod.execute(ctx)
+        assert ctx.verified_zero_status is None
+    else:
+        mod.execute(ctx)
+        expected = runner.STATUS_OBSERVED_EMPTY if items == [] else None
+        assert ctx.verified_zero_status == expected
+    assert events == ["custody"] and ctx.processed == 0
+
+
+@pytest.mark.parametrize("persist_ok", [True, False])
+def test_verified_dedup_counts_as_processed_only_after_persist(monkeypatch, tmp_path, persist_ok):
+    ctx = _ctx(str(tmp_path))
+    ctx.args = argparse.Namespace(date=date(2026, 9, 11), limit=None)
+    record = _record()  # 既存のwriter境界double。原本の金融値は生成しない。
+    monkeypatch.setattr(mod, "_collect", lambda *a: [(object(), [record], {})])
+    monkeypatch.setattr(mod, "_load_master_map", lambda _: ({record.code: "master"}, True))
+    monkeypatch.setattr(mod.upsert, "load_disclosure_page_entries", lambda *a, **kw: {record.doc_id: ("existing", {})})
+    monkeypatch.setattr(mod.upsert, "disclosure_matches_page", lambda *a: True)
+    monkeypatch.setattr(mod.file_upload, "load_raw_page_map", lambda *a, **kw: {})
+    monkeypatch.setattr(mod.upsert, "upsert_disclosure", lambda *a, **kw: pytest.fail("同値の再PATCH"))
+    calls = []
+    ctx.persist = lambda record, notion_write, **kw: calls.append(notion_write()) or persist_ok
+    mod.execute(ctx)
+    assert calls == ["existing"]
+    assert ctx.processed == int(persist_ok) and ctx.failed == int(not persist_ok)
+    assert ctx.verified_zero_status is None
+    assert runner._status(ctx, False) == (runner.STATUS_SUCCESS if persist_ok else runner.STATUS_FAILURE)
 
 
 class TestProcessFinancialXbrlSavesDocId:

@@ -79,7 +79,10 @@ beforeEach(() => {
   vi.mocked(downloadArchivedFile).mockImplementation(async file => Buffer.from(archives.get(file.url.split("/").at(-1)!)!.bytes));
   vi.mocked(notionRequest).mockImplementation(async (method, path, body, options) => {
     const request = body as { archived?: boolean; properties?: Record<string, Record<string, unknown>>; filter?: { property?: string }; parent?: { database_id: string } };
-    if (method === "GET" && path.startsWith("/databases/")) return (nid(path.split("/").at(-1)!) === nid(schema.id) ? schema : { id: page.parent.database_id, properties: page.properties }) as never;
+    if (method === "GET" && path.startsWith("/databases/")) return (nid(path.split("/").at(-1)!) === nid(schema.id) ? schema : { id: page.parent.database_id,
+      // Current source schema projection, distinct from the saved page's selected value.
+      properties: { ...page.properties, "保有明細状態": { type: "select", select: { options: ["再開待ち", "要確認", "実行中（結果未確定）", "明細原本照合済", "原本明示不該当"]
+        .map((name, index) => ({ id: `source-status-${index}`, name, color: "default" })) } } } }) as never;
     if (method === "POST" && path.endsWith("/query")) return { results: request.filter?.property === "保有明細状態" ? (page.properties["保有明細状態"].select.name === "実行中（結果未確定）" ? [structuredClone(page), ...structuredClone(additionalUnknown)] : structuredClone(additionalUnknown)) : structuredClone(rows), has_more: false, next_cursor: null } as never;
     if (method === "GET") {
       if (path === `/pages/${page.id}`) return structuredClone(page);

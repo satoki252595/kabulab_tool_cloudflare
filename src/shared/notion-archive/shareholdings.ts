@@ -708,6 +708,23 @@ export type PublishHoldingsResult = (
   | { status: "held"; parsed: number; reason: string; usedRows?: number; pending?: boolean;
       reasonCode?: "explicit_not_applicable"; notApplicable?: ShareholdingsNotApplicable }) & { issuedSharesObservation?: IssuedShareObservation };
 
+/** parserの型付き原本根拠を持つ不該当だけ。通常HOLD・途中window・根拠欠けは未完のまま。 */
+export function isExplicitNotApplicableHoldings(result: PublishHoldingsResult): boolean {
+  if (result.status !== "held" || result.reasonCode !== "explicit_not_applicable" || result.parsed !== 0 || result.pending === true) return false;
+  const proof = result.notApplicable;
+  if (proof === null || typeof proof !== "object" || Array.isArray(proof) || proof.version !== 1 ||
+      !["whole_section_not_applicable", "filer_both_investment_purposes_absent"].includes(proof.basis)) return false;
+  if (![proof.zipSha256, proof.memberSha256, proof.blockHtmlSha256].every(value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value)) ||
+      typeof proof.filename !== "string" || !proof.filename.trim() || typeof proof.statement !== "string" || !proof.statement.trim() ||
+      typeof proof.elementNamespace !== "string" || !/^http:\/\/disclosure\.edinet-fsa\.go\.jp\/taxonomy\/jpcrp\/\d{4}-\d{2}-\d{2}\/jpcrp_cor$/.test(proof.elementNamespace) ||
+      proof.inlineNamespace !== "http://www.xbrl.org/2008/inlineXBRL") return false;
+  const context = proof.context;
+  return context !== null && typeof context === "object" && context.contextRef === "FilingDateInstant" &&
+    typeof context.entity === "string" && /^E[0-9]{5}-000$/.test(context.entity) && typeof context.instantDate === "string" &&
+    /^\d{4}-\d{2}-\d{2}$/.test(context.instantDate) && Number.isFinite(Date.parse(context.instantDate)) &&
+    new Date(context.instantDate).toISOString().slice(0, 10) === context.instantDate;
+}
+
 /**
  * recordEdinetZip(type1)の物理全文照合を終えた同一bytesだけを渡す。
  * 原本の再取得・再アップロードはしない。全原表を固定し、残run枠だけを読戻して再開する。
@@ -737,7 +754,7 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
     notApplicable?: ShareholdingsNotApplicable): Promise<PublishHoldingsResult> => {
     assert.ok(notApplicable === undefined || !pricePhase, "既存価格queueを明示不該当へ付け替えません");
     if (pricePhase) await recordRecoveryInfo(args.archivePageId, pricePhase.info, retry ? "再開待ち" : "要確認", reason, true, undefined, undefined, pricePreflight);
-    else await recordRecoveryMarker(args, retry ? "再開待ち" : "要確認", reason, parsed, undefined, diagnostic?.observation, notApplicable);
+    else await recordRecoveryMarker(args, notApplicable === undefined ? (retry ? "再開待ち" : "要確認") : "原本明示不該当", reason, parsed, undefined, diagnostic?.observation, notApplicable);
     return { status: "held", parsed, reason, ...(retry ? { pending: true } : {}),
       ...(notApplicable === undefined ? {} : { reasonCode: "explicit_not_applicable", notApplicable }) };
   };
@@ -1193,7 +1210,7 @@ export async function readSavedHoldingsZip(source: ShareholdingsSource, budget?:
 }
 
 const RECOVERY = {
-  "保有明細状態": { select: { options: ["再開待ち", "要確認", "実行中（結果未確定）", "明細原本照合済"].map(name => ({ name })) } },
+  "保有明細状態": { select: { options: ["再開待ち", "要確認", "実行中（結果未確定）", "明細原本照合済", "原本明示不該当"].map(name => ({ name })) } },
   "保有明細理由": { rich_text: {} },
   "保有明細再開情報": { rich_text: {} },
   "保有価格状態": { select: { options: ["再開待ち", "要確認", "実行中（結果未確定）", "価格照合完了"].map(name => ({ name })) } },
@@ -1219,10 +1236,23 @@ async function recoveryDatabase(): Promise<string> {
       if (schema.properties[name]) assert.equal(schema.properties[name].type, Object.keys(definition)[0]);
       else properties[name] = definition;
     }
+    const sourceStatus = schema.properties["保有明細状態"];
+    if (sourceStatus) {
+      assert.ok(Array.isArray(sourceStatus.select?.options), "保有明細状態の選択肢を確認できません");
+      if (!sourceStatus.select.options.some(option => option.name === "原本明示不該当")) {
+        properties["保有明細状態"] = { select: { options: [...sourceStatus.select.options, { name: "原本明示不該当" }] } };
+      }
+    }
     if (Object.keys(properties).length > 0) {
       await notionRequest("PATCH", `/databases/${dbId}`, { properties }, { singleAttempt: true });
       const actual = await notionRequest<HoldingsSchema>("GET", `/databases/${dbId}`);
       for (const [name, definition] of Object.entries(RECOVERY)) assert.equal(actual.properties[name].type, Object.keys(definition)[0]);
+      const options = actual.properties["保有明細状態"].select?.options;
+      assert.ok(Array.isArray(options)); assert.ok(options.some(option => option.name === "原本明示不該当"));
+      for (const old of sourceStatus?.select?.options ?? []) {
+        const current: { id: string; name: string; color: string } | undefined = options.find(option => option.id === old.id);
+        assert.ok(current); for (const field of ["id", "name", "color"] as const) assert.equal(current[field], old[field], "既存保有明細状態の選択肢を変更しません");
+      }
     }
     return dbId;
   })();
@@ -1650,7 +1680,7 @@ async function assertNoUnknownHoldingPeriod(source: ShareholdingsSource, archive
 
 /** EDINET完了checkpointとは独立した既知HOLDだけを再開し、資格済み未知sourceは隔離して保持する。 */
 export async function resumePendingShareholdings(args: { sourceDb: ReportedSourceDb; maxRows: number; shouldStop: () => boolean; hardDeadlineReached?: () => boolean; observeIssuedShares?: true }): Promise<{
-  usedRows: number; resumed: number; held: number; pending: boolean; unknownSources?: UnknownHoldingsSource[];
+  usedRows: number; resumed: number; held: number; pending: boolean; explicitNotApplicable?: number; unknownSources?: UnknownHoldingsSource[];
 }> {
   assert.ok(Number.isSafeInteger(args.maxRows) && args.maxRows >= 0 && args.maxRows <= 100);
   notionEnv.NOTION_STOCK_HOLDINGS_DB_ID(); // EDINET源取得より前に必須設定を検証する。
@@ -1670,7 +1700,41 @@ export async function resumePendingShareholdings(args: { sourceDb: ReportedSourc
     assertSameHoldingPage(fresh, page); protectedPages.push(fresh); unknownSources.push(hold);
   }
   const queue = await query("再開待ち", 6);
-  const attention = await query("要確認", 1);
+  let attention = await query("要確認", 1);
+  let explicitNotApplicable = 0;
+  const assertLegacyActive = () => assert.ok(!(args.hardDeadlineReached === undefined ? args.shouldStop() : args.hardDeadlineReached()),
+    "旧不該当の再資格が時間予算を超えました（状態を再送しません）");
+  // 旧版の不該当markerだけを最大1通/回で再資格する。queryの先頭を除外して後続HOLDを隠さない。
+  const legacy = attention.results[0];
+  const legacyProperty = legacy?.properties?.["保有明細再開情報"];
+  const legacyText = legacyProperty?.type === "rich_text" ? richValue(legacyProperty) : "";
+  if (legacyText && !args.shouldStop()) {
+    const info = JSON.parse(legacyText) as RecoveryInfo;
+    if (info.notApplicable !== undefined && info.parsed === 0 && info.sourceQueueVersion === undefined &&
+        info.sourceNextHoldingOffset === undefined && info.factsSha256 === undefined) {
+      qualifyRecoveryPage(legacy, legacy.id, dbId, info.source);
+      assert(!identities.has(JSON.stringify([info.source.stockCode, info.source.fiscalYearEnd])) &&
+        !unknownIds.has(legacy.id.replaceAll("-", "")) && !unknownDocs.has(info.source.docId), "旧不該当が結果未確定sourceと衝突しています");
+      assertLegacyActive();
+      const saved = await readSavedHoldingsZip(info.source);
+      assertLegacyActive();
+      if (saved.status === "ready") {
+        assert.equal(saved.sourceCustody, "typed"); assert.equal(saved.archivePageId.replaceAll("-", ""), legacy.id.replaceAll("-", ""));
+        assert.equal(saved.bytes.length, info.zipBytes); assert.equal(saved.sha256, info.zipSha256);
+        const parsed = parseShareholdingsData(saved.bytes, info.source);
+        assert.equal(parsed.status, "explicit_not_applicable", "旧不該当の原本根拠を再資格できません");
+        assert.deepEqual(parsed.notApplicable, info.notApplicable, "旧不該当の全文根拠が変更されています");
+        assert.equal(saved.metadata.filerName, info.ownerName);
+        assertLegacyActive();
+        const outcome = await publishVerifiedShareholdings({ sourceDb: args.sourceDb, source: info.source, ownerName: info.ownerName,
+          zip: saved.bytes, archivePageId: legacy.id, maxRows: 0 });
+        assert.ok(isExplicitNotApplicableHoldings(outcome), "旧不該当を明細/価格成功へ変換しません");
+        explicitNotApplicable++;
+        assertLegacyActive();
+        attention = await query("要確認", 1);
+      }
+    }
+  }
   const result = { usedRows: 0, resumed: 0, held: attention.results.length + unknownSources.length,
     pending: unknownSources.length > 0 || queue.has_more || queue.results.length > 5 };
   // 同じholding期末に別source/legacyが混在した場合は、未知sourceを迂回して書かない。
@@ -1711,5 +1775,6 @@ export async function resumePendingShareholdings(args: { sourceDb: ReportedSourc
       "結果未確定sourceの保護POST確認前に時間予算を超えました");
     assertSameHoldingPage(await notionRequest<HoldingPage>("GET", `/pages/${page.id}`, undefined, { singleAttempt: true }), page);
   }
-  return unknownSources.length === 0 ? result : { ...result, unknownSources };
+  return { ...result, ...(explicitNotApplicable === 0 ? {} : { explicitNotApplicable }),
+    ...(unknownSources.length === 0 ? {} : { unknownSources }) };
 }

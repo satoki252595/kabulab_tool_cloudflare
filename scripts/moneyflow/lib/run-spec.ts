@@ -27,6 +27,7 @@ import {
 import {
   validateDrafts,
   MoneyflowFetchError,
+  MoneyflowNotYetPublishedError,
   type MoneyflowSourceSpec,
   type ObservationDraft,
   type SpecFile,
@@ -200,7 +201,7 @@ async function runSpecInner(spec: MoneyflowSourceSpec, ctx: SpecRunContext): Pro
   return `${key} を記録 ${describeCounts(drafts.length, written.counts)}`;
 }
 
-/** 失敗原本は成功バッチと別のSHAキーで保全。再送や別値補完は行わない。 */
+/** 未公表・失敗原本は観測成功と別のSHAキーで保全。再送や別値補完は行わない。 */
 export async function runSpec(spec: MoneyflowSourceSpec, ctx: SpecRunContext): Promise<string> {
   try { return await runSpecInner(spec, ctx); }
   catch (error) {
@@ -211,12 +212,14 @@ export async function runSpec(spec: MoneyflowSourceSpec, ctx: SpecRunContext): P
         return `${f.filename}:${Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, "0")).join("")}`;
       }));
       const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(hashes.join("\n")));
-      const key = `failed-${spec.name}-${Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, "0")).join("")}`;
+      const unpublished = error instanceof MoneyflowNotYetPublishedError;
+      const prefix = unpublished ? `not-yet-published-${spec.name}-${error.reason.period}` : `failed-${spec.name}`;
+      const key = `${prefix}-${Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, "0")).join("")}`;
       const archive = await recordPrimaryData({ service: "moneyflow", key, ...error.primary,
-        metadata: { ...error.primary.metadata, failedBeforeObservation: true, failure: error.message } });
-      if (archive.fileTooLarge) throw new Error(`[${spec.name}] 失敗原本が未保管。観測停止`, { cause: error });
+        metadata: { ...error.primary.metadata, ...(unpublished ? { publication: error.reason } : { failedBeforeObservation: true, failure: error.message }) } });
+      if (archive.fileTooLarge) throw new Error(`[${spec.name}] ${unpublished ? "未公表" : "失敗"}原本が未保管。観測停止`, { cause: error });
       await verifyArchivedAttachments(archive.pageId, `[${spec.name}] failed raw`, key, error.primary.files);
-      console.warn(`[${spec.name}] 取得済み失敗原本を物理保全: ${archive.pageId}。観測書込なし`);
+      console.warn(`[${spec.name}] 取得済み${unpublished ? "未公表" : "失敗"}原本を物理保全: ${archive.pageId}。観測書込なし`);
     }
     throw error;
   }

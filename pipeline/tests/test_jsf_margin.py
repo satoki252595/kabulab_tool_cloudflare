@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from datetime import date
 
+import pytest
+
 from conftest import fixture_path
 
 from jp_stock_pipeline.collectors import jsf_margin as jsf
@@ -51,6 +53,18 @@ class TestZandaka:
             exchange="東証", report_type="確報", loan_bal=1000, stock_bal=400,
         )
         assert row.ratio == 2.5
+
+    @pytest.mark.parametrize(("loan_bal", "stock_bal", "expected"), [
+        (0, 400, 0.0), (None, 400, None), (1000, None, None), (0, 0, None),
+    ])
+    def test_zero_numerator_is_distinct_from_missing_or_zero_denominator(
+        self, loan_bal, stock_bal, expected
+    ):
+        row = jsf.ZandakaRow(
+            apply_date=date(2026, 9, 10), code="9999", name="x",
+            exchange="東証", report_type="確報", loan_bal=loan_bal, stock_bal=stock_bal,
+        )
+        assert row.ratio == expected
 
     def test_same_code_can_appear_on_multiple_exchanges(self):
         """主キーは (申込日, コード, 取引所区分名)。コード単独では一意にならない。"""

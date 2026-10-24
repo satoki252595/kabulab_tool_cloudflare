@@ -42,7 +42,8 @@ beforeEach(() => {
   });
   vi.mocked(notionRequest).mockImplementation(async (method, path, body) => {
     if (method === "GET" && path.startsWith("/databases/")) return (sameId(path.split("/").at(-1)!, schema.id) ? schema
-      : { id: unknown.parent.database_id, properties: unknown.properties }) as never;
+      : { id: unknown.parent.database_id, properties: { ...unknown.properties,
+        "保有明細状態": { type: "select", select: { options: [{ name: "原本明示不該当" }] } } } }) as never;
     if (method === "POST" && path.endsWith("/query")) {
       if (sameId(path.split("/")[2], schema.id)) return { object: "list", results: read("1897-period-complete.json").rows, has_more: false, next_cursor: null } as never;
       const status = (body as { filter: { select: { equals: string } } }).filter.select.equals;
