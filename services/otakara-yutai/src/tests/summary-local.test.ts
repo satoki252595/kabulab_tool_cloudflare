@@ -1,9 +1,11 @@
-/** Synthetic unit inputs only; no source-site text, model, or production I/O. */
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+/** 文法試験＋保存実3群の私有回帰。モデル・本番I/Oは行わない。 */
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ROOT } from "../../../../src/shared/db/tests/source-scan.js";
 import {
   SEMIF_HF_MODEL,
   SEMIF_HF_REVISION,
@@ -27,7 +29,10 @@ import {
   type BenefitRow,
   type SummaryTask,
 } from "../../data-scripts/summary-tasks.js";
-import type { ImportPlan } from "../../data-scripts/summary-import.js";
+import { planSummaryImport, type ImportPlan } from "../../data-scripts/summary-import.js";
+import shippingSaved from "./fixtures/shipping-saved3.json";
+
+const shippingPrivatePath = join(ROOT, "tmp/yutai-shipping-proof-v1/saved3.private.json");
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -114,7 +119,7 @@ function dependencies(initial: BenefitRow[]): {
                 shortSummary: update.shortSummary,
                 estimatedValue: update.estimatedValue,
                 estimateValueSource: update.estimateValueSource,
-                updatedAt: 2,
+                updatedAt: r.updatedAt + 1,
               }
             : r;
         });
@@ -138,6 +143,55 @@ describe("local summary generation/import boundary", () => {
       expect(compileSimpleSummary(task(description))).toBeNull();
     }
   });
+  it.each(shippingSaved.groups)("送付2か月の全文文法は掲載額と両月を保持する: $taskId", group => {
+    // 全文文法の対照入力。実task/rowの原bytesは私有回帰で別途照合する。
+    const description = `【種別："自社製品詰合せ（アイス等）"】\n${group.expectedValue.toLocaleString("en-US")}円相当\n【送付時期】\n5月~6月`;
+    const currentRows = [row(1, { description })];
+    const tasks = selectSummaryTasks(currentRows);
+    const result = compileSimpleSummary(tasks[0]);
+    expect(result).toMatchObject({ shortSummary: group.expectedSummary, estimatedValue: group.expectedValue });
+    expect(companyValue(tasks[0])).toEqual({ value: group.expectedValue, reason: "qualified_company_per_grant" });
+    const plan = planSummaryImport({ tasks, currentRows, resultsText: JSON.stringify(result) });
+    expect(plan.rejections).toEqual([]);
+    expect(plan.updates).toHaveLength(1);
+  });
+  it("送付文法は余分な注記・数量・保有条件・別見出し・不正額/月を部分採用しない", () => {
+    const original = '【種別："自社製品詰合せ（アイス等）"】\n2,000円相当\n【送付時期】\n5月~6月';
+    const compile = (description: string) => compileSimpleSummary(selectSummaryTasks([row(1, { description })])[0]);
+    for (const suffix of ["\n※別条件あり", "\n2個", "\n×2", "\n1年以上保有", "\n抽選", "\n申込必要", "\n別途1,000円分"]) {
+      expect(compile(original + suffix)).toBeNull();
+    }
+    for (const changed of [original.replace("アイス等", "別商品"), original.split("\n").slice(1).join("\n"),
+      original.replace("2,000円", "約2,000円"), original.replace("2,000円", "0円"), original.replace("2,000円", "2,00円"),
+      original.replace("2,000円", "9,007,199,254,740,992円"), original.replace("5月", "0月"), original.replace("6月", "13月"),
+      original.replace("5月~6月", "5~6月"), original.replace("【送付時期】", "【申込時期】")]) {
+      expect(compile(changed)).toBeNull();
+    }
+  });
+  it.skipIf(!existsSync(shippingPrivatePath))("保存実2872の3task/3行を通常PRE/原子取込/全POSTへモデル0で通す", async () => {
+    const bytes = readFileSync(shippingPrivatePath);
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe(shippingSaved.provenance.privateFixtureSha256);
+    const saved = JSON.parse(bytes.toString()) as { tasks: SummaryTask[]; rows: BenefitRow[] };
+    const tasks = selectSummaryTasks(saved.rows);
+    expect(tasks).toEqual(parseTaskFile(saved.tasks.map(task => JSON.stringify(task)).join("\n")));
+    expect(tasks).toHaveLength(3);
+    for (const task of tasks) {
+      const group = shippingSaved.groups.find(item => item.taskId === task.taskId)!;
+      expect(createHash("sha256").update(task.description).digest("hex")).toBe(group.sourceSha256);
+      expect(task.recipients).toEqual(group.recipients);
+      expect(compileSimpleSummary(task)).toMatchObject({ shortSummary: group.expectedSummary, estimatedValue: group.expectedValue });
+    }
+    const { deps, events, rows } = dependencies(saved.rows);
+    expect(await runLocalSummary({ stateDir: state(), limit: 60 }, deps)).toMatchObject({ selected: 3, accepted: 3,
+      deterministic: 3, pendingAfter: 0, modelCalls: 0, modelResidents: 0 });
+    expect(deps.generate).not.toHaveBeenCalled();
+    expect(events).toEqual(["archive-pre", "apply", "archive-post"]);
+    for (const task of tasks) {
+      const result = rows().find(item => item.description === task.description)!;
+      const group = shippingSaved.groups.find(item => item.taskId === task.taskId)!;
+      expect(result).toMatchObject({ shortSummary: group.expectedSummary, estimatedValue: group.expectedValue, estimateValueSource: "company" });
+    }
+  });
   it("定型だけのbatchはモデルを起動せず、通常の物理PRE/原子取込/全POSTを通す", async () => {
     const { deps, events, rows } = dependencies([row(1, { description: "QUOカード 3,000円分" })]);
     const dir = state();
@@ -148,7 +202,7 @@ describe("local summary generation/import boundary", () => {
     expect(rows()[0]).toMatchObject({ shortSummary: "QUOカード 3,000円分", estimatedValue: 3000 });
     const run = readdirSync(dir).find(name => name !== "progress.json")!;
     const pre = JSON.parse(gunzipSync(readFileSync(join(dir, run, "pre-import.json.gz"))).toString());
-    expect(pre).toMatchObject({ model: null, revision: null, protocol: "", deterministicRule: "simple-face-value-one-of-holding-and-record-tier-v4" });
+    expect(pre).toMatchObject({ model: null, revision: null, protocol: "", deterministicRule: "simple-face-value-one-of-holding-record-tier-and-shipping-v5" });
     expect(parseTaskFile(readFileSync(join(dir, run, "model-tasks.jsonl"), "utf8"))).toEqual([]);
   });
   it("全文1点選択はモデル0で通常PRE/原子取込/POSTへ通し、選択肢の掲載額を評価しない", async () => {

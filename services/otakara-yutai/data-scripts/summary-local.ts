@@ -125,7 +125,7 @@ export function companyValue(task: SummaryTask): {
   return evaluateCompanyValue(task.description, context);
 }
 
-export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-one-of-holding-and-record-tier-v4";
+export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-one-of-holding-record-tier-and-shipping-v5";
 
 /** 対応する種類＋額面・全文1点選択・全文対応の期間/名簿条件を定型化する。未対応条件を削らない。 */
 export function compileSimpleSummary(task: SummaryTask): SummaryResult | null {
@@ -149,6 +149,14 @@ export function compileSimpleSummary(task: SummaryTask): SummaryResult | null {
   if (source.malformed) return null;
   const grammar = /^(QUOカードPay|QUOカード|クオカード|図書カードNEXT|図書カード|商品券|ギフトカード|自社商品|カタログギフト)[ \t]*(?:([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)円(分|相当))(?:を贈呈|贈呈)?[。]?$/u;
   const body = source.body.normalize("NFKC").trim();
+  // 掲載額と明示された両送付月を保持する。余分な注記・数量・保有条件は全文一致で拒否する。
+  const shipment = /^([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)円(分|相当)\n【送付時期】\n(1[0-2]|[1-9])月~(1[0-2]|[1-9])月$/u.exec(body);
+  if (source.heading?.normalize("NFKC").trim() === "自社製品詰合せ(アイス等)" && shipment !== null) {
+    const amount = companyValue(task);
+    if (amount.value === null || !Number.isSafeInteger(amount.value) || amount.value !== Number(shipment[1].replaceAll(",", ""))) return null;
+    return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion,
+      shortSummary: `自社製品詰合せ(アイス等) ${amount.value.toLocaleString("en-US")}円${shipment[2]}・${shipment[3]}月〜${shipment[4]}月送付`, estimatedValue: amount.value });
+  }
   let match = grammar.exec(body);
   // 種類だけの表見出し＋本文の額面も同じ全文文法で読む。金額は本文で認定する。
   if (match === null && source.heading !== null) match = grammar.exec(`${source.heading.normalize("NFKC").trim()} ${body}`);

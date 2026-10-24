@@ -1,0 +1,56 @@
+{
+  "provenance": {
+    "source": "saved-first-gha-pre",
+    "observedAt": "2026-10-24T21:26:11.249Z",
+    "prePageId": "403d74ff-84cd-8176-9864-e35f734e3844",
+    "preGzipSha256": "6cf387b43d8dcbefb39d955d4f841f7597117dc67c1f78a2d0ab19d50ca243cc",
+    "privateFixtureSha256": "2cb1481d2b1ca9fbaff5e0fb97386f119774b19b0d2f17ff784604331c61806a",
+    "taskScope": 3,
+    "firstGhaScope": 60,
+    "wholePendingScopeVerified": false
+  },
+  "groups": [
+    {
+      "taskId": "a315eb6ca9ee1507",
+      "stockCode": "2872",
+      "sourceSha256": "a2b0c4302c089351d42915c2b67ee59a6e87fa6c3a23883652587c9f462cc747",
+      "recipients": [
+        {
+          "minShares": 100,
+          "recordMonth": 2,
+          "recordDate": null
+        }
+      ],
+      "expectedValue": 2000,
+      "expectedSummary": "自社製品詰合せ(アイス等) 2,000円相当・5月〜6月送付"
+    },
+    {
+      "taskId": "3ca78066415f9e3b",
+      "stockCode": "2872",
+      "sourceSha256": "8e6fef8d12e26c9445a79628e09ee4319fd5455ad0c5a4b725ea5dbb54e6d087",
+      "recipients": [
+        {
+          "minShares": 500,
+          "recordMonth": 2,
+          "recordDate": null
+        }
+      ],
+      "expectedValue": 3000,
+      "expectedSummary": "自社製品詰合せ(アイス等) 3,000円相当・5月〜6月送付"
+    },
+    {
+      "taskId": "05fc40e8edab87f8",
+      "stockCode": "2872",
+      "sourceSha256": "1ddb39e1a41c2792f7b292c5b4e749f492df5ab691d2bd7a05145aeb268cef5f",
+      "recipients": [
+        {
+          "minShares": 1000,
+          "recordMonth": 2,
+          "recordDate": null
+        }
+      ],
+      "expectedValue": 4000,
+      "expectedSummary": "自社製品詰合せ(アイス等) 4,000円相当・5月〜6月送付"
+    }
+  ]
+}
