@@ -132,3 +132,16 @@ it("mechanical source metadata HOLD creates no publication or business write", a
   expect(io.replace).not.toHaveBeenCalled(); expect(io.create).not.toHaveBeenCalled();
   expect(put.mock.calls.some(([key]) => key.includes("/operations/"))).toBe(false);
 });
+
+it("same-length source edit cannot reuse prior receipt or call an old target unchanged", async () => {
+  const saved = row(), before = await mechanicalTextInput(latest, saved, sections, "protocol-master");
+  Object.assign(saved, before); saved.texts = row().texts;
+  const changed = business.replace("製造", "製作"); expect(changed).not.toBe(business); expect(changed.length).toBe(business.length);
+  io.rows.mockResolvedValue([saved]); io.full.mockResolvedValue(saved);
+  io.source.mockResolvedValue([{ ...sections[0], text: changed }]);
+  const result = await withSharedPublishingWriter(() => runMechanicalPublishing({ codes: ["6103"], limit: 1, budgetMs: 60_000 }), store());
+  expect(result).toMatchObject({ unchanged: 0, synced: 1, modelCalls: 0 });
+  expect(io.qualified).toHaveBeenCalledTimes(1); expect(io.source).toHaveBeenCalledTimes(1);
+  expect(io.replace.mock.calls[0][2].texts["事業の内容"]).toBe(changed);
+  expect(io.replace.mock.calls[0][2]).not.toHaveProperty("tagDoc");
+});

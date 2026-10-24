@@ -132,12 +132,13 @@ export async function runMechanicalPublishing(options: { limit: number; budgetMs
           if (full !== null) assert(full.stockCode === item.stockCode && JSON.stringify(savedRowGuard(full)) === JSON.stringify(savedRowGuard(row!)), "補足メタ/判定が限定plan後に変更されています");
           // 旧receiptだけではsource所属を証明できない。unchanged候補も同じ資格readerを1回通す。
           const sections = await publishingReadOnly(() => readQualifiedBiztagDocText(db, item.stockCode, item.doc!));
-          active();
-          if (current && full !== null && full.masterLinked && full.companyName === item.companyName && full.sector33 === item.sector33 &&
+          active(); const input = await mechanicalTextInput(item, full, sections, masterId);
+          const observed = rowTextSyncReceipt({ textSyncReceipt: input.textSyncReceipt, judgeInput: null });
+          if (current && full !== null && observed !== null && observed.textsSha256 === prior!.textsSha256 &&
+              observed.notionTextsSha256 === prior!.notionTextsSha256 && full.masterLinked && full.companyName === item.companyName && full.sector33 === item.sector33 &&
               await sha256Hex(JSON.stringify(TEXT_SECTIONS.map(({ title }) => [title, normalizeSupplementText(full.texts[title]) || null]))) === prior!.notionTextsSha256) {
             unchanged++; done.add(item.stockCode); continue;
           }
-          const input = await mechanicalTextInput(item, full, sections, masterId);
           const beforeWrite = async () => { active(); await assertLatestDocCurrent(db, item.stockCode, item.doc, { companyName: item.companyName, sector33: item.sector33 }); };
           if (full === null) { await beforeWrite(); await createSupplementRow(supplement.dbId, input, null, writer.supplementJournal()); }
           else await replaceEvidenceBlock(full.pageId, undefined, input, { ...savedRowGuard(full), ...buildSupplementProperties({ texts: full.texts }) }, beforeWrite, writer.supplementJournal());
