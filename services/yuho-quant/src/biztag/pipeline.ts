@@ -57,7 +57,7 @@ import { vocabularyHash } from "./vocabulary/hash.js";
 import { processStock, type ProcessDeps, type TextObservation } from "./process.js";
 import { isPrefilterSection, type PrefilterSectionKey } from "./prefilter.js";
 import { buildReviewPacket, refreshReviewPacketLedger } from "./review.js";
-import { assertLatestDocCurrent, loadLatestDocs, loadNewStockEligibility, type BiztagSourceDb } from "./source.js";
+import { assertLatestDocCurrent, loadLatestDocs, loadNewStockEligibility, readQualifiedBiztagDocText, BiztagTextQualificationError, type BiztagSourceDb } from "./source.js";
 import type { Vocabulary } from "./vocabulary/schema.js";
 import { TEXT_SECTIONS } from "../services/edinet/text-sections.js";
 
@@ -440,7 +440,10 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
       if (masterIndex === undefined) throw new Error("relationの解決前に銘柄マスタを取得していません");
       return masterIndex.index.get(code) ?? null;
     },
-    readStockTextRow,
+    readStockTextRow: pageId => {
+      if (!currentItem?.doc || currentItem.doc.notionDocPageId !== pageId) throw new BiztagTextQualificationError();
+      return readQualifiedBiztagDocText(db, currentItem.stockCode, currentItem.doc);
+    },
     readSupplementRowFully: pageId => readSupplementRowFully(pageId, supplementDbId, TEXT_SECTIONS.map(s => s.title), () => {
       if (Date.now() - start >= opts.budgetMs) throw new Error("現在39検査の新規読取期限を超過。未検査を残して停止");
     }),
@@ -538,7 +541,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     } catch (e) {
       // Unknown model/publisher results stop the whole run, including later forwards and ledger tail.
       if (localJudgeStop !== undefined || e instanceof NotionUnknownResultError) throw e;
-      if (item.sourceChangedLocalJudge || item.emptyTagRepair) qualificationHeld.push(item.stockCode);
+      if (e instanceof BiztagTextQualificationError || item.sourceChangedLocalJudge || item.emptyTagRepair) qualificationHeld.push(item.stockCode);
       failures.push({ stockCode: item.stockCode, message: e instanceof Error ? e.message : String(e) });
     }
   }

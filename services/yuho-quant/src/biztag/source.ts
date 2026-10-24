@@ -15,6 +15,9 @@
  * `yuho_text_sections` (索引テーブル。80万行規模) には一切触れない
  * (rows_read を抑える)。
  */
+import assert from "node:assert/strict";
+import { notionEnv } from "../../../../src/shared/notion-archive/env.js";
+import { readVerifiedDocText } from "../services/text-backup.js";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
 import { activeEquityCondition } from "../../../../src/shared/db/active-equity.js";
@@ -278,4 +281,33 @@ export async function assertLatestDocCurrent(
       actual.notionDocPageId !== expected.notionDocPageId || actual.textParseStatus !== expected.textParseStatus) {
     throw new Error(`書込直前に最新有報・本文pointerが変更/欠測 (${stockCode})。旧値を保持してHOLD`);
   }
+}
+
+/** 未資格本文は失敗状態の書込へ進めず、原文/旧タグを保持する。 */
+export class BiztagTextQualificationError extends Error {
+  constructor(cause?: unknown) {
+    super("保存本文の所属/7メタを資格確認できません。旧値を保持してHOLD", { cause });
+    this.name = "BiztagTextQualificationError";
+  }
+}
+
+/** 選択済みの1docだけを索引で読み、D1主体とNotion所属/全7メタを同時に資格化する。 */
+export async function readQualifiedBiztagDocText(db: BiztagSourceDb, stockCode: string,
+  expected: NonNullable<LatestDoc["doc"]>) {
+  try {
+    assert(parseStockCode(stockCode) === stockCode && expected.notionDocPageId !== null && expected.textParseStatus === "ok");
+    const rows = await db.select({ id: yuhoDocuments.id, docId: yuhoDocuments.docId, docTypeCode: yuhoDocuments.docTypeCode,
+      periodEnd: yuhoDocuments.periodEnd, submittedAt: yuhoDocuments.submittedAt,
+      notionDocPageId: yuhoDocuments.notionDocPageId, textParseStatus: yuhoDocuments.textParseStatus,
+      reportedHold: reportedLatestSelectionHold(yuhoDocuments.docId,yuhoDocuments.stockId,yuhoDocuments.periodEnd,yuhoDocuments.submittedAt).as("reported_hold"),
+    }).from(yuhoDocuments).innerJoin(stocks, eq(yuhoDocuments.stockId, stocks.id))
+      .where(and(activeEquityCondition(), eq(stocks.code, stockCode), eq(yuhoDocuments.docId, expected.docId))).limit(2);
+    const d = rows[0];
+    assert(rows.length === 1 && Number.isSafeInteger(d.id) && d.id > 0 && d.reportedHold === 0 &&
+      d.docId === expected.docId && d.docTypeCode === expected.docTypeCode && d.periodEnd === expected.periodEnd &&
+      d.submittedAt.toISOString() === expected.submittedAt && d.notionDocPageId === expected.notionDocPageId && d.textParseStatus === "ok");
+    const sections = await readVerifiedDocText({ dbId: notionEnv.NOTION_YUHO_TEXT_DB_ID(), rowPageId: expected.notionDocPageId,
+      stockCode, docId: d.docId, d1DocumentId: d.id, fiscalYearEnd: d.periodEnd, textParseStatus: "ok", deriveCountsFromBody: true });
+    assert(sections.length > 0, "資格本文が空です"); return sections;
+  } catch (cause) { throw new BiztagTextQualificationError(cause); }
 }

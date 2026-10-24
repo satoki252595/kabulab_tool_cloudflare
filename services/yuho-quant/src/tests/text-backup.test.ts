@@ -12,7 +12,7 @@ import {
   upsertStockTextRow,
 } from "../../../../src/shared/notion-archive/index.js";
 import { notionRequest } from "../../../../src/shared/notion-archive/client.js";
-import { backupDocTextToNotion, ExistingTextReadbackMismatchError } from "../services/text-backup.js";
+import { backupDocTextToNotion, readVerifiedDocText, ExistingTextReadbackMismatchError } from "../services/text-backup.js";
 
 vi.mock("../../../../src/shared/notion-archive/index.js", () => ({
   ensureStockTextDb: vi.fn(),
@@ -194,5 +194,30 @@ describe("text-backup", () => {
     await expect(backupDocTextToNotion({ ...doc, sections })).rejects.toThrow(
       "429 boom"
     );
+  });
+});
+
+describe("consumer strict full-body qualification", () => {
+  const args = { ...doc, dbId, rowPageId, deriveCountsFromBody: true as const };
+  it("consumer derives exact codepoint counts once while producer retains independent expected counts", async () => {
+    vi.clearAllMocks(); vi.mocked(notionRequest).mockResolvedValue(fullPage());
+    vi.mocked(readStockTextRow).mockResolvedValue(structuredClone(sections));
+    expect(await readVerifiedDocText(args)).toEqual(sections);
+    expect(readStockTextRow).toHaveBeenCalledExactlyOnceWith(rowPageId, true);
+    expect(notionRequest).toHaveBeenCalledExactlyOnceWith("GET", `/pages/${rowPageId}`);
+    expect(upsertStockTextRow).not.toHaveBeenCalled(); expect(ensureStockTextDb).not.toHaveBeenCalled();
+    await expect(readVerifiedDocText({ ...doc, dbId, rowPageId, sectionCount: 2, charCount: 1 })).rejects.toThrow("7プロパティ");
+  });
+  it.each(["文書", "銘柄コード", "D1文書ID", "会計期末", "セクション件数", "文字数合計", "抽出状態"])("consumer never treats missing %s as wildcard", async key => {
+    vi.clearAllMocks(); const page = fullPage(); delete (page.properties as Record<string, unknown>)[key];
+    vi.mocked(notionRequest).mockResolvedValue(page); vi.mocked(readStockTextRow).mockResolvedValue(structuredClone(sections));
+    await expect(readVerifiedDocText(args)).rejects.toThrow("読み戻し");
+    expect(upsertStockTextRow).not.toHaveBeenCalled(); expect(ensureStockTextDb).not.toHaveBeenCalled();
+  });
+  it("another issuer's valid native body cannot be adopted through a pointer", async () => {
+    const page = fullPage(); page.properties.銘柄コード.rich_text[0]!.plain_text = "6963";
+    page.properties.銘柄コード.rich_text[0]!.text.content = "6963";
+    vi.mocked(notionRequest).mockResolvedValue(page); vi.mocked(readStockTextRow).mockResolvedValue(structuredClone(sections));
+    await expect(readVerifiedDocText(args)).rejects.toThrow("7プロパティ");
   });
 });

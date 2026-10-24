@@ -16,6 +16,7 @@ concurrency:
   queue: max
 permissions:
   contents: read
+  actions: read
   issues: write
 # Same existing raw bucket as the accepted Mac .env. Root explicitly bootstraps the
 # canonical old journals before enabling MECHANICAL_PUBLISHING_ENABLED=true.
@@ -26,6 +27,7 @@ env:
   NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
   NOTION_ARCHIVE_PAGE_ID: ${{ secrets.NOTION_ARCHIVE_PAGE_ID }}
   NOTION_STOCK_INFO_PAGE_ID: ${{ secrets.NOTION_STOCK_INFO_PAGE_ID }}
+  NOTION_YUHO_TEXT_DB_ID: ${{ secrets.NOTION_YUHO_TEXT_DB_ID }}
   NOTION_DB_STOCK_MASTER: ${{ secrets.NOTION_DB_STOCK_MASTER }}
   NOTION_MAX_RPS: "0.8"
   R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
@@ -41,6 +43,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
+      - uses: ./.github/actions/record-job-clock
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -66,6 +69,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
+      - uses: ./.github/actions/record-job-clock
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:

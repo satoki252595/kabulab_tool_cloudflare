@@ -14,6 +14,18 @@
 
 私有ログは専用worktreeの`tmp/mechanical-publishing-validation/`へ保存する。全Node JSON SHA256は `1e125b9ed650d9956e61d47e10d7873dbcc08d42f4cc81ccb5bd921a3331e53d`。Wrangler私有ログSHA256は `80cbdf9e71900283f6dabbf85da3c84d2089da9d45c6297eec0de0ec5d80f092`。
 
-主要境界は、2host同ETag競合、適用済みACK不明のPRE/cursor、後続hostの通信0、純read失敗だけのowner解放、reserve後POSTread失敗の保持、優待raw取込4段階のunknown、旧タグ原文保持・同doc入力変更の再判定、空欄drift検知・未変更source GET0、コード/SQL有限scope、reported-HOLDと空sourceの旧値保護。過去の全社欠測件数を現在値に読み替えるテストではない。
+主要境界は、2host同ETag競合、適用済みACK不明のPRE/cursor、後続hostの通信0、純read失敗だけのowner解放、reserve後POSTread失敗の保持、優待raw取込4段階のunknown、旧タグ原文保持・同doc入力変更の再判定、空欄drift検知・初回候補の未変更source GET0（後続の資格追補で変更）、コード/SQL有限scope、reported-HOLDと空sourceの旧値保護。過去の全社欠測件数を現在値に読み替えるテストではない。
 
 [PR #565](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/565)のGitHub CIと、[初回切替](../mechanical-publishing.md)のcanonical移行・秘密注入・旧runtime拒否・少量本番readback・有効化は、それぞれ別に受け入れる。初期化前のjob skipをデータ取得成功と数えない。
+
+## native期限・本文資格の追補
+
+GitHub両jobは既存record-job-clockとnativeJobExecutionWindowを再利用する。CLI元budgetは維持し、hardはCLI開始＋budget＋5分とjob実開始＋25分の早い方、softはhardの5分前。時計なし/開始余裕なしはowner・業務依存生成前に停止し、開始済み原子unitだけhardまで閉鎖する。
+
+本文sourceは変更のない選択対象も共通qualified readerを1回通すよう変更した。初回候補のsource GET0という費用説明は現行の保証ではない。選択1docのD1照会、Notion page所属/7メタ、strict本文を同じ資格helperで検証する。consumerの件数は実本文のcodepointから算出し、producerの独立件数/全文照合は維持した。原本ZIP/全市場メタ読込/モデル追加は0。
+
+Nix関連6suite157件PASS、global tscと対象lint PASS。主な追加回帰はsetup11分時のnative hard短縮/clock欠落/soft到達、開始済みbody後の次unit停止、優待原子batchの閉鎖、7メタ欠落・別issuer、限定1doc SELECT、通常Mac/tagとmechanicalの資格HOLDでpublication/forward 0。初回本番のNotion request数・秒・processedはrootの切替時に別途実測し、コードテストから処理量を推定しない。
+
+main #560を通常mergeした追補候補で、Nix Node全体6867件PASS/0FAIL/既存465SKIP、global tsc/lint、Wrangler deploy --dry-run（実配備なし）を確認。モデル/上流取得/業務APIは0。私有検証ログは`tmp/mechanical-native-validation/`、全Node JSON SHA256 `f0cf90be34aeb26e351ea0560aa961f4416d5683ea742b3b21bf21de19c0f158`。
+
+rootの独立peerで、source本文を読んでも旧target SHAだけでunchangedになる条件漏れを修正。今回の原39 SHA・Notion表現SHAを旧receiptへ照合し、同文字数の実本文変更でも再同期する回帰を追加した（新IO/新schemaなし）。最終候補の関連6suite158件PASS、Nix Node全体6868件PASS/0FAIL/既存465SKIP、global tsc・変更lint・Worker dry-runも再PASS。`full-node-v2.json` SHA256 `75242216856876f99bf711d64d851f48776a63823a3ffc5e87d276966df6c7ba`。運用一覧も15 workflows/23 jobs、LLMとnative時計・先行関係へ更新した。
