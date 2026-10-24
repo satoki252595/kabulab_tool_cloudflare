@@ -30,7 +30,7 @@ import json
 import logging
 import subprocess
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from ..cloud_store import core_stocks
@@ -50,6 +50,7 @@ from ..config import Settings, load_settings
 from ..contracts.sector33 import TSE_SECTOR33_NAMES, normalize_sector33
 from ..contracts.stock_code import parse_stock_code, source_code_to_ticker
 from .runner import JobContext, build_parser, main_exit, run_job
+from .scheduled import ScheduledWindowError, assert_scheduled_io, assert_scheduled_source, native_job_started_at, source_request_options
 
 logger = logging.getLogger(__name__)
 
@@ -314,6 +315,15 @@ def _generation_key(asof: str, manifest: dict[str, object]) -> str:
 
 def execute(ctx: JobContext) -> SectorReport:
     """sector33-only 同期。戻りは機械可読な要約。"""
+    now = datetime.now(timezone.utc)
+    start = native_job_started_at(ctx.args, now)
+    if start is not None:
+        # 元のmonthly jobの360分を共有する。子CLI開始や現在時刻で延長しない。
+        hard = start + timedelta(minutes=355)
+        ctx.args._scheduled_source_deadline = hard - timedelta(minutes=10)
+        ctx.args._scheduled_window = (start, hard)
+        if now >= ctx.args._scheduled_source_deadline:
+            raise ScheduledWindowError("業種取得の時間予算が無いため開始しません（未完）")
     report = SectorReport()
     if getattr(ctx.args, "date", None) is not None:
         logger.warning("--date は無視する (基準日は常に source のメタ行)")
@@ -322,6 +332,7 @@ def execute(ctx: JobContext) -> SectorReport:
         report.stopped = "config-stop"
         return report
     try:
+        assert_scheduled_source(ctx.args, datetime.now(timezone.utc))
         requested_at = datetime.now(timezone.utc)
         captured: dict[str, object] = {}
         artifact = edinet_codelist.fetch_codelist(
@@ -329,6 +340,7 @@ def execute(ctx: JobContext) -> SectorReport:
             on_response=lambda resp: captured.update(
                 {"response": edinet_codelist.response_metadata(resp)}
             ),
+            **source_request_options(ctx.args),
         )
         completed_at = datetime.now(timezone.utc)
     except Exception as exc:
@@ -338,6 +350,7 @@ def execute(ctx: JobContext) -> SectorReport:
     zip_bytes = artifact.local_path.read_bytes()
     store = D1Store(ctx.settings.cloud_store, writer=JOB_NAME)
     try:
+        assert_scheduled_io(ctx.args, datetime.now(timezone.utc))
         current = store.query(ACTIVE_SNAPSHOT_SQL, list(ACTIVE_SNAPSHOT_PARAMS))
     except D1Error as exc:
         ctx.add_failure("sector33-read", f"現在値を読めない: {exc}")
@@ -411,7 +424,10 @@ def execute(ctx: JobContext) -> SectorReport:
             f"--as-of={asof}",
             f"--completed-at={completed_at.isoformat()}",
         ]
+        if start is not None:
+            cmd.append(f"--job-started-at={ctx.args.job_started_at}")
         try:
+            assert_scheduled_io(ctx.args, datetime.now(timezone.utc))
             proc = _run_archive_cli(cmd)
         except Exception as exc:
             ctx.add_failure("sector33-archive", f"archive CLI 失敗: {exc}")
@@ -467,6 +483,7 @@ def execute(ctx: JobContext) -> SectorReport:
     written = 0
     for sql, params in statements:
         try:
+            assert_scheduled_io(ctx.args, datetime.now(timezone.utc))
             result = store.query(sql, params)
             if "RETURNING code" in sql and result != [{"code": params[1]}]:
                 raise D1Error("認定identityがUPDATE時に変化 (書込0)")
@@ -496,6 +513,7 @@ def execute(ctx: JobContext) -> SectorReport:
 def main(argv: list[str] | None = None, *, env: dict[str, str] | None = None) -> int:
     """D1 必須 + 想定外 local 拒否を `run_job` の前に typed STOP (exit 2)。"""
     parser = build_parser("EDINET sector33 のみ同期 (cadence)")
+    parser.add_argument("--job-started-at", default=None, help="元Actions jobのJobs API実開始UTC時計（360分の予算を共有）")
     parser.add_argument("--archive-only", action="store_true", help="原本の物理照合後に終了し、業種を更新しない")
     args = parser.parse_args(argv)
     try:

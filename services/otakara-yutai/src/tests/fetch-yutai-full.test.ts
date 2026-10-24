@@ -17,6 +17,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
+import { ScheduledSourceDeadlineError } from "../../../../src/shared/scheduled-admission.js";
 import { createD1HttpDb } from "../../../../src/shared/db/d1-http-client.js";
 import { recordPrimaryData, verifyArchivedAttachments } from "../../../../src/shared/notion-archive/index.js";
 import {
@@ -370,6 +371,16 @@ describe("collectStockDetails は unknown を import の前に止める", () => 
       expect(raw).toMatchObject({ byteLength: bytes.length, status: 429 });
     } finally { fetched.mockRestore(); }
   });
+
+  it("native source停止は通信UNKNOWNへ変換せず、個別GETとcaptureを始めない", async () => {
+    const fetched = vi.spyOn(globalThis, "fetch"), capture = vi.fn();
+    const stopped = new ScheduledSourceDeadlineError("source stop");
+    try {
+      await expect(fetchStockDetail("9100", capture, () => { throw stopped; })).rejects.toBe(stopped);
+      expect(fetched).not.toHaveBeenCalled();
+      expect(capture).not.toHaveBeenCalled();
+    } finally { fetched.mockRestore(); }
+  });
 });
 
 describe("collectAllStockCodes は既知の最終ページだけで完了する", () => {
@@ -499,6 +510,35 @@ describe("collectAllStockCodes は既知の最終ページだけで完了する"
       process.chdir(cwd);
       fetched.mockRestore();
       vi.clearAllMocks();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("元jobのsource期限に達したら次一覧GET0、先行実bytesだけgzip/Notionへ閉鎖し取込0", async () => {
+    const cwd = process.cwd(), dir = mkdtempSync(join(tmpdir(), "yutai-native-source-"));
+    const started = Date.now() - 344 * 60_000;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(started + 344 * 60_000);
+    vi.stubEnv("BATCH_JOB_STARTED_AT", new Date(started).toISOString());
+    const first = Buffer.from(pageWith(1, 2, "9100"));
+    const fetched = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      clock.mockReturnValue(started + 345 * 60_000);
+      return new Response(first);
+    });
+    vi.mocked(recordPrimaryData).mockResolvedValue({ pageId: "native-source-page", outcome: "recorded", fileTooLarge: false, manifestMatch: "written" });
+    vi.mocked(verifyArchivedAttachments).mockResolvedValue();
+    const prior = vi.mocked(recordPrimaryData).mock.calls.length, writes = vi.mocked(createD1HttpDb).mock.calls.length;
+    try {
+      process.chdir(dir);
+      await expect(main()).rejects.toBeInstanceOf(ScheduledSourceDeadlineError);
+      expect(fetched).toHaveBeenCalledTimes(1);
+      expect(createD1HttpDb).toHaveBeenCalledTimes(writes);
+      expect(recordPrimaryData).toHaveBeenCalledTimes(prior + 1);
+      const archive = vi.mocked(recordPrimaryData).mock.calls.at(-1)![0];
+      const saved = JSON.parse(gunzipSync(archive.files![0].bytes).toString("utf8").trim());
+      expect(Buffer.from(saved.bodyBase64, "base64")).toEqual(first);
+      expect(verifyArchivedAttachments).toHaveBeenCalled();
+    } finally {
+      process.chdir(cwd); fetched.mockRestore(); clock.mockRestore(); vi.unstubAllEnvs();
       rmSync(dir, { recursive: true, force: true });
     }
   });

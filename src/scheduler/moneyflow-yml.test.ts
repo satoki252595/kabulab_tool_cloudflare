@@ -32,4 +32,6 @@ it("両producerは旧rateで直列取得し、別joinが同run両summaryの正�
   expect(yml).not.toContain('ARGS="$ARGS --only=${{');
   expect(yml).toContain('args+=("--as-of=$TRADE_DATE")');
   expect(yml.match(/timeout-minutes: 120/g)).toHaveLength(2);
+  expect(readFileSync(new URL("../../.github/workflows/stock-sync.yml", import.meta.url), "utf8")
+    .split("  moneyflow:\n")[1]).toContain("    permissions:\n      actions: read");
 });

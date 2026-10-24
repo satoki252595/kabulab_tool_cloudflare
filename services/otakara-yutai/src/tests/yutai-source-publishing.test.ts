@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PublishingStore } from "../../../../scripts/mechanical-publishing/shared-writer.js";
-import { SHARED_WRITER_KEY } from "../../../../scripts/mechanical-publishing/shared-writer.js";
+import { publishingStore, SHARED_WRITER_KEY } from "../../../../scripts/mechanical-publishing/shared-writer.js";
 import { importCollectedYutaiData } from "../../data-scripts/fetch-yutai-full.js";
 
 const io = vi.hoisted(() => ({
@@ -13,9 +13,9 @@ const io = vi.hoisted(() => ({
 }));
 vi.mock("../../../../scripts/mechanical-publishing/shared-writer.js", async original => {
   const actual = await original<typeof import("../../../../scripts/mechanical-publishing/shared-writer.js")>();
-  return { ...actual, withSharedPublishingWriter: (execute: () => Promise<void>) => {
+  return { ...actual, publishingStore: vi.fn(() => io.store!), withSharedPublishingWriter: (execute: () => Promise<void>, store?: PublishingStore) => {
     if (io.store === undefined) throw new Error("protocol store absent");
-    return actual.withSharedPublishingWriter(execute, io.store);
+    return actual.withSharedPublishingWriter(execute, store === undefined ? io.store : store);
   } };
 });
 vi.mock("../../../../src/shared/db/d1-http-client.js", () => ({
@@ -50,7 +50,7 @@ beforeEach(() => {
   io.verify.mockReset().mockResolvedValue(undefined); io.retire.mockReset().mockResolvedValue({ trashPageId: "protocol-retired" });
   vi.spyOn(console, "info").mockImplementation(() => undefined);
 });
-afterEach(() => { process.chdir(cwd); rmSync(directory, { recursive: true, force: true }); vi.restoreAllMocks(); });
+afterEach(() => { process.chdir(cwd); rmSync(directory, { recursive: true, force: true }); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 it("source import reserves before PRE and releases only after observed POST custody and retirement", async () => {
   await importCollectedYutaiData([], "protocol-run", "2026-10-25T00:00:00Z");
@@ -73,4 +73,27 @@ it.each(["pre-archive", "import-ack", "post-read", "post-archive"])("%s uncertai
   expect(JSON.parse(objects.get(SHARED_WRITER_KEY)!.body).pending.kind).toBe("yutai-source-import");
   await expect(importCollectedYutaiData([], "another-host", "2026-10-25T00:01:00Z")).rejects.toThrow("期限では解除しません");
   expect(io.read).toHaveBeenCalledTimes(reads); expect(io.apply).toHaveBeenCalledTimes(writes); expect([...objects]).toEqual(before);
+});
+
+it.each(["pre-archive", "import-ack"])("%s finishes at native hard: preserve pending, do not publish completion or start the next unit", async phase => {
+  const start = Date.now(), deadline = start + 355 * 60_000;
+  const clock = vi.spyOn(Date, "now").mockReturnValue(deadline - 1);
+  vi.stubEnv("BATCH_JOB_STARTED_AT", new Date(start).toISOString());
+  if (phase === "pre-archive") io.archive.mockImplementationOnce(async () => {
+    clock.mockReturnValue(deadline);
+    return { pageId: "known-pre", outcome: "recorded", fileTooLarge: false };
+  });
+  else {
+    const result = io.apply.getMockImplementation()!;
+    io.apply.mockImplementationOnce(async (...args) => { const saved = await result(...args); clock.mockReturnValue(deadline); return saved; });
+  }
+  await expect(importCollectedYutaiData([], "native-hard", new Date(start).toISOString())).rejects.toThrow("原本閉鎖期限");
+  expect(publishingStore).toHaveBeenCalledWith(deadline);
+  expect(io.apply).toHaveBeenCalledTimes(phase === "pre-archive" ? 0 : 1);
+  expect(io.read).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(objects.get(SHARED_WRITER_KEY)!.body).pending.kind).toBe("yutai-source-import");
+  expect([...objects.keys()].some(key => key.endsWith("/completed.json"))).toBe(false);
+  const before = [...objects];
+  await expect(importCollectedYutaiData([], "later-host", new Date(start).toISOString())).rejects.toThrow("原本閉鎖期限");
+  expect([...objects]).toEqual(before);
 });

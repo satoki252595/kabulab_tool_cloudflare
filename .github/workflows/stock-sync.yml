@@ -195,5 +195,6 @@ jobs:
       only: sector-turnover
     secrets: inherit
     permissions:
+      actions: read
       contents: read
       issues: write

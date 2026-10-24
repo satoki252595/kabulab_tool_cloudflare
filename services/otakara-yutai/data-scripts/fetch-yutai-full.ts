@@ -22,9 +22,11 @@ import { pathToFileURL } from "node:url";
 import { moveToTrash, recordPrimaryData, verifyArchivedAttachments } from "../../../src/shared/notion-archive/index.js";
 import { sha256HexBytes } from "../../../src/shared/sha256.js";
 import { resolveRunId, writeSummaryLocal } from "../../../scripts/vwap/lib/ingest-guard.js";
-import { currentPublishingWriter, publishingReadOnly, withSharedPublishingWriter } from "../../../scripts/mechanical-publishing/shared-writer.js";
+import { currentPublishingWriter, publishingReadOnly, publishingStore, withSharedPublishingWriter } from "../../../scripts/mechanical-publishing/shared-writer.js";
 import "dotenv/config";
 import { ANYTIME_RECORD_MONTH } from "../src/record-date.js";
+import { sharedEnv } from "../../../src/shared/env.js";
+import { installScheduledDeadline, nativeJobExecutionWindow, ScheduledSourceDeadlineError } from "../../../src/shared/scheduled-admission.js";
 
 // Schema は src/db/schema.ts に集約済み (D1/SQLite 版 — ADR-0001)。
 // 銘柄マスタ stocks は core_stocks の再 export、yutai_genres / yutai_benefits は
@@ -36,7 +38,8 @@ type RawPage = {
 };
 type CapturePage = (page: RawPage) => void;
 
-async function fetchPage(url: string, onRaw?: CapturePage): Promise<string> {
+async function fetchPage(url: string, onRaw?: CapturePage, beforeRequest?: () => void): Promise<string> {
+  beforeRequest?.();
   const res = await fetch(url, {
     signal: AbortSignal.timeout(20_000),
     headers: {
@@ -152,6 +155,7 @@ export async function collectAllStockCodes(
     try {
       html = await fetchListPage(page);
     } catch (e) {
+      if (e instanceof ScheduledSourceDeadlineError) throw e;
       throw new Error(
         `検索ページの取得に失敗したため中断します (page=${page}。` +
           `部分リストを完成扱い・キャッシュしません): ${e instanceof Error ? e.message : String(e)}`,
@@ -191,15 +195,16 @@ export type StockDetailResult =
   | { status: "ok"; data: StockYutaiData }
   | { status: "unknown"; code: string; reason: string };
 
-export async function fetchStockDetail(code: string, onRaw?: CapturePage): Promise<StockDetailResult> {
+export async function fetchStockDetail(code: string, onRaw?: CapturePage, beforeRequest?: () => void): Promise<StockDetailResult> {
   let html: string;
   let sourceFetchedAt: string | undefined;
   try {
     html = await fetchPage(`https://minkabu.jp/stock/${code}/yutai`, page => {
       sourceFetchedAt = page.receivedAt;
       onRaw?.(page);
-    });
+    }, beforeRequest);
   } catch (e) {
+    if (e instanceof ScheduledSourceDeadlineError) throw e;
     const reason = `fetch: ${e instanceof Error ? e.message : String(e)}`.slice(0, 160);
     return { status: "unknown", code, reason };
   }
@@ -396,6 +401,15 @@ export function parseStockDetail(code: string, html: string): StockDetailResult 
 
 // ===== Main =====
 export async function main() {
+  const window = nativeJobExecutionWindow(Date.now(), sharedEnv.BATCH_JOB_STARTED_AT(), 360, 10);
+  const assertSource = () => {
+    if (window !== undefined && Date.now() >= window.sourceDeadline) {
+      throw new ScheduledSourceDeadlineError("優待の新規取得期限です（未完・取込なし）");
+    }
+  };
+  assertSource();
+  const restore = window === undefined ? undefined : installScheduledDeadline(window.deadline);
+  try {
   log.info("🚀 優待銘柄データ全量取得 v2\n");
 
   const runId = resolveRunId();
@@ -419,10 +433,10 @@ export async function main() {
   try {
     // 毎回現行一覧を確認する。期限のない共有/tmpキャッシュでは新規・廃止を検出できない。
     log.info("📋 Phase 1: 全銘柄コードを収集中...");
-    const codes = await collectAllStockCodes((page) => fetchPage(`https://minkabu.jp/yutai/search?order=&page=${page}`, capture));
+    const codes = await collectAllStockCodes((page) => fetchPage(`https://minkabu.jp/yutai/search?order=&page=${page}`, capture, assertSource));
     log.info(`\n✅ ${codes.length}銘柄のコードを収集\n`);
     log.info("📊 Phase 2: 各銘柄の詳細データを取得中...");
-    allData = await collectStockDetails(codes, (code) => fetchStockDetail(code, capture));
+    allData = await collectStockDetails(codes, (code) => fetchStockDetail(code, capture, assertSource));
   } finally {
     closeSync(fd);
     // UNKNOWNでも取得済み原本を残す。成功時もD1更新より先に保管・照合する。
@@ -438,14 +452,25 @@ export async function main() {
   }
   if (lastClock === null) throw new Error("優待原本の実取得時計が無いためSTOP");
   await importCollectedYutaiData(allData, runId, lastClock);
+  } finally { restore?.(); }
 }
 
 /** 全量・物理原本の照合済み収集結果を、通常のPRE保管・原子取込へ渡す。 */
 export async function importCollectedYutaiData(allData: StockYutaiData[], runId: string, sourceFetchedAt: string): Promise<void> {
-  return withSharedPublishingWriter(() => importCollectedYutaiDataOwned(allData, runId, sourceFetchedAt));
+  const window = nativeJobExecutionWindow(Date.now(), sharedEnv.BATCH_JOB_STARTED_AT(), 360, 10);
+  const assertActive = () => {
+    if (window !== undefined && Date.now() >= window.deadline) throw new Error("優待の原本閉鎖期限です（未完・再送なし）");
+  };
+  assertActive();
+  const restore = window === undefined ? undefined : installScheduledDeadline(window.deadline);
+  try {
+    return await withSharedPublishingWriter(() => importCollectedYutaiDataOwned(allData, runId, sourceFetchedAt, assertActive),
+      window === undefined ? undefined : publishingStore(window.deadline));
+  } finally { restore?.(); }
 }
 
-async function importCollectedYutaiDataOwned(allData: StockYutaiData[], runId: string, sourceFetchedAt: string): Promise<void> {
+async function importCollectedYutaiDataOwned(allData: StockYutaiData[], runId: string, sourceFetchedAt: string, assertActive: () => void): Promise<void> {
+  assertActive();
   const writer = currentPublishingWriter();
   if (writer === undefined) throw new Error("優待原文取込の共有writerがありません");
   log.info(`\n✅ ${allData.length}銘柄の詳細データを取得\n`);
@@ -463,6 +488,7 @@ async function importCollectedYutaiDataOwned(allData: StockYutaiData[], runId: s
   const db = await publishingReadOnly(async () => createD1HttpDb(schema));
   // 取得経路だけでなく上書き前の全優待行を復元可能にする。原文・解釈をログには出さない。
   const previous = await publishingReadOnly(() => db.select().from(schema.yutaiBenefits));
+  assertActive();
   const preimageBytes = Buffer.from(JSON.stringify(previous));
   const publication = await writer.reserve("yutai-source-import", { runId, sourceFetchedAt },
     JSON.stringify({ runId, sourceFetchedAt, previous, allData }));
@@ -472,7 +498,9 @@ async function importCollectedYutaiDataOwned(allData: StockYutaiData[], runId: s
     bodyBase64: preimageBytes.toString("base64"),
   }], `${runId}-preimage`, "D1 yutai_benefits complete row snapshot before source import (HTTP status not exposed)");
   if (preimage === undefined) throw new Error("優待の更新前スナップショットが無いためSTOP");
+  assertActive();
   const result = await importYutaiFull(db, allData, createD1HttpBatchSender(), sourceFetchedAt);
+  assertActive();
   const postRows = await publishingReadOnly(() => db.select().from(schema.yutaiBenefits));
   const postBytes = Buffer.from(JSON.stringify(postRows));
   const postimage = await archivePages([{
@@ -481,9 +509,11 @@ async function importCollectedYutaiDataOwned(allData: StockYutaiData[], runId: s
     bodyBase64: postBytes.toString("base64"),
   }], `${runId}-postimage`, "D1 yutai_benefits complete observed row snapshot after source import (HTTP status not exposed)");
   if (postimage === undefined) throw new Error("優待の取込後スナップショットが無いためSTOP");
+  assertActive();
   const retired = await moveToTrash({ service: "otakara-yutai", originPageId: preimage.pageId,
     reason: `優待原文取込 ${runId} が成功。更新前の全行スナップショットを復元用に保管。` });
   await verifyArchivedAttachments(retired.trashPageId, preimage.files, "優待更新前スナップショット退避");
+  assertActive();
   await publication.complete({ preArchivePageId: preimage.pageId, postArchivePageId: postimage.pageId,
     observedPostSha256: await sha256HexBytes(postBytes), observedPostRows: postRows.length,
     stockCount: result.stockCount, benefitCount: result.benefitCount });

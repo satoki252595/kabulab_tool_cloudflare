@@ -28,6 +28,22 @@ def _jst(now: datetime) -> datetime:
     return now.astimezone(JST)
 
 
+def native_job_started_at(args: argparse.Namespace, now: datetime) -> datetime | None:
+    """同じJobs API時計を再利用する。時計なしのSSH/ローカル入口は変更しない。"""
+    value = getattr(args, "job_started_at", None)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", value):
+        raise ScheduledWindowError("job開始時計のUTC形式が不正です")
+    try:
+        start = datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+    except ValueError as exc:
+        raise ScheduledWindowError("job開始時計が不正です") from exc
+    if start > _jst(now):
+        raise ScheduledWindowError("job開始時計が未来です")
+    return start
+
+
 def scheduled_target(job: str, args: argparse.Namespace, now: datetime) -> date | None:
     """手動入口は維持。CF予定はslot・曜日・明示日・開始窓を取得前に検証する。"""
     value = getattr(args, "scheduled_at", None)
@@ -58,16 +74,8 @@ def scheduled_target(job: str, args: argparse.Namespace, now: datetime) -> date 
         raise ScheduledWindowError("--dateとCF予定のJST対象日が一致しません")
     if not slot <= _jst(now) < last_start:
         raise ScheduledWindowError("予定実行の開始窓外です（未取得を成功扱いしません）")
-    job_started = getattr(args, "job_started_at", None)
-    if job_started is not None:
-        if not isinstance(job_started, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", job_started):
-            raise ScheduledWindowError("job開始時計のUTC形式が不正です")
-        try:
-            start = datetime.strptime(job_started, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
-        except ValueError as exc:
-            raise ScheduledWindowError("job開始時計が不正です") from exc
-        if start > _jst(now):
-            raise ScheduledWindowError("job開始時計が未来です")
+    start = native_job_started_at(args, now)
+    if start is not None:
         native_minutes = {"tdnet_hourly": 30, "supply_daily": 60, "edinet_daily": 120}[job]
         deadline = min(deadline, start + timedelta(minutes=native_minutes - 5))
     source_deadline = deadline - timedelta(minutes=10)
