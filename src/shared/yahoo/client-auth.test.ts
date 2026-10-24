@@ -378,6 +378,7 @@ describe("crumb 429 cooldown", () => {
     expect(err).toBeInstanceOf(YahooRateLimitError);
     const typed = err as InstanceType<typeof YahooRateLimitError>;
     expect(typed.status).toBe(429);
+    expect(typed.authStage).toBe("auth-crumb");
     expect(typed.retryAtMs).toBeGreaterThanOrEqual(before + 15 * 60_000 - 100);
     expect(typed.retryAtMs).toBeLessThanOrEqual(Date.now() + 15 * 60_000);
     expect(String(err)).toContain(`retry-at-ms=${typed.retryAtMs}`);
@@ -620,8 +621,10 @@ describe("全Yahoo endpointの共通停止", () => {
     vi.stubGlobal("fetch", fetchMock);
     const { yahooFetchDirect, YahooRateLimitError } = await import("./client.js");
     const target = "https://query1.finance.yahoo.com/v8/finance/chart/7203.T";
-    await expect(yahooFetchDirect(target)).rejects.toBeInstanceOf(YahooRateLimitError);
-    await expect(yahooFetchDirect(target)).rejects.toBeInstanceOf(YahooRateLimitError);
+    const first = await yahooFetchDirect(target).catch((error: unknown) => error);
+    expect(first).toBeInstanceOf(YahooRateLimitError);
+    expect(first).toMatchObject({ authStage: "auth-page" });
+    await expect(yahooFetchDirect(target)).rejects.toBe(first);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
