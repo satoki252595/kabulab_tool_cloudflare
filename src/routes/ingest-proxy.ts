@@ -92,6 +92,7 @@ ingestProxyRoute.get("/yahoo", async (c) => {
       return c.json({ error: "yahoo shared cooldown active; no upstream request" }, cooldown.upstream_status, {
         "Retry-After": String(Math.max(0, Math.ceil((cooldown.retry_at_ms - Date.now()) / 1000))),
         "X-Kabulab-Yahoo-Cooldown": "active",
+        "X-Kabulab-Yahoo-Stage": "shared-cooldown",
       });
     }
   } catch {
@@ -131,6 +132,7 @@ ingestProxyRoute.get("/yahoo", async (c) => {
           event: "yahoo_ingest_proxy_rate_limited",
           source: "ingest-proxy",
           status: error.status,
+          authStage: error.authStage,
           retryAfterSec,
         })
       );
@@ -142,6 +144,7 @@ ingestProxyRoute.get("/yahoo", async (c) => {
         {
           "Retry-After": String(retryAfterSec),
           "X-Kabulab-Yahoo-Status": String(error.status),
+          "X-Kabulab-Yahoo-Stage": error.authStage === null ? "unknown" : error.authStage,
           ...(persisted ? {} : { "X-Kabulab-Yahoo-Cooldown": "persist-failed" }),
         }
       );
@@ -157,6 +160,7 @@ ingestProxyRoute.get("/yahoo", async (c) => {
   }
   const headers = new Headers({
     "X-Kabulab-Yahoo-Status": String(res.status),
+    "X-Kabulab-Yahoo-Stage": decodedPath.startsWith("/v8/") ? "chart" : "quote-summary",
   });
   const contentType = res.headers.get("Content-Type");
   if (contentType) headers.set("Content-Type", contentType);

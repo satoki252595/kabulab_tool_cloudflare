@@ -134,6 +134,10 @@ export async function yahooHttpErrorMessage(
       : "yahoo-direct";
   details.push(`source=${source}`);
   if (upstreamStatus) details.push(`yahoo-status=${upstreamStatus}`);
+  const stage = response.headers.get("X-Kabulab-Yahoo-Stage");
+  if (stage !== null) {
+    details.push(`yahoo-stage=${["auth-page", "auth-crumb", "chart", "quote-summary", "shared-cooldown", "unknown"].includes(stage) ? stage : "unrecognized"}`);
+  }
   const cooldown = response.headers.get("X-Kabulab-Yahoo-Cooldown");
   if (cooldown !== null) details.push(`proxy-cooldown=${redactYahooDiagnostic(cooldown).slice(0, 40)}`);
   if (source === "ingest-proxy" && cfRay) details.push(`cf-ray=${cfRay}`);
@@ -312,7 +316,7 @@ async function bootstrapYahooCredential(
   }, beforeRequest);
   assertCredentialRefreshOwner(refreshAttempt);
   if (pageRes.status === 429 || pageRes.status === 503) {
-    ensureOk(pageRes);
+    ensureOk(pageRes, "auth-page");
   }
 
   const cookies = pageRes.headers.getSetCookie?.() ?? [];
@@ -336,7 +340,8 @@ async function bootstrapYahooCredential(
     throw new YahooRateLimitError(
       crumbRes.status,
       parseRetryAfter(crumbRes),
-      rateLimitRetryAt(crumbRes)
+      rateLimitRetryAt(crumbRes),
+      "auth-crumb"
     );
   }
   if (!crumbRes.ok) {
@@ -879,15 +884,19 @@ async function qualifyChartResponse(
  * シグナルとして扱い、即リトライで叩き返さない (retry は再スロー、ingest は
  * サーキットブレークで中断する)。`retryAfterMs` は Retry-After ヘッダ由来。
  */
+type YahooAuthStage = "auth-page" | "auth-crumb";
+
 export class YahooRateLimitError extends Error {
   constructor(
     readonly status: number,
     readonly retryAfterMs: number | null,
-    readonly retryAtMs: number | null = null
+    readonly retryAtMs: number | null = null,
+    readonly authStage: YahooAuthStage | null = null
   ) {
     super(
       `yahoo ${status} (rate limited)` +
-        (retryAtMs !== null ? `; retry-at-ms=${retryAtMs}` : "")
+        (retryAtMs !== null ? `; retry-at-ms=${retryAtMs}` : "") +
+        (authStage !== null ? `; yahoo-stage=${authStage}` : "")
     );
     this.name = "YahooRateLimitError";
   }
@@ -904,10 +913,10 @@ function parseRetryAfter(r: Response): number | null {
 }
 
 /** !ok を投げ分ける。429/503 はレート制限として型付きで投げる。 */
-function ensureOk(r: Response): void {
+function ensureOk(r: Response, authStage: YahooAuthStage | null = null): void {
   if (r.ok) return;
   if (r.status === 429 || r.status === 503) {
-    throw new YahooRateLimitError(r.status, parseRetryAfter(r), rateLimitRetryAt(r));
+    throw new YahooRateLimitError(r.status, parseRetryAfter(r), rateLimitRetryAt(r), authStage);
   }
   throw new Error(`yahoo ${r.status}`);
 }
