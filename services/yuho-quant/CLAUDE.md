@@ -54,7 +54,9 @@ UI で「未対応」と出す（ルール1/2）。**海外売上高 = 開示さ
 `REGION_BUCKETS` で束ね、その地域を明示開示する会社だけを対象に丸めている会社は
 除外する（架空の比較可能性を作らない）。新パターン対応も **実 fixture を足して
 テストで固定してから**。旧基準「海外売上高」注記は現行有報からほぼ消滅（調査280件で
-0件）のため対象外。`pnpm audit:overseas` で全銘柄の取りこぼし署名を集計できる。
+0件）のため対象外。旧`pnpm audit:overseas`は廃止済み。保存済み原本の有限監査は
+`pnpm backfill:overseas`へ`--saved-mode=prepare`または`--saved-mode=inspect`、固定cohort・通信上限を明示する
+（[全引数](../../docs/test-logs/overseas-saved-cohort-20261017.md)）。未対応全体の理由分類器ではない。
 
 > 本サービスは Cloudflare D1 で本番稼働中。サイトと Worker 認証ルートは
 > **D1(`c.env.DB` バインディング)**、日次 GitHub Actions CLI は **Node + D1 HTTP atomic sender**
@@ -178,10 +180,10 @@ services/yuho-quant/
 
 ```bash
 pnpm ingest:yuho-edinet     # Node 共通取込 + D1 HTTP atomic sender (EDINET/D1/Notion 設定必須)
-pnpm backfill:overseas      # 既存有報の海外埋め戻し (D1 HTTP)
+pnpm backfill:overseas      # 保存原本の固定cohort・有限引数が必須（prepare/apply/inspect）
 pnpm yuho:backfill:text     # 既存有報の開示テキスト埋め戻し (CSV のみ・D1 HTTP)
 pnpm yuho:backfill:missing  # 期間指定の取りこぼし回収 (日次上限で欠けた分。無制限・再開可能)
-pnpm audit:overseas         # 全銘柄の取りこぼし署名を集計
+pnpm audit:overseas         # 廃止済み・通信前拒否。上記saved prepare/inspectを使う
 pnpm biztag run             # 適格新規初回/実入力変更だけClef、本文同期・保存タグ再利用・不足は機械補完
 pnpm biztag gate            # 現在停止: TypeSafeを使う見直し提案審査
 pnpm biztag golden          # 現在停止: TypeSafeを使う精度測定
