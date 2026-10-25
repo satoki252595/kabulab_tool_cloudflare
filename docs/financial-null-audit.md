@@ -22,6 +22,8 @@ nix develop --command pnpm audit:financial:null \
 
 ## exact原本をlocalで診断する
 
+通常の`reparse_financials_from_notion.py`の既定監査も、`--code`等で選択した財務行の一意な原本relationを直接GETし、同じ取得元・日付group内で重複取得を省く。同日の全市場の原本一覧は読まない。返却pageのID・正準⑤DB親・activeを検査してから既存のSHA照合・再解析へ渡し、取得数を`raw_page_gets`で報告する。監査は書込を行わず、journalの確認後に別途applyする。
+
 `source-map.json`はversion1と`sources`配列を持つ。各要素には`raw_page_id`, `snapshot_file`, `snapshot_sha256`, `original_file`, `original_sha256`を明示する。snapshotはexact⑤pageの保存JSON、originalは同じfull SHAの全ZIP。期限付きURLの再取得や別原本探索は行わない。必要なmetadata/物理原本の有限読取は別の明示RO操作とし、根拠がなければHOLDのまま進める。
 
 ```sh

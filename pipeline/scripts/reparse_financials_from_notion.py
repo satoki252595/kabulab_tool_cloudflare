@@ -18,6 +18,7 @@ from datetime import date, datetime
 from pathlib import Path
 from threading import Event, Lock
 from urllib.parse import urlparse
+from uuid import UUID
 
 import httpx
 
@@ -518,7 +519,8 @@ def audit(*, source, future_after, limit, journal: Path, cache_dir: Path, codes=
         if old.provenance.data_date is None:
             raise ValueError(f"{old.code}: 原本の取得対象日がありません")
         groups[(old.provenance.source.value, old.provenance.data_date)].append((page["id"], old))
-    checked = changed = failed = fallbacks = 0
+    checked = changed = failed = raw_page_gets = 0
+    raw_database_id = UUID(settings.db_id("raw_files"))
     with (
         journal.open("a") as output,
         httpx.Client(
@@ -531,31 +533,22 @@ def audit(*, source, future_after, limit, journal: Path, cache_dir: Path, codes=
         for (data_source, data_date), rows in sorted(
             groups.items(), key=lambda entry: (entry[0][0] != "TDnet", entry[0][1])
         ):
-            # ⑤を日付・source・種別でまとめてquery。個別GETを100行/reqのページングへ減らす。
-            raw_pages = client.query_database(
-                settings.db_id("raw_files"),
-                filter={
-                    "and": [
-                        {"property": S.PROP_SOURCE, "select": {"equals": data_source}},
-                        {"property": S.PROP_DATA_DATE, "date": {"equals": data_date.isoformat()}},
-                        {
-                            "or": [
-                                {"property": S.RAW_PROP_DATATYPE, "rich_text": {"equals": kind}}
-                                for kind in ("csv", "tdnet_xbrl", "xbrl")
-                            ]
-                        },
-                    ]
-                },
-                strict=True,
-            )
-            raw_by_id = {page["id"].replace("-", ""): page for page in raw_pages}
+            # 選択済み財務行の一意relationだけを読む。同日の全市場原本は先読みしない。
+            raw_by_id = {}
             futures = []
             for page_id, old in rows:
-                raw_id = old.provenance.raw_page_id
-                raw_page = raw_by_id.get(raw_id.replace("-", ""))
+                raw_id = UUID(old.provenance.raw_page_id)
+                raw_page = raw_by_id.get(raw_id)
                 if raw_page is None:
-                    fallbacks += 1
-                    raw_page = client.get_page(raw_id)
+                    raw_page_gets += 1
+                    raw_page = client.get_page(str(raw_id))
+                    if (UUID(raw_page["id"]) != raw_id
+                            or raw_page.get("archived") is not False
+                            or raw_page.get("in_trash") is not False
+                            or raw_page["parent"].get("type") != "database_id"
+                            or UUID(raw_page["parent"]["database_id"]) != raw_database_id):
+                        raise ValueError(f"{old.code}: 原本のID/親/activeが不一致です")
+                    raw_by_id[raw_id] = raw_page
                 futures.append(
                     (
                         page_id,
@@ -602,7 +595,7 @@ def audit(*, source, future_after, limit, journal: Path, cache_dir: Path, codes=
                 "checked": checked,
                 "changed": changed,
                 "failed": failed,
-                "raw_get_fallbacks": fallbacks,
+                "raw_page_gets": raw_page_gets,
                 "partial": bool(limit is not None or source or future_after or codes),
                 "elapsed_seconds": round(time.monotonic() - started, 1),
             }

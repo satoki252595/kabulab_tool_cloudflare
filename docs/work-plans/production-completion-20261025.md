@@ -6,22 +6,22 @@
 |---|---|---|
 | 定時起動・実時間の締切 | 未来予定を拒否し、許容遅配・source停止・原本保存・native timeout・receiptの順序が全入口で一致 | #560と機械publisher追補#568、元job時計の有限再資格#570、SSH手動株式CLIの翌06時通信停止#584をCI・main配備・SSHへ反映済み。10/23 MWF/VWAPは17:15〜17:25 JSTの遅配が旧受付外となった。#560の予定時刻基準による根本修正後の自然定期実績は別受入 |
 | 本文39項目・基本情報の補足同期 | Linuxの通常定期処理がモデル・語彙判定に依存せず差分同期し、旧タグ根拠と最新本文を区別 | 起動前設定検査とSSH必須設定を受入後、通常50件中27件を同期、HOLD0・未着手23・実行時モデル0。normal CLI exit1の既知部分完了。直後の外側POST確認はTimeoutErrorで停止したが、別の明示単発3GETで共有owner/pending閉鎖とcursor進捗を受入。個別27文書の独立再照合や全社完了とはしない |
-| 優待の機械要約 | 既存compiler・検証・原子的publisherをLinuxから呼び、未解析は保留。Macの成否を先行条件にしない | 移行・有効化と起動前設定検査を受入済み。#602の長期保有型3群/3行を通常60件＋18件で追加採用し、物理PRE/POST・他行不変・owner閉鎖を確認。16:56:28 JSTの通常全POST 7,729行から再計数した未完は108群/160行/43銘柄（追加live SELECTなし）。未対応形式と意味判断が残る |
+| 優待の機械要約 | 既存compiler・検証・原子的publisherをLinuxから呼び、未解析は保留。Macの成否を先行条件にしない | 移行・有効化と起動前設定検査を受入済み。保存レビュー13群/13行も通常publisherで追加反映し、物理PRE/POST・全issuer33行・cursor不変・owner閉鎖を確認。18:34:35 JSTの単一SELECT全7,729行を契約`.4`で再計数し、未完95群/147行/39銘柄を実測。未対応形式と意味判断が残る |
 | Notionの保存結果不明 | 非冪等書込の529等を再送せず、runnerと文書callerでも成功化・次文書続行しない | #563をmain `2fa25380`へ反映、CI・CF・SSH確認済み。読取529と明示拒否429は別契約のまま |
 | 33業種更新の先行条件 | 株価・RSI失敗でも独立した原典取得を実行。取消・対象外の停止と通信枠を維持 | #562をmain `a90df635`へ反映、CI・CF・SSH確認済み。native境界は#560で同じ元job時計へ束縛。自然定期での更新成功はコード受入と分ける |
 | Yahoo等の源欠測 | 保存原応答からNULL・0・項目欠測・通信障害を区別し、根拠なく無取引と断定しない | 結果区分の#561に加え、認証/crumb/価格API/共有停止の段階診断#564をmain `dee57443`へ配備・SSH反映済み。各欠測の原因確定・最新対象日の充足とは別 |
 | 財務NULL・本文空欄・歴史relation | 保存原典との対応を機械分類し、原典に値がある取りこぼしだけ修復。非公表を数値で埋めない | 別50社の初回37保留は、#591と通常原本修復後、7社・30社の別時刻の通常照合で解消。次50社の40保留もCSV限定修復17回/40文書記録後に通常RO照合し、40社1,560セル＝一致1,528・同CSV要素なし32、資格不足0。財務7911/8566は現行原本2行の26既存値不変・12NULLに抽出差0、履歴17行の残15行はlocal-map不足HOLD。全市場分類は未検収で、旧6,251セル・35,158履歴行・relation1,649行を現在残数にしない |
 | 株価・VWAP・IR原本 | 必要対象日の保存物と通常producerの実行を照合し、原典不足を別値で埋めない | 日足run40169768650は更新2,695・skip990・HOLD1、全3,686件集計済み・unknown/未着手0。523Aの旧8/19・8/21欠落は更新前HOLD。原本90batch/90pageとsummary保管を通常閉鎖し、新activeを独立3GETで受入。株式マスタ38件の補完、全5分足・旧PUT不明は別の未検収。TDnet1279652は同一文書の両入口404で原本未取得HOLD |
-| 保有明細・権利処理 | 主体・株式種類・価格日・株数日・分割/併合/増資等の根拠と計算basisを資格化 | snapshot40169768650.1/session10/23/3,685 membersを独立受入。523Aのみerror除外で旧member補填なし。新世代の通常resumeは未着手。全保有価格・全権利種別の資格成立は未完 |
+| 保有明細・権利処理 | 主体・株式種類・価格日・株数日・分割/併合/増資等の根拠と計算basisを資格化 | snapshot40169768650.1/session10/23/3,685 membersを独立受入。通常resume1窓はusedRows24/resumed3/held3・pending=trueで既知閉鎖。51書込がHTTP200、未解決writeなし。全保有価格・全権利種別の資格成立は未完 |
 | マクロ・個別スクリーニング | 元仕様と同じ指標・対象・期間を使い、未取得を通過にしない | プライム売買代金比率、個別④需給・⑤カタリスト（2週間、過去/未来の範囲は確認中）は既存の未接続。#572の手動案内に残った未来限定を訂正。自動判定の完成扱いや、新条件の推定実装はしない。定義は下記 |
 | 内部API・MCP | 既存の有効な認証情報で代表的な読取を本番通し確認 | 旧認証3ケース＋新REST7ケース/77行、MCP3ケースの段階受入済み。公開読取も5ケースPASS。全API・全データ充足の保証へ広げない。私有証跡は下記 |
-| 本番受入・文書 | PR/CI/main/CF配備とSSH revisionを照合し、必要な有限補完を実行。設定と自然時刻の成功を区別 | #603 main778117f8までCI3本・CF98f18673 100%・SSH同headを受入。旧日足run40164923672のfatal exit2は履歴として保持し、後続run40169768650の既知非fatal exit1と区別する。株式directの実上流・全市場の財務/本文/優待・次の自然定期・月次実モデルは別受入 |
+| 本番受入・文書 | PR/CI/main/CF配備とSSH revisionを照合し、必要な有限補完を実行。設定と自然時刻の成功を区別 | #605 maina756706fまでCI3本・CF826f96cc 100%・SSH同headを受入。後続PRの配備は別受入。旧日足fatal exit2と後続run40169768650の既知非fatal exit1を区別する。株式directの実上流・全市場の財務/本文/優待・次の自然定期・月次実モデルは別受入 |
 
 取得元の停止・非公表・原本消失は取得成功としない。理由付きHOLDを実装しても、その値自体の取得完了には数えない。旧件数と固定集合の完了を現在の全市場の残数へ読み替えない。
 
 ## コード・配備の受入証跡
 
-最新の受入は#603 main `778117f8`、[CI 40176848712](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40176848712)の3本成功・SSH同SHA。17:34 JSTの管理APIでdeployment `8bbcb6e5` / version `98f18673`の100%と同main buildの対応を確認した。以下は個別の受入履歴。
+最新の配備受入は#605 main `a756706f`、[CI 40178597476](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40178597476)の3本成功・SSH同SHA。18:02 JSTの管理APIでdeployment `805a43f5` / version `826f96cc`の100%と同main buildの対応を確認した。後続PRはこの受入と区別する。以下は個別の受入履歴。
 
 | 修正 | main | CI成功run | CF配備・SSH |
 |---|---|---|---|
@@ -158,4 +158,8 @@ Primeの既存接続原典から、同一定義の当日実代金と20日平均�
 
 日足run40169768650は17:04 JSTに既知HOLDによるexit1で閉鎖した。更新2,695・skip990・HOLD1、unknown/未着手/429は0、原本90batch/90page・summaryは通常保管済み。523Aは旧8/19・8/21がfreshに無いため更新前に停止し、元日付を削除していない。17:35 JSTの独立3GETでactivation/active/registryの完全一致、snapshot40169768650.1・session10/23・coverage3,686・members3,685・523Aのみerror除外を確認した。公式銘柄表の世代/asOf・各価格原本の物理再読はこの3GETの受入外。私有RO FINISHED SHA `0bcbd5ed42c13b98c830d1291daf836739689c544cd8a13204a4b9d9d6199e09`。
 
-#604はmain `8d8d1b39`の[CI 40177408880](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40177408880)3本とCF version `2e9d2269` 100%を受入済み。SSHは4661の通常是正処理の証跡確認のため#603を保持する。同是正CLIは原本資格確認段階でexit2、専用state作成・共有writer取得・DMLの前に停止した。原因は調査中で再送していない。5分足は別の通常[intra5d run40177951577](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40177951577)を17:46 JSTに開始し、結果は未検収。
+#604はmain `8d8d1b39`の[CI 40177408880](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40177408880)3本とCF version `2e9d2269` 100%を受入済み。その後#605でSSHも更新した。4661の通常是正CLIは原本資格確認段階でexit2、専用state作成・共有writer取得・DMLの前に停止。別の単発原本GETはHTTP200・全byte数を観測したが、body読取が期限を越しSHA資格前に停止した。共通期限の修正と通常ツールでの是正は未完。5分足は別の通常[intra5d run40177951577](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40177951577)を17:46 JSTに開始し、結果は未検収。
+
+18:34 JSTまでに、保存レビュー済み13群/13行の通常取込・物理POST・全issuer33行照合・共有owner閉鎖を受入。私有`yutai-reviewed-next13-contract4-prep-v1`のFS受入SHA `e539d182b0d53202e3a01d20143ad7411349e95eeb35a2d8100c0cea232b1fb8`。続く単一SELECTは全7,729行、未完95群/147行/39銘柄、全てmissing。契約`.4`・業務書込0・再試行0で、件数の差引推算ではない。私有`yutai-pending-post-reviewed13-contract4-count-plan-v1`のFS受入SHA `7378895c6f8853e567af0997f6a0bf7dbf0837bbd087f63087210db68f20f90c`。
+
+保有価格の通常再開1窓はusedRows24/resumed3/held3・pending=true、51intent→51HTTP200で閉鎖した。normal pending-writeなし・completedあり、次窓と全価格の資格確認が残る。私有FS受入SHA `c3f67c75063151f8686fe3a628044d26a856fa9846cfdf0ddcd3ad078d7cf69b`。HTTP200は全価格の充足や各権利basisの成立を意味しない。

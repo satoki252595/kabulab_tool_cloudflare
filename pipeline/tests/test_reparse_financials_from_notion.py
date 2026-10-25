@@ -28,6 +28,65 @@ from test_financial_context_units import EDINET_CASES, fixture_provenance, fixtu
 from jp_stock_pipeline.transform.normalize import tidy_to_financial_record  # noqa: E402
 
 
+@pytest.mark.parametrize("invalid", [None, "id", "parent", "archived", "in_trash"])
+def test_audit_reads_only_selected_relations_and_checks_identity(
+    tmp_path, monkeypatch, capsys, invalid
+):
+    case = EDINET_CASES[0]
+    record = tidy_to_financial_record(fixture_tidy(case), case["code"], fixture_provenance(case))
+    raw_id, raw_database_id = case["page_id"], EDINET_CASES[1]["page_id"]
+    raw = {"id": raw_id, "parent": {"type": "database_id", "database_id": raw_database_id},
+           "archived": False, "in_trash": False}
+    if invalid == "id":
+        raw["id"] = raw_database_id
+    elif invalid == "parent":
+        raw["parent"]["database_id"] = raw_id
+    elif invalid is not None:
+        raw[invalid] = True
+    reads, parsed = [], []
+
+    class Client:
+        def query_database(self, database_id, **kwargs):
+            assert database_id == "financials"  # 全市場の⑤queryは失敗させる。
+            assert kwargs == {"filter": {"and": [{"or": [{
+                "property": S.FIN_PROP_CODE, "rich_text": {"equals": case["code"]},
+            }]}]}, "strict": True}
+            return [{"id": "financial-a"}, {"id": "financial-b"}]
+
+        def get_page(self, page_id):
+            assert page_id == raw_id
+            reads.append(page_id)
+            return raw
+
+    def parse(old, raw_page, *args):
+        parsed.append(raw_page["id"])
+        return old, {"changes": {}}
+
+    monkeypatch.setattr(reparse, "NotionClient", lambda *args, **kwargs: Client())
+    monkeypatch.setattr(reparse, "load_settings", lambda: SimpleNamespace(
+        notion_token="test-token", notion_rps=1,
+        db_id=lambda name: raw_database_id if name == "raw_files" else name,
+    ))
+    monkeypatch.setattr(reparse, "_page_record", lambda page: record)
+    monkeypatch.setattr(reparse, "reparse_record", parse)
+    journal = tmp_path / "audit.jsonl"
+    kwargs = dict(source=None, future_after=None, limit=2, journal=journal,
+                  cache_dir=tmp_path / "raw", codes=[case["code"]])
+    if invalid is not None:
+        with pytest.raises(ValueError, match="原本のID/親/active"):
+            reparse.audit(**kwargs)
+        assert parsed == []
+        assert journal.read_text() == ""
+    else:
+        reparse.audit(**kwargs)
+        assert parsed == [raw_id, raw_id]
+        items = reparse._journal_items(journal)
+        assert set(items) == {"financial-a", "financial-b"}
+        assert all(item["old"] == item["new"] for item in items.values())
+        assert json.loads(capsys.readouterr().out.splitlines()[-1])["raw_page_gets"] == 1
+    assert reads == [raw_id]  # 同じrelationは同一groupで再GETしない。
+
+
 @pytest.mark.parametrize("helper_name", ["direct_roa.py", "direct_roa_table.py"])
 def test_roa_helper_change_reparses_cached_success(tmp_path, monkeypatch, helper_name):
     """実原本の値は不変。補助parserだけの変更でも旧成功を再検証する。"""
