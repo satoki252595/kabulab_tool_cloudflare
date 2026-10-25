@@ -1,0 +1,68 @@
+{
+  "provenance": {
+    "source": "saved-native-135-normal-selector-contract3",
+    "responseSha256": "c934da8c28a5e98b4da17207740e2febf7dfcc341585b859bfb7ff872f6fe6be",
+    "countFinishedSha256": "5a15e7f4255bd63a437cf1c20bbe145f57362e49e7e22c8c88e6f8098907ede2",
+    "privateFixtureSha256": "a32757623c4a88777a3f93415c117772aee9b7fa05637989ffae6749d324cb64",
+    "normalizedTermsSha256": "302bbc296773a9bbe7f04971fe162d1272be78401e0c2d9ea27444589454eb06",
+    "historicalFixtureNotCurrentPendingCount": true
+  },
+  "groups": [
+    {
+      "taskId": "2c54237506779e3b",
+      "stockCode": "4392",
+      "points": 5000,
+      "sourceSha256": "c2d5a839759dd1340f6421cb8599365a312809262a4d5a4e24c2932121bb5229",
+      "recipients": [
+        {
+          "minShares": 1500,
+          "recordMonth": 12,
+          "recordDate": null
+        }
+      ],
+      "expectedSummarySha256": "c0882254538ccbb196307a871953b2dca616d3de0fffb0e1c4ec8aa35e343720"
+    },
+    {
+      "taskId": "35525613ab4b94b5",
+      "stockCode": "4392",
+      "points": 8000,
+      "sourceSha256": "e61b2e96302a6b294e80543e4ca53c7f2493d2e823a8d2e6bb46fd7f8b83d18b",
+      "recipients": [
+        {
+          "minShares": 2000,
+          "recordMonth": 12,
+          "recordDate": null
+        }
+      ],
+      "expectedSummarySha256": "d84cfb36fcbbe99a9b39edc60c0c78a9963ef3f287840e889d548a3f512addfb"
+    },
+    {
+      "taskId": "30480b798cd47e2c",
+      "stockCode": "4392",
+      "points": 15000,
+      "sourceSha256": "2d44944fa1fc7c59b92d37ba473dab5d193392d56f16a205fcc9b8fc94224b2e",
+      "recipients": [
+        {
+          "minShares": 3000,
+          "recordMonth": 12,
+          "recordDate": null
+        }
+      ],
+      "expectedSummarySha256": "1f04deedbfde00660f03796f9bac17940badc6b8aaaeab3c2bbc04f86b806443"
+    },
+    {
+      "taskId": "3e7e4a7e675bb8b3",
+      "stockCode": "4392",
+      "points": 20000,
+      "sourceSha256": "6e32992c7db615b71f3e4765f486213c954fb11077bf0c1781ae119b97aef502",
+      "recipients": [
+        {
+          "minShares": 4000,
+          "recordMonth": 12,
+          "recordDate": null
+        }
+      ],
+      "expectedSummarySha256": "bf8a8b3219fc601c17acd3adcd9eba3c99630814cb955dd1b2341b12a09ec4c8"
+    }
+  ]
+}

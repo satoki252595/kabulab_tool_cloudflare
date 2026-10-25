@@ -171,7 +171,7 @@ export function companyValue(task: SummaryTask): {
   return evaluateCompanyValue(task.description, context);
 }
 
-export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v7";
+export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v8";
 
 /** 対応する種類＋額面・全文1点選択・全文対応の期間/名簿条件を定型化する。未対応条件を削らない。 */
 export function compileSimpleSummary(task: SummaryTask): SummaryResult | null {
@@ -209,6 +209,16 @@ export function compileSimpleSummary(task: SummaryTask): SummaryResult | null {
   if (source.malformed) return null;
   const grammar = /^(QUOカードPay|QUOカード|クオカード|図書カードNEXT|図書カード|商品券|ギフトカード|自社商品|カタログギフト)[ \t]*(?:([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)円(分|相当))(?:を贈呈|贈呈)?[。]?$/u;
   const body = source.body.normalize("NFKC").trim();
+  // 数量以外は保存済み全文のSHAへ束縛する。原文段落は公開せず、約換算から金額を作らない。
+  if (source.heading?.normalize("NFKC").trim() === "プレミアム優待倶楽部ポイント") {
+    const points = /^([1-9][0-9]{0,2}(?:,[0-9]{3})+|[1-9][0-9]*)ポイント\n/u.exec(body);
+    if (points === null || sha(body.slice(points[0].length)) !== "302bbc296773a9bbe7f04971fe162d1272be78401e0c2d9ea27444589454eb06") return null;
+    const count = Number(points[1].replaceAll(",", "")), amount = companyValue(task);
+    if (!Number.isSafeInteger(count) || amount.value !== null || amount.reason !== "approx") return null;
+    const shortSummary = `${count}ポイント(WEB商品選択・寄付・WILLsCoin交換、翌年12月末同番号継続記録2回以上で繰越1回のみ)`;
+    if (checkSummary(shortSummary).length > 0) return null;
+    return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion, shortSummary, estimatedValue: null });
+  }
   // 掲載額と明示された両送付月を保持する。余分な注記・数量・保有条件は全文一致で拒否する。
   const shipment = /^([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)円(分|相当)\n【送付時期】\n(1[0-2]|[1-9])月~(1[0-2]|[1-9])月$/u.exec(body);
   if (source.heading?.normalize("NFKC").trim() === "自社製品詰合せ(アイス等)" && shipment !== null) {
@@ -216,6 +226,16 @@ export function compileSimpleSummary(task: SummaryTask): SummaryResult | null {
     if (amount.value === null || !Number.isSafeInteger(amount.value) || amount.value !== Number(shipment[1].replaceAll(",", ""))) return null;
     return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion,
       shortSummary: `自社製品詰合せ(アイス等) ${amount.value.toLocaleString("en-US")}円${shipment[2]}・${shipment[3]}月〜${shipment[4]}月送付`, estimatedValue: amount.value });
+  }
+  // 座席指定経路の残全文を同値確認する。私有原文を公開せず、数量だけを原文から読む。
+  const cinema = /^毎月([1-9][0-9]*)回\n([\s\S]+)$/u.exec(body);
+  if (source.heading?.normalize("NFKC").trim() === "あべのアポロシネマ映画鑑賞無料ご招待" && cinema !== null &&
+    sha(cinema[2]) === "0bd4590313a989d9bb80ea81e8969e8849a8658eeded3d53d7d8f34c25d67db6") {
+    const count = Number(cinema[1]), amount = companyValue(task);
+    if (!Number.isSafeInteger(count) || amount.value !== null || amount.reason !== "no_source_yen_amount") return null;
+    const shortSummary = `あべのアポロシネマ毎月${count}回無料(ネット又は招待カード利用の券売機・窓口で座席指定)`;
+    if (checkSummary(shortSummary).length > 0) return null;
+    return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion, shortSummary, estimatedValue: null });
   }
   let match = grammar.exec(body);
   // 種類だけの表見出し＋本文の額面も同じ全文文法で読む。金額は本文で認定する。
