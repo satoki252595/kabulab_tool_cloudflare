@@ -407,6 +407,98 @@ describe("SDK retry disabled", () => {
 });
 
 describe("r2GetVersion contract", () => {
+  function fakeAttemptTimeouts() {
+    vi.useFakeTimers();
+    vi.spyOn(AbortSignal, "timeout").mockImplementation(ms => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException("attempt expired", "TimeoutError")), ms);
+      return controller.signal;
+    });
+  }
+  // 固定SDKがheader待機中のsignal中断で返す型/cause。同じsignalへ束縛して制御する。
+  const pendingHeader = (_command: unknown, options?: unknown) => new Promise<never>((_resolve, reject) => {
+    const signal = (options as { abortSignal: AbortSignal }).abortSignal;
+    signal.addEventListener("abort", () => reject(Object.assign(new Error("Request aborted"),
+      { name: "AbortError", cause: signal.reason })), { once: true });
+  });
+
+  it("own 60s header timeout retries a GET within the live caller budget", async () => {
+    fakeAttemptTimeouts();
+    const caller = new AbortController(), beforeAttempt = vi.fn();
+    const send = vi.spyOn(S3Client.prototype, "send").mockImplementationOnce(pendingHeader)
+      .mockImplementationOnce(async () => ({ ...okGet(), Body: Readable.from([Buffer.from("original bytes")]) }));
+    const result = expect(r2GetVersion("daily/3931.json", { abortSignal: caller.signal, beforeAttempt }))
+      .resolves.toEqual({ body: "original bytes", etag: '"native-etag"' });
+    await vi.advanceTimersByTimeAsync(61_000); await result;
+    expect(send).toHaveBeenCalledTimes(2); expect(beforeAttempt).toHaveBeenCalledTimes(2);
+    expect(caller.signal.aborted).toBe(false);
+    expect(send.mock.calls.every(([command]) => command instanceof GetObjectCommand)).toBe(true);
+  });
+
+  it("persistent own header timeouts remain a fault after at most three GETs", async () => {
+    fakeAttemptTimeouts();
+    const send = vi.spyOn(S3Client.prototype, "send").mockImplementation(pendingHeader);
+    const result = expect(r2GetVersion("daily/3931.json")).rejects.toMatchObject({ name: "AbortError" });
+    await vi.runAllTimersAsync(); await result;
+    expect(send).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["singleAttempt", "observer"])("own header timeout keeps %s read single", async mode => {
+    fakeAttemptTimeouts();
+    const send = vi.spyOn(S3Client.prototype, "send").mockImplementation(pendingHeader), onRead = vi.fn();
+    const options = mode === "singleAttempt" ? { singleAttempt: true } : { maxBytes: 100, onRead };
+    const result = expect(r2GetVersion("daily/3931.json", options)).rejects.toMatchObject({ name: "AbortError" });
+    await vi.runAllTimersAsync(); await result;
+    expect(send).toHaveBeenCalledOnce(); expect(onRead).not.toHaveBeenCalled();
+  });
+
+  it("caller abort never becomes an own timeout retry", async () => {
+    fakeAttemptTimeouts();
+    const caller = new AbortController(), send = vi.spyOn(S3Client.prototype, "send").mockImplementation(pendingHeader);
+    const result = expect(r2GetVersion("daily/3931.json", { abortSignal: caller.signal })).rejects.toMatchObject({ name: "AbortError" });
+    setTimeout(() => caller.abort(new Error("caller deadline")), 30_000);
+    await vi.runAllTimersAsync(); await result;
+    expect(send).toHaveBeenCalledOnce();
+  });
+
+  it("caller expiry during backoff stops before the next GET", async () => {
+    fakeAttemptTimeouts();
+    const caller = new AbortController(), beforeAttempt = vi.fn();
+    const send = vi.spyOn(S3Client.prototype, "send").mockImplementation(pendingHeader);
+    const result = expect(r2GetVersion("daily/3931.json", { abortSignal: caller.signal, beforeAttempt }))
+      .rejects.toThrow("caller deadline");
+    setTimeout(() => caller.abort(new Error("caller deadline")), 60_500);
+    await vi.runAllTimersAsync(); await result;
+    expect(send).toHaveBeenCalledOnce(); expect(beforeAttempt).toHaveBeenCalledOnce();
+  });
+
+  it("clears the previous own timeout before a next-attempt guard rejects", async () => {
+    fakeAttemptTimeouts();
+    let previousAbort: unknown;
+    const beforeAttempt = vi.fn().mockImplementationOnce(() => {}).mockImplementationOnce(() => { throw previousAbort; });
+    const send = vi.spyOn(S3Client.prototype, "send").mockImplementation((command, options) => pendingHeader(command, options)
+      .catch(error => { previousAbort = error; throw error; }));
+    const result = expect(r2GetVersion("daily/3931.json", { beforeAttempt })).rejects.toMatchObject({ name: "AbortError" });
+    await vi.runAllTimersAsync(); await result;
+    expect(send).toHaveBeenCalledOnce(); expect(beforeAttempt).toHaveBeenCalledTimes(2);
+  });
+
+  it("unattributed AbortError and timeout body failure are never retried", async () => {
+    const error = Object.assign(new Error("Request aborted"), { name: "AbortError" });
+    const send = vi.spyOn(S3Client.prototype, "send").mockRejectedValueOnce(error);
+    await expect(r2GetVersion("daily/3931.json")).rejects.toBe(error); expect(send).toHaveBeenCalledOnce();
+    send.mockReset().mockImplementationOnce(async () => ({ ...okGet(), Body: { transformToByteArray: async () => { throw error; } } }));
+    await expect(r2GetVersion("daily/3931.json")).rejects.toBe(error); expect(send).toHaveBeenCalledOnce();
+    fakeAttemptTimeouts();
+    send.mockReset().mockImplementation((_command, options) => new Promise((_resolve, reject) => {
+      const signal = (options as { abortSignal: AbortSignal }).abortSignal;
+      signal.addEventListener("abort", () => reject(error), { once: true });
+    }));
+    const unbound = expect(r2GetVersion("daily/3931.json")).rejects.toBe(error);
+    await vi.runAllTimersAsync(); await unbound;
+    expect(send).toHaveBeenCalledOnce(); // own期限が発火してもcauseが一致しないAbortErrorは除外。
+  });
+
   it("native transient GET failure retries only the read and keeps the returned version", async () => {
     vi.useFakeTimers();
     const send = vi.spyOn(S3Client.prototype, "send");

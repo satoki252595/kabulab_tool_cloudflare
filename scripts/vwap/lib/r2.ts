@@ -383,20 +383,27 @@ export async function r2GetBytesVersion(key: string, bucket: string | undefined,
   // 成功 envelope は strict 200 + body + nonempty ETag を要求する。
   try {
     // GET は mutation と異なり再読しても適用結果が曖昧にならない。
-    // nativeな既知5xx・名前解決失敗だけ既存backoffへ接続し、認可/404/未知schemaは即STOP。
+    // 既知5xx・名前解決失敗・自分のheader待機期限だけ既存backoffへ接続する。
+    // caller期限・観測付きread・body不完全・認可/404/未知schemaは再読対象に広げない。
     let signal: AbortSignal;
+    let attemptTimeout: AbortSignal | undefined;
     const attempt = async () => {
+      attemptTimeout = undefined;
       opts?.abortSignal?.throwIfAborted();
       await opts?.beforeAttempt?.();
       opts?.abortSignal?.throwIfAborted();
-      const timeout = AbortSignal.timeout(60_000);
-      signal = opts?.abortSignal === undefined ? timeout : AbortSignal.any([timeout, opts.abortSignal]);
+      attemptTimeout = AbortSignal.timeout(60_000);
+      signal = opts?.abortSignal === undefined ? attemptTimeout : AbortSignal.any([attemptTimeout, opts.abortSignal]);
       return client().send(new GetObjectCommand({ Bucket: bucket, Key: key }), { abortSignal: signal });
     };
     const r = opts?.singleAttempt === true ? await attempt() : await retry(attempt, 3, 1000, (e) => {
         const { code, status } = r2CauseOf(e);
         const dns = e as { code?: unknown; syscall?: unknown } | null;
-        return (e instanceof Error && status === "none" && dns?.syscall === "getaddrinfo" &&
+        // SDKのAbortErrorだけではcaller中断と区別できない。自分のtimeout reasonへ束縛する。
+        const ownHeaderTimeout = e instanceof Error && e.name === "AbortError" && status === "none" &&
+          opts?.onRead === undefined && attemptTimeout?.aborted === true &&
+          e.cause === attemptTimeout.reason && opts?.abortSignal?.aborted !== true;
+        return ownHeaderTimeout || (e instanceof Error && status === "none" && dns?.syscall === "getaddrinfo" &&
           ["ENOTFOUND", "EAI_AGAIN"].includes(dns.code as string)) ||
           (["InternalError", "InternalServerError", "ServiceUnavailable", "SlowDown"].includes(code) &&
           [500, 502, 503, 504].includes(status as number));
