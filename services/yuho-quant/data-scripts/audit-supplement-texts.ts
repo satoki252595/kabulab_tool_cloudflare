@@ -19,6 +19,7 @@ import { loadLatestDocs, type BiztagSourceDb, type LatestDoc } from "../src/bizt
 import { hasUsableText, rowTextSyncReceipt } from "../src/biztag/plan.js";
 import * as schema from "../src/db/schema.js";
 import { readSavedEdinetZip, SavedEdinetZipQualificationError } from "../src/services/edinet/archive.js";
+import { edinetArchiveNativeMetadata } from "../src/services/edinet/archive-metadata.js";
 import { parseEdinetCsvZip } from "../src/services/edinet/csv.js";
 import { extractTextSections, matchesTextSection, TEXT_SECTIONS } from "../src/services/edinet/text-sections.js";
 import { parseSubmitDateTime, secCodeToTicker } from "../src/services/edinet/types.js";
@@ -124,7 +125,7 @@ export function parseAuditArgs(argv: string[]) {
 /** Same active/latest/reported-HOLD and strict saved body qualification as normal publishing; extra ZIP evidence is read-only. */
 export function qualifyAuditSource(latest: LatestDoc, document: Document, source: Source) {
   assert(hasUsableText(latest.doc) && latest.reportedHoldReason === undefined, "latest_body_unqualified");
-  const metadata = source.metadata;
+  const metadata = edinetArchiveNativeMetadata(source.metadata);
   assert(document.docId === latest.doc.docId && document.periodEnd === latest.doc.periodEnd && document.docTypeCode === latest.doc.docTypeCode &&
     document.notionDocPageId === latest.doc.notionDocPageId && document.textParseStatus === "ok" &&
     document.submittedAt.toISOString() === latest.doc.submittedAt, "document_changed");

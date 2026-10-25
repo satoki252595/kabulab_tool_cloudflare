@@ -12,6 +12,7 @@ import { readVerifiedDocText } from "../text-backup.js";
 import { notionEnv } from "../../../../../src/shared/notion-archive/env.js";
 import { NotionUnknownResultError } from "../../../../../src/shared/notion-archive/client.js";
 import { readSavedEdinetZip, SavedEdinetZipQualificationError } from "./archive.js";
+import { edinetArchiveNativeMetadata } from "./archive-metadata.js";
 import { captureListSnapshot, readListSnapshot, listSnapshotSchema, EdinetListQualificationError, type ListSnapshot } from "./list-snapshot.js";
 import { EdinetListFetchError } from "./client.js";
 import { edinetDocSchema, parseSubmitDateTime, secCodeToTicker, type EdinetDoc } from "./types.js";
@@ -182,9 +183,12 @@ export async function requalifyInformationEdit(db: Database, args: { doc: Edinet
       RX_ORDER_KEYWORD.test(r.value) || RX_OVERSEAS_KEYWORD.test(r.itemName) || RX_OVERSEAS_KEYWORD.test(r.value));
     stop(); const xbrl = requiresXbrl ? await readSavedEdinetZip(d.docId, 1) : undefined;
     const savedZips = xbrl === undefined ? [csv] : [csv, xbrl];
-    for (const zip of savedZips) for (const [key, value] of Object.entries({ edinetCode: d.edinetCode, secCode: args.doc.secCode,
-      filerName: d.filerName, docTypeCode: d.docTypeCode, periodStart: d.periodStart, periodEnd: d.periodEnd, submitDateTime: args.doc.submitDateTime }))
-      requireSame(zip.metadata[key] === value, "保存原本と業務metadataが一致しません");
+    for (const zip of savedZips) {
+      const metadata = edinetArchiveNativeMetadata(zip.metadata);
+      for (const [key, value] of Object.entries({ edinetCode: d.edinetCode, secCode: args.doc.secCode,
+        filerName: d.filerName, docTypeCode: d.docTypeCode, periodStart: d.periodStart, periodEnd: d.periodEnd, submitDateTime: args.doc.submitDateTime }))
+        requireSame(metadata[key] === value, "保存原本と業務metadataが一致しません");
+    }
     requireSame(d.textParseStatus === "ok" && d.notionDocPageId !== null, "完成済み本文pointerがありません");
     stop(); const body = await readVerifiedDocText({ dbId: notionEnv.NOTION_YUHO_TEXT_DB_ID(), rowPageId: d.notionDocPageId, stockCode: args.stockCode,
       docId: d.docId, d1DocumentId: d.id, fiscalYearEnd: d.periodEnd, textParseStatus: "ok",
