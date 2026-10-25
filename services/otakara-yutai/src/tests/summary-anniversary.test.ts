@@ -35,7 +35,7 @@ it("周年は原文の同じ正準整数literalだけを認め、別単位・部
 
 it("共有取込・既存要約選定・月次carryが同じ周年資格を使い、旧.3結果は拒否する", () => {
   const current = row(), tasks = selectSummaryTasks([current]);
-  expect(tasks[0].contractVersion).toBe("2026-10-25.4");
+  expect(tasks[0].contractVersion).toBe(SUMMARY_CONTRACT_VERSION);
   const result = { taskId: tasks[0].taskId, contractVersion: SUMMARY_CONTRACT_VERSION, shortSummary, estimatedValue: null };
   const plan = planSummaryImport({ tasks, currentRows: [current], resultsText: JSON.stringify(result) });
   expect(plan.rejections).toEqual([]); expect(plan.updates).toHaveLength(1);

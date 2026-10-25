@@ -21,7 +21,8 @@
  *   注記記号の取り込み 38 行 / 60 字超 35 行 / です・ます調 5 行 (重複あり計 ~70 行)
  */
 
-import { HEADED_MARK } from "./estimated-value-guard.js";
+import { createHash } from "node:crypto";
+import { HEADED_MARK, splitHeadedDescription } from "./estimated-value-guard.js";
 import { compilePointExchangeLiteral, compileVenueAdmissionLiteral } from "./holding-structure.js";
 
 /**
@@ -30,7 +31,7 @@ import { compilePointExchangeLiteral, compileVenueAdmissionLiteral } from "./hol
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-10-25.4";
+export const SUMMARY_CONTRACT_VERSION = "2026-10-25.5";
 
 /** 比較時だけ同じ月期間の表記を揃え、数値・比較条件・保存文面は変えない。 */
 function normalizeMonthPeriods(text: string): string {
@@ -136,9 +137,35 @@ export function isSummaryNumbersGrounded(
   // 周年を金額・株数・年数へ転用せず、後続の額や数量も通常どおり検証する。
   const numericTerm = /(?<![0-9A-Za-z.,+\-万千百億兆])(?:3Dプリンター住宅|1デーパスポート|[1-9][0-9]*周年)/g;
   const sourceNumericTerms = new Set(description.normalize("NFKC").match(numericTerm));
-  const normalizedSummary = withoutVenue.replace(numericTerm, term =>
+  let normalizedSummary = withoutVenue.replace(numericTerm, term =>
     sourceNumericTerms.has(term) && (!term.endsWith("周年") || Number.isSafeInteger(Number(term.slice(0, -2))))
       ? term.replace(/[0-9]/g, "") : term);
+  // 継続保有の定義にある株数は現tierの株数ではない。既知の完全句と明示scopeだけを束縛する。
+  if (normalizedSummary.includes("継続条件")) {
+    const source = splitHeadedDescription(description);
+    if (source.malformed || source.heading === null) return false;
+    const body = source.body.normalize("NFKC").replace(/\r\n/g, "\n");
+    const sections = body.split("\n■継続保有期間について\n");
+    if (sections.length !== 2) return false;
+    const clause = sections[1].split("\n■")[0].trim();
+    const numbers = clause.match(/[0-9]+/g);
+    if (numbers === null || numbers.length !== 5 || numbers.some(value =>
+      !/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value)))) return false;
+    // 実原文の転載を避け、数値slot以外の定義文全体を固定する。例外・名義交換もHOLD。
+    if (createHash("sha256").update(clause.replace(/[0-9]+/g, "#")).digest("hex") !==
+        "85f8a4cac6c0c3a82472df66d06424c4a9f197e68baf7ca55d4627fd1eb84ffe") return false;
+    const [years, firstMonth, secondMonth, records, shares] = numbers.map(Number);
+    const headings = body.match(/^【.*保有.*】$/gm);
+    if (headings?.length !== 1 || headings[0] !== `【${years}年以上保有】` || !sections[0].split("\n").includes(headings[0]) ||
+        firstMonth > 12 || secondMonth > 12 || firstMonth === secondMonth ||
+        context.minShares.length === 0 || context.minShares.some(value => !Number.isSafeInteger(value) || value < shares) ||
+        context.recordMonths.length === 0 || context.recordMonths.some(value => ![firstMonth, secondMonth].includes(value))) return false;
+    const literal = `継続条件:${years}年以上・${firstMonth}月末/${secondMonth}月末同一株主番号${shares}株以上${records}回連続記録`;
+    const scoped = new RegExp(`(^|[(、])${literal}(?=$|[)、])`, "u");
+    // scopeの不一致を一般数値照合へ降格させない。句外の株数は従来のrecipient照合へ残す。
+    if (normalizedSummary.split("継続条件").length !== 2 || !scoped.test(normalizedSummary)) return false;
+    normalizedSummary = normalizedSummary.replace(scoped, (_match, boundary: string) => boundary);
+  }
   // 同一(の)株主番号の「一株」は数量ではない。この同義2表記だけを
   // 原文で確認して比較時に外し、実際の株数・保有期間・金額には触れない。
   const identityTerm = /同一(?:の)?株主番号/g;
