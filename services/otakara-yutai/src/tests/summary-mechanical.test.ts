@@ -14,6 +14,7 @@ import { runMechanicalSummary } from "../../data-scripts/summary-mechanical.js";
 import { main as runLocalCli, parseLocalArgs, readReviewedInput, runLocalSummary, type LocalDependencies, type LocalOptions } from "../../data-scripts/summary-local.js";
 import { type ImportPlan } from "../../data-scripts/summary-import.js";
 import { selectSummaryTasks, type BenefitRow } from "../../data-scripts/summary-tasks.js";
+import musashinoSaved from "./fixtures/musashino-source-saved3.json";
 
 const dirs: string[] = [];
 const cursorKey = "mechanical-publishing/v1/cursors/yutai-summary.json";
@@ -79,8 +80,9 @@ describe("Linux mechanical summary / shared writer", () => {
       if (args[2] === "pre") expect(saved).toBe(gunzipSync(args[0]).toString("utf8"));
       await archive(...args);
     });
-    expect(await runMechanicalSummary({ stateDir: dir, limit: 60 }, () => deps, memory.store)).toMatchObject({
-      accepted: 1, pendingAfter: 0, modelCalls: 0, modelResidents: 0, deterministic: 1 });
+    expect(await runMechanicalSummary({ stateDir: dir, limit: 60 }, () => deps, memory.store)).toEqual({
+      selected: 1, accepted: 1, rejected: 0, held: 0, equivalent: 0, toNull: 0,
+      pendingBefore: 1, pendingAfter: 0, modelCalls: 0, modelResidents: 0, deterministic: 1, outcome: "complete" });
     expect(deps.generate).not.toHaveBeenCalled(); expect(rows()[0]).toMatchObject({ shortSummary: "QUOカード 3,000円分", estimatedValue: 3000 });
     const completed = memory.events.findIndex(event => event.endsWith("/completed.json"));
     expect(memory.events.indexOf("archive-pre")).toBeLessThan(memory.events.indexOf("apply"));
@@ -93,8 +95,11 @@ describe("Linux mechanical summary / shared writer", () => {
   it("未対応HOLDもmodel0・旧値維持で閉鎖し、別hostの古いcursorより共有cursorを優先する", async () => {
     const memory = storeFixture(); const initial = [row(1, "合成商品から選択・条件不明"), row(2, "合成商品から選択・条件不明")];
     const { deps, rows } = dependencies(initial, memory.events); const tasks = selectSummaryTasks(initial);
-    expect(await runMechanicalSummary({ stateDir: state(), limit: 1 }, () => deps, memory.store)).toMatchObject({
+    const first = await runMechanicalSummary({ stateDir: state(), limit: 1 }, () => deps, memory.store);
+    expect(first).toMatchObject({
       accepted: 0, held: 1, outcome: "partial_rejection", modelCalls: 0, modelResidents: 0 });
+    expect(first.holds).toEqual([{ stockCode: tasks[0].stockCode, taskId: tasks[0].taskId,
+      sourceSha256: createHash("sha256").update(tasks[0].description).digest("hex"), reason: "mechanical_rule_unavailable_model_disabled" }]);
     const nextHost = state(); writeFileSync(join(nextHost, "progress.json"), JSON.stringify({ cursor: tasks[1].taskId }), { mode: 0o600 });
     expect(await runMechanicalSummary({ stateDir: nextHost, limit: 1 }, () => deps, memory.store)).toMatchObject({ held: 1 });
     expect(JSON.parse(memory.values.get(cursorKey)!.body)).toEqual({ cursor: tasks[1].taskId });
@@ -113,6 +118,33 @@ describe("Linux mechanical summary / shared writer", () => {
       cursorBefore: JSON.stringify({ cursor: tasks[0].taskId }), cursorNext: JSON.stringify({ cursor: tasks[1].taskId }) });
     expect(existsSync(join(nextHost, run, "post-import.json.gz"))).toBe(false);
     expect(existsSync(join(nextHost, run, "complete.json"))).toBe(true);
+  });
+  const actualHoldsPath = join(ROOT, musashinoSaved.privateFixtureDir, "SAVED-ROWS.private.json");
+  it.skipIf(!existsSync(actualHoldsPath))("実保存3群のHOLDを上限内のID/全文SHA/固定理由だけで返し、標準JSONログへ原文や秘密を出さない（CIはprivate不在skip）", async () => {
+    const bytes = readFileSync(actualHoldsPath);
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe(musashinoSaved.files.find(file => file.path === "SAVED-ROWS.private.json")!.sha256);
+    const original = JSON.parse(bytes.toString("utf8")) as BenefitRow[];
+    const tasks = selectSummaryTasks(original);
+    expect(tasks).toHaveLength(3);
+    // 制御用の秘密/署名URLを社名欄へ置く。実原文と実受取条件は変更しない。
+    const sensitive = "controlled-private-token https://notion-static.invalid/source?signature=controlled-private-signature";
+    const memory = storeFixture(), dir = state();
+    const { deps, rows } = dependencies(original.map(row => ({ ...row, stockName: sensitive })), memory.events);
+    const report = await runMechanicalSummary({ stateDir: dir, limit: 2 }, () => deps, memory.store);
+    expect(report).toMatchObject({ selected: 2, accepted: 0, rejected: 2, held: 2, pendingBefore: 3, pendingAfter: 3,
+      modelCalls: 0, modelResidents: 0, deterministic: 0, outcome: "partial_rejection" });
+    expect(report.holds).toEqual(tasks.slice(0, 2).map(task => ({ stockCode: "8336", taskId: task.taskId,
+      sourceSha256: createHash("sha256").update(task.description).digest("hex"), reason: "mechanical_rule_unavailable_model_disabled" })));
+    expect(report.holds!.length).toBeLessThanOrEqual(60);
+    const line = `[mechanical-publishing] ${JSON.stringify({ target: "yutai", ...report })}`;
+    expect(line).not.toContain(sensitive); expect(line).not.toMatch(/https?:|signature|controlled-private|description|shortSummary/);
+    for (const task of tasks) expect(line).not.toContain(JSON.stringify(task.description));
+    const run = readdirSync(dir).find(name => name !== "progress.json")!;
+    const privateHeld = JSON.parse(readFileSync(join(dir, run, "deterministic.json"), "utf8")).held;
+    expect(report.holds!.map(({ taskId, reason }) => ({ taskId, reason }))).toEqual(privateHeld);
+    expect(rows()).toEqual(original.map(row => ({ ...row, stockName: sensitive })));
+    expect(deps.apply).not.toHaveBeenCalled(); expect(deps.archive).not.toHaveBeenCalled(); expect(deps.generate).not.toHaveBeenCalled();
+    expect(memory.current()).toMatchObject({ owner: null, pending: null });
   });
   it.each(["recipient", "clock", "read"] as const)("全HOLDのfresh %s変化/失敗ではcursorを書かず、純readのownerだけ閉じる", async failure => {
     const memory = storeFixture(), initial = row(1, "合成商品から選択・条件不明");
