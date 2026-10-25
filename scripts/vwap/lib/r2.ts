@@ -255,6 +255,50 @@ function logToken(value: string): string {
   return redacted.length > 0 ? redacted : "none";
 }
 
+const R2_ABORT_LOG = "[INC-20261025-kabulab_tool_cloudflare-vwap-abort]";
+
+/**
+ * 要求ごと60秒と呼び出し側 signal（予算）のどちらが中断したかを1行残す。
+ * 60秒・retry・投げる例外は変えない。この関数から例外を出さない。
+ */
+function logR2Abort(input: {
+  key: string;
+  error: unknown;
+  phase: "ヘッダ受信前" | "本文読み取り中";
+  timeout: AbortSignal;
+  budget: AbortSignal | undefined;
+  signal: AbortSignal;
+  startedAt: number;
+}): void {
+  try {
+    const timeoutAborted = input.timeout.aborted === true;
+    const budgetAborted = input.budget?.aborted === true;
+    const signalAborted = input.signal.aborted === true;
+    if (!timeoutAborted && !budgetAborted && !signalAborted && readExceptionName(input.error) !== "AbortError") return;
+    // 片方だけが aborted のときだけ帰属する。両方、またはどちらでもない AbortError は不明。
+    let fired: "要求ごと60秒" | "予算" | "不明";
+    if (timeoutAborted && !budgetAborted) fired = "要求ごと60秒";
+    else if (budgetAborted && !timeoutAborted) fired = "予算";
+    else fired = "不明";
+    const reason = signalAborted ? input.signal.reason : undefined;
+    const cause = input.error !== null && typeof input.error === "object" && "cause" in input.error
+      ? (input.error as { cause?: unknown }).cause
+      : undefined;
+    const elapsedMs = Date.now() - input.startedAt;
+    console.error([
+      R2_ABORT_LOG,
+      `signal=${logToken(fired)}`,
+      `phase=${logToken(input.phase)}`,
+      `reason=${logToken(readExceptionName(reason))}`,
+      `cause=${logToken(readExceptionName(cause))}`,
+      `elapsedMs=${elapsedMs}`,
+      `key=${logToken(input.key)}`,
+    ].join(" "));
+  } catch {
+    // 計測行の出力失敗は要求の例外に影響させない。
+  }
+}
+
 /**
  * 明示拒否 (適用なし確定) の判定。412 前提失敗と retry 不能な確定 4xx のみ。
  * 408/429 (retryable)・5xx・status なしは適用有無が曖昧なため unknown。
@@ -299,12 +343,16 @@ export async function r2PutBytes(key: string, body: Uint8Array, observedVersion:
   let res: unknown;
   if (opts?.beforeAttempt !== undefined) await opts.beforeAttempt();
   opts?.abortSignal?.throwIfAborted();
+  const putTimeout = AbortSignal.timeout(60_000);
+  const putSignal = opts?.abortSignal === undefined ? putTimeout : AbortSignal.any([opts.abortSignal, putTimeout]);
+  const putStartedAt = Date.now();
   try {
     res = await client().send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: contentType,
       ...(observedVersion === null ? { IfNoneMatch: "*" } : { IfMatch: observedVersion }),
       ...(metadata === undefined ? {} : { Metadata: metadata }),
-    }), { abortSignal: opts?.abortSignal === undefined ? AbortSignal.timeout(60_000) : AbortSignal.any([opts.abortSignal, AbortSignal.timeout(60_000)]) });
+    }), { abortSignal: putSignal });
   } catch (e) {
+    logR2Abort({ key, error: e, phase: "ヘッダ受信前", timeout: putTimeout, budget: opts?.abortSignal, signal: putSignal, startedAt: putStartedAt });
     const { code, status } = r2CauseOf(e);
     logR2PutFailure(key, e, status);
     if (isExplicitRejection(code, status)) throw new R2PutRejectedError(key, code, status, e);
@@ -381,6 +429,7 @@ export async function r2GetBytesVersion(key: string, bucket: string | undefined,
   // (bucket/endpoint 誤り等)・矛盾メタは missing-object の証明に
   // ならないため fault として throw する。
   // 成功 envelope は strict 200 + body + nonempty ETag を要求する。
+  let abortDiag: { timeout: AbortSignal; signal: AbortSignal; startedAt: number; headersReceived: boolean } | undefined;
   try {
     // GET は mutation と異なり再読しても適用結果が曖昧にならない。
     // 既知5xx・名前解決失敗・自分のheader待機期限だけ既存backoffへ接続する。
@@ -389,12 +438,22 @@ export async function r2GetBytesVersion(key: string, bucket: string | undefined,
     let attemptTimeout: AbortSignal | undefined;
     const attempt = async () => {
       attemptTimeout = undefined;
+      abortDiag = undefined;
       opts?.abortSignal?.throwIfAborted();
       await opts?.beforeAttempt?.();
       opts?.abortSignal?.throwIfAborted();
       attemptTimeout = AbortSignal.timeout(60_000);
       signal = opts?.abortSignal === undefined ? attemptTimeout : AbortSignal.any([attemptTimeout, opts.abortSignal]);
-      return client().send(new GetObjectCommand({ Bucket: bucket, Key: key }), { abortSignal: signal });
+      const diag = { timeout: attemptTimeout, signal, startedAt: Date.now(), headersReceived: false };
+      abortDiag = diag;
+      try {
+        const response = await client().send(new GetObjectCommand({ Bucket: bucket, Key: key }), { abortSignal: signal });
+        diag.headersReceived = true;
+        return response;
+      } catch (error) {
+        logR2Abort({ key, error, phase: "ヘッダ受信前", timeout: diag.timeout, budget: opts?.abortSignal, signal: diag.signal, startedAt: diag.startedAt });
+        throw error;
+      }
     };
     const r = opts?.singleAttempt === true ? await attempt() : await retry(attempt, 3, 1000, (e) => {
         const { code, status } = r2CauseOf(e);
@@ -458,6 +517,18 @@ export async function r2GetBytesVersion(key: string, bucket: string | undefined,
     return { body, etag, ...(r.Metadata === undefined ? {} : { metadata: r.Metadata }),
       ...(r.ContentType === undefined ? {} : { contentType: r.ContentType }) };
   } catch (e) {
+    // header中断はattempt内で記録済み。ここは本文読み取り中だけ（再試行の最終throwと二重に出さない）。
+    if (abortDiag?.headersReceived === true) {
+      logR2Abort({
+        key,
+        error: e,
+        phase: "本文読み取り中",
+        timeout: abortDiag.timeout,
+        budget: opts?.abortSignal,
+        signal: abortDiag.signal,
+        startedAt: abortDiag.startedAt,
+      });
+    }
     const err = e as { name?: unknown; $metadata?: { httpStatusCode?: unknown } };
     if (err?.name === "NoSuchKey" && err?.$metadata?.httpStatusCode === 404) return null;
     throw e;

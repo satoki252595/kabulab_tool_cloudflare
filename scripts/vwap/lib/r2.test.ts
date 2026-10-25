@@ -727,3 +727,272 @@ describe("explicit SDK read budgets include the native body tail", () => {
     expect(send).toHaveBeenCalledTimes(2);
   });
 });
+
+const ABORT_LOG = "[INC-20261025-kabulab_tool_cloudflare-vwap-abort]";
+const abortLogLines = (logged: { mock: { calls: unknown[][] } }) =>
+  logged.mock.calls.map((call) => String(call[0])).filter((line) => line.startsWith(ABORT_LOG));
+
+describe("R2 abort signal diagnostic", () => {
+  const timeoutReason = (message = "The operation was aborted due to timeout") =>
+    new DOMException(message, "TimeoutError");
+
+  it("logs a 60s header abort, keeps the 60s timer, and rethrows the same error once", async () => {
+    const timeout = new AbortController();
+    const budget = new AbortController();
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms: number) => {
+      expect(ms).toBe(60_000);
+      return timeout.signal;
+    });
+    const reason = timeoutReason("https://acct.r2.cloudflarestorage.com/x?X-Amz-Signature=deadbeef Authorization: Bearer test-secret");
+    let thrown!: Error;
+    const send = vi.spyOn(S3Client.prototype, "send").mockImplementation(async (_command, options) => {
+      const signal = (options as { abortSignal: AbortSignal }).abortSignal;
+      const until = Date.now() + 25;
+      while (Date.now() < until) { /* 要求開始からの経過を実測する */ }
+      timeout.abort(reason);
+      expect(signal.aborted).toBe(true);
+      expect(budget.signal.aborted).toBe(false);
+      thrown = Object.assign(new Error("Request aborted https://secret.example/leak?X-Amz-Signature=deadbeef"), {
+        name: "AbortError",
+        cause: signal.reason,
+      });
+      throw thrown;
+    });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const started = Date.now();
+    const caught = await r2GetVersion("daily/3931.json", { abortSignal: budget.signal, singleAttempt: true }).catch((error: unknown) => error);
+    expect(caught).toBe(thrown);
+    expect(caught).not.toBeInstanceOf(R2PutUnknownError);
+    expect(send).toHaveBeenCalledTimes(1);
+    const lines = abortLogLines(logged);
+    expect(lines).toHaveLength(1);
+    const elapsed = Number(lines[0].match(/elapsedMs=(\d+)/)?.[1]);
+    expect(Number.isSafeInteger(elapsed)).toBe(true);
+    expect(elapsed).toBeGreaterThanOrEqual(25);
+    expect(elapsed).toBeLessThanOrEqual(Date.now() - started);
+    expect(lines[0]).toBe(`${ABORT_LOG} signal=要求ごと60秒 phase=ヘッダ受信前 reason=TimeoutError cause=TimeoutError elapsedMs=${elapsed} key=daily/3931.json`);
+    expect(lines[0]).not.toMatch(/[\r\n]/);
+    for (const secret of ["https://", "deadbeef", "Bearer", "test-secret", "secret.example", "test-access", "test-account", "cloudflarestorage"]) {
+      expect(lines[0]).not.toContain(secret);
+    }
+    expect(logged.mock.calls.map((call) => String(call[0])).some((line) => line.startsWith("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown]"))).toBe(false);
+  });
+
+  it("logs every own 60s header abort and still retries that GET up to three times", async () => {
+    vi.useFakeTimers();
+    const budget = new AbortController();
+    const controllers: AbortController[] = [];
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms: number) => {
+      expect(ms).toBe(60_000);
+      const controller = new AbortController();
+      controllers.push(controller);
+      return controller.signal;
+    });
+    const thrown: Error[] = [];
+    const send = vi.spyOn(S3Client.prototype, "send").mockImplementation(async (_command, options) => {
+      const signal = (options as { abortSignal: AbortSignal }).abortSignal;
+      controllers.at(-1)!.abort(timeoutReason());
+      const error = Object.assign(new Error("Request aborted"), { name: "AbortError", cause: signal.reason });
+      thrown.push(error);
+      throw error;
+    });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const pending = r2GetVersion("daily/3931.json", { abortSignal: budget.signal }).then(() => {
+      throw new Error("own header timeout should stay a fault");
+    }, (error: unknown) => error);
+    await vi.runAllTimersAsync();
+    expect(await pending).toBe(thrown[2]);
+    expect(send).toHaveBeenCalledTimes(3);
+    expect(budget.signal.aborted).toBe(false);
+    const lines = abortLogLines(logged);
+    expect(lines).toHaveLength(3);
+    for (const line of lines) {
+      expect(line).toMatch(/ signal=要求ごと60秒 phase=ヘッダ受信前 reason=TimeoutError cause=TimeoutError elapsedMs=\d+ key=daily\/3931\.json$/);
+    }
+  });
+
+  it("attributes a header abort to the budget signal when the 60s timer is still running", async () => {
+    const budget = new AbortController();
+    const reason = timeoutReason();
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    let thrown!: Error;
+    vi.spyOn(S3Client.prototype, "send").mockImplementation(async (_command, options) => {
+      const signal = (options as { abortSignal: AbortSignal }).abortSignal;
+      budget.abort(reason);
+      expect(signal.aborted).toBe(true);
+      thrown = Object.assign(new Error("Request aborted"), { name: "AbortError", cause: signal.reason });
+      throw thrown;
+    });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const caught = await r2GetVersion("daily/3931.json", { abortSignal: budget.signal }).catch((error: unknown) => error);
+    expect(caught).toBe(thrown);
+    expect(timeout.mock.calls).toEqual([[60_000]]);
+    expect((timeout.mock.results[0].value as AbortSignal).aborted).toBe(false);
+    const line = abortLogLines(logged)[0];
+    expect(line).toMatch(new RegExp(`^${ABORT_LOG.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} signal=予算 phase=ヘッダ受信前 reason=TimeoutError cause=TimeoutError elapsedMs=\\d+ key=daily/3931\\.json$`));
+  });
+
+  it("says the signal is unknown when both are aborted or neither is", async () => {
+    const timeout = new AbortController();
+    const budget = new AbortController();
+    vi.spyOn(AbortSignal, "timeout").mockImplementation(() => timeout.signal);
+    let thrown!: Error;
+    const send = vi.spyOn(S3Client.prototype, "send").mockImplementation(async (_command, options) => {
+      const signal = (options as { abortSignal: AbortSignal }).abortSignal;
+      timeout.abort(timeoutReason());
+      budget.abort(timeoutReason());
+      thrown = Object.assign(new Error("Request aborted"), { name: "AbortError", cause: signal.reason });
+      throw thrown;
+    });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await r2GetVersion("daily/3931.json", { abortSignal: budget.signal }).catch((error: unknown) => error)).toBe(thrown);
+    expect(abortLogLines(logged)[0]).toMatch(/ signal=不明 phase=ヘッダ受信前 reason=TimeoutError cause=TimeoutError elapsedMs=\d+ /);
+    expect(send).toHaveBeenCalledTimes(1);
+
+    logged.mockClear();
+    send.mockReset();
+    const cause = Object.assign(new Error("https://secret.example/leak"), { name: "TimeoutError" });
+    const plain = Object.assign(new Error("Request aborted"), { name: "AbortError", cause });
+    send.mockRejectedValueOnce(plain);
+    vi.spyOn(AbortSignal, "timeout").mockRestore();
+    const realTimeout = vi.spyOn(AbortSignal, "timeout");
+    expect(await r2GetVersion("daily/3931.json").catch((error: unknown) => error)).toBe(plain);
+    expect(realTimeout).toHaveBeenCalledWith(60_000);
+    expect((realTimeout.mock.results[0].value as AbortSignal).aborted).toBe(false);
+    const line = abortLogLines(logged)[0];
+    expect(line).toMatch(/ signal=不明 phase=ヘッダ受信前 reason=none cause=TimeoutError elapsedMs=\d+ key=daily\/3931\.json$/);
+    expect(line).not.toContain("secret.example");
+  });
+
+  it("logs a body-read abort and still rejects with the signal reason plus the received prefix", async () => {
+    const budget = new AbortController();
+    const reason = timeoutReason();
+    const prefix = Buffer.from("ab");
+    const stream = new Readable({ read() {} });
+    stream.push(prefix);
+    const onRead = vi.fn();
+    const send = vi.spyOn(S3Client.prototype, "send").mockImplementationOnce(async () => ({ ...okGet(), ContentLength: 4, Body: stream }));
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const pending = r2GetVersion("daily/3931.json", { singleAttempt: true, maxBytes: 4, abortSignal: budget.signal, onRead });
+    const rejected = expect(pending).rejects.toBe(reason);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    budget.abort(reason);
+    await rejected;
+    expect(stream.destroyed).toBe(true);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(onRead).toHaveBeenCalledExactlyOnceWith({ status: 200, etag: '"native-etag"', contentLength: 4, body: prefix, receivedBytes: 2, complete: false });
+    expect(abortLogLines(logged)[0]).toMatch(/ signal=予算 phase=本文読み取り中 reason=TimeoutError cause=none elapsedMs=\d+ key=daily\/3931\.json$/);
+  });
+
+  it("attributes a body-read abort to the 60s signal when no budget signal is aborted", async () => {
+    const timeout = new AbortController();
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms: number) => {
+      expect(ms).toBe(60_000);
+      return timeout.signal;
+    });
+    const reason = timeoutReason();
+    const stream = new Readable({ read() {} });
+    stream.push(Buffer.from("ab"));
+    vi.spyOn(S3Client.prototype, "send").mockImplementationOnce(async () => ({ ...okGet(), ContentLength: 4, Body: stream }));
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const pending = r2GetVersion("daily/3931.json", { singleAttempt: true, maxBytes: 4 });
+    const rejected = expect(pending).rejects.toBe(reason);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    timeout.abort(reason);
+    await rejected;
+    expect(abortLogLines(logged)[0]).toMatch(/ signal=要求ごと60秒 phase=本文読み取り中 reason=TimeoutError cause=none elapsedMs=\d+ /);
+  });
+
+  it("does not log aborts for success, missing objects, short bodies, or retried 5xx", async () => {
+    vi.useFakeTimers();
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    const send = vi.spyOn(S3Client.prototype, "send");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    send.mockImplementationOnce(async () => okGet());
+    await r2GetVersion("daily/3931.json");
+    send.mockRejectedValueOnce(svcError("NoSuchKey", 404));
+    await expect(r2GetVersion("daily/3931.json")).resolves.toBeNull();
+    send.mockImplementationOnce(async () => ({ ...okGet(), ContentLength: 4, Body: Readable.from([Buffer.from("ab")]) }));
+    await expect(r2GetVersion("daily/3931.json", { singleAttempt: true, maxBytes: 4 })).rejects.toThrow("ContentLength");
+    const fault = svcError("InternalError", 500);
+    send.mockRejectedValue(fault);
+    const rejected = expect(r2GetVersion("daily/3931.json")).rejects.toBe(fault);
+    await vi.runAllTimersAsync();
+    await rejected;
+    expect(send).toHaveBeenCalledTimes(6);
+    expect(timeout.mock.calls).toEqual([[60_000], [60_000], [60_000], [60_000], [60_000], [60_000]]);
+    expect(abortLogLines(logged)).toEqual([]);
+  });
+
+  it("does not log a budget abort that happens before the request starts", async () => {
+    const budget = new AbortController();
+    const send = vi.spyOn(S3Client.prototype, "send");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const beforeAttempt = () => { budget.abort(new Error("absolute deadline")); };
+    await expect(r2GetVersion("daily/3931.json", { abortSignal: budget.signal, beforeAttempt, singleAttempt: true })).rejects.toThrow("absolute deadline");
+    expect(send).not.toHaveBeenCalled();
+    expect(abortLogLines(logged)).toEqual([]);
+  });
+
+  it("logs a PUT abort without replacing the unknown error or the existing incident line", async () => {
+    const timeout = new AbortController();
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms: number) => {
+      expect(ms).toBe(60_000);
+      return timeout.signal;
+    });
+    const reason = timeoutReason();
+    let sdk!: Error;
+    const send = vi.spyOn(S3Client.prototype, "send").mockImplementation(async (_command, options) => {
+      const signal = (options as { abortSignal: AbortSignal }).abortSignal;
+      timeout.abort(reason);
+      sdk = Object.assign(new Error("Request aborted"), { name: "AbortError", cause: signal.reason });
+      throw sdk;
+    });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const caught = await r2Put("daily/3931.json", "{}", null).catch((error: unknown) => error);
+    expect(caught).toBeInstanceOf(R2PutUnknownError);
+    expect((caught as Error).cause).toBe(sdk);
+    expect(send).toHaveBeenCalledTimes(1);
+    const lines = logged.mock.calls.map((call) => String(call[0]));
+    expect(lines.filter((line) => line.startsWith("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown]"))).toEqual([
+      "[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown] key=daily/3931.json status=none name=AbortError code=none body=Request aborted",
+    ]);
+    expect(abortLogLines(logged)[0]).toMatch(new RegExp(`^${ABORT_LOG.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} signal=要求ごと60秒 phase=ヘッダ受信前 reason=TimeoutError cause=TimeoutError elapsedMs=\\d+ key=daily/3931\\.json$`));
+  });
+
+  it("a failing abort log still throws the original GET error and the wrapped PUT error", async () => {
+    vi.useFakeTimers();
+    const reason = timeoutReason();
+    const controllers: AbortController[] = [];
+    vi.spyOn(AbortSignal, "timeout").mockImplementation(() => {
+      const controller = new AbortController();
+      controllers.push(controller);
+      return controller.signal;
+    });
+    let last!: Error;
+    const send = vi.spyOn(S3Client.prototype, "send").mockImplementation(async (_command, options) => {
+      const signal = (options as { abortSignal: AbortSignal }).abortSignal;
+      controllers.at(-1)!.abort(reason);
+      last = Object.assign(new Error("Request aborted"), { name: "AbortError", cause: signal.reason });
+      throw last;
+    });
+    vi.spyOn(console, "error").mockImplementation(() => { throw new Error("log failed"); });
+    const pending = r2GetVersion("daily/3931.json").then(() => {
+      throw new Error("own header timeout should stay a fault");
+    }, (error: unknown) => error);
+    await vi.runAllTimersAsync();
+    expect(await pending).toBe(last);
+    expect(send).toHaveBeenCalledTimes(3);
+    vi.useRealTimers();
+    const putTimeout = new AbortController();
+    vi.spyOn(AbortSignal, "timeout").mockReturnValue(putTimeout.signal);
+    const putSdk = Object.assign(new Error("Request aborted"), { name: "AbortError", cause: reason });
+    send.mockReset().mockImplementation(async () => {
+      putTimeout.abort(reason);
+      throw putSdk;
+    });
+    const caught = await r2Put("daily/7203.json", "{}", null).catch((error: unknown) => error);
+    expect(caught).toBeInstanceOf(R2PutUnknownError);
+    expect((caught as Error).cause).toBe(putSdk);
+  });
+});
