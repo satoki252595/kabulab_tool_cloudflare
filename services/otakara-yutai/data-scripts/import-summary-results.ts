@@ -13,7 +13,7 @@
  *
  * 実行:
  *   pnpm yutai:summary:import --tasks <タスクファイル> --results <結果ファイル>          # dry-run
- *   pnpm yutai:summary:import --tasks <タスクファイル> --results <結果ファイル> --apply  # 書き込み
+ * 本番適用は summary-local の明示 reviewed 入力で共有publisherを使う。旧 --apply は退役済み。
  *
  * dry-run は D1 を読むだけで、書く件数・はじいた行と理由を出す。既定では、はじいた
  * 行の詳細に掲載文由来の文字列 (契約違反の要約本体・JSON として読めなかった行の
@@ -145,7 +145,7 @@ async function main(): Promise<void> {
   if (!apply) {
     const rows = plan.updates.reduce((s, u) => s + u.ids.length, 0);
     console.info(
-      `[summary:import] dry-run: D1 には書いていません (書く予定 ${plan.updates.length} タスク / ${rows} 行)。--apply で書き込みます。`,
+      `[summary:import] dry-run: D1 には書いていません (書く予定 ${plan.updates.length} タスク / ${rows} 行)。本番は明示reviewed入力を共有publisherへ渡してください。`,
     );
     await reportYieldPreview(db, targetIds, plan.updates);
     return;
@@ -243,7 +243,7 @@ async function reportYieldPreview(
 }
 
 /**
- * `--apply` の実経路: 書き込み予定の推定値を今の D1 の snapshot に仮適用して
+ * 通常共有publisherの原子適用部品: 書き込み予定の推定値を今の D1 の snapshot に仮適用して
  * 利回り・スコアを先に計算し (dry-run の先見せと同一の overlay 方式・同一関数)、
  * 同一銘柄の要約・推定値・利回り・スコアの全 UPDATE を D1 REST `{batch}`
  * 1 リクエストで送る (銘柄単位の原子単位。要約だけ書いて中断する形は無い)。
@@ -253,8 +253,8 @@ async function reportYieldPreview(
  * batch 先頭の preflight が projection preimage (射影) を検証し、不一致は
  * SQL エラーで batch 全体 rollback。
  * ガードの snapshot は利回り計算と同一読取 (`fetchYieldInputs` 1 回)。
- * `data_date` は月次のまま。銘柄間の失敗は止めて同引数の再実行で回復する
- * (適用済み銘柄は無変更・冪等。`resolveTargetIds` の和集合で混合再開に対応)。
+ * `data_date` は月次のまま。失敗・結果不明は全後続を止め、共有owner/pendingと
+ * 物理PRE/POSTを保持する。自動再送や同引数の再実行でunknownを回避しない。
  * 送信口は差し替え可能にし、テストでは D1 なしで束ね方を固定する。
  * ABC (A+C 統合) の適用もこの同一関数を通す (/tmp だけのガードは不可)。
  */

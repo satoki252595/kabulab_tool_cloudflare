@@ -1,13 +1,13 @@
 # 優待要約タスク — クラウド LLM 向け作業仕様書
 
 この文書は、株主優待の**一覧用の短い要約**と**推定金額**を作る外部エージェント
-（Cursor Automations などのクラウド上の LLM）向けの仕様書です。この文書と
+（運用者が明示したサブエージェント等）向けの仕様書です。この文書と
 タスクファイルがあれば作業できるように書いてあります。
 
 - 要約生成・書出し・取込は正常母集団（active かつ equity）の優待行を対象とする。母集団外の既存優待は全行退避に保持し、再生成・更新しない。
 - 契約の版: **`2026-10-25.2`**（`services/otakara-yutai/data-scripts/summary-contract.ts` の `SUMMARY_CONTRACT_VERSION`）
 - 書き出し: `pnpm yutai:summary:export`（`--violations-only` で契約違反の既存要約だけ）
-- 取り込み: `pnpm yutai:summary:import --tasks <タスク> --results <結果>`（既定は dry-run、`--apply` で書き込み）
+- 保存結果の検証は共通`planSummaryImport`。旧`yutai:summary:import --apply`は退役済み。本番は下記の明示reviewed入力を共有publisherへ渡す。
 
 通常の日次機械処理とMacの手動CLIは、対応済みの全文文法を決定的に処理します。未対応文章はHOLDし、固定ローカルモデルはMacで明示許可した場合だけ使用します。両経路ともこの文書の公開契約・金額判定・原子取込を通します。
 「一覧から1点選択」は、対応する表見出し＋本文の連続番号一覧（2～8選択肢、円相当/円分）を全文照合した場合だけ「優待を1点選択」とし、`estimatedValue: null` を保持します。注記・保有期間・抽選・申込・併用・未対応の品目や単位・番号欠けがあれば、この定型処理では採用しません。掲載選択肢の額を最大値・合計額・1回の受取額へ読み替えません。
@@ -37,7 +37,7 @@
 3. **結果に `description` を含めない。** 結果に書くのは下の 4 つのキーだけです（余計なキーがあると行ごとはじかれます）。
 4. **掲載元サイトを見に行かない。** スクレイピングや追加の検索で情報を補わない。判断材料はタスクファイルの中だけです。
 5. **推測で埋めない。** 金額が決められなければ `null`。架空の商品名や条件を足さない。
-6. 作業が終わったら、エージェント側の作業領域に残したタスクファイルと結果ファイルのコピーを消す。
+6. 作業が終わったら、不要なエージェント側コピーを消す。運用者が固定した原入力・結果・PRE/POST・unknownの証跡は保全する。
 
 ## 2. 作業の流れ
 
@@ -45,17 +45,27 @@
 [運用者] pnpm yutai:summary:export            → data-scripts/data/summary-tasks/tasks-YYYY-MM-DD.jsonl
             │  (非公開の経路で渡す。コミットしない)
             ▼
-[クラウド LLM] この文書に従って 1 タスク 1 行の結果 JSONL を作る
+[明示したレビュー担当] この文書に従って 1 タスク 1 行の結果 JSONL を作る
             │  (非公開の経路で返す。コミットしない)
             ▼
-[運用者] pnpm yutai:summary:import --tasks … --results …          # dry-run: 書く件数とはじいた理由
-[運用者] pnpm yutai:summary:import --tasks … --results … --apply  # 通った行だけ D1 に書く
+[運用者] 保存入力で共通planSummaryImportを検証し、tasks/results全fileのSHAを固定
+[運用者] 下記の明示manualコマンド（共有owner・物理PRE/POST・通常原子取込）
 ```
+
+```sh
+nix develop --command pnpm yutai:summary:local --state-dir <私有state> --limit <1〜60群> \
+  --reviewed-tasks <私有tasks.jsonl> --reviewed-tasks-sha256 <全bytesのSHA256> \
+  --reviewed-results <私有results.jsonl> --reviewed-results-sha256 <全bytesのSHA256>
+```
+
+4引数は全指定、`--allow-model`とは排他。通常file・所有者・0600・8MiB以内・全SHA・現契約を照合し、指定task集合を切り詰めず、issuer codesをSQLで先限定して同issuerの全tierを読む。inactive・対象消失・内容/recipient/行数の変化は停止する。結果を機械compilerの別結果へ置換せず、原file全bytesとSHA・reviewed件数を通常PRE/POSTへ保管する。モデルprotocol・token・モデルidentityを作らず、日次cursorは読取も更新もしない。
+
+これはLinuxで明示する手動入力であり、日次機械入口はreviewed入力とモデル許可を依存生成前に拒否する。共有writer未初期化・owner/pending未閉鎖は停止し、新state-dirへ替えて再送しない。受入済みMacの固定runtime/env/pinは変更しない。通常のMac月次実行をこの手動入力へ自動切替しない。新しい有料モデル呼出やLLM定期処理は追加しない。
 
 - タスクの単位は `(銘柄コード, 掲載文)` です。同じ文言の行（権利月違い）はまとめて 1 タスクになっています。
 - はじかれた行は D1 に書かれず、前の値のまま残ります。理由を見て、その行だけ作り直してください。
 - エージェント自身が書き出しを実行する運用にする場合も、出力は gitignore 済みの場所に置き、上の禁止事項を守ること。
-  D1 への書き込み（`--apply`）には D1 の編集権限が要るので、dry-run の結果を人が確認してから実行する前提です。
+  本番は保存結果・入力・通常planを運用者が受入した後だけ実行する。旧standalone dry-runは全active行を読むため、有限cohort検証は保存入力で共通pure plannerを使う。
 
 ## 3. 入力: タスクファイル（JSONL、1 行 1 タスク）
 
@@ -275,7 +285,7 @@
 
 ## 8. 取り込みがはじく理由の一覧
 
-dry-run / `--apply` の出力（`はじいた結果` の一覧）には、既定では掲載文や要約本体
+検証結果の出力（`はじいた結果` の一覧）には、既定では掲載文や要約本体
 そのものを出しません。`contract` の詳細は破った規則名と字数だけ、`parse`（JSON
 として読めない行）の詳細も固定文で、Node の元エラー文（入力の先頭が乗ることがある）
 は出しません。本文を見て直したいときは `--show-text` を付けると端末にだけ出ます
