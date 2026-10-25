@@ -56,10 +56,11 @@ import { parsePublicBenefitFacts } from "../public-facts.js";
 import { benefitKey } from "../../data-scripts/benefit-key.js";
 import { SUMMARY_CONTRACT_VERSION, SUMMARY_MAX_CHARS } from "../../data-scripts/summary-contract.js";
 import { assertMusashinoInitialPost, planMusashinoInitialEvent, planMusashinoSourceAdoption } from "../../data-scripts/musashino-repair.js";
-import { readSavedMusashinoSource } from "../../data-scripts/fetch-yutai-full.js";
+import { readSavedMusashinoSource, readSavedNoteSource } from "../../data-scripts/fetch-yutai-full.js";
 import { loadMonthScopePreimage, assertMonthScopePost } from "../../data-scripts/saved-month-scope.js";
 import { fetchYieldInputs } from "../../data-scripts/recompute-yields.js";
 import musashinoMetadata from "./fixtures/musashino-source-saved3.json";
+import noteMetadata from "./fixtures/note-source-saved2.json";
 import admissionMetadata from "./fixtures/admission-saved3.json";
 import { compileSimpleSummary } from "../../data-scripts/summary-local.js";
 import type { SummaryTask } from "../../data-scripts/summary-tasks.js";
@@ -306,36 +307,55 @@ describe("importYutaiFull は母集団の銘柄の優待だけを作り直す", 
     expect(next.benefits.filter(row => row.recordDate === null)).toHaveLength(3);
   });
 
-  it.skipIf(!existsSync(join(ROOT, musashinoMetadata.privateFixtureDir, "CORRECTED-8336.private.json")))("実8336三段階の限定3UPDATEは全4表driftでrollbackし、POST再入SQL0・翌月通常carryを保つ（SQLite制御DB）", async () => {
+  for (const { code, fixtureMetadata, holderId } of [{ code: "8336", fixtureMetadata: musashinoMetadata, holderId: NEW_HOLDER.id }, { code: "5243", fixtureMetadata: noteMetadata, holderId: 871 }])
+  it.skipIf(!existsSync(join(ROOT, fixtureMetadata.privateFixtureDir, "SAVED-SOURCE-PACKET.private.json")))(`実${code}の全段階限定UPDATEは全4表driftでrollbackし、POST再入SQL0・翌月通常carryを保つ（SQLite制御DB）`, async () => {
     captureConsole();
-    const fixture = join(ROOT, musashinoMetadata.privateFixtureDir);
-    const data = (JSON.parse(readFileSync(join(fixture, "CORRECTED-8336.private.json"), "utf8")) as { data: StockYutaiData }).data;
-    const original = JSON.parse(readFileSync(join(fixture, "SAVED-ROWS.private.json"), "utf8")) as { id: number; description: string; minShares: number; updatedAt: number }[];
+    const fixture = join(ROOT, fixtureMetadata.privateFixtureDir), packet = fixtureMetadata.files.find(file => file.path === "SAVED-SOURCE-PACKET.private.json")!;
+    const { data } = code === "8336" ? await readSavedMusashinoSource(join(fixture, packet.path), packet.sha256) : await readSavedNoteSource(join(fixture, packet.path), packet.sha256);
+    const month = code === "8336" ? 3 : 11;
+    const original = JSON.parse(readFileSync(join(fixture, "SAVED-ROWS.private.json"), "utf8")) as { id: number; description: string; shortSummary: string | null; minShares: number; updatedAt: number }[];
     // 実原本/recipientをローカル制御DBへ入れる。親の他列・制御用財務は本番PREを装わない。
-    sqlite.prepare("UPDATE core_stocks SET code='8336',is_yutai=1 WHERE id=?").run(NEW_HOLDER.id);
+    sqlite.prepare("UPDATE core_stocks SET id=?,code=?,is_yutai=1 WHERE id=?").run(holderId, code, NEW_HOLDER.id);
     const genreId = YUTAI_GENRES.findIndex(genre => genre.slug === "other") + 1;
-    for (const row of original) sqlite.prepare("INSERT INTO yutai_benefits (id,stock_id,genre_id,description,min_shares,record_month,updated_at) VALUES (?,?,?,?,?,3,?)").run(row.id, NEW_HOLDER.id, genreId, row.description, row.minShares, row.updatedAt);
-    sqlite.prepare("INSERT INTO otakara_stock_financials (stock_id,price,data_date) VALUES (?,1000,'2026-10-26')").run(NEW_HOLDER.id);
-    const pre = await loadMonthScopePreimage(db, "8336"), inputs = await fetchYieldInputs(db, [NEW_HOLDER.id]);
-    sqlite.prepare("UPDATE otakara_stock_financials SET yutai_yield=1 WHERE stock_id=?").run(NEW_HOLDER.id);
-    const needsOtherUpdate = await loadMonthScopePreimage(db, "8336"), needsOtherInputs = await fetchYieldInputs(db, [NEW_HOLDER.id]);
+    for (const row of original) sqlite.prepare("INSERT INTO yutai_benefits (id,stock_id,genre_id,description,short_summary,min_shares,record_month,updated_at) VALUES (?,?,?,?,?,?,?,?)").run(row.id, holderId, genreId, row.description, row.shortSummary, row.minShares, month, row.updatedAt);
+    sqlite.prepare("INSERT INTO otakara_stock_financials (stock_id,price,data_date) VALUES (?,1000,'2026-10-26')").run(holderId);
+    const pre = await loadMonthScopePreimage(db, code), inputs = await fetchYieldInputs(db, [holderId]);
+    if (code === "5243") {
+      for (const changed of [
+        { ...pre, benefits: pre.benefits.slice(1) },
+        { ...pre, benefits: pre.benefits.map((row, i) => i === 0 ? { ...row, id: Number(row.id) + 100 } : row) },
+        { ...pre, benefits: pre.benefits.map((row, i) => i === 0 ? { ...row, recordMonth: 5 } : row) },
+        { ...pre, benefits: pre.benefits.map((row, i) => i === 0 ? { ...row, shortSummary: null } : row) },
+      ]) expect(() => planMusashinoSourceAdoption(db, changed, data, "2026-10-21T16:56:22.538Z", inputs)).toThrow();
+      expect(() => planMusashinoSourceAdoption(db, pre, { ...data, benefits: data.benefits.slice(1) }, "2026-10-21T16:56:22.538Z", inputs)).toThrow();
+      const faultBytes = readFileSync(join(ROOT, "tmp/yutai-admission-proof-v1/saved3.private.json"));
+      expect(createHash("sha256").update(faultBytes).digest("hex")).toBe(admissionMetadata.provenance.privateFixtureSha256);
+      const fault = (JSON.parse(faultBytes.toString()) as { tasks: SummaryTask[] }).tasks[0];
+      const rebound = { ...fault, taskId: benefitKey(data.code, fault.description), contractVersion: SUMMARY_CONTRACT_VERSION, stockCode: data.code,
+        recipients: [{ minShares: 100, recordMonth: 11, recordDate: null }] };
+      expect(compileSimpleSummary(rebound)).toMatchObject({ estimatedValue: null });
+      const wrong = { ...data, benefits: data.benefits.map((row, i) => i === 0 ? { ...row, heading: "", description: fault.description, notes: "" } : row) };
+      expect(() => planMusashinoSourceAdoption(db, pre, wrong, "2026-10-21T16:56:22.538Z", inputs)).toThrow("note_full_source_changed");
+    }
+    sqlite.prepare("UPDATE otakara_stock_financials SET yutai_yield=1 WHERE stock_id=?").run(holderId);
+    const needsOtherUpdate = await loadMonthScopePreimage(db, code), needsOtherInputs = await fetchYieldInputs(db, [holderId]);
     expect(() => planMusashinoSourceAdoption(db, needsOtherUpdate, data, "2026-10-21T16:56:22.538Z", needsOtherInputs)).toThrow("musashino_recompute_requires_other_updates");
-    sqlite.prepare("UPDATE otakara_stock_financials SET yutai_yield=NULL WHERE stock_id=?").run(NEW_HOLDER.id);
+    sqlite.prepare("UPDATE otakara_stock_financials SET yutai_yield=NULL WHERE stock_id=?").run(holderId);
     const plan = planMusashinoSourceAdoption(db, pre, data, "2026-10-21T16:56:22.538Z", inputs);
     if (plan.batch === null) throw new Error("actual_adoption_plan_missing");
-    expect(plan.updatedRows).toBe(3);
-    expect(plan.batch.statements.filter(statement => /^update /iu.test(statement.sql))).toHaveLength(3);
+    expect(plan.updatedRows).toBe(original.length);
+    expect(plan.batch.statements.filter(statement => /^update /iu.test(statement.sql))).toHaveLength(original.length);
     expect(plan.batch.statements.some(statement => /\b(?:INSERT|DELETE)\b/iu.test(statement.sql))).toBe(false);
     const all = () => ["core_stocks", "yutai_benefits", "otakara_stock_financials", "otakara_stock_scores", "yutai_genres"].map(table => sqlite.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all());
     const before = all();
     const rowId = original[0].id;
     const mutations: [() => void, () => void][] = [
-      [() => { sqlite.prepare("UPDATE core_stocks SET name=name||'-drift' WHERE id=?").run(NEW_HOLDER.id); }, () => { sqlite.prepare("UPDATE core_stocks SET name=? WHERE id=?").run(pre.parent.name, NEW_HOLDER.id); }],
+      [() => { sqlite.prepare("UPDATE core_stocks SET name=name||'-drift' WHERE id=?").run(holderId); }, () => { sqlite.prepare("UPDATE core_stocks SET name=? WHERE id=?").run(pre.parent.name, holderId); }],
       [() => { sqlite.prepare("UPDATE yutai_benefits SET public_facts='{}' WHERE id=?").run(rowId); }, () => { sqlite.prepare("UPDATE yutai_benefits SET public_facts=NULL WHERE id=?").run(rowId); }],
       [() => { sqlite.prepare("UPDATE yutai_benefits SET created_at=created_at+1 WHERE id=?").run(rowId); }, () => { sqlite.prepare("UPDATE yutai_benefits SET created_at=created_at-1 WHERE id=?").run(rowId); }],
       [() => { sqlite.prepare("UPDATE yutai_benefits SET genre_id=? WHERE id=?").run(genreId === 1 ? 2 : 1, rowId); }, () => { sqlite.prepare("UPDATE yutai_benefits SET genre_id=? WHERE id=?").run(genreId, rowId); }],
-      [() => { sqlite.prepare("UPDATE otakara_stock_financials SET price=1001 WHERE stock_id=?").run(NEW_HOLDER.id); }, () => { sqlite.prepare("UPDATE otakara_stock_financials SET price=1000 WHERE stock_id=?").run(NEW_HOLDER.id); }],
-      [() => { sqlite.prepare("INSERT INTO otakara_stock_scores (stock_id,fundamental_score,technical_score,total_score) VALUES (?,0,0,0)").run(NEW_HOLDER.id); }, () => { sqlite.prepare("DELETE FROM otakara_stock_scores WHERE stock_id=?").run(NEW_HOLDER.id); }],
+      [() => { sqlite.prepare("UPDATE otakara_stock_financials SET price=1001 WHERE stock_id=?").run(holderId); }, () => { sqlite.prepare("UPDATE otakara_stock_financials SET price=1000 WHERE stock_id=?").run(holderId); }],
+      [() => { sqlite.prepare("INSERT INTO otakara_stock_scores (stock_id,fundamental_score,technical_score,total_score) VALUES (?,0,0,0)").run(holderId); }, () => { sqlite.prepare("DELETE FROM otakara_stock_scores WHERE stock_id=?").run(holderId); }],
     ];
     for (const [mutate, undo] of mutations) {
       mutate(); const changed = all();
@@ -343,7 +363,7 @@ describe("importYutaiFull は母集団の銘柄の優待だけを作り直す", 
       expect(all()).toEqual(changed); undo(); expect(all()).toEqual(before);
     }
     await makeRecordingSender().sender(plan.batch.statements);
-    const post = await loadMonthScopePreimage(db, "8336"); assertMonthScopePost(plan, post);
+    const post = await loadMonthScopePreimage(db, code); assertMonthScopePost(plan, post);
     expect(post.benefits.map(row => row.id)).toEqual(pre.benefits.map(row => row.id));
     for (const row of post.benefits) {
       const old = pre.benefits.find(value => value.id === row.id)!;
@@ -351,11 +371,13 @@ describe("importYutaiFull は母集団の銘柄の優待だけを作り直す", 
     }
     const after = all();
     expect(after[0]).toEqual(before[0]); expect(after.slice(2)).toEqual(before.slice(2));
-    expect((after[1] as { stock_id: number }[]).filter(row => row.stock_id !== NEW_HOLDER.id)).toEqual((before[1] as { stock_id: number }[]).filter(row => row.stock_id !== NEW_HOLDER.id));
-    expect(planMusashinoSourceAdoption(db, post, data, "2026-10-21T16:56:22.538Z", await fetchYieldInputs(db, [NEW_HOLDER.id])).batch).toBeNull();
+    expect((after[1] as { stock_id: number }[]).filter(row => row.stock_id !== holderId)).toEqual((before[1] as { stock_id: number }[]).filter(row => row.stock_id !== holderId));
+    expect(planMusashinoSourceAdoption(db, post, data, "2026-10-21T16:56:22.538Z", await fetchYieldInputs(db, [holderId])).batch).toBeNull();
     await importYutaiFull(db, [...HELD.map(stock => fetched(stock.code)), data], makeRecordingSender().sender, "2026-10-21T16:56:22.538Z");
-    const nextMonth = await loadMonthScopePreimage(db, "8336");
+    const nextMonth = await loadMonthScopePreimage(db, code);
     expect(nextMonth.benefits.map(row => row.description)).toEqual(post.benefits.map(row => row.description));
+    expect(nextMonth.benefits.every(row => row.recordMonth === month && row.recordDate === null)).toBe(true);
+    expect(nextMonth.benefits).toHaveLength(original.length);
     expect(nextMonth.benefits.map(row => row.shortSummary)).toEqual(post.benefits.map(row => row.shortSummary));
     expect(nextMonth.benefits.every(row => parsePublicBenefitFacts(row.publicFacts, data.code)?.source.officialStatus === "verified")).toBe(true);
   });

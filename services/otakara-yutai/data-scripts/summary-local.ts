@@ -39,6 +39,7 @@ import { z } from "../../../src/shared/zod-mini.js";
 import { parseBenefitChoiceStructure } from "./choice-structure.js";
 import { compileAnnualGiftHistoryLiteral, compileBankDepositChoiceLiteral, compileBankHoldingHistoryLiteral, compileDepartmentHoldingLiteral, compileEqualAllocationHoldingLiteral, compileHoldingGiftChoiceLiteral, compileHoldingPointCarryLiteral, compileHotelHoldingLiteral, compileMealTicketSplitLiteral, compilePointExchangeLiteral, compilePremiumClubCarryLiteral, compileRegistryTierLiteral, compileSkiTicketBundleLiteral, compileVenueAdmissionLiteral, parseBenefitHoldingStructure } from "./holding-structure.js";
 import { compileMusashinoOfficialLiteral } from "./musashino-source.js";
+import { compileNoteOfficialLiteral } from "./note-source.js";
 import { parseBenefitRecordTierStructure } from "./record-tier-structure.js";
 import { benefitKey } from "./benefit-key.js";
 import { loadBenefitRows, openOtakaraD1 } from "./benefit-rows.js";
@@ -174,7 +175,7 @@ export function companyValue(task: SummaryTask): {
   return evaluateCompanyValue(task.description, context);
 }
 
-export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v21";
+export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v22";
 
 /** 対応する種類＋額面・全文1点選択・全文対応の期間/名簿条件を定型化する。未対応条件を削らない。 */
 export function compileSimpleSummary(task: SummaryTask): SummaryResult | null {
@@ -189,6 +190,15 @@ export function compileSimpleSummary(task: SummaryTask): SummaryResult | null {
       })) return null;
     return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion,
       shortSummary: registryTier.shortSummary, estimatedValue: amount.value });
+  }
+  const note = compileNoteOfficialLiteral(task.description);
+  if (note !== null) {
+    const amount = companyValue(task);
+    if (task.stockCode !== "5243" || task.rowCount !== 1 || task.recipients.length !== 1 ||
+        amount.value !== null || amount.reason !== "no_per_grant_face" || checkSummary(note.shortSummary).length > 0 ||
+        !isSummaryNumbersGrounded(task.description, note.shortSummary, { minShares: task.recipients.map(r => r.minShares),
+          recordMonths: task.recipients.map(r => r.recordMonth), recordDates: task.recipients.map(r => r.recordDate) })) return null;
+    return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion, shortSummary: note.shortSummary, estimatedValue: null });
   }
   const holdingGift = compileHoldingGiftChoiceLiteral(task.description);
   if (holdingGift !== null) {
