@@ -1,0 +1,116 @@
+{
+  "provenance": {
+    "taskFileSha256": "3b53aac3450ec1f64b23eabc3cff29ebce533bf5701b87527e836759fac11a09",
+    "rowsFileSha256": "83f92a7a8c751dcc7181ec83cd358b73905448d7effbd587174acf95afc14742",
+    "privateFixtureSha256": "97493df3f145fce571c754e9b1ddb4127c8b271e926969be569d95244d698e69",
+    "normalizedTailSha256": "6b92867c4e0cbff43b79fefe5faba333a26a353727b739f78a5ea3938686ac8c",
+    "historicalFixtureNotCurrentPendingCount": true
+  },
+  "groups": [
+    {
+      "taskId": "4ea4cff38af35a1b",
+      "stockCode": "4397",
+      "pointsPerGrant": 12500,
+      "annualPointsListed": 25000,
+      "sourceSha256": "357fe0b04f9f0e742fce4a17e8ff31b674cc0f5f4ee22202e314a1e1ef620171",
+      "rowCount": 2,
+      "recipients": [
+        {
+          "minShares": 4000,
+          "recordMonth": 2,
+          "recordDate": null
+        },
+        {
+          "minShares": 4000,
+          "recordMonth": 8,
+          "recordDate": null
+        }
+      ],
+      "expectedSummarySha256": "0c4315e035013aac0febb6327bed2108210be8df8333b2ea06753c65b23f3173"
+    },
+    {
+      "taskId": "88167fd609cac40f",
+      "stockCode": "4397",
+      "pointsPerGrant": 2000,
+      "annualPointsListed": 4000,
+      "sourceSha256": "d15672af15cae4a87af9025526a9e6a9f9a64560e5274ef98d82a61f81da5c7a",
+      "rowCount": 2,
+      "recipients": [
+        {
+          "minShares": 2000,
+          "recordMonth": 2,
+          "recordDate": null
+        },
+        {
+          "minShares": 2000,
+          "recordMonth": 8,
+          "recordDate": null
+        }
+      ],
+      "expectedSummarySha256": "d4aab6fc038d93589e76bc5556d0fe3f9b0c48f1b8a00728700717ee26a56b04"
+    },
+    {
+      "taskId": "a75bd2c223921fb0",
+      "stockCode": "4397",
+      "pointsPerGrant": 20000,
+      "annualPointsListed": 40000,
+      "sourceSha256": "a556b8059ef29aab1ccc7f848e06c667e5312e96a1c4b23da26ad89f53b35830",
+      "rowCount": 2,
+      "recipients": [
+        {
+          "minShares": 50000,
+          "recordMonth": 2,
+          "recordDate": null
+        },
+        {
+          "minShares": 50000,
+          "recordMonth": 8,
+          "recordDate": null
+        }
+      ],
+      "expectedSummarySha256": "9434fb9a2a01274c5eac2e4212f0b54df79f2c60308a49e0a9d911896f80afbb"
+    },
+    {
+      "taskId": "11a750d25cf3b565",
+      "stockCode": "4397",
+      "pointsPerGrant": 3750,
+      "annualPointsListed": 7500,
+      "sourceSha256": "3397de7e91905a87cb1a09f073d79889e1d72bddeccbd07cd18640f151bcaae7",
+      "rowCount": 2,
+      "recipients": [
+        {
+          "minShares": 3000,
+          "recordMonth": 2,
+          "recordDate": null
+        },
+        {
+          "minShares": 3000,
+          "recordMonth": 8,
+          "recordDate": null
+        }
+      ],
+      "expectedSummarySha256": "3b103e4ec36004220341ee11ee30f904999701465f07ff13924fb853e812df99"
+    },
+    {
+      "taskId": "512d91f1c942a4f3",
+      "stockCode": "4397",
+      "pointsPerGrant": 750,
+      "annualPointsListed": 1500,
+      "sourceSha256": "986c4b22e81621d7c5ef4c0f20cfd04efe401d13ea89efe21af986f7cfb74548",
+      "rowCount": 2,
+      "recipients": [
+        {
+          "minShares": 1000,
+          "recordMonth": 2,
+          "recordDate": null
+        },
+        {
+          "minShares": 1000,
+          "recordMonth": 8,
+          "recordDate": null
+        }
+      ],
+      "expectedSummarySha256": "0c3bd5ad0a25c93781e3fbe5cee5639a67af328b314e49873ffb73ac2c2c7fb5"
+    }
+  ]
+}

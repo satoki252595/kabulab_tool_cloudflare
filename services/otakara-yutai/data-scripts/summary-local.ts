@@ -37,7 +37,7 @@ import {
 import { semifEnv } from "../../../src/shared/semif/env.js";
 import { z } from "../../../src/shared/zod-mini.js";
 import { parseBenefitChoiceStructure } from "./choice-structure.js";
-import { compilePointExchangeLiteral, compileVenueAdmissionLiteral, parseBenefitHoldingStructure } from "./holding-structure.js";
+import { compilePointExchangeLiteral, compilePremiumClubCarryLiteral, compileVenueAdmissionLiteral, parseBenefitHoldingStructure } from "./holding-structure.js";
 import { parseBenefitRecordTierStructure } from "./record-tier-structure.js";
 import { benefitKey } from "./benefit-key.js";
 import { loadBenefitRows, openOtakaraD1 } from "./benefit-rows.js";
@@ -46,7 +46,7 @@ import { splitHeadedDescription } from "./estimated-value-guard.js";
 import { applyImportAtomically } from "./import-summary-results.js";
 import { assertNotCommittable } from "./private-path.js";
 import { SummaryResult, planSummaryImport, type ImportPlan } from "./summary-import.js";
-import { checkSummary, missingSummaryConditions, SUMMARY_CONTRACT_VERSION } from "./summary-contract.js";
+import { checkSummary, isSummaryNumbersGrounded, missingSummaryConditions, SUMMARY_CONTRACT_VERSION } from "./summary-contract.js";
 import {
   parseTaskFile,
   selectSummaryTasks,
@@ -173,10 +173,17 @@ export function companyValue(task: SummaryTask): {
   return evaluateCompanyValue(task.description, context);
 }
 
-export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v9";
+export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v10";
 
 /** 対応する種類＋額面・全文1点選択・全文対応の期間/名簿条件を定型化する。未対応条件を削らない。 */
 export function compileSimpleSummary(task: SummaryTask): SummaryResult | null {
+  const clubCarry = compilePremiumClubCarryLiteral(task.description);
+  if (clubCarry !== null) {
+    const amount = companyValue(task);
+    if (amount.value !== null || amount.reason !== "approx" || checkSummary(clubCarry).length > 0 ||
+      !isSummaryNumbersGrounded(task.description, clubCarry, { minShares: task.recipients.map(r => r.minShares), recordMonths: task.recipients.map(r => r.recordMonth) })) return null;
+    return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion, shortSummary: clubCarry, estimatedValue: null });
+  }
   const pointExchange = compilePointExchangeLiteral(task.description);
   if (pointExchange !== null) {
     const amount = companyValue(task);

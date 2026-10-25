@@ -24,6 +24,18 @@ export function compilePointExchangeLiteral(description: string): { shortSummary
   return { shortSummary: `電子ギフト ${listedYen.toLocaleString("en-US")}円相当(1ポイント1円相当、電子マネー・ポイント交換、基準日から3か月以内贈呈)`, listedYen };
 }
 
+/** 既知の残全文に束縛した各回ポイントと繰越両条件だけ。約換算は金額にしない。 */
+export function compilePremiumClubCarryLiteral(description: string): string | null {
+  const source = splitHeadedDescription(description);
+  if (source.malformed || source.heading?.normalize("NFKC").trim() !== "プレミアム優待倶楽部ポイント") return null;
+  const match = /^([1-9][0-9]{0,2}(?:,[0-9]{3})+|[1-9][0-9]*)ポイント\(年間([1-9][0-9]{0,2}(?:,[0-9]{3})+|[1-9][0-9]*)ポイント\)\n([\s\S]+)$/u.exec(source.body.normalize("NFKC").trim());
+  if (match === null || createHash("sha256").update(match[3]).digest("hex") !== "6b92867c4e0cbff43b79fefe5faba333a26a353727b739f78a5ea3938686ac8c") return null;
+  const count = Number(match[1].replaceAll(",", "")), annual = Number(match[2].replaceAll(",", ""));
+  // 掲載された2数量の整合確認だけ。年額や換算額を生成しない。
+  if (!Number.isSafeInteger(count) || !Number.isSafeInteger(annual) || annual !== count * 2) return null;
+  return `${count}ポイント(商品選択/WILLsCoin交換、繰越:同株主番号2回以上連続記載・1000株以上継続保有)`;
+}
+
 /** 保存全文にある単一期間と掲載額・枚数の対応だけを読む。本人の適用条件は未確認。 */
 export function parseBenefitHoldingStructure(description: string): BenefitHoldingStructure | null {
   const source = splitHeadedDescription(description);
