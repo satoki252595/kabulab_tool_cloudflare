@@ -32,7 +32,7 @@ it("明示scopeの未資格・不完全な原文は、current100が数値一致�
 
 it.skipIf(!existsSync(privatePath))("保存定義句を現tierとは別scopeに束縛し、取込・selector・carryへ同じ資格を使う", () => {
   const saved = fixture(), tasks = selectSummaryTasks(saved.rows), summary = saved.proposedShortSummary;
-  expect(tasks.length).toBe(1); expect(tasks[0].contractVersion).toBe("2026-10-25.5");
+  expect(tasks.length).toBe(1); expect(tasks[0].contractVersion).toBe(SUMMARY_CONTRACT_VERSION);
   const withoutVersion = ({ contractVersion: _version, ...task }: SummaryTask) => task;
   expect(digest(JSON.stringify(tasks.map(withoutVersion)))).toBe(digest(JSON.stringify([withoutVersion(saved.task)])));
   expect(isSummaryNumbersGrounded(saved.task.description, summary, context)).toBe(true);

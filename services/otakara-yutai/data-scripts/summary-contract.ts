@@ -23,7 +23,7 @@
 
 import { createHash } from "node:crypto";
 import { HEADED_MARK, splitHeadedDescription } from "./estimated-value-guard.js";
-import { compilePointExchangeLiteral, compileVenueAdmissionLiteral } from "./holding-structure.js";
+import { compilePointExchangeLiteral, compilePremiumClubCarryLiteral, compileVenueAdmissionLiteral } from "./holding-structure.js";
 
 /**
  * 要約契約の版。タスクファイルと結果ファイルの各行に載り、取り込み時に
@@ -31,7 +31,7 @@ import { compilePointExchangeLiteral, compileVenueAdmissionLiteral } from "./hol
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-10-25.5";
+export const SUMMARY_CONTRACT_VERSION = "2026-10-25.6";
 
 /** 比較時だけ同じ月期間の表記を揃え、数値・比較条件・保存文面は変えない。 */
 function normalizeMonthPeriods(text: string): string {
@@ -125,10 +125,15 @@ export function isSummaryNumbersGrounded(
   shortSummary: string,
   context: { minShares: readonly number[]; recordMonths: readonly number[] },
 ): boolean {
+  const normalized = shortSummary.normalize("NFKC").trim();
+  const clubCarry = compilePremiumClubCarryLiteral(description);
+  // 繰越の株数を現tierへ転用しない。既知全文＋完全な定型句だけを別scopeで照合する。
+  if (clubCarry !== null || normalized.includes("繰越:")) return clubCarry !== null && normalized === clubCarry &&
+    context.minShares.length > 0 && context.minShares.every(value => Number.isSafeInteger(value) && value >= 1000) &&
+    context.recordMonths.length > 0 && context.recordMonths.every(value => Number.isInteger(value) && value >= 1 && value <= 12);
   const pointExchange = compilePointExchangeLiteral(description);
   if (pointExchange !== null && shortSummary.normalize("NFKC").trim() !== pointExchange.shortSummary.normalize("NFKC")) return false;
   const admission = compileVenueAdmissionLiteral(description);
-  const normalized = shortSummary.normalize("NFKC").trim();
   if (admission !== null && normalized !== admission.normalize("NFKC")) return false;
   // 全文資格と施設・枚数・利用制限の同値が成立した場合だけ、固有施設名の
   // 「六本」を数量に数えない。原文・公開要約自体は変更しない。

@@ -5,23 +5,23 @@
 | 残件 | 完了とする条件 | 10/25時点の確認 |
 |---|---|---|
 | 定時起動・実時間の締切 | 未来予定を拒否し、許容遅配・source停止・原本保存・native timeout・receiptの順序が全入口で一致 | #560と機械publisher追補#568、元job時計の有限再資格#570、SSH手動株式CLIの翌06時通信停止#584をCI・main配備・SSHへ反映済み。10/23 MWF/VWAPは17:15〜17:25 JSTの遅配が旧受付外となった。#560の予定時刻基準による根本修正後の自然定期実績は別受入 |
-| 本文39項目・基本情報の補足同期 | Linuxの通常定期処理がモデル・語彙判定に依存せず差分同期し、旧タグ根拠と最新本文を区別 | 先の50件は27同期・23未着手、直近の次50件は21同期・23同値・HOLD0・6未着手で既知閉鎖。Notion444要求・429/再試行0、cursor157A→1801、owner/pending閉鎖を確認。実行時モデル/新規上流0。通常publisherと共有状態の受入であり、個別21文書の独立再読や全社完了とはしない |
-| 優待の機械要約 | 既存compiler・検証・原子的publisherをLinuxから呼び、未解析は保留。Macの成否を先行条件にしない | 契約`.5`の4群/6行に続き、別4群/4行も通常反映。3983のみ既存認定関数の3000円を採用、他3群NULL保持。4661も余剰1行だけ是正し保持14行・原本/物理PREPOST・owner閉鎖を確認。19:37の未完91群は別4群の反映前実測で、現在数を推算しない。未対応形式と意味判断が残る |
+| 本文39項目・基本情報の補足同期 | Linuxの通常定期処理がモデル・語彙判定に依存せず差分同期し、旧タグ根拠と最新本文を区別 | 先の27同期・次の21同期に続き、通常3窓を延べ107処理＝同期70/同値37・HOLD0で閉鎖。Notion1327要求・429/再試行0、cursor1801→1934、owner/pending閉鎖を確認。実行時モデル/新規上流0。各窓の未着手は現残数へ合算せず、個別全値の独立再読や全社完了とはしない |
+| 優待の機械要約 | 既存compiler・検証・原子的publisherをLinuxから呼び、未解析は保留。Macの成否を先行条件にしない | 契約`.5`で直近17群/31行も通常反映。企業公表額7行だけ採用し他のNULLを保持、10銘柄全68行の対象外37行も全mapped列不変。物理PRE/POST・owner閉鎖・両cursor不変を確認。4661は余剰1行是正済み。19:37の未完91群は追加反映前の実測で、現在数を推算しない。未対応形式と意味判断が残る |
 | Notionの保存結果不明 | 非冪等書込の529等を再送せず、runnerと文書callerでも成功化・次文書続行しない | #563をmain `2fa25380`へ反映、CI・CF・SSH確認済み。読取529と明示拒否429は別契約のまま |
 | 33業種更新の先行条件 | 株価・RSI失敗でも独立した原典取得を実行。取消・対象外の停止と通信枠を維持 | #562をmain `a90df635`へ反映、CI・CF・SSH確認済み。native境界は#560で同じ元job時計へ束縛。自然定期での更新成功はコード受入と分ける |
 | Yahoo等の源欠測 | 保存原応答からNULL・0・項目欠測・通信障害を区別し、根拠なく無取引と断定しない | 結果区分の#561に加え、認証/crumb/価格API/共有停止の段階診断#564をmain `dee57443`へ配備・SSH反映済み。各欠測の原因確定・最新対象日の充足とは別 |
-| 財務NULL・本文空欄・歴史relation | 保存原典との対応を機械分類し、原典に値がある取りこぼしだけ修復。非公表を数値で埋めない | 固定40社の通常照合は1,560セル＝一致1,528・同CSV要素なし32、資格不足0。財務の不足15原本から固定17行・323セルを通常診断し、ROA4行をNotionへ反映、他13行・全他プロパティと元取得時計を保持。D1全17行/34列も読み、差は同4行のROAだけ。D1同期は行CAS修正・配備後。保存scope候補なし137を公式非開示と断定せず、全市場分類は未検収 |
+| 財務NULL・本文空欄・歴史relation | 保存原典との対応を機械分類し、原典に値がある取りこぼしだけ修復。非公表を数値で埋めない | 固定40社の通常照合は1,560セル＝一致1,528・同CSV要素なし32、資格不足0。財務の不足15原本から固定17行・323セルを通常診断し、ROA4行をNotion・D1へ反映。同statement全34列行CASと全17行PRE/POSTで、差は同4行のROAだけ、他13行・原本/時計/書類ID/licenseは不変。保存scope候補なし137を公式非開示と断定せず、全市場分類は未検収 |
 | 株価・VWAP・IR原本 | 必要対象日の保存物と通常producerの実行を照合し、原典不足を別値で埋めない | 日足全3,686件は更新2,695・skip990・HOLD1で閉鎖し、新activeを独立受入。5分足5d窓も全3,686件＝更新3,679・skip2・error5、unknown/未着手0・原本123batch/pageとsummary保管済み。日足523Aの履歴欠測、株式マスタ38件、5分足の失敗・旧日付・窓外欠測、旧PUT不明は未検収。TDnet1279652は原本両入口404/HOLD |
 | 保有明細・権利処理 | 主体・株式種類・価格日・株数日・分割/併合/増資等の根拠と計算basisを資格化 | snapshot40169768650.1/session10/23/3,685 membersを独立受入。通常resumeの次窓はusedRows30/resumed2/held3・pending=false、23intent→23HTTP200・未解決writeなしで閉鎖。同窓のheld3と全保有価格・全権利種別の資格成立は未完 |
 | マクロ・個別スクリーニング | 元仕様と同じ指標・対象・期間を使い、未取得を通過にしない | プライム売買代金比率、個別④需給・⑤カタリスト（2週間、過去/未来の範囲は確認中）は既存の未接続。#572の手動案内に残った未来限定を訂正。自動判定の完成扱いや、新条件の推定実装はしない。定義は下記 |
 | 内部API・MCP | 既存の有効な認証情報で代表的な読取を本番通し確認 | 旧認証3ケース＋新REST7ケース/77行、MCP3ケースの段階受入済み。公開読取も5ケースPASS。全API・全データ充足の保証へ広げない。私有証跡は下記 |
-| 本番受入・文書 | PR/CI/main/CF配備とSSH revisionを照合し、必要な有限補完を実行。設定と自然時刻の成功を区別 | 20:16 JSTまでに#609 main50127145のCI3本・CF8bb19f8e 100%・SSH同headを受入。後続修正は別受入。日足/5分足の既知非fatal exit1を全件取得成功にしない。株式directの実上流・全市場の財務/本文/優待・次の自然定期・月次実モデルは別受入 |
+| 本番受入・文書 | PR/CI/main/CF配備とSSH revisionを照合し、必要な有限補完を実行。設定と自然時刻の成功を区別 | #610 main8be10d33のCI3本・CF991dbf2b 100%・SSH同headを受入。後続修正は別受入。日足/5分足の既知非fatal exit1を全件取得成功にしない。株式directの実上流・全市場の財務/本文/優待・次の自然定期・月次実モデルは別受入 |
 
 取得元の停止・非公表・原本消失は取得成功としない。理由付きHOLDを実装しても、その値自体の取得完了には数えない。旧件数と固定集合の完了を現在の全市場の残数へ読み替えない。
 
 ## コード・配備の受入証跡
 
-20:16 JSTまでの配備受入は#609 main `50127145`、[CI 40187445599](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40187445599)の3本成功・SSH同SHA。20:09の管理APIでdeployment `de90a0e6` / version `8bb19f8e`の100%と同main buildの対応を確認し、20:16にSSHを同SHAへFFした。#609は文書のみで、#606の優待継続保有条件照合・#607の対象原本直接読取・#608の共有download期限を含む。env/Mac runtimeは変更していない。私有受入は`tmp/feature-audit-20261025/main609-acceptance-v1/`。以下は個別の受入履歴。
+配備受入は#610 main `8be10d33`、[CI 40190561661](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40190561661)の3本成功・SSH同SHA。管理APIでdeployment `4de6fcc1` / version `991dbf2b`の100%と同main buildの対応を確認し、本文3窓の閉鎖後にSSHをFFした。#610は通常財務同期の全34列行CASで、追加API0。#606〜#609の優待条件照合・対象原本直接読取・共有download期限も含む。env/Mac runtimeは変更していない。私有受入は`tmp/feature-audit-20261025/main610-acceptance-v1/`。以下は個別の受入履歴。
 
 | 修正 | main | CI成功run | CF配備・SSH |
 |---|---|---|---|
@@ -178,6 +178,14 @@ Primeの既存接続原典から、同一定義の当日実代金と20日平均�
 
 20:23 JSTに別の保存レビュー4群/4行を通常publisherで反映した。3983だけ既存`companyValue`の認定3000円を採用し、3377/3560/3823は選択・源金額なし・抽選の各guardに従いNULL保持。対象4行と非対象1行の全mapped列POST、通常yield/score原子再計算、物理PRE/POST・共有owner閉鎖・両cursor不変を受入。独立した財務/score再GETは行っていない。19:37の全市場91群から残数を差引推算しない。私有`yutai-reviewed-current91-third4-contract5-prep-v1/ACCEPTED.private.json` SHA `4e1e1e58b8283bfc6aac3577317887561c62e468d72afeda06243dfac66896e4`。
 
-財務の通常auditは既存cache17原本を再利用し、対象2銘柄のquery1＋一意原本GET17だけで17行を再解析した。通常Notion applyもquery2＋PATCH4の6要求だけで成功し、ROA4行以外の全propertiesと元取得時計は不変、同一キーの退避0。FINISHED SHA `fc4704baf71dce436c5e8c5ce11e5b10862867b9b8d08df3bea0c72bd5415544`、適用receipt17 SHA `d6b2d45aca091297e2c0590b78628abfe11ccba6ffa709efb79a11cae25a7dd0`。続くD1はcode先限定の1SELECTで17行/全34列、read21行・write0。差は同じ4行のROAだけで、他13行・全他列は同値。Python用設定名の不足による旧HTTP0 STOPを保持し、本番workflowと同じ明示aliasで読み取った。D1書込は未実施で、並行更新を守る共有行CAS修正後に行う。私有比較summary SHA `d4c1d55db3fc983a884166b45902d752ad704b604ba669bd1f15d851a53f1460`。
+財務の通常auditは既存cache17原本を再利用し、対象2銘柄のquery1＋一意原本GET17だけで17行を再解析した。通常Notion applyもquery2＋PATCH4の6要求だけで成功し、ROA4行以外の全propertiesと元取得時計は不変、同一キーの退避0。FINISHED SHA `fc4704baf71dce436c5e8c5ce11e5b10862867b9b8d08df3bea0c72bd5415544`、適用receipt17 SHA `d6b2d45aca091297e2c0590b78628abfe11ccba6ffa709efb79a11cae25a7dd0`。続くD1はcode先限定の1SELECTで17行/全34列、read21行・write0。差は同じ4行のROAだけで、他13行・全他列は同値。Python用設定名の不足による旧HTTP0 STOPを保持し、本番workflowと同じ明示aliasで読み取った。このPRE読取段階ではD1書込未実施で、後述の行CAS修正後の同期と区別する。私有比較summary SHA `d4c1d55db3fc983a884166b45902d752ad704b604ba669bd1f15d851a53f1460`。
 
 6396/7509は同runの保存原本2batchだけをmetadata2＋physical2GETで資格化した。両HTTP200・`chart.error=null`・一意result/銘柄一致だが、timestampプロパティとOHLCV配列が全て未存在。通常parserの同じ拒否を再現し、銘柄単位の既知非fatal・価格PUT0は妥当と判断した。原応答から無取引や当日充足を補作しない。新Yahoo/D1/R2/業務書込/他58応答decodeは0。私有`vwap-intra6396-7509-saved-raw-ro-prep-v1/RAW-SHAPE-CLASSIFICATION.private.json` SHA `0f7dd7ba3573fb8ffe642344ba80f7faaf91b9a225d0c7d0f191100a87fef6e6`。
+
+21:08 JSTにSSHの通常本文3窓が自然終了した。延べ150選択/107処理＝同期70・同値37、HOLD0、Notion1,327要求・429/再試行0。cursor1801→1813→190A→1934、各窓の共有owner/pending閉鎖と優待cursor/baselineの全body/ETag不変、全27ファイルを確認した。窓末未着手18/6/19は各時点の数で、合算残数や全市場完了にしない。私有`supplement-normal-three-windows-prep-v1/ACCEPTED.private.json` SHA `39a310cba9006265552aa77d5320fe172149b02701b288afa08a51e9b6734d9a`。
+
+21:15 JSTに通常`sync_d1`の全34列行CASでROA4行を同期した。Notion fresh query1＋D1読取3＋UPSERT1の5要求、全17行PRE/POSTで7911のFY2024/2025は3.2/3.6、8566は0.91/1.19のみを採用し、他13行・原本/時計/書類ID/licenseは不変。親2銘柄一致、退避/保護/unknown/再送/新原本/モデル0。D1の業務changes4と物理rows_written12は区別する。私有`financial-roa4-d1-sync-prep-20261025-v1/accepted-production/POST-FULL34-QUALIFICATION.private.json` SHA `40597508e9e308efbcbda709137fcef6c99fde3ba45aacfeb08f7b598ccf2360`。
+
+ポイント繰越の既知全文型は、当回ポイントと掲載年額の整合・残全文SHA・完全定型句・実recipientを共有helperで照合し、現在tierと繰越1000株を分離する。実5群10行の通常compiler/import/selector/carryを検査し、金額は約換算せずNULL。関連210 PASS・私有fixture不足12 SKIPを区別する。保存19:37の全7,728行を`.5`/`.6`で機械再生した影響検査は91→91群、追加/除外/reason差0であり、現在残数91の再測定ではない。私有`yutai-contract6-fullsnapshot-replay-v1/REPORT.private.json` SHA `8b8e794659a1b15d73b4f26236ac99abef8971145852dcb36d631d21f7edc70c`。
+
+続いて契約`.5`の保存レビュー17群31行を通常publisherで反映した。10銘柄全68行の保存PRE/POSTを照合し、対象31行の要約・値と対象外37行の全mapped列保持を確認。企業公表額への変更7行、他のNULLは保持、owner/pending閉鎖・両cursor/baselineのbody/ETag不変。実行時モデル/新原本/再送0で、保存候補の意味レビューに使ったLLM判断とは区別する。10銘柄内pending26→9はscope内の値で、全市場を差引推算しない。私有`yutai-reviewed-saved91-fourth-sixth17-contract5-prep-v1/ACCEPTED.private.json` SHA `ed12a32d3cdf0496808210a8737c420e7356fe75bdb91591b6f5f159c452927c`。新`.6`では750ポイントの既存要約も共有定型句と異なるため再整形対象になり得るが、繰越条件と金額NULLを維持する。
