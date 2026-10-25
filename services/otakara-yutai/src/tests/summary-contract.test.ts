@@ -410,3 +410,17 @@ it("原文と同じ3D住宅製品語の数字を数量と誤認せず、他の�
     `${summary}2台`,
   ]) expect(isSummaryNumbersGrounded(source, changed, context)).toBe(false);
 });
+
+it("数値を含む製品語は各literalを原文へ束縛し、別製品語や後続の数量・金額を素通ししない", () => {
+  const context = { minShares: [100], recordMonths: [3] };
+  const source = "合成優待:1デーパスポート2枚、年間4枚";
+  const summary = "1デーパスポート2枚、年間4枚";
+  expect(isSummaryNumbersGrounded(source, summary, context)).toBe(true);
+  expect(isSummaryNumbersGrounded(source.replace("1デー", "１デー"), summary, context)).toBe(true);
+  for (const name of ["11デーパスポート", "2デーパスポート", "A1デーパスポート", "1デーチケット", "3Dプリンター住宅"]) {
+    expect(isSummaryNumbersGrounded(source, summary.replace("1デーパスポート", name), context)).toBe(false);
+    expect(isSummaryNumbersGrounded(source.replace("1デーパスポート", name), summary, context)).toBe(false);
+  }
+  for (const changed of [summary.replace("2枚", "3枚"), summary.replace("4枚", "5枚"), `${summary}500円`, `${summary}2台`])
+    expect(isSummaryNumbersGrounded(source, changed, context)).toBe(false);
+});

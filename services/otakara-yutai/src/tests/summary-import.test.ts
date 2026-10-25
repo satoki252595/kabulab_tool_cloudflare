@@ -5,11 +5,13 @@
  * を固定する。既存テストの掲載文はすべて架空 (出典サイトの文面は使わない)。
  * 共有厳密判定のテストは raw34 の原文抜粋 (`./raw34-excerpts.ts`) を使う。
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import { ROOT } from "../../../../src/shared/db/tests/source-scan.js";
 import { benefitKey } from "../../data-scripts/benefit-key.js";
 import { headedDescription, sanitizeEstimatedValue } from "../../data-scripts/estimated-value-guard.js";
 import { assertNotCommittable } from "../../data-scripts/private-path.js";
@@ -21,6 +23,7 @@ import {
   classifyDescriptionRepair,
   formatPlanReport,
   planSummaryImport,
+  type SummaryResult,
   type SummaryWriter,
 } from "../../data-scripts/summary-import.js";
 import {
@@ -69,6 +72,27 @@ const K_DISCOUNT = keyOf("9992", DESC_DISCOUNT);
 
 const result = (over: Record<string, unknown>) =>
   JSON.stringify({ taskId: K_CATALOG, contractVersion: SUMMARY_CONTRACT_VERSION, shortSummary: "カタログギフト 3,000円相当", estimatedValue: 3000, ...over });
+
+const namedProductActual = join(ROOT, "tmp/yutai-named-product-number-proof-v1");
+it.skipIf(!existsSync(join(namedProductActual, "SAVED-ROWS.private.json")))("保存実4661は新版の通常planで2行受理し、旧結果・製品数字変更を拒否する（CIは私有fixture不在skip）", () => {
+  const read = (name: string, expected: string) => {
+    const bytes = readFileSync(join(namedProductActual, name));
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe(expected);
+    return bytes.toString("utf8");
+  };
+  const current = JSON.parse(read("SAVED-ROWS.private.json", "5558fb69a7a0d5f35db388a6c9b68f2b00872749338a238543f6ee0f39249c57")) as BenefitRow[];
+  const original = parseTaskFile(read("ORIGINAL-TASK.private.jsonl", "c7baab1f72cdae5546a283447792ee30dfdca2ee6046537b842fe5bb7ad34d84"));
+  const oldResult = JSON.parse(read("ORIGINAL-RESULT.private.jsonl", "65dfc4cdbf859dd785cd8271381e9412e16516d9d1740b932f90d3ef30b04526")) as SummaryResult;
+  const tasks = selectSummaryTasks(current);
+  expect(tasks).toHaveLength(1); expect(tasks[0]).toMatchObject({ taskId: original[0].taskId, rowCount: 2, stockCode: "4661" });
+  const plan = (saved: unknown) => planSummaryImport({ tasks, currentRows: current, resultsText: JSON.stringify(saved) });
+  expect(plan(oldResult).rejections[0].reason).toBe("contract_version");
+  // 新版候補のoffline検証だけ。私有の旧版結果を書き換えたり、本番へ採用したりしない。
+  const trial = { ...oldResult, contractVersion: SUMMARY_CONTRACT_VERSION };
+  expect(plan(trial)).toMatchObject({ rejections: [], unansweredTaskIds: [], updates: [{ ids: current.map(row => row.id).sort((a, b) => a - b),
+    estimatedValue: null, estimateValueSource: null }] });
+  expect(plan({ ...trial, shortSummary: trial.shortSummary.replace("1デー", "11デー") }).rejections[0].reason).toBe("summary_ungrounded");
+});
 
 describe("selectSummaryTasks", () => {
   it.each([
