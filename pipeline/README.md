@@ -32,6 +32,10 @@ uv run pytest        # テスト
 
 全ジョブ `--dry-run` 対応（Notion に書き込まない）。
 
+### 財務NULLの有限読取とoffline診断
+
+`pnpm audit:financial:null`はコードファイル全SHA・code/page/HTTP上限・絶対期限を必須にして、③をコード別に薄く読む。原本API・モデル・業務書込は0。既存再解析CLIの`--diagnose-capture`でexact原本snapshotとlocal全SHA原本を結び、共有normalizerの実分岐で項目別の理由を確認できる。原本不足・多値・key不成立はHOLD。[入力形式と手順](../docs/financial-null-audit.md)。`--limit`付き旧auditは読取HTTP上限の代用にしない。
+
 ### 原本から財務の期末・連結区分・中間期を再検証
 
 2026-09-28 に、年度末 DEI を四半期末として使う経路、配当/メタ情報の既定連結が

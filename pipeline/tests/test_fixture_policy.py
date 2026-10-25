@@ -154,6 +154,8 @@ SKIP_ALLOWED: frozenset[str] = frozenset(
         "edinet/documents_list_sample.json",
         "edinet/xbrl_sample.meta.json",
         "edinet/xbrl_sample.zip",
+        # SHA固定の保存済みEDINET原本。私有ZIPが未配置のCIでは取得・合成しない。
+        "financial-null-634a/original.zip",
         "jsf/shina.csv",
         "jsf/zandaka.csv",
         "jsf/{…}.csv",

@@ -1,0 +1,1120 @@
+{
+  "evidence": {
+    "code": "634A",
+    "edinetDocId": "S100Z4Z3",
+    "capturedAt": "2026-10-25T00:23:35.040Z",
+    "financialOriginalResponseSha256": "e58cac0edad303f8a73c0752ddac5ad1315342c2f95f9c427bfd365f8318859b",
+    "projection": "Only page identity/properties and DB schema; user identities, URLs and signed file URLs omitted. Numeric facts unchanged."
+  },
+  "schema": {
+    "object": "database",
+    "id": "e30ed07f-6f4d-4916-967d-90d11b9dff39",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "来期予想経常利益": {
+        "id": "%3A%7Db%60",
+        "name": "来期予想経常利益",
+        "description": null,
+        "type": "number",
+        "number": {
+          "format": "number"
+        }
+      },
+      "来期予想純利益": {
+        "id": "%3DQ%5C%7D",
+        "name": "来期予想純利益",
+        "description": null,
+        "type": "number",
+        "number": {
+          "format": "number"
+        }
+      },
+      "原本": {
+        "id": "%3EM%3Em",
+        "name": "原本",
+        "description": null,
+        "type": "relation",
+        "relation": {
+          "database_id": "57cedf7b-733a-4db3-970a-015bf655c934",
+          "data_source_id": "db10c11e-6e44-478a-9e83-880eb727df21",
+          "type": "dual_property",
+          "dual_property": {
+            "synced_property_name": "③財務行",
+            "synced_property_id": "%3BEbm"
+          }
+        }
+      },
+      "取得日時": {
+        "id": "Im~~",
+        "name": "取得日時",
+        "description": null,
+        "type": "date",
+        "date": {}
+      },
+      "売上高": {
+        "id": "LBsq",
+        "name": "売上高",
+        "description": null,
+        "type": "number",
+        "number": {
+          "format": "number"
+        }
+      },
+      "開示日": {
+        "id": "N%7Bwd",
+        "name": "開示日",
+        "description": null,
+        "type": "date",
+        "date": {}
+      },
+      "純利益": {
+        "id": "RG%7DW",
+        "name": "純利益",
+        "description": null,
+        "type": "number",
+        "number": {
+          "format": "number"
+        }
+      },
+      "自己資本比率%": {
+        "id": "Txw%7D",
+        "name": "自己資本比率%",
+        "description": null,
+        "type": "number",
+        "number": {
+          "format": "number"
+        }
+      },
+      "1株配当(実績)": {
+        "id": "Y~%5Ci",
+        "name": "1株配当(実績)",
+        "description": null,
+        "type": "number",
+        "number": {
+          "format": "number"
+        }
+      },
+      "連結単体": {
+        "id": "_iNy",
+        "name": "連結単体",
+        "description": null,
+        "type": "select",
+        "select": {
+          "options": [
+            {
+              "id": "2d244106-83ab-4a11-bd44-58a3bb7525cf",
+              "name": "連結",
+              "color": "blue",
+              "description": null
+            },
+            {
+              "id": "abaff391-245e-42ec-a134-8b939402cd59",
+              "name": "単体",
+              "color": "gray",
+              "description": null
+            }
+          ]
+        }
+      },
+      "会計基準": {
+        "id": "b%3D~G",
+        "name": "会計基準",
+        "description": null,
+        "type": "select",
+        "select": {
+          "options": [
+            {
+              "id": "ee869ca3-e301-4a38-9489-11b1551211b8",
+              "name": "日本基準",
+              "color": "blue",
+              "description": null
+            },
+            {
+              "id": "9702c314-22c6-4231-9a90-459d1868436b",
+              "name": "IFRS",
+              "color": "green",
+              "description": null
+            },
+            {
+              "id": "d2dbda55-aed4-44ef-bb75-b23a68cd45ca",
+              "name": "US-GAAP",
+              "color": "orange",
+              "description": null
+            },
+            {
+              "id": "2a348b4a-ec04-4920-afbb-82915373d938",
+              "name": "その他",
+              "color": "gray",
+              "description": null
+            }
+          ]
+        }
+      },
+      "1株配当(予想)": {
+        "id": "c%3C%3CV",
+        "name": "1株配当(予想)",
+        "description": null,
+        "type": "number",
+        "number": {
+          "format": "number"
+        }
+      },
+      "ROE%": {
+        "id": "dEY%5E",
+        "name": "ROE%",
+        "description": null,
+        "type": "number",
+        "number": {
+          "format": "number"
+        }
+      },
+      "EPS": {
+        "id": "d%5E%7CE",
+        "name": "EPS",
+        "description": null,
+        "type": "number",
+        "number": {
+          "format": "number"
+        }
+      },
+      "営業利益": {
+        "id": "djB%5D",
+        "name": "営業利益",
+        "description": null,
+        "type": "number",
+        "number": {
+          "format": "number"
+        }
+      },
+      "財務CF": {
+        "id": "eiks",
+        "name": "財務CF",
+        "description": null,
+        "type": "number",
+        "number": {
+          "format": "number"
+        }
+      },
+      "開示種別": {
+        "id": "eqWc",
+        "name": "開示種別",
+        "description": null,
+        "type": "select",
+        "select": {
+          "options": [
+            {
+              "id": "031966bb-984b-49db-8d2d-1060488a98c7",
+              "name": "本決算",
+              "color": "blue",
+              "description": null
+            },
+            {
+              "id": "a0453d0a-e6c6-4a5e-b9bf-424404c2f0ee",
+              "name": "1Q",
+              "color": "green",
+              "description": null
+            },
+            {
+              "id": "503356ac-3118-4144-b64d-ce24163d630a",
+              "name": "2Q",
+              "color": "yellow",
+              "description": null
+            },
+            {
+              "id": "6632ab31-19ba-4961-aaa8-4e7ac8cb707e",
+              "name": "3Q",
+              "color": "orange",
+              "description": null
+            },
+            {
+              "id": "d58c2f61-4c2c-4479-9d1b-881e31fd6902",
+              "name": "修正",
+              "color": "red",
+              "description": null
+            },
+            {
+              "id": "0054a5d0-f234-4edc-9789-88b66119c627",
+              "name": "予想",
+              "color": "purple",
+              "description": null
+            },
+            {
+              "id": "7fb56166-c6cb-49ad-9f36-d04980083ebf",
+              "name": "中間",
+              "color": "default",
+              "description": null
+            }
+          ]
+        }
+      },
+      "来期予想営業利益": {
+        "id": "fDcL",
+        "name": "来期予想営業利益",
+        "description": null,
+        "type": "number",
+        "number": {
+          "format": "number"
+        }
+      },
+      "ROA%": {
+        "id": "fOLE",
+        "name": "ROA%",
+        "description": null,
+        "type": "number",
+        "number": {
+          "format": "number"
+        }
+      },
+      "来期予想売上高": {
+        "id": "g_nW",
+        "name": "来期予想売上高",
+        "description": null,
+        "type": "number",
+        "number": {
+          "format": "number"
+        }
+      },
+      "データ基準日": {
+        "id": "gjNf",
+        "name": "データ基準日",
+        "description": null,
+        "type": "date",
+        "date": {}
+      },
+      "ライセンスタグ": {
+        "id": "g%7C%5E%60",
+        "name": "ライセンスタグ",
+        "description": null,
+        "type": "select",
+        "select": {
+          "options": [
+            {
+              "id": "54a4aa3a-cb44-43a2-b2f0-e5752c835a4a",
+              "name": "commercial-ok",
+              "color": "green",
+              "description": null
+            },
+            {
+              "id": "aad49931-5ab2-4c69-b3f6-7037554807f8",
+              "name": "factual-cite",
+              "color": "yellow",
+              "description": null
+            },
+            {
+              "id": "d1649642-8244-43ff-8346-24c13bea3a62",
+              "name": "personal-only",
+              "color": "red",
+              "description": null
+            }
+          ]
+        }
+      },
+      "経常利益": {
+        "id": "j%3EG%7B",
+        "name": "経常利益",
+        "description": null,
+        "type": "number",
+        "number": {
+          "format": "number"
+        }
+      },
+      "BPS": {
+        "id": "lM%40%40",
+        "name": "BPS",
+        "description": null,
+        "type": "number",
+        "number": {
+          "format": "number"
+        }
+      },
+      "投資CF": {
+        "id": "m%3DL%3A",
+        "name": "投資CF",
+        "description": null,
+        "type": "number",
+        "number": {
+          "format": "number"
+        }
+      },
+      "決算期末": {
+        "id": "p%7C%3Ca",
+        "name": "決算期末",
+        "description": null,
+        "type": "date",
+        "date": {}
+      },
+      "データ品質": {
+        "id": "uF%60b",
+        "name": "データ品質",
+        "description": null,
+        "type": "select",
+        "select": {
+          "options": [
+            {
+              "id": "b2dadbb7-429c-47f1-836e-413813b5e182",
+              "name": "正常",
+              "color": "green",
+              "description": null
+            },
+            {
+              "id": "7b38f15f-7a2b-4b57-a9b0-cd659dac62e8",
+              "name": "要確認",
+              "color": "yellow",
+              "description": null
+            },
+            {
+              "id": "1afb7073-2140-449e-84da-ad362b6dc495",
+              "name": "欠損あり",
+              "color": "red",
+              "description": null
+            }
+          ]
+        }
+      },
+      "営業CF": {
+        "id": "u%5DJ%3D",
+        "name": "営業CF",
+        "description": null,
+        "type": "number",
+        "number": {
+          "format": "number"
+        }
+      },
+      "ソース": {
+        "id": "ue%7DH",
+        "name": "ソース",
+        "description": null,
+        "type": "select",
+        "select": {
+          "options": [
+            {
+              "id": "d5aaecea-0f4d-4ba4-9068-12417b499c05",
+              "name": "EDINET",
+              "color": "blue",
+              "description": null
+            },
+            {
+              "id": "8e4fc742-c70a-4db4-8bbc-dd2a1e4597dc",
+              "name": "TDnet",
+              "color": "green",
+              "description": null
+            },
+            {
+              "id": "e63b26a3-403b-4c1a-aa27-23860ff8d7f9",
+              "name": "yfinance",
+              "color": "orange",
+              "description": null
+            },
+            {
+              "id": "7acad8cc-f6d9-41e1-83f0-87a260a93aaf",
+              "name": "stooq",
+              "color": "yellow",
+              "description": null
+            },
+            {
+              "id": "5d58153a-d8e2-49bb-b85e-392182b14e27",
+              "name": "JPX",
+              "color": "brown",
+              "description": null
+            },
+            {
+              "id": "f3023953-1190-4909-a243-8999e5482505",
+              "name": "計算",
+              "color": "gray",
+              "description": null
+            }
+          ]
+        }
+      },
+      "銘柄マスタ": {
+        "id": "us%5Et",
+        "name": "銘柄マスタ",
+        "description": null,
+        "type": "relation",
+        "relation": {
+          "database_id": "e8e70e9f-8a28-4643-ad44-b8419b9080a5",
+          "data_source_id": "896066ff-d79a-4a8e-9583-6b874f6890bc",
+          "type": "dual_property",
+          "dual_property": {
+            "synced_property_name": "財務サマリ",
+            "synced_property_id": "%5ERE%5E"
+          }
+        }
+      },
+      "来期予想EPS": {
+        "id": "yYad",
+        "name": "来期予想EPS",
+        "description": null,
+        "type": "number",
+        "number": {
+          "format": "number"
+        }
+      },
+      "銘柄コード": {
+        "id": "%7CG%3A%3A",
+        "name": "銘柄コード",
+        "description": null,
+        "type": "rich_text",
+        "rich_text": {}
+      },
+      "タイトル": {
+        "id": "title",
+        "name": "タイトル",
+        "description": "例: 7203 2026/03期 本決算",
+        "type": "title",
+        "title": {}
+      }
+    }
+  },
+  "response": {
+    "object": "list",
+    "results": [
+      {
+        "object": "page",
+        "id": "3ead74ff-84cd-817a-8cc9-d592bce067f2",
+        "parent": {
+          "type": "database_id",
+          "database_id": "e30ed07f-6f4d-4916-967d-90d11b9dff39"
+        },
+        "archived": false,
+        "in_trash": false,
+        "last_edited_time": "2026-10-18T12:52:00.000Z",
+        "properties": {
+          "売上高": {
+            "id": "LBsq",
+            "type": "number",
+            "number": 1980664000
+          },
+          "営業利益": {
+            "id": "djB%5D",
+            "type": "number",
+            "number": 344462000
+          },
+          "経常利益": {
+            "id": "j%3EG%7B",
+            "type": "number",
+            "number": 337040000
+          },
+          "純利益": {
+            "id": "RG%7DW",
+            "type": "number",
+            "number": 239697000
+          },
+          "EPS": {
+            "id": "d%5E%7CE",
+            "type": "number",
+            "number": 106.53
+          },
+          "BPS": {
+            "id": "lM%40%40",
+            "type": "number",
+            "number": 280.71
+          },
+          "ROE%": {
+            "id": "dEY%5E",
+            "type": "number",
+            "number": 46.839999999999996
+          },
+          "ROA%": {
+            "id": "fOLE",
+            "type": "number",
+            "number": null
+          },
+          "自己資本比率%": {
+            "id": "Txw%7D",
+            "type": "number",
+            "number": 56.910000000000004
+          },
+          "営業CF": {
+            "id": "u%5DJ%3D",
+            "type": "number",
+            "number": 277202000
+          },
+          "投資CF": {
+            "id": "m%3DL%3A",
+            "type": "number",
+            "number": -31300000
+          },
+          "財務CF": {
+            "id": "eiks",
+            "type": "number",
+            "number": -24296000
+          },
+          "1株配当(実績)": {
+            "id": "Y~%5Ci",
+            "type": "number",
+            "number": null
+          },
+          "1株配当(予想)": {
+            "id": "c%3C%3CV",
+            "type": "number",
+            "number": null
+          },
+          "来期予想売上高": {
+            "id": "g_nW",
+            "type": "number",
+            "number": null
+          },
+          "来期予想営業利益": {
+            "id": "fDcL",
+            "type": "number",
+            "number": null
+          },
+          "来期予想経常利益": {
+            "id": "%3A%7Db%60",
+            "type": "number",
+            "number": null
+          },
+          "来期予想純利益": {
+            "id": "%3DQ%5C%7D",
+            "type": "number",
+            "number": null
+          },
+          "来期予想EPS": {
+            "id": "yYad",
+            "type": "number",
+            "number": null
+          },
+          "銘柄コード": {
+            "id": "%7CG%3A%3A",
+            "type": "rich_text",
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "634A",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "634A",
+                "href": null
+              }
+            ]
+          },
+          "決算期末": {
+            "id": "p%7C%3Ca",
+            "type": "date",
+            "date": {
+              "start": "2026-06-30",
+              "end": null,
+              "time_zone": null
+            }
+          },
+          "開示種別": {
+            "id": "eqWc",
+            "type": "select",
+            "select": {
+              "id": "031966bb-984b-49db-8d2d-1060488a98c7",
+              "name": "本決算",
+              "color": "blue"
+            }
+          },
+          "連結単体": {
+            "id": "_iNy",
+            "type": "select",
+            "select": {
+              "id": "abaff391-245e-42ec-a134-8b939402cd59",
+              "name": "単体",
+              "color": "gray"
+            }
+          },
+          "ソース": {
+            "id": "ue%7DH",
+            "type": "select",
+            "select": {
+              "id": "d5aaecea-0f4d-4ba4-9068-12417b499c05",
+              "name": "EDINET",
+              "color": "blue"
+            }
+          },
+          "原本": {
+            "id": "%3EM%3Em",
+            "type": "relation",
+            "relation": [
+              {
+                "id": "3ead74ff-84cd-819b-a23a-d7de059a709e"
+              }
+            ],
+            "has_more": false
+          },
+          "会計基準": {
+            "id": "b%3D~G",
+            "type": "select",
+            "select": {
+              "id": "ee869ca3-e301-4a38-9489-11b1551211b8",
+              "name": "日本基準",
+              "color": "blue"
+            }
+          },
+          "開示日": {
+            "id": "N%7Bwd",
+            "type": "date",
+            "date": {
+              "start": "2026-09-29T15:30:00.000+09:00",
+              "end": null,
+              "time_zone": null
+            }
+          },
+          "ライセンスタグ": {
+            "id": "g%7C%5E%60",
+            "type": "select",
+            "select": {
+              "id": "54a4aa3a-cb44-43a2-b2f0-e5752c835a4a",
+              "name": "commercial-ok",
+              "color": "green"
+            }
+          },
+          "データ基準日": {
+            "id": "gjNf",
+            "type": "date",
+            "date": {
+              "start": "2026-09-29",
+              "end": null,
+              "time_zone": null
+            }
+          },
+          "取得日時": {
+            "id": "Im~~",
+            "type": "date",
+            "date": {
+              "start": "2026-09-30T02:20:00.000+09:00",
+              "end": null,
+              "time_zone": null
+            }
+          },
+          "データ品質": {
+            "id": "uF%60b",
+            "type": "select",
+            "select": {
+              "id": "b2dadbb7-429c-47f1-836e-413813b5e182",
+              "name": "正常",
+              "color": "green"
+            }
+          }
+        }
+      }
+    ],
+    "has_more": false,
+    "next_cursor": null
+  },
+  "raw": {
+    "object": "page",
+    "id": "3ead74ff-84cd-819b-a23a-d7de059a709e",
+    "parent": {
+      "type": "database_id",
+      "database_id": "57cedf7b-733a-4db3-970a-015bf655c934"
+    },
+    "archived": false,
+    "in_trash": false,
+    "last_edited_time": "2026-09-29T17:20:00.000Z",
+    "properties": {
+      "取得日時": {
+        "id": "%3A%3CGS",
+        "type": "date",
+        "date": {
+          "start": "2026-09-30T02:20:00.000+09:00",
+          "end": null,
+          "time_zone": null
+        }
+      },
+      "③財務行": {
+        "id": "%3BEbm",
+        "type": "relation",
+        "relation": [
+          {
+            "id": "3ead74ff-84cd-817a-8cc9-d592bce067f2"
+          }
+        ],
+        "has_more": false
+      },
+      "ライセンスタグ": {
+        "id": "%3FHkS",
+        "type": "select",
+        "select": {
+          "id": "38a51cd9-b56e-4734-a677-466a03f16e6f",
+          "name": "commercial-ok",
+          "color": "green"
+        }
+      },
+      "④開示行": {
+        "id": "AsV%7B",
+        "type": "relation",
+        "relation": [
+          {
+            "id": "3ead74ff-84cd-8199-9bc1-dc62d4316dbd"
+          }
+        ],
+        "has_more": false
+      },
+      "⑥データセット": {
+        "id": "Qgj%40",
+        "type": "relation",
+        "relation": [],
+        "has_more": false
+      },
+      "ソース": {
+        "id": "U%5EyZ",
+        "type": "select",
+        "select": {
+          "id": "ee45c6d3-d197-4608-9f31-94d728b7c547",
+          "name": "EDINET",
+          "color": "blue"
+        }
+      },
+      "サイズ": {
+        "id": "Xa~k",
+        "type": "number",
+        "number": 79467
+      },
+      "②株価行": {
+        "id": "%5B%7D%60i",
+        "type": "relation",
+        "relation": [],
+        "has_more": false
+      },
+      "取得URL": {
+        "id": "a%3AFs",
+        "type": "url",
+        "url": "https://api.edinet-fsa.go.jp/api/v2/documents/S100Z4Z3?type=5"
+      },
+      "データ基準日": {
+        "id": "dJwQ",
+        "type": "date",
+        "date": {
+          "start": "2026-09-29",
+          "end": null,
+          "time_zone": null
+        }
+      },
+      "ファイル": {
+        "id": "f%5BlA",
+        "type": "files",
+        "files": [
+          {
+            "name": "edinet_csv_634A_20260929.zip",
+            "type": "file"
+          },
+          {
+            "name": "edinet_csv_634A_20260929_converted.csv",
+            "type": "file"
+          },
+          {
+            "name": "edinet_csv_634A_20260929_converted.parquet.zip",
+            "type": "file"
+          }
+        ]
+      },
+      "対象期間": {
+        "id": "hrFE",
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "2026-09-29",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "2026-09-29",
+            "href": null
+          }
+        ]
+      },
+      "関連銘柄": {
+        "id": "lp%3DY",
+        "type": "relation",
+        "relation": [],
+        "has_more": false
+      },
+      "データ種別": {
+        "id": "mC%40X",
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "csv",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "csv",
+            "href": null
+          }
+        ]
+      },
+      "対象銘柄コード": {
+        "id": "npjy",
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "634A",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "634A",
+            "href": null
+          }
+        ]
+      },
+      "変換状態": {
+        "id": "oUbI",
+        "type": "select",
+        "select": {
+          "id": "3cfebe25-bc8b-4e20-a240-ba11e97f3671",
+          "name": "完了",
+          "color": "green"
+        }
+      },
+      "SHA256": {
+        "id": "pxqx",
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "0278f0d855e184c0252019e82c2e0e4a4f4bda6e342094c6b80a18dc82ba1637",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "0278f0d855e184c0252019e82c2e0e4a4f4bda6e342094c6b80a18dc82ba1637",
+            "href": null
+          }
+        ]
+      },
+      "Related to ⑨ 株主優待 (原本)": {
+        "id": "r%3Ae%60",
+        "type": "relation",
+        "relation": [],
+        "has_more": false
+      },
+      "Related to ⑧ 需給 (原本)": {
+        "id": "%7BLJR",
+        "type": "relation",
+        "relation": [],
+        "has_more": false
+      },
+      "ファイル名": {
+        "id": "title",
+        "type": "title",
+        "title": [
+          {
+            "type": "text",
+            "text": {
+              "content": "edinet_csv_634A_20260929.zip",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "edinet_csv_634A_20260929.zip",
+            "href": null
+          }
+        ]
+      }
+    }
+  },
+  "contract": {
+    "databaseId": "e30ed07f6f4d4916967d90d11b9dff39",
+    "rawDatabaseId": "57cedf7b-733a-4db3-970a-015bf655c934",
+    "fields": [
+      {
+        "field": "net_sales",
+        "name": "売上高",
+        "type": "number"
+      },
+      {
+        "field": "operating_income",
+        "name": "営業利益",
+        "type": "number"
+      },
+      {
+        "field": "ordinary_income",
+        "name": "経常利益",
+        "type": "number"
+      },
+      {
+        "field": "net_income",
+        "name": "純利益",
+        "type": "number"
+      },
+      {
+        "field": "eps",
+        "name": "EPS",
+        "type": "number"
+      },
+      {
+        "field": "bps",
+        "name": "BPS",
+        "type": "number"
+      },
+      {
+        "field": "roe_pct",
+        "name": "ROE%",
+        "type": "number"
+      },
+      {
+        "field": "roa_pct",
+        "name": "ROA%",
+        "type": "number"
+      },
+      {
+        "field": "equity_ratio_pct",
+        "name": "自己資本比率%",
+        "type": "number"
+      },
+      {
+        "field": "cf_operating",
+        "name": "営業CF",
+        "type": "number"
+      },
+      {
+        "field": "cf_investing",
+        "name": "投資CF",
+        "type": "number"
+      },
+      {
+        "field": "cf_financing",
+        "name": "財務CF",
+        "type": "number"
+      },
+      {
+        "field": "dps_actual",
+        "name": "1株配当(実績)",
+        "type": "number"
+      },
+      {
+        "field": "dps_forecast",
+        "name": "1株配当(予想)",
+        "type": "number"
+      },
+      {
+        "field": "forecast_net_sales",
+        "name": "来期予想売上高",
+        "type": "number"
+      },
+      {
+        "field": "forecast_operating_income",
+        "name": "来期予想営業利益",
+        "type": "number"
+      },
+      {
+        "field": "forecast_ordinary_income",
+        "name": "来期予想経常利益",
+        "type": "number"
+      },
+      {
+        "field": "forecast_net_income",
+        "name": "来期予想純利益",
+        "type": "number"
+      },
+      {
+        "field": "forecast_eps",
+        "name": "来期予想EPS",
+        "type": "number"
+      },
+      {
+        "field": "code",
+        "name": "銘柄コード",
+        "type": "rich_text"
+      },
+      {
+        "field": "fiscal_period_end",
+        "name": "決算期末",
+        "type": "date"
+      },
+      {
+        "field": "disclosure_type",
+        "name": "開示種別",
+        "type": "select"
+      },
+      {
+        "field": "consolidated",
+        "name": "連結単体",
+        "type": "select"
+      },
+      {
+        "field": "source",
+        "name": "ソース",
+        "type": "select"
+      },
+      {
+        "field": "raw_relation",
+        "name": "原本",
+        "type": "relation"
+      },
+      {
+        "field": "accounting_standard",
+        "name": "会計基準",
+        "type": "select"
+      },
+      {
+        "field": "disclosed_at",
+        "name": "開示日",
+        "type": "date"
+      },
+      {
+        "field": "license_tag",
+        "name": "ライセンスタグ",
+        "type": "select"
+      },
+      {
+        "field": "data_date",
+        "name": "データ基準日",
+        "type": "date"
+      },
+      {
+        "field": "fetched_at",
+        "name": "取得日時",
+        "type": "date"
+      },
+      {
+        "field": "quality",
+        "name": "データ品質",
+        "type": "select"
+      }
+    ]
+  }
+}

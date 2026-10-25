@@ -26,6 +26,7 @@
     "backfill:overseas": "tsx services/yuho-quant/data-scripts/backfill-overseas.ts",
     "audit:overseas": "tsx services/yuho-quant/data-scripts/audit-overseas.ts",
     "audit:supplement:texts": "tsx --env-file-if-exists=.env services/yuho-quant/data-scripts/audit-supplement-texts.ts",
+    "audit:financial:null": "tsx scripts/notion/financial-null-capture.ts",
     "audit:report:check": "tsx scripts/audit/render-data-audit.ts --check",
     "ingest:ir-tdnet": "tsx scripts/sync/ir-tdnet.ts",
     "ingest:vwap-daily": "tsx scripts/vwap/ingest-daily.ts",

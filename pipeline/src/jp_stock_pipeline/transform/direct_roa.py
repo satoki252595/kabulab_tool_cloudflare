@@ -48,21 +48,32 @@ def direct_net_profit_roa(
     fiscal_period_end: date,
     disclosure_type: str,
     consolidated: str | None,
+    *,
+    diagnostic: dict | None = None,
 ) -> float | None:
     """native DEI・全社主体・実績完了文・純利益定義が揃った百分率だけを返す。
 
     FilingDateInstant の文章を財務値の期間フィルタで落とさず、年度末/FYをDEIで
     照合する。比較表・目標・セグメント・多値は採用しない。type5/type1共通入口。
     """
-    if tidy.empty or disclosure_type != "本決算" or consolidated not in ("連結", "単体"):
-        return None
+    def finish(value, reason, status="null"):
+        if diagnostic is not None:
+            diagnostic.update(status="value" if value is not None else status, reason=reason)
+        return value
+
+    if tidy.empty:
+        return finish(None, "empty_tidy", "hold")
+    if disclosure_type != "本決算":
+        return finish(None, "roa_annual_only", "not_applicable")
+    if consolidated not in ("連結", "単体"):
+        return finish(None, "consolidation_unresolved", "hold")
     if _dei(tidy, "TypeOfCurrentPeriodDEI") != "FY":
-        return None
+        return finish(None, "native_annual_period_unqualified", "hold")
     if _dei(tidy, "CurrentPeriodEndDateDEI") != fiscal_period_end.isoformat():
-        return None
+        return finish(None, "native_period_mismatch_or_missing", "hold")
     native_consolidated = _dei(tidy, "WhetherConsolidatedFinancialStatementsArePreparedDEI")
     if native_consolidated != ("true" if consolidated == "連結" else "false"):
-        return None
+        return finish(None, "native_consolidation_mismatch_or_missing", "hold")
     from .direct_roa_table import ROATableConflict, direct_table_net_profit_roa  # noqa: PLC0415
 
     try:
@@ -71,7 +82,7 @@ def direct_net_profit_roa(
         )
     except ROATableConflict:
         logger.warning("当期純利益ROAの実表値が衝突しているため本文で補わずHOLD")
-        return None
+        return finish(None, "multiple_direct_table_values", "hold")
     blocks = tidy[
         (tidy["element"] == _BLOCK)
         & (tidy["context_ref"] == "FilingDateInstant")
@@ -79,16 +90,17 @@ def direct_net_profit_roa(
     ]
     texts = set(blocks["value"])
     if len(texts) != 1:
-        return None
+        return finish(None, "mda_block_not_unique_or_missing", "hold")
     text = texts.pop()
     if "<" in text:
         # 既存lxmlでタグの境界を空白として保つ。セルの数値を連結しない。
         text = " ".join(html.fromstring(text).itertext())
     text = re.sub(r"\s+", " ", unicodedata.normalize("NFKC", text))
     if "総資産経常利益率" in text:
-        return None
+        return finish(None, "ordinary_income_roa_outside_definition", "not_applicable")
     if not re.search(_NET_LABEL, text):
-        return table_value
+        return finish(table_value, "direct_table_value" if table_value is not None
+                      else "no_qualified_direct_value")
     current_scope = "当連結会計年度" if consolidated == "連結" else "当事業年度"
     other_scope = "当事業年度" if consolidated == "連結" else "当連結会計年度"
     values: set[float] = {table_value} if table_value is not None else set()
@@ -145,7 +157,8 @@ def direct_net_profit_roa(
             if math.isfinite(value):
                 values.add(value)
     if len(values) == 1:
-        return values.pop()
+        return finish(values.pop(), "single_qualified_direct_value")
     if values:
         logger.warning("純利益ROAの直接実績文が多値のため採用しない")
-    return None
+        return finish(None, "multiple_direct_values", "hold")
+    return finish(None, "no_qualified_direct_value")

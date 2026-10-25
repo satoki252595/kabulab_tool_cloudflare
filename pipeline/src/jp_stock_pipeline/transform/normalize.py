@@ -295,23 +295,37 @@ def _unit_allowed(unit: str, field: str) -> bool:
 
 def _pick_value(
     df: pd.DataFrame, candidates: tuple[str, ...], *, field: str,
-    forecast: bool, next_year: bool = False, disclosure_type: str | None = None
+    forecast: bool, next_year: bool = False, disclosure_type: str | None = None,
+    diagnostic: dict | None = None,
 ) -> float | None:
     """会社全体・円建て・適切な単位だけを選ぶ。多義的な数値は欠損にする。"""
+    def finish(value, reason, status="null"):
+        if diagnostic is not None:
+            diagnostic.update(status="value" if value is not None else status, reason=reason)
+        return value
+
+    if diagnostic is not None:
+        diagnostic.update(input_rows=len(df), forecast=forecast, next_year=next_year)
     if df.empty:
-        return None
+        return finish(None, "no_rows_in_selected_scope")
     df = df[df["element"].map(_local_name).isin(candidates)]
+    if diagnostic is not None:
+        diagnostic["allowlisted_rows"] = len(df)
     if df.empty:
-        return None
+        return finish(None, "no_allowlisted_element_in_selected_scope")
     interim_instant_present = (
         not forecast and disclosure_type == "中間" and field in ("bps", "equity_ratio_pct")
         and df["context_ref"].str.startswith("InterimInstant").any()
     )
-    df = df[
-        df.apply(lambda row: _company_wide(row, field), axis=1)
-        & df["unit"].map(lambda unit: _unit_allowed(unit, field))
-    ]
+    company = df.apply(lambda row: _company_wide(row, field), axis=1)
+    unit = df["unit"].map(lambda unit: _unit_allowed(unit, field))
+    if diagnostic is not None:
+        diagnostic.update(company_wide_rows=int(company.sum()), allowed_unit_rows=int(unit.sum()))
+    df = df[company & unit]
+    if df.empty:
+        return finish(None, "no_qualified_company_wide_unit", "hold")
     local = df["element"].map(_local_name)
+    context_rows = selected_rows = 0
     for cand in candidates:
         rows = df[local == cand]
         if rows.empty:
@@ -324,6 +338,7 @@ def _pick_value(
             rows = rows[rows["context_ref"].str.startswith(("CurrentYearDuration", "NextYearDuration"))]
         else:
             rows = rows[rows["context_ref"].map(_is_actual_current)]
+        context_rows += len(rows)
         if rows.empty:
             continue
         # 連結優先 ("連結" > "" > "単体")
@@ -345,12 +360,25 @@ def _pick_value(
                 if not statements.empty:
                     sel = statements
             numbers = set(sel["value"].map(parse_numeric).dropna())
+            selected_rows += len(sel)
             if len(numbers) == 1:
-                return numbers.pop()
+                if diagnostic is not None:
+                    diagnostic.update(element=cand, consolidated=consolidated,
+                                      context_refs=sorted(set(sel["context_ref"])),
+                                      selected_rows=len(sel))
+                return finish(numbers.pop(), "selected_single_numeric_value")
             if len(numbers) > 1:
                 logger.warning("財務値が複数あり採用しない (field=%s element=%s)", field, cand)
-                return None
-    return None
+                if diagnostic is not None:
+                    diagnostic.update(element=cand, numeric_values=sorted(numbers))
+                return finish(None, "multiple_numeric_values", "hold")
+    if diagnostic is not None:
+        diagnostic.update(context_rows=context_rows, selected_rows=selected_rows)
+    if context_rows == 0:
+        return finish(None, "no_qualified_context")
+    if selected_rows == 0:
+        return finish(None, "no_qualified_consolidation_or_period", "hold")
+    return finish(None, "explicit_non_numeric_or_nil")
 
 
 def _pick_text(df: pd.DataFrame, candidates: tuple[str, ...]) -> str | None:
@@ -467,6 +495,7 @@ def tidy_to_financial_record(
     *,
     disclosure_type: str | None = None,
     disclosed_at: datetime | None = None,
+    diagnostics: dict[str, dict] | None = None,
 ) -> FinancialSummaryRecord | None:
     """tidy DataFrame から ③ 財務サマリの1レコードを構築する。
 
@@ -475,10 +504,22 @@ def tidy_to_financial_record(
     disclosure_type 引数は呼び出し側が開示種別を確定できる場合の上書き
     （例: ④ の classify 結果が「修正」）。
     """
+    def trace(field):
+        if diagnostics is None:
+            return None
+        result = {}
+        diagnostics[field] = result
+        return result
+
+    key_trace = trace("_record")
     if tidy.empty:
+        if key_trace is not None:
+            key_trace.update(status="hold", reason="empty_tidy")
         return None
     fiscal_period_end = derive_fiscal_period_end(tidy)
     if fiscal_period_end is None:
+        if key_trace is not None:
+            key_trace.update(status="hold", reason="fiscal_period_unresolved")
         logger.warning("決算期末を導出できないため③レコードを生成しない (code=%s)", code)
         return None
     dtype = interim_disclosure_type(
@@ -503,12 +544,18 @@ def tidy_to_financial_record(
     actual = scoped[
         scoped["period_end"].isin(("", period)) & scoped["instant_date"].isin(("", period))
     ]
+    if key_trace is not None:
+        key_trace.update(status="value" if consolidated is not None else "hold",
+                         reason="key_selected" if consolidated is not None else "consolidation_unresolved",
+                         fiscal_period_end=period, disclosure_type=dtype, consolidated=consolidated,
+                         source_rows=len(tidy), consolidated_rows=len(scoped), actual_rows=len(actual))
 
     values: dict[str, float | None] = {}
     for field, candidates in ELEMENT_CANDIDATES.items():
         if field == "dps":
             continue
-        num = _pick_value(actual, candidates, field=field, forecast=False, disclosure_type=dtype)
+        num = _pick_value(actual, candidates, field=field, forecast=False, disclosure_type=dtype,
+                          diagnostic=trace(field))
         if num is not None and field in _RATIO_FIELDS:
             num *= 100.0  # pure比率だけを%へ確定変換。perShare等の誤unitを採らない。
         values[field] = num
@@ -524,17 +571,19 @@ def tidy_to_financial_record(
         values[dst_field] = _pick_value(
             scoped, ELEMENT_CANDIDATES[src_field], field=src_field, forecast=True,
             next_year=next_year_present,
+            diagnostic=trace(dst_field),
         )
 
     # 1株配当は発行会社の値なので連結区分で除外せず、実績の対象期だけ守る。
     issuer_actual = tidy[tidy["period_end"].isin(("", period)) & tidy["instant_date"].isin(("", period))]
-    dps_actual = _pick_value(issuer_actual, ELEMENT_CANDIDATES["dps"], field="dps", forecast=False)
+    dps_actual = _pick_value(issuer_actual, ELEMENT_CANDIDATES["dps"], field="dps", forecast=False,
+                             diagnostic=trace("dps_actual"))
     next_dps_present = not tidy[
         tidy["context_ref"].str.startswith("NextYearDuration")
         & tidy["element"].map(_local_name).isin(ELEMENT_CANDIDATES["dps"])
     ].empty
     dps_forecast = _pick_value(tidy, ELEMENT_CANDIDATES["dps"], field="dps", forecast=True,
-                               next_year=next_dps_present)
+                               next_year=next_dps_present, diagnostic=trace("dps_forecast"))
 
     return FinancialSummaryRecord(
         code=code,
@@ -550,7 +599,8 @@ def tidy_to_financial_record(
         eps=values["eps"],
         bps=values["bps"],
         roe_pct=values["roe_pct"],
-        roa_pct=direct_net_profit_roa(tidy, fiscal_period_end, dtype, consolidated),
+        roa_pct=direct_net_profit_roa(tidy, fiscal_period_end, dtype, consolidated,
+                                      diagnostic=trace("roa_pct")),
         equity_ratio_pct=values["equity_ratio_pct"],
         cf_operating=values["cf_operating"],
         cf_investing=values["cf_investing"],
