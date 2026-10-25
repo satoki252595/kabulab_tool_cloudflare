@@ -12,10 +12,11 @@ import { log } from "../../../src/shared/log.js";
 import * as schema from "../src/db/schema.js";
 import {
   importYutaiFull,
+  explicitRowRecordMonth,
   type BenefitDetail,
   type StockYutaiData,
 } from "./yutai-full-import.js";
-import { chmodSync, closeSync, createReadStream, createWriteStream, fsyncSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, createReadStream, createWriteStream, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import { createGzip, gzipSync } from "node:zlib";
 import { pathToFileURL } from "node:url";
@@ -27,6 +28,15 @@ import "dotenv/config";
 import { ANYTIME_RECORD_MONTH } from "../src/record-date.js";
 import { sharedEnv } from "../../../src/shared/env.js";
 import { installScheduledDeadline, nativeJobExecutionWindow, ScheduledSourceDeadlineError } from "../../../src/shared/scheduled-admission.js";
+import { parseArgs } from "node:util";
+import { join, resolve } from "node:path";
+import { syncParent } from "../../../scripts/biztag-local/clef-journal.js";
+import { notionEnv } from "../../../src/shared/notion-archive/env.js";
+import { setNotionMaxRps } from "../../../src/shared/notion-archive/client.js";
+import { assertNotCommittable } from "./private-path.js";
+import { applyAtomicBatches } from "./atomic-apply.js";
+import { fetchYieldInputs } from "./recompute-yields.js";
+import { assertMonthScopePost, assertMonthScopeRowsEqual, loadMonthScopePreimage, planSavedMonthScope, qualifySavedMonthScopeArchive, readMonthScopePreimage, readSavedMonthScopePage, readMonthScopeRawBytes } from "./saved-month-scope.js";
 
 // Schema は src/db/schema.ts に集約済み (D1/SQLite 版 — ADR-0001)。
 // 銘柄マスタ stocks は core_stocks の再 export、yutai_genres / yutai_benefits は
@@ -374,11 +384,8 @@ export function parseStockDetail(code: string, html: string): StockDetailResult 
       let localRecordMonths = tableRecordMonths;
       // 実原本の「1,000円相当\n（3月のみ）」「1枚※3月のみ」は
       // 行全体の適用月。複数商品や利用・開催・申込・発送の月は拾わない。
-      const rowMonth = description.normalize("NFKC").match(
-        /^(?:(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)円相当\s*\(([0-9]{1,2})月のみ\)|[1-9][0-9]*枚※([0-9]{1,2})月のみ)$/,
-      );
-      if (rowMonth !== null) {
-        const month = Number(rowMonth[1] === undefined ? rowMonth[2] : rowMonth[1]);
+      const month = explicitRowRecordMonth(description);
+      if (month !== undefined) {
         if (month < 1 || month > 12 || tableRecordMonths.includes(ANYTIME_RECORD_MONTH) ||
             !tableRecordMonths.includes(month)) {
           return { status: "unknown", code, reason: "row-month-scope-conflict" };
@@ -388,7 +395,7 @@ export function parseStockDetail(code: string, html: string): StockDetailResult 
       const notes = cells[2] || lastNotes;
       if (cells[2]) lastNotes = cells[2];
 
-      benefits.push({ minShares, description, notes, localRecordMonths, heading });
+      benefits.push({ minShares, description, notes, localRecordMonths, ...(month === undefined ? {} : { tableRecordMonths }), heading });
     }
   }
 
@@ -400,7 +407,8 @@ export function parseStockDetail(code: string, html: string): StockDetailResult 
 }
 
 // ===== Main =====
-export async function main() {
+export async function main(argv: readonly string[] = []) {
+  if (argv.length > 0) return repairSavedMonthScope(argv);
   const window = nativeJobExecutionWindow(Date.now(), sharedEnv.BATCH_JOB_STARTED_AT(), 360, 10);
   const assertSource = () => {
     if (window !== undefined && Date.now() >= window.sourceDeadline) {
@@ -453,6 +461,90 @@ export async function main() {
   if (lastClock === null) throw new Error("優待原本の実取得時計が無いためSTOP");
   await importCollectedYutaiData(allData, runId, lastClock);
   } finally { restore?.(); }
+}
+
+/** 明示saved modeだけを受け付ける。単一銘柄を全量/廃止判定へ渡さない。 */
+export function parseSavedMonthScopeArgs(argv: readonly string[]) {
+  const { values, tokens } = parseArgs({ args: [...argv], strict: true, allowPositionals: false, tokens: true, options: {
+    "repair-month-scope": { type: "boolean" }, code: { type: "string" },
+    "saved-raw": { type: "string" }, "saved-raw-sha256": { type: "string" },
+    "raw-archive-page-id": { type: "string" }, "raw-filename": { type: "string" },
+    "expected-pre": { type: "string" }, "expected-pre-sha256": { type: "string" }, "state-dir": { type: "string" },
+  } });
+  const seen = new Set<string>();
+  for (const token of tokens) if (token.kind === "option") { if (seen.has(token.name)) throw new Error("月限定是正の引数が重複しています"); seen.add(token.name); }
+  if (values["repair-month-scope"] !== true || !values.code || !/^\d{3}[0-9A-Z]$/.test(values.code) ||
+      !values["saved-raw"] || !values["expected-pre"] || !values["state-dir"] ||
+      !values["saved-raw-sha256"] || !/^[a-f0-9]{64}$/.test(values["saved-raw-sha256"]) ||
+      !values["expected-pre-sha256"] || !/^[a-f0-9]{64}$/.test(values["expected-pre-sha256"]) ||
+      !values["raw-archive-page-id"] || !/^(?:[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/.test(values["raw-archive-page-id"]) ||
+      !values["raw-filename"] || !/^yutai-source-[a-zA-Z0-9_-]+\.jsonl\.gz$/.test(values["raw-filename"])) throw new Error("保存月限定是正には全固定入力/完全SHA/原本保管先/専用stateが必要です");
+  return { code: values.code, path: values["saved-raw"], sha256: values["saved-raw-sha256"],
+    archivePageId: values["raw-archive-page-id"], filename: values["raw-filename"],
+    expectedPre: values["expected-pre"], preSha256: values["expected-pre-sha256"], state: resolve(values["state-dir"]) };
+}
+
+async function repairSavedMonthScope(argv: readonly string[]): Promise<void> {
+  const options = parseSavedMonthScopeArgs(argv);
+  const started = Date.now(), native = nativeJobExecutionWindow(started, sharedEnv.BATCH_JOB_STARTED_AT(), 360, 10);
+  const deadline = Math.min(started + 15 * 60_000, native === undefined ? Infinity : native.deadline);
+  const sourceDeadline = Math.min(started + 10 * 60_000, native === undefined ? Infinity : native.sourceDeadline);
+  const assertActive = () => { if (Date.now() >= deadline) throw new Error("保存月限定是正の閉鎖期限です。再送せず保全します"); };
+  const assertSource = () => { assertActive(); if (Date.now() >= sourceDeadline) throw new Error("保存月限定是正の新規送信開始期限です。再送せず保全します"); };
+  assertSource();
+  if (existsSync(options.state)) throw new Error("保存月限定是正は開始済みstateを再利用しません");
+  const restore = installScheduledDeadline(deadline);
+  try {
+    const pre = readMonthScopePreimage(options.expectedPre, options.preSha256);
+    const raw = await readSavedMonthScopePage(options.path, options.sha256, options.code);
+    const parsed = parseStockDetail(options.code, raw.html);
+    if (parsed.status !== "ok") throw new Error("保存原本の通常parseが未確定です");
+    parsed.data.sourceFetchedAt = raw.receivedAt;
+    const db = createD1HttpDb(schema), sender = createD1HttpBatchSender();
+    for (const getter of [sharedEnv.R2_ACCOUNT_ID, sharedEnv.R2_ACCESS_KEY_ID, sharedEnv.R2_SECRET_ACCESS_KEY, sharedEnv.R2_BUCKET_RAW,
+      notionEnv.NOTION_TOKEN, notionEnv.NOTION_ARCHIVE_PAGE_ID]) getter();
+    const rps = notionEnv.NOTION_MAX_RPS(); if (rps !== undefined) setNotionMaxRps(rps);
+    assertNotCommittable(join(options.state, "INTENT.private.json"));
+    // 完全SHAと実受信時計は元rawからのみ得る。保管済み原本を別keyへ再保存しない。
+    const original = readMonthScopeRawBytes(options.path, options.sha256);
+    assertSource();
+    await qualifySavedMonthScopeArchive(options.archivePageId, options.filename, raw);
+    await verifyArchivedAttachments(options.archivePageId, [{ filename: options.filename, bytes: original }], "保存月限定是正の元原本");
+    mkdirSync(options.state, { mode: 0o700 }); syncParent(options.state); // 既存stateは成功/不明を問わず再利用しない。
+    const stateStat = lstatSync(options.state);
+    if (realpathSync(options.state) !== options.state || !stateStat.isDirectory() || stateStat.isSymbolicLink() || stateStat.uid !== process.getuid?.() || (stateStat.mode & 0o777) !== 0o700) throw new Error("月限定stateは所有者限定0700の実体directoryが必要です");
+    const save = (name: string, value: unknown) => { const path = join(options.state, name); writeFileSync(path, JSON.stringify(value) + "\n", { mode: 0o600, flag: "wx", flush: true }); syncParent(path); };
+    save("INTENT.private.json", { version: 1, ...options, startedAt: new Date(started).toISOString(), deadline: new Date(deadline).toISOString() });
+    const runId = resolveRunId();
+    await withSharedPublishingWriter(async () => {
+      const writer = currentPublishingWriter(); if (writer === undefined) throw new Error("保存月限定是正の共有writerがありません");
+      assertSource();
+      const plan = await publishingReadOnly(async () => {
+        const current = await loadMonthScopePreimage(db, options.code); assertMonthScopeRowsEqual(pre, current);
+        const inputs = await fetchYieldInputs(db, [Number(pre.parent.id)]);
+        return planSavedMonthScope(pre, parsed.data, raw, inputs, Date.now());
+      });
+      assertActive(); save("PRE.private.json", pre); save("PLAN.private.json", plan);
+      const publication = await writer.reserve("yutai-source-import", { kind: "saved-month-scope-v1", code: options.code, rawSha256: options.sha256, preSha256: options.preSha256, excessId: plan.excessId }, JSON.stringify({ options, raw: { ...raw, html: undefined }, pre, plan }));
+      const archive = async (phase: "pre" | "post", value: unknown) => {
+        const bytes = Buffer.from(JSON.stringify(value));
+        const archived = await archivePages([{ url: `D1:stock ${options.code} saved month scope ${phase}`, receivedAt: new Date().toISOString(), status: null,
+          contentType: "application/json", byteLength: bytes.length, bodyBase64: bytes.toString("base64") }], `${runId}-month-scope-${phase}`, `D1 complete scoped rows ${phase} saved month scope repair (HTTP status not exposed)`);
+        if (archived === undefined) throw new Error("月限定是正の物理PRE/POSTがありません");
+        return { archived, bytes };
+      };
+      const before = await archive("pre", pre);
+      assertSource(); await applyAtomicBatches(sender, [plan.batch]);
+      assertActive();
+      const post = await publishingReadOnly(() => loadMonthScopePreimage(db, options.code));
+      assertMonthScopePost(plan, post); save("POST.private.json", post);
+      const after = await archive("post", post); assertActive();
+      await publication.complete({ preArchivePageId: before.archived.pageId, postArchivePageId: after.archived.pageId,
+        observedPostSha256: await sha256HexBytes(after.bytes), observedPostRows: post.benefits.length, deletedRows: 1, code: options.code, rawSha256: options.sha256 });
+    }, publishingStore(deadline));
+    save("FINISHED.private.json", { code: options.code, deletedRows: 1, retainedRows: pre.benefits.length - 1, modelCalls: 0, sourceRequests: 0 });
+    console.info(JSON.stringify({ kind: "saved-month-scope", code: options.code, deletedRows: 1, retainedRows: pre.benefits.length - 1, modelCalls: 0, sourceRequests: 0 }));
+  } finally { restore(); }
 }
 
 /** 全量・物理原本の照合済み収集結果を、通常のPRE保管・原子取込へ渡す。 */
@@ -537,5 +629,5 @@ async function importCollectedYutaiDataOwned(allData: StockYutaiData[], runId: s
 
 // CLI として直接実行されたときだけ動かす (限定 READ 再利用のため import 可能にする)。
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch(() => { console.error("優待取得・原本保管・取込のいずれかが失敗しました。取込開始後は更新済み銘柄があり得ます。原本と更新前スナップショットを保持してSTOP。"); process.exit(1); });
+  main(process.argv.slice(2)).catch(() => { console.error("優待取得・原本保管・取込のいずれかが失敗しました。取込開始後は更新済み銘柄があり得ます。原本と更新前スナップショットを保持してSTOP。再実行しないでください。"); process.exit(process.argv.length > 2 ? 2 : 1); });
 }

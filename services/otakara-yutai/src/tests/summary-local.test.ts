@@ -524,7 +524,7 @@ describe("local summary generation/import boundary", () => {
       selected: 1, accepted: 0, rejected: 1, held: 1, pendingBefore: 2, pendingAfter: 2,
       outcome: "partial_rejection", modelCalls: 0, modelResidents: 0 });
     expect(deps.generate).not.toHaveBeenCalled(); expect(deps.apply).not.toHaveBeenCalled(); expect(rows()).toEqual(original);
-    expect(events).toEqual(["archive-pre", "archive-pre"]);
+    expect(events).toEqual([]);
     const attempts = readdirSync(dir).filter(name => name !== "progress.json").map(name =>
       parseTaskFile(readFileSync(join(dir, name, "tasks.jsonl"), "utf8"))[0].taskId);
     expect(new Set(attempts).size).toBe(2);
@@ -672,7 +672,7 @@ describe("local summary generation/import boundary", () => {
     expect(statSync(join(dir, run, "generation.jsonl")).mode & 0o777).toBe(0o600);
   });
   it("unknown pre archive retains the latch; next execution performs no read, generation, archive, or mutation", async () => {
-    const { deps } = dependencies([row()]);
+    const { deps } = dependencies([row(1, { description: "QUOカード 3,000円分" })]);
     const dir = state();
     deps.archive = vi.fn(async () => {
       expect(statSync(join(dir, "pending-write.json")).mode & 0o777).toBe(0o600);

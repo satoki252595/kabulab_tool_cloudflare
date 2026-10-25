@@ -13,12 +13,15 @@
  * 値は原文と同一)。欠落系だけ抜粋への合成変形で作る。
  */
 import { describe, expect, it, vi } from "vitest";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gunzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { ScheduledSourceDeadlineError } from "../../../../src/shared/scheduled-admission.js";
 import { createD1HttpDb } from "../../../../src/shared/db/d1-http-client.js";
+import { notionRequest } from "../../../../src/shared/notion-archive/client.js";
+import { inputFingerprint } from "../../../../src/shared/notion-archive/archive.js";
 import { recordPrimaryData, verifyArchivedAttachments } from "../../../../src/shared/notion-archive/index.js";
 import {
   collectAllStockCodes,
@@ -27,9 +30,11 @@ import {
   main,
   parseStockDetail,
   parseStockListPage,
+  parseSavedMonthScopeArgs,
   type StockDetailResult,
 } from "../../data-scripts/fetch-yutai-full.js";
 import { benefitRowsOf, type StockYutaiData } from "../../data-scripts/yutai-full-import.js";
+import { qualifySavedMonthScopeArchive, readSavedMonthScopePage, readMonthScopeRawBytes, readMonthScopePreimage, type SavedMonthScopePage } from "../../data-scripts/saved-month-scope.js";
 
 vi.mock("../../../../src/shared/db/d1-http-client.js", async (original) => ({
   ...await original<typeof import("../../../../src/shared/db/d1-http-client.js")>(),
@@ -38,6 +43,105 @@ vi.mock("../../../../src/shared/db/d1-http-client.js", async (original) => ({
 vi.mock("../../../../src/shared/notion-archive/index.js", () => ({
   recordPrimaryData: vi.fn(), verifyArchivedAttachments: vi.fn(), moveToTrash: vi.fn(),
 }));
+vi.mock("../../../../src/shared/notion-archive/client.js", async original => ({
+  ...await original<typeof import("../../../../src/shared/notion-archive/client.js")>(), notionRequest: vi.fn(),
+}));
+
+describe("保存月限定modeの元原本metadata資格", () => {
+  const pageId = "a".repeat(32), dbId = "b".repeat(32), parentId = "c".repeat(32), filename = "yutai-source-local-clock.jsonl.gz";
+  const raw: SavedMonthScopePage = { html: "", url: "https://minkabu.jp/stock/4661/yutai", receivedAt: "2026-10-22T03:04:05.123Z", batchFetchedAt: "2026-10-22T03:04:05.123Z", sha256: "a".repeat(64), compressedBytes: 1, rawBytes: 1, pages: 1 };
+  const text = (value: string) => [{ type: "text", plain_text: value, text: { content: value } }];
+  async function fixtures() {
+    const manifest = { version: 1, files: [{ originalFilename: filename, uploadFilename: filename, originalMime: "application/gzip", uploadMime: "application/gzip", byteLength: 1, sha256: raw.sha256, upload: "uploaded" }], inputFingerprint: await inputFingerprint([{ filename, contentType: "application/gzip", byteLength: 1, sha256: raw.sha256 }]) };
+    const metadata = { runId: "local-clock", pages: 1, rawBytes: 1, bytes: 1, sha256: raw.sha256, _fileManifest: manifest };
+    const page = { object: "page", id: pageId, archived: false, in_trash: false, parent: { type: "database_id", database_id: dbId }, properties: {
+      Key: { type: "title", title: text("yutai-source-local-clock") }, Service: { type: "select", select: { name: "otakara-yutai" } },
+      Status: { type: "select", select: { name: "recorded" } }, Source: { type: "rich_text", rich_text: text("minkabu search/detail response bytes (gzip lossless)") },
+      Metadata: { type: "rich_text", rich_text: text(JSON.stringify(metadata)) }, Files: { type: "files", files: [{ name: filename, type: "file", file: { url: "https://file.notion.so/unit" } }] },
+      "Fetched At": { type: "date", date: { start: "2026-10-22T03:04:00.000Z" } },
+    } };
+    const db = { object: "database", id: dbId, archived: false, in_trash: false, parent: { type: "page_id", page_id: parentId }, title: text("一次データ｜otakara-yutai"), properties: Object.fromEntries(Object.entries(page.properties).map(([name, p]) => [name, { type: p.type }])) };
+    return { page, db, metadata };
+  }
+  it("pageと親DBの2単発GETで資格化し、Notionの分表現と元raw時計を混同しない", async () => {
+    const f = await fixtures(); vi.stubEnv("NOTION_ARCHIVE_PAGE_ID", parentId);
+    vi.mocked(notionRequest).mockReset().mockResolvedValueOnce(f.page).mockResolvedValueOnce(f.db);
+    try {
+      await qualifySavedMonthScopeArchive(pageId, filename, raw);
+      expect(notionRequest).toHaveBeenNthCalledWith(1, "GET", `/pages/${pageId}`, undefined, { singleAttempt: true });
+      expect(notionRequest).toHaveBeenNthCalledWith(2, "GET", `/databases/${dbId}`, undefined, { singleAttempt: true });
+      expect(raw.batchFetchedAt).toBe("2026-10-22T03:04:05.123Z");
+    } finally { vi.unstubAllEnvs(); }
+  });
+  it.each(["archived", "service", "status", "source", "fingerprint", "runId", "clock", "parent", "schema", "truncated"])("%sの不整合は最大2read/書込0でSTOP", async fault => {
+    const f = await fixtures(); vi.stubEnv("NOTION_ARCHIVE_PAGE_ID", parentId);
+    if (fault === "archived") f.page.archived = true;
+    if (fault === "service") f.page.properties.Service.select.name = "other";
+    if (fault === "status") f.page.properties.Status.select.name = "obsoleted";
+    if (fault === "source") f.page.properties.Source.rich_text = text("other source");
+    if (fault === "fingerprint") f.metadata._fileManifest.inputFingerprint = "0".repeat(64);
+    if (fault === "runId") f.metadata.runId = "other-clock";
+    if (fault === "clock") f.page.properties["Fetched At"].date.start = "2026-10-22T03:05:00.000Z";
+    if (fault === "parent") f.db.parent.page_id = "d".repeat(32);
+    if (fault === "schema") f.db.properties.Key.type = "rich_text";
+    if (fault === "truncated") Object.assign(f.page, { request_status: { type: "incomplete" } });
+    f.page.properties.Metadata.rich_text = text(JSON.stringify(f.metadata));
+    vi.mocked(notionRequest).mockReset().mockResolvedValueOnce(f.page).mockResolvedValueOnce(f.db);
+    try { await expect(qualifySavedMonthScopeArchive(pageId, filename, raw)).rejects.toThrow(); expect(vi.mocked(notionRequest).mock.calls.length).toBeLessThanOrEqual(2); }
+    finally { vi.unstubAllEnvs(); }
+  });
+});
+
+describe("保存済み月限定入力の通信前資格", () => {
+  const record = (code: string, bytes: Buffer, clock: string) => ({ url: `https://minkabu.jp/stock/${code}/yutai`,
+    receivedAt: clock, status: 200, contentType: "text/html; charset=utf-8", byteLength: bytes.length, bodyBase64: bytes.toString("base64") });
+  const first = "2026-10-22T03:04:05.123Z", last = "2026-10-22T03:05:06.456Z";
+  const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+  const input = () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "saved-month-"))), path = join(dir, "raw.gz");
+    const lines = [record("4661", Buffer.from("<html>権利月</html>"), first), record("9101", Buffer.from([0xff]), last)];
+    const bytes = gzipSync(lines.map(line => JSON.stringify(line)).join("\n") + "\n");
+    writeFileSync(path, bytes, { mode: 0o600 }); return { dir, path, lines, bytes };
+  };
+  it("全gzip SHA/EOFを検証し、対象HTMLだけdecode・末尾の実batch時計を保持する", async () => {
+    const f = input();
+    try {
+      const value = await readSavedMonthScopePage(f.path, sha(f.bytes), "4661");
+      expect(value.html).toBe("<html>権利月</html>"); expect(value.receivedAt).toBe(first);
+      expect(value.batchFetchedAt).toBe(last); expect(value.pages).toBe(2);
+      expect(readMonthScopeRawBytes(f.path, sha(f.bytes))).toEqual(f.bytes);
+      await expect(readSavedMonthScopePage(f.path, "0".repeat(64), "4661")).rejects.toThrow();
+      expect(() => readMonthScopeRawBytes(f.path, "0".repeat(64))).toThrow();
+      expect(() => readMonthScopePreimage(f.path, sha(f.bytes))).toThrow();
+    } finally { rmSync(f.dir, { recursive: true, force: true }); }
+  });
+  it("重複code/不正bytes/欠落/未閉鎖gzip/非private/symlinkはSTOPする", async () => {
+    const f = input();
+    try {
+      for (const lines of [[...f.lines, f.lines[0]], [{ ...f.lines[0], byteLength: 1 }], [f.lines[1]]]) {
+        const bytes = gzipSync(lines.map(line => JSON.stringify(line)).join("\n") + "\n"); writeFileSync(f.path, bytes);
+        await expect(readSavedMonthScopePage(f.path, sha(bytes), "4661")).rejects.toThrow();
+      }
+      const truncated = f.bytes.subarray(0, f.bytes.length - 8); writeFileSync(f.path, truncated);
+      await expect(readSavedMonthScopePage(f.path, sha(truncated), "4661")).rejects.toThrow();
+      writeFileSync(f.path, f.bytes); chmodSync(f.path, 0o644);
+      await expect(readSavedMonthScopePage(f.path, sha(f.bytes), "4661")).rejects.toThrow();
+      chmodSync(f.path, 0o600); const linked = join(f.dir, "link.gz"); symlinkSync(f.path, linked);
+      await expect(readSavedMonthScopePage(linked, sha(f.bytes), "4661")).rejects.toThrow();
+    } finally { rmSync(f.dir, { recursive: true, force: true }); }
+  });
+  it("明示mode/完全SHA/全引数を欠く入口は通信前にSTOPする", async () => {
+    const args = ["--repair-month-scope", "--code=4661", "--saved-raw=/private/raw.gz", `--saved-raw-sha256=${"a".repeat(64)}`,
+      `--raw-archive-page-id=${"a".repeat(32)}`, "--raw-filename=yutai-source-local-clock.jsonl.gz", "--expected-pre=/private/pre.json",
+      `--expected-pre-sha256=${"b".repeat(64)}`, "--state-dir=/private/state"];
+    expect(parseSavedMonthScopeArgs(args).code).toBe("4661");
+    for (let i = 0; i < args.length; i++) expect(() => parseSavedMonthScopeArgs(args.filter((_, n) => n !== i))).toThrow();
+    expect(() => parseSavedMonthScopeArgs([...args, "--unknown"])).toThrow();
+    const reads = vi.mocked(createD1HttpDb).mock.calls.length;
+    await expect(main(["--code=4661"])).rejects.toThrow();
+    expect(createD1HttpDb).toHaveBeenCalledTimes(reads);
+  });
+});
 
 /** 8022 valuations の union (原本 byte 66863 付近。被せてはならない decoy)。 */
 const UNION8022 = `<tr>

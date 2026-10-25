@@ -101,7 +101,53 @@ describe("Linux mechanical summary / shared writer", () => {
     const run = readdirSync(nextHost).find(name => name !== "progress.json")!;
     expect(readFileSync(join(nextHost, run, "tasks.jsonl"), "utf8")).toContain(tasks[1].taskId);
     expect(rows()).toEqual(initial); expect(deps.apply).not.toHaveBeenCalled(); expect(deps.generate).not.toHaveBeenCalled();
-    expect(memory.events.filter(event => event === "archive-post")).toHaveLength(2);
+    expect(deps.archive).not.toHaveBeenCalled();
+    expect([...memory.values.keys()].some(key => key.includes("/operations/"))).toBe(false);
+    expect(memory.current()).toMatchObject({ owner: null, pending: null });
+    expect(readdirSync(nextHost)).not.toContain("pending-write.json");
+    const bundle = JSON.parse(gunzipSync(readFileSync(join(nextHost, run, "pre-import.json.gz"))).toString());
+    const tasksText = readFileSync(join(nextHost, run, "tasks.jsonl"), "utf8");
+    const resultsText = readFileSync(join(nextHost, run, "results.jsonl"), "utf8");
+    expect(bundle.noWrite).toEqual({ tasksSHA256: createHash("sha256").update(tasksText).digest("hex"),
+      resultsSHA256: createHash("sha256").update(resultsText).digest("hex"),
+      cursorBefore: JSON.stringify({ cursor: tasks[0].taskId }), cursorNext: JSON.stringify({ cursor: tasks[1].taskId }) });
+    expect(existsSync(join(nextHost, run, "post-import.json.gz"))).toBe(false);
+    expect(existsSync(join(nextHost, run, "complete.json"))).toBe(true);
+  });
+  it.each(["recipient", "clock", "read"] as const)("全HOLDのfresh %s変化/失敗ではcursorを書かず、純readのownerだけ閉じる", async failure => {
+    const memory = storeFixture(), initial = row(1, "合成商品から選択・条件不明");
+    const { deps } = dependencies([initial], memory.events); let reads = 0;
+    deps.loadRows = vi.fn(async () => {
+      if (++reads !== 2) return [structuredClone(initial)];
+      if (failure === "read") throw new Error("fresh_read_failed");
+      return [{ ...initial, ...(failure === "recipient" ? { minShares: 200 } : { updatedAt: 2 }) }];
+    });
+    const dir = state();
+    await expect(runMechanicalSummary({ stateDir: dir, limit: 60 }, () => deps, memory.store)).rejects.toThrow("publishing_read_only_failed");
+    expect(memory.current()).toMatchObject({ owner: null, pending: null });
+    expect(memory.events).not.toContain(`put:${cursorKey}`); expect(existsSync(join(dir, "progress.json"))).toBe(false);
+    expect(deps.archive).not.toHaveBeenCalled(); expect(deps.apply).not.toHaveBeenCalled();
+    expect([...memory.values.keys()].some(key => key.includes("/operations/"))).toBe(false);
+  });
+  it("全HOLDのcursor適用後ACK不明はprivate bundleとownerを保持し、次hostから再送しない", async () => {
+    const memory = storeFixture(), before = JSON.stringify({ cursor: "0000000000000000" });
+    memory.values.set(cursorKey, { body: before, etag: "cursor-before" });
+    const { deps } = dependencies([row(1, "合成商品から選択・条件不明")], memory.events), dir = state();
+    const localBefore = JSON.stringify({ cursor: "ffffffffffffffff" });
+    writeFileSync(join(dir, "progress.json"), localBefore, { mode: 0o600 });
+    const put = memory.store.put;
+    memory.store.put = vi.fn(async (...args: Parameters<PublishingStore["put"]>) => { await put(...args); if (args[0] === cursorKey) throw new Error("unknown_cursor"); });
+    await expect(runMechanicalSummary({ stateDir: dir, limit: 60 }, () => deps, memory.store)).rejects.toThrow("unknown_cursor");
+    expect(memory.current().owner).not.toBeNull(); expect(memory.current().pending).toBeNull();
+    expect(deps.archive).not.toHaveBeenCalled(); expect(deps.apply).not.toHaveBeenCalled();
+    const run = readdirSync(dir).find(name => name !== "progress.json")!;
+    const bundle = JSON.parse(gunzipSync(readFileSync(join(dir, run, "pre-import.json.gz"))).toString());
+    expect(bundle.noWrite.cursorBefore).toBe(before); expect(bundle.noWrite.cursorNext).toBe(memory.values.get(cursorKey)!.body);
+    expect(readFileSync(join(dir, "progress.json"), "utf8")).toBe(localBefore);
+    expect(existsSync(join(dir, run, "complete.json"))).toBe(false); expect(existsSync(join(dir, "pending-write.json"))).toBe(false);
+    const create = vi.fn(() => deps);
+    await expect(runMechanicalSummary({ stateDir: state(), limit: 60 }, create, memory.store)).rejects.toThrow("未閉鎖");
+    expect(create).not.toHaveBeenCalled(); expect(memory.events.filter(event => event === `put:${cursorKey}`)).toHaveLength(1);
   });
   it("予約前の純read失敗だけownerを閉じ、次hostの通常処理を許可する", async () => {
     const memory = storeFixture(); const { deps } = dependencies([row(1)], memory.events); const loadRows = deps.loadRows;
