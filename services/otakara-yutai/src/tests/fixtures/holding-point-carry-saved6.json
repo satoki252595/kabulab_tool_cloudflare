@@ -1,0 +1,96 @@
+{
+  "provenance": {
+    "sourcePostSha256": "1f4a9079b400a4ec83e20755cfbb740e1b256a8b2c2bfb36d27b62745a2aa8cd",
+    "clock": "2026-10-25T12:51:09.987Z",
+    "sourceTasksSha256": "c2ba8b2e6eb7886b5a4c954fa74f6012b5a616d4389b05159e93c54fa18fec97",
+    "privateFixtureSha256": "2529d6fd4c816b0065f6e83775e26633381ef3d84f2ac483f07027ea57d28bf5",
+    "normalizedTailSha256": "72495c8f4116e4a58389f02b24409d01561fffec516534b3333a1dd43d49781a",
+    "historicalFixtureNotCurrentPendingCount": true
+  },
+  "groups": [
+    {
+      "taskId": "a0c60cf52f743652",
+      "stockCode": "4053",
+      "sourceSha256": "bae6840178ab39956b8a54c82d230cda83f66d47bf9a47b240e6b5f1ef94003e",
+      "rowCount": 1,
+      "recipients": [
+        {
+          "minShares": 900,
+          "recordMonth": 12,
+          "recordDate": null
+        }
+      ],
+      "expectedSummarySha256": "2d86c46c56a01ea04d7427642da9ddc42eb0844e9668b8da1ca3dbf42505d034"
+    },
+    {
+      "taskId": "fcf9aca2192b921e",
+      "stockCode": "4053",
+      "sourceSha256": "35f191bd24ba9d491bef57be4b6bc193d5c65e2b883755a6050172e5bc6b0436",
+      "rowCount": 1,
+      "recipients": [
+        {
+          "minShares": 1000,
+          "recordMonth": 12,
+          "recordDate": null
+        }
+      ],
+      "expectedSummarySha256": "17db52a52d8d0fcb78770c8b3b0aabaaa42886f83846ff963b678c83bd6e9b39"
+    },
+    {
+      "taskId": "799b7c5e5aad351b",
+      "stockCode": "4053",
+      "sourceSha256": "9f069cb3c02d35890db2497e9b1fa55f896e5f83ad12caa048767d9d2ae21794",
+      "rowCount": 1,
+      "recipients": [
+        {
+          "minShares": 2000,
+          "recordMonth": 12,
+          "recordDate": null
+        }
+      ],
+      "expectedSummarySha256": "ff453f7aa30c4aeca011de9d4f2da4e84971823848cee1c5eec523277d016373"
+    },
+    {
+      "taskId": "be5a99ee7d4dad02",
+      "stockCode": "4053",
+      "sourceSha256": "19c4776fafbd8057319a536dc0e6356cc824ae73e859823770675889bd3c685a",
+      "rowCount": 1,
+      "recipients": [
+        {
+          "minShares": 600,
+          "recordMonth": 12,
+          "recordDate": null
+        }
+      ],
+      "expectedSummarySha256": "35d5c637c995a068ec346ed25603a8377789519e7500d61174048e8175e2b1d8"
+    },
+    {
+      "taskId": "57c52e6ffeb31120",
+      "stockCode": "4053",
+      "sourceSha256": "0a72135414935efa02bce25bf1dd9cd935f2ed98a678d1a788becc6622ca884a",
+      "rowCount": 1,
+      "recipients": [
+        {
+          "minShares": 4000,
+          "recordMonth": 12,
+          "recordDate": null
+        }
+      ],
+      "expectedSummarySha256": "bffda1920d419d1d937b6d8b54d20ca48788dedd8dd1372b640748597691aa5c"
+    },
+    {
+      "taskId": "577aa0d82a0c0594",
+      "stockCode": "4053",
+      "sourceSha256": "2580b1a5eb62ad7ef5e7b41f48d65b6933a3a22681811d5769fd8ebea496e0c9",
+      "rowCount": 1,
+      "recipients": [
+        {
+          "minShares": 3000,
+          "recordMonth": 12,
+          "recordDate": null
+        }
+      ],
+      "expectedSummarySha256": "8c11a41506cc564404fbb5871a026c072a1b5edb49d68a28a89fcddbbe3cca76"
+    }
+  ]
+}

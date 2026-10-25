@@ -3,12 +3,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { ROOT } from "../../../../src/shared/db/tests/source-scan.js";
-import { isSummaryNumbersGrounded, SUMMARY_CONTRACT_VERSION } from "../../data-scripts/summary-contract.js";
+import { checkSummary, isSummaryNumbersGrounded, missingSummaryConditions, SUMMARY_CONTRACT_VERSION, SUMMARY_MAX_CHARS } from "../../data-scripts/summary-contract.js";
 import { companyValue, compileSimpleSummary } from "../../data-scripts/summary-local.js";
 import { planSummaryImport, type SummaryResult } from "../../data-scripts/summary-import.js";
 import { selectSummaryTasks, type BenefitRow, type SummaryTask } from "../../data-scripts/summary-tasks.js";
 import saved from "./fixtures/premium-club-saved4.json";
 import carrySaved from "./fixtures/premium-club-carry-saved5.json";
+import holdingCarrySaved from "./fixtures/holding-point-carry-saved6.json";
+import { compileHoldingPointCarryLiteral } from "../../data-scripts/holding-structure.js";
 import { carryKey, planCarry } from "../../data-scripts/yutai-full-import.js";
 import { splitHeadedDescription } from "../../data-scripts/estimated-value-guard.js";
 
@@ -114,7 +116,7 @@ it.skipIf(!existsSync(carryPrivatePath))("保存5群10行の繰越両条件を�
     const result = compileSimpleSummary(task);
     if (result === null) throw new Error("carry_literal_missing");
     expect(sha(result.shortSummary)).toBe(metadata?.expectedSummarySha256);
-    expect(result.shortSummary.length <= 60 && result.estimatedValue === null).toBe(true);
+    expect(result.shortSummary.length <= SUMMARY_MAX_CHARS && result.estimatedValue === null).toBe(true);
     expect(isSummaryNumbersGrounded(task.description, result.shortSummary, { minShares: task.recipients.map(r => r.minShares), recordMonths: task.recipients.map(r => r.recordMonth) })).toBe(true);
     return result;
   });
@@ -155,7 +157,7 @@ it.skipIf(!existsSync(carryPrivatePath))("繰越全文・各回/年額・対象�
   }
   for (const first of ["0ポイント(年間0ポイント)", "0750ポイント(年間1500ポイント)", "7,50ポイント(年間1500ポイント)",
     "-750ポイント(年間1500ポイント)", "750.5ポイント(年間1501ポイント)", "750ポイント(年間1501ポイント)",
-    "9007199254740992ポイント(年間18014398509481984ポイント)", "1234567890ポイント(年間2469135780ポイント)"])
+    "9007199254740992ポイント(年間18014398509481984ポイント)"])
     expect(compileSimpleSummary({ ...task, description: [lines[0], first, ...lines.slice(2)].join("\n") }) === null).toBe(true);
   for (const minShares of [[], [999], [4000, 999], [1000.5], [Number.MAX_SAFE_INTEGER + 1]])
     expect(isSummaryNumbersGrounded(task.description, result.shortSummary, { ...context, minShares })).toBe(false);
@@ -165,5 +167,90 @@ it.skipIf(!existsSync(carryPrivatePath))("繰越全文・各回/年額・対象�
     result.shortSummary.replace("WILLsCoin", "別コイン"), `${result.shortSummary}・4000株`, result.shortSummary.replace("ポイント", "円")])
     expect(isSummaryNumbersGrounded(task.description, shortSummary, context)).toBe(false);
   const plan = planSummaryImport({ tasks: [task], currentRows: source.rows, resultsText: JSON.stringify({ ...result, estimatedValue: carrySaved.groups[0].pointsPerGrant }) });
+  expect(plan.updates.length).toBe(0); expect(plan.rejections.length).toBe(1);
+});
+
+const holdingCarryPrivatePath = join(ROOT, "tmp/yutai-holding-point-carry-proof-v1/saved6.private.json");
+function holdingCarryFixture() {
+  const bytes = readFileSync(holdingCarryPrivatePath);
+  expect(sha(bytes)).toBe(holdingCarrySaved.provenance.privateFixtureSha256);
+  return JSON.parse(bytes.toString()) as { tasks: SummaryTask[]; rows: BenefitRow[]; expectedResults: SummaryResult[] };
+}
+
+it("未資格の保有/繰越条件namespaceを通常株数へ降格させず、120字でも数値・率・条件guardを維持する", () => {
+  const description = '【種別："プレミアム優待倶楽部ポイント"】\n【1年未満保有】\n100ポイント\n【1年以上保有】\n200ポイント\n合成の未資格条件';
+  const context = { minShares: [600], recordMonths: [12] };
+  expect(compileHoldingPointCarryLiteral(description)).toBeNull();
+  expect(isSummaryNumbersGrounded(description, "100ポイント(繰越条件:600株)", context)).toBe(false);
+  expect(isSummaryNumbersGrounded("合成商品券1000円", "600株:1000円", context)).toBe(true);
+  expect(isSummaryNumbersGrounded("合成商品券1000円", "600株:1000円", { ...context, minShares: [900] })).toBe(false);
+  expect(checkSummary("あ".repeat(120))).toEqual([]);
+  expect(checkSummary("あ".repeat(121)).map(v => v.rule)).toEqual(["too_long"]);
+  expect(missingSummaryConditions("1年以上保有で商品を選択", "商品")).toEqual(["choice_condition_missing", "holding_condition_missing"]);
+});
+
+it.skipIf(!existsSync(holdingCarryPrivatePath))("保存6群6行の両数量と継続/繰越条件を保持し、通常plan/selector/carryを通す", () => {
+  const source = holdingCarryFixture(), tasks = selectSummaryTasks(source.rows);
+  expect(tasks.length).toBe(6); expect(source.rows.length).toBe(6);
+  const results = tasks.map(task => {
+    const metadata = holdingCarrySaved.groups.find(g => g.taskId === task.taskId);
+    expect(sha(task.description)).toBe(metadata?.sourceSha256);
+    expect(companyValue(task)).toEqual({ value: null, reason: "choice" });
+    const result = compileSimpleSummary(task);
+    if (result === null) throw new Error("holding_point_carry_missing");
+    expect(sha(result.shortSummary)).toBe(metadata?.expectedSummarySha256);
+    expect(result.shortSummary.length > 60 && result.shortSummary.length <= SUMMARY_MAX_CHARS).toBe(true);
+    expect(result.estimatedValue).toBeNull();
+    expect(missingSummaryConditions(task.description, result.shortSummary)).toEqual([]);
+    return result;
+  });
+  const plan = planSummaryImport({ tasks, currentRows: source.rows, resultsText: results.map(r => JSON.stringify(r)).join("\n") });
+  expect(plan.rejections.map(r => r.reason)).toEqual([]); expect(plan.updates.length).toBe(6);
+  expect(plan.updates.flatMap(u => u.ids).length).toBe(6);
+  const after = source.rows.map(row => {
+    const update = plan.updates.find(u => u.ids.includes(row.id));
+    if (update === undefined) throw new Error("holding_point_carry_update_missing");
+    expect(update.estimatedValue === null && update.estimateValueSource === null).toBe(true);
+    return { ...row, shortSummary: update.shortSummary, estimatedValue: null, estimateValueSource: null };
+  });
+  expect(selectSummaryTasks(after).length).toBe(0);
+  for (const row of after) {
+    const key = carryKey(row.stockCode, splitHeadedDescription(row.description).body, row.minShares, row.recordMonth);
+    const carried = planCarry([{ ...row, code: row.stockCode }], new Map(), new Map()).carried.get(key);
+    expect(carried !== undefined).toBe(true); expect(sha(carried!.shortSummary!)).toBe(sha(row.shortSummary));
+  }
+  const old = results.map(r => JSON.stringify({ ...r, contractVersion: "2026-10-25.6" })).join("\n");
+  expect(planSummaryImport({ tasks, currentRows: source.rows, resultsText: old }).rejections.map(r => r.reason)).toEqual(Array(6).fill("contract_version"));
+});
+
+it.skipIf(!existsSync(holdingCarryPrivatePath))("両数量・定義全文・定型句・600株/12月の対象矛盾は成功化しない", () => {
+  const { rows } = holdingCarryFixture(), task = selectSummaryTasks(rows)[0], result = compileSimpleSummary(task);
+  if (result === null) throw new Error("holding_point_carry_missing");
+  const context = { minShares: task.recipients.map(r => r.minShares), recordMonths: [12] }, lines = task.description.split("\n");
+  const changed = [task.description + "\n追加条件", task.description.replace("600株", "900株"),
+    task.description.replace("同一", "別の"), task.description.replace("１回", "２回"), task.description.replace("12月", "11月"),
+    task.description.replace("3月上旬", "3月下旬"), task.description.replace("WILLsCoin", "別コイン"),
+    task.description.replace("1年以上保有", "2年以上保有"), task.description.replace(lines[0], '【種別："別ポイント"】')];
+  for (let line = 1; line < lines.length; line++) if (lines[line] !== "") changed.push(lines.filter((_, i) => i !== line).join("\n"));
+  for (const description of changed) {
+    expect(description !== task.description).toBe(true);
+    expect(compileSimpleSummary({ ...task, description }) === null).toBe(true);
+    expect(isSummaryNumbersGrounded(description, result.shortSummary, context)).toBe(false);
+  }
+  for (const count of ["0", "-1", "1.5", "05000", "5,00", "01,000", "1e4", "9007199254740992"]) {
+    for (const slot of [2, 4]) {
+      const description = lines.map((l, i) => i === slot ? `${count}ポイント` : l).join("\n");
+      expect(compileSimpleSummary({ ...task, description }) === null).toBe(true);
+    }
+  }
+  for (const minShares of [[], [599], [600, 599], [600.5], [Number.MAX_SAFE_INTEGER + 1]])
+    expect(isSummaryNumbersGrounded(task.description, result.shortSummary, { ...context, minShares })).toBe(false);
+  for (const recordMonths of [[], [0], [11], [12, 11], [12.5]])
+    expect(isSummaryNumbersGrounded(task.description, result.shortSummary, { ...context, recordMonths })).toBe(false);
+  for (const shortSummary of [result.shortSummary.replace("600株", "900株"), result.shortSummary.replace("1年未満", "1年以下"),
+    result.shortSummary.replace("WILLsCoin", "別コイン"), result.shortSummary.replace("翌3月", "3月"),
+    result.shortSummary.replace("ポイント", "円"), result.shortSummary.replace("継続保有・記載", "継続保有"), `${result.shortSummary}・600株`])
+    expect(isSummaryNumbersGrounded(task.description, shortSummary, context)).toBe(false);
+  const plan = planSummaryImport({ tasks: [task], currentRows: rows, resultsText: JSON.stringify({ ...result, estimatedValue: 10000 }) });
   expect(plan.updates.length).toBe(0); expect(plan.rejections.length).toBe(1);
 });

@@ -8,6 +8,7 @@ import { buildPublicBenefitFacts } from "../../data-scripts/public-facts.js";
 import { compileSimpleSummary, companyValue } from "../../data-scripts/summary-local.js";
 import { planSummaryImport } from "../../data-scripts/summary-import.js";
 import { selectSummaryTasks, type BenefitRow } from "../../data-scripts/summary-tasks.js";
+import { SUMMARY_MAX_CHARS } from "../../data-scripts/summary-contract.js";
 import saved from "./fixtures/record-tier-saved1.json";
 
 const hash = (text: string | Buffer) => createHash("sha256").update(text).digest("hex");
@@ -62,10 +63,15 @@ describe("全文で対応した保有2tierと名簿記録条件の定型要約",
     }
   });
 
-  it("同額・安全整数外・60字を超える額面は既存金額guardや要約契約を迂回しない", () => {
+  it("同額・安全整数外は拒否し、安全整数内の両数量は120字以内で保持する", () => {
     expect(compile(description.replace("2,000円", "5,000円"))).toBeNull();
     expect(compile(description.replace("2,000円", "9,007,199,254,740,992円"))).toBeNull();
-    expect(compile(description.replace("2,000円", "999,999,999,999,999円").replace("5,000円", "888,888,888,888,888円"))).toBeNull();
+    const text = description.replace("2,000円", "999,999,999,999,999円").replace("5,000円", "888,888,888,888,888円");
+    const rows = [row(text)], tasks = selectSummaryTasks(rows), result = compileSimpleSummary(tasks[0]);
+    expect(result !== null && result.shortSummary.length > 60 && result.shortSummary.length <= SUMMARY_MAX_CHARS).toBe(true);
+    expect(result?.estimatedValue).toBeNull();
+    const plan = planSummaryImport({ tasks, currentRows: rows, resultsText: JSON.stringify(result) });
+    expect(plan.rejections).toEqual([]); expect(plan.updates.length).toBe(1);
   });
 
   it("掲載2期間と名簿定義は構造化し、本人適用と評価額は未資格のまま保つ", () => {

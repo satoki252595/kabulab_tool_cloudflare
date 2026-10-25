@@ -1,5 +1,7 @@
 # 保存原本による受注の有限補修 — 2026-10-17
 
+**10/25確認の後続結果:** 固定112文書479数値は通常適用・物理PRE/POST・独立inspectまで受入済み。下記の「177候補未実行」は当初の記録で、現在の残数ではない。正準stateの112恒久claimは同集合と一致する。他65は当時の保有18/海外47との競合回避による除外で、補修必要数は未確定。海外166文書の閉鎖後も、受注47の最新文書・全6表は未再資格化のため、元177を先頭から再実行しない。受注最終証跡はprivate `tmp/feature-audit-20261017/orders-remaining52-normal-operation-v1/stage-03/root-final-acceptance-v1.json`（SHA `987d5aa7092295bb37b8f4ddbc67cecd45ab1455eea115c2971437a490ba2082`）。[現状の完了条件と残件](../work-plans/production-completion-20261025.md)を参照。
+
 通常 `ingestDocument` と `processMissingDoc` の受注保存変換を `toOrderSaveRows` に統一した。受注parser・採用表・金額・NULL・前期行・提出会社単独のfalseは変えていない。新 `backfill-orders.ts` は既存の保存海外売上ツールの原本資格、typed-first、現在最新有報/本文、全6表CAS、通常growth投影、物理PRE/POST、独立inspect、通信予算を再用する。新源取得・モデル・依存・DDLは追加0。
 
 ## 有限入口

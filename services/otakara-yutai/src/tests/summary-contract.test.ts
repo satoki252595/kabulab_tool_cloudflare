@@ -101,8 +101,8 @@ describe("checkSummary — 本番で実在した違反", () => {
     expect(rules("◇保有する株式数に応じて付与")).toContain("annotation");
   });
 
-  it("60字超を検出する", () => {
-    // 7780 (135字) の冒頭を再現した 61 字
+  it("120字まで条件を保持し、121字を拒否する", () => {
+    expect(SUMMARY_MAX_CHARS).toBe(120);
     expect(rules("あ".repeat(SUMMARY_MAX_CHARS + 1))).toContain("too_long");
     expect(rules("あ".repeat(SUMMARY_MAX_CHARS))).not.toContain("too_long");
   });
@@ -125,7 +125,7 @@ describe("checkSummary — 本番で実在した違反", () => {
   });
 
   it("複数違反を全て返す", () => {
-    const v = checkSummary("※" + "あ".repeat(70) + "です。");
+    const v = checkSummary("※" + "あ".repeat(SUMMARY_MAX_CHARS + 1) + "です。");
     expect(v.map((x) => x.rule).sort()).toEqual(["annotation", "prose", "too_long"]);
     expect(formatViolations(v)).toContain("annotation");
   });

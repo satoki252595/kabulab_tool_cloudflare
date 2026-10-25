@@ -36,6 +36,17 @@ export function compilePremiumClubCarryLiteral(description: string): string | nu
   return `${count}ポイント(商品選択/WILLsCoin交換、繰越:同株主番号2回以上連続記載・1000株以上継続保有)`;
 }
 
+/** 保有期間別の両数量と、継続保有・記載・繰越・開始時期の既知全文だけを定型化する。 */
+export function compileHoldingPointCarryLiteral(description: string): string | null {
+  const source = splitHeadedDescription(description);
+  if (source.malformed || source.heading?.normalize("NFKC").trim() !== "プレミアム優待倶楽部ポイント") return null;
+  const match = /^【1年未満保有】\n([1-9][0-9]{0,2}(?:,[0-9]{3})+|[1-9][0-9]*)ポイント\n【1年以上保有】\n([1-9][0-9]{0,2}(?:,[0-9]{3})+|[1-9][0-9]*)ポイント\n([\s\S]+)$/u.exec(source.body.normalize("NFKC").trim());
+  if (match === null || createHash("sha256").update(match[3]).digest("hex") !== "72495c8f4116e4a58389f02b24409d01561fffec516534b3333a1dd43d49781a") return null;
+  const below = Number(match[1].replaceAll(",", "")), above = Number(match[2].replaceAll(",", ""));
+  if (![below, above].every(value => Number.isSafeInteger(value) && value > 0)) return null;
+  return `保有1年未満${below}/1年以上${above}ポイント(WEB商品選択/WILLsCoin交換)、1年以上/繰越条件:毎年12月末同一株主番号600株以上継続保有・記載、繰越次回1回、翌3月上旬開始`;
+}
+
 /** 保存全文にある単一期間と掲載額・枚数の対応だけを読む。本人の適用条件は未確認。 */
 export function parseBenefitHoldingStructure(description: string): BenefitHoldingStructure | null {
   const source = splitHeadedDescription(description);

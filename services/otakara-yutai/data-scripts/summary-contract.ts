@@ -23,7 +23,7 @@
 
 import { createHash } from "node:crypto";
 import { HEADED_MARK, splitHeadedDescription } from "./estimated-value-guard.js";
-import { compilePointExchangeLiteral, compilePremiumClubCarryLiteral, compileVenueAdmissionLiteral } from "./holding-structure.js";
+import { compileHoldingPointCarryLiteral, compilePointExchangeLiteral, compilePremiumClubCarryLiteral, compileVenueAdmissionLiteral } from "./holding-structure.js";
 
 /**
  * 要約契約の版。タスクファイルと結果ファイルの各行に載り、取り込み時に
@@ -31,7 +31,7 @@ import { compilePointExchangeLiteral, compilePremiumClubCarryLiteral, compileVen
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-10-25.6";
+export const SUMMARY_CONTRACT_VERSION = "2026-10-25.7";
 
 /** 比較時だけ同じ月期間の表記を揃え、数値・比較条件・保存文面は変えない。 */
 function normalizeMonthPeriods(text: string): string {
@@ -126,6 +126,11 @@ export function isSummaryNumbersGrounded(
   context: { minShares: readonly number[]; recordMonths: readonly number[] },
 ): boolean {
   const normalized = shortSummary.normalize("NFKC").trim();
+  const holdingPointCarry = compileHoldingPointCarryLiteral(description);
+  // 600株は保有期間/繰越の定義。既知全文と完全な定型句以外を一般株数へ降格させない。
+  if (holdingPointCarry !== null || normalized.includes("繰越条件")) return holdingPointCarry !== null && normalized === holdingPointCarry &&
+    context.minShares.length > 0 && context.minShares.every(value => Number.isSafeInteger(value) && value >= 600) &&
+    context.recordMonths.length > 0 && context.recordMonths.every(value => value === 12);
   const clubCarry = compilePremiumClubCarryLiteral(description);
   // 繰越の株数を現tierへ転用しない。既知全文＋完全な定型句だけを別scopeで照合する。
   if (clubCarry !== null || normalized.includes("繰越:")) return clubCarry !== null && normalized === clubCarry &&
@@ -228,8 +233,8 @@ export function isSummaryNumbersGrounded(
  */
 export const CONTRACT_VERSION_PATTERN = /^\d{4}-\d{2}-\d{2}\.\d+$/;
 
-/** 一覧カードに 1 行で出す前提の上限。作業仕様書の上限と同じ値。 */
-export const SUMMARY_MAX_CHARS = 60;
+/** 数量と重要条件を省略せず保持する上限。作業仕様書の上限と同じ値。 */
+export const SUMMARY_MAX_CHARS = 120;
 
 /** 取り込み前に揃える表記揺れ。 */
 export function normalizeSummary(summary: string): string {

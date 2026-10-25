@@ -85,7 +85,7 @@ yutai_benefits
 ├── stock_id    FK → core_stocks(id)
 ├── genre_id    FK → yutai_genres
 ├── description     text        # スクレイピング元テキスト (長文)
-├── short_summary   text?       # 契約検証済みの短縮文言 (60文字以内)
+├── short_summary   text?       # 契約検証済みの短縮文言 (120文字以内)
 ├── min_shares      integer     # 最低必要株数
 ├── record_month    integer     # 権利確定月 (1-12)
 ├── record_date     text?       # 単発の実基準日 (YYYY-MM-DD)。NULL は従来の月表現
@@ -190,17 +190,17 @@ GitHub Actions 月次
 
 ## 優待データの短縮サマリー (`shortSummary`)
 
-変更・未要約の優待について、Macの `com.kabulab-cf.yutai-summary` が毎日21時に最大60群ずつ処理する。既存の固定Qwen3.5-4B/MLXキャッシュを使い、モデルや依存を自動取得しない。事業タグと同じ承認済みmain・Nix環境・kernel排他を通す。Macの稼働が必要で、Cloudflare Worker単独ではモデル処理を実行しない。
+変更・未要約の優待は、Linux/GitHub Actionsの毎日04:17 JSTの本文job終了後に最大60群ずつ通常CLIで処理する。通常は決定的compilerだけを使い、モデルは使用しない。意味判断が必要な群は明示した手動レビューの保存結果を同じ共有publisherへ渡す。旧Macの自動起動は廃止し、受入済みの固定Mac runtimeを自動更新しない。手順は[機械公開](mechanical-publishing.md)と[Mac月次手動](mac-monthly-manual.md)を参照。
 
-生成するのは `shortSummary` だけ。`estimatedValue` は既存の `qualifyCompanyPerGrantValue` で一意に認定できた企業提示の1回分額面だけを採用し、曖昧なものは理由とともにNULLを保持する。原文・受取条件と異なる単位付き数値、60字超、転載、内部ラベル、旧版結果を同じ共有契約で拒否する。拒否された群は前値を保持し、未処理数を記録して非0終了する。private進捗で先頭の拒否群が後続を永久に妨げないようにする。
+生成するのは `shortSummary` だけ。`estimatedValue` は既存の `qualifyCompanyPerGrantValue` で一意に認定できた企業提示の1回分額面だけを採用し、曖昧なものは理由とともにNULLを保持する。原文・受取条件と異なる単位付き数値、120字超、転載、内部ラベル、旧版結果を同じ共有契約で拒否する。拒否された群は前値を保持し、未処理数を記録して非0終了する。private進捗で先頭の拒否群が後続を永久に妨げないようにする。
 
-入力・実モデル応答・適用計画・PRE/POSTはprivateに保存し、D1更新前のNotion実体保管と全バイト照合、銘柄単位の原子適用、実POST再読を必須にする。未確定の書込みやPOST保管の失敗は保留マーカーを残し、翌日の自動再送を止める。対象0群ならモデル・Notion・業務書込みは0。TypeSafeの設定は変更しない。
+入力・生成結果・適用計画・PRE/POSTはprivateに保存し、D1更新前のNotion実体保管と全バイト照合、銘柄単位の原子適用、実POST再読を必須にする。未確定の書込みやPOST保管の失敗は保留マーカーを残し、翌日の自動再送を止める。対象0群ならモデル・Notion・業務書込みは0。TypeSafeの設定は変更しない。
 
 外部エージェントによる個別修復にも、次の既存経路を引き続き使える。
 
 1. `pnpm yutai:summary:export` が要約の要る `(銘柄, 掲載文)` をタスク JSONL に書き出す (要約が NULL / 既存要約が契約違反。`--violations-only` で後者だけ)。`--retask-keys` で内容キー指定の作り直し (`rework`) も出せる (2026-09-28。契約上有効だが別群の要約・tier 違いの修復用)。
 2. 外部エージェントが [作業仕様書](../services/otakara-yutai/docs/llm-summary-task.md) に従って結果 JSONL を返す。
-3. `pnpm yutai:summary:import` が結果を**信用せずに**検証し (要約契約、共有厳密金額判定 `qualifyCompanyPerGrantValue`、`taskId` と現行掲載文の一致、発行時の株数・権利月と現行群の一致、契約の版)、通った行だけを書く。金額は原文で一意に裏づけられた1回分の全体額だけを `company` として保存する。ポイントの一律円換算、選択肢の代表額、任意の合算、年間額の各月への流用はしない。既定は dry-run。`--apply` では同じ post 入力から `yutai_yield` とスコア3列も再計算する (`data_date` は保護)。書く予定が無い再実行でもタスク対象の利回りを再評価する。
+3. 保存結果の採用は通常の `pnpm yutai:summary:local` へtasks/results両ファイルと全SHAを明示し、共有publisherで要約契約・厳密金額判定・掲載文と全受取条件・契約版を検証する。[作業仕様書](../services/otakara-yutai/docs/llm-summary-task.md)の手動コマンドを使い、退役したstandalone importの`--apply`は使わない。金額は原文で一意に裏づけられた1回分の全体額だけを`company`へ採用し、ポイント換算・選択肢の代表額・任意合算・年間額の各月への流用はしない。通常の同一入力/CAS/全POSTと利回り・スコア再計算を共用し、`data_date`を保護する。未知の結果を再送しない。
 
 fetch (`fetch-yutai-full.ts`) は掲載文・株数・権利月が一致する解釈だけを持ち越す。現在の表見出し・全受取条件の群を同じ厳密判定へ渡し、不認定の旧値は要約を保って金額と出典をともに `null` にする。出典NULLの旧値も、現在の掲載原文・表ローカルの月条件で適格になった場合だけ `company` に上げる。未対応出典の非NULL値は削除前に停止する。取込終了時には利回りとスコアも再計算する。月次・再計算もこの共通判定を通る金額だけを使い、値不明を0円として計算しない。
 

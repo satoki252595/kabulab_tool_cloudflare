@@ -15,7 +15,7 @@ import { ROOT } from "../../../../src/shared/db/tests/source-scan.js";
 import { benefitKey } from "../../data-scripts/benefit-key.js";
 import { headedDescription, sanitizeEstimatedValue } from "../../data-scripts/estimated-value-guard.js";
 import { assertNotCommittable } from "../../data-scripts/private-path.js";
-import { SUMMARY_CONTRACT_VERSION } from "../../data-scripts/summary-contract.js";
+import { SUMMARY_CONTRACT_VERSION, SUMMARY_MAX_CHARS } from "../../data-scripts/summary-contract.js";
 import {
   MAX_IDS_PER_UPDATE,
   applySummaryImport,
@@ -276,7 +276,7 @@ describe("planSummaryImport", () => {
   });
 
   it.each([
-    ["too_long", "あ".repeat(61)],
+    ["too_long", "あ".repeat(SUMMARY_MAX_CHARS + 1)],
     ["annotation", "カタログギフト 3,000円相当 ※毎年7月"],
     ["prose", "カタログから好きな商品を選べます。"],
     ["empty", "   "],
