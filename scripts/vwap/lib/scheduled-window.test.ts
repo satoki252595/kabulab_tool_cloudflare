@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { assertVwapAdmission, assertVwapContinuation, scheduledVwapWindow } from "../../../src/shared/vwap-schedule.js";
 import { scheduledVwapGuard } from "./scheduled-window.js";
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 const date = "2026-10-14";
 const start = Date.parse(`${date}T08:00:00.000Z`);
 
@@ -58,6 +58,49 @@ describe("VWAP定時窓と同run受付時計", () => {
     const guard = scheduledVwapGuard({ plannedDate: undefined, runId: "local-unchanged", directory, phase: "intra" });
     expect(guard.admission).toBeNull(); guard.assertActive();
     expect(readdirSync(directory)).toEqual([]);
+  });
+  it.each(["daily", "intra"] as const)("手動%sも元jobから345分でsource停止・355分で閉鎖し、後続CLIで予算を更新しない", phase => {
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(start);
+    const input = { plannedDate: undefined, runId: "manual", phase, jobStartedAt: new Date(start).toISOString() };
+    const first = scheduledVwapGuard(input);
+    vi.setSystemTime(start + 340 * 60_000);
+    const later = scheduledVwapGuard(input);
+    vi.setSystemTime(start + 345 * 60_000);
+    for (const guard of [first, later]) {
+      expect(guard.admission).toBeNull(); expect(() => guard.assertSource()).toThrow("新規取得期限");
+      expect(() => guard.assertActive()).not.toThrow(); expect(guard.ioOptions?.abortSignal).toBeInstanceOf(AbortSignal);
+    }
+    vi.setSystemTime(start + 355 * 60_000);
+    for (const guard of [first, later]) expect(() => guard.assertActive()).toThrow("閉鎖期限");
+    expect(() => scheduledVwapGuard(input)).toThrow("完了期限");
+    for (const jobStartedAt of ["invalid", new Date(Date.now() + 1).toISOString()])
+      expect(() => scheduledVwapGuard({ ...input, jobStartedAt })).toThrow();
+  });
+  it("有限intraの開始予算はarchive期限にせず、nativeの短いsource/閉鎖窓も守る", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(start + 344 * 60_000);
+    const native = vi.fn<typeof fetch>(async () => new Response("closed")); vi.stubGlobal("fetch", native);
+    const guard = scheduledVwapGuard({ plannedDate: undefined, runId: "manual", phase: "intra", maxStartSeconds: "900",
+      jobStartedAt: new Date(start).toISOString() });
+    const restore = guard.installDeadline();
+    try {
+      vi.setSystemTime(start + 345 * 60_000);
+      expect(() => guard.assertSource()).toThrow("新規取得期限");
+      guard.assertActive(); await fetch("https://archive.test.invalid");
+      vi.setSystemTime(start + 355 * 60_000);
+      expect(() => guard.assertActive()).toThrow("閉鎖期限");
+      expect(() => fetch("https://archive.test.invalid")).toThrow("閉鎖期限");
+    } finally { restore(); }
+    expect(native).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(start);
+    const finite = scheduledVwapGuard({ plannedDate: undefined, runId: "manual", phase: "intra", maxStartSeconds: "1",
+      jobStartedAt: new Date(start).toISOString() });
+    const close = finite.installDeadline();
+    try {
+      vi.setSystemTime(start + 1000); expect(() => finite.assertActive()).toThrow("開始期限");
+      finite.ioOptions?.beforeAttempt?.(); await fetch("https://archive.test.invalid");
+    } finally { close(); }
+    expect(native).toHaveBeenCalledTimes(2);
   });
   it("明示した手動intraの予算だけを固定し、期限ちょうどと不正/定時併用を拒否する", () => {
     vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(start);

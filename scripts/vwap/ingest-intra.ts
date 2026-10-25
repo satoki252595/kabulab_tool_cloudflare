@@ -182,7 +182,7 @@ export async function main() {
         let existing: string | null;
         let observedVersion: string | null;
         try {
-          const current = await r2GetVersion(`intra/${code}.json`);
+          const current = await r2GetVersion(`intra/${code}.json`, schedule.ioOptions);
           existing = current === null ? null : current.body;
           observedVersion = current === null ? null : current.etag;
         } catch (e) {
@@ -247,9 +247,9 @@ export async function main() {
           let putReadback: PricePutReadback | undefined;
           try {
             schedule.assertActive();
-            putReadback = await r2Put(`intra/${code}.json`, payloadJson, observedVersion)
+            putReadback = await r2Put(`intra/${code}.json`, payloadJson, observedVersion, undefined, schedule.ioOptions)
               .then(() => undefined, error => {
-                const confirmation = confirmUnknownPricePut(error, `intra/${code}.json`, payloadJson, undefined, schedule.assertActive);
+                const confirmation = confirmUnknownPricePut(error, `intra/${code}.json`, payloadJson, undefined, schedule.assertActive, schedule.ioOptions);
                 // 他の開始済みPUTはsettleさせ、未確定中の次PUTはbarrierで止める。
                 putBarrier = Promise.all([putBarrier, confirmation]).then(() => {}, () => { fatal = true; });
                 return confirmation;

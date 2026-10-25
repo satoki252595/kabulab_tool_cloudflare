@@ -57,17 +57,34 @@ def test_unpublished_metadata_is_observed_without_replacing_original_clock(capsy
                                      monotonic=lambda: elapsed[0],
                                      sleep=lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds))
     assert result == "2026-10-23T09:00:00.000Z"
-    assert remaining == [30.0, 28.0, 26.0]
+    assert remaining == [30.0, 20.0, 10.0]
     log = capsys.readouterr().err
     assert log == ("native_job_clock observation=1 reason=job_not_visible\n"
                    "native_job_clock observation=2 reason=runner_unassigned\n")
     assert "qualified-runner" not in log and "39928733182" not in log
 
 
+@pytest.mark.parametrize("changes", [{"runner_name": None}, {"started_at": None}])
+def test_metadata_published_after_fifteen_seconds_keeps_the_original_start(changes):
+    elapsed, calls = [0.0], []
+
+    def read(timeout):
+        calls.append((elapsed[0], timeout))
+        changes_now = changes if elapsed[0] < 15 else {}
+        return {"jobs": [row(**changes_now)], "total_count": 1}
+
+    result = clock.observe_job_clock(read, "39928733182", "1", "ingest-yahoo", "qualified-runner",
+                                     monotonic=lambda: elapsed[0],
+                                     sleep=lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds))
+    assert result == "2026-10-23T09:00:00.000Z"
+    assert calls == [(0.0, 30.0), (10.0, 20.0), (20.0, 10.0)]
+    assert elapsed[0] < 30
+
+
 @pytest.mark.parametrize("changes", [{"runner_name": None}, {"runner_name": ""},
                                     {"started_at": None}, {"started_at": ""}, {"status": "queued"}])
 def test_unpublished_metadata_stops_after_three_gets(changes):
-    calls = []
+    elapsed, calls = [0.0], []
 
     def read(timeout):
         calls.append(timeout)
@@ -75,8 +92,10 @@ def test_unpublished_metadata_stops_after_three_gets(changes):
 
     with pytest.raises(clock.JobClockNotReady):
         clock.observe_job_clock(read, "39928733182", "1", "ingest-yahoo", "qualified-runner",
-                                monotonic=lambda: 0, sleep=lambda _: None)
-    assert len(calls) == 3
+                                monotonic=lambda: elapsed[0],
+                                sleep=lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds))
+    assert calls == [30.0, 20.0, 10.0]
+    assert elapsed[0] == 20.0
 
 
 @pytest.mark.parametrize("payload", [
