@@ -15,6 +15,8 @@
 
 ローカル・SSHはリポジトリのNixと依存lockを使う。本番Actionsの通常CLIと入力契約を合わせ、復旧中のruntime・設定は固定する。
 
+財務NULLの[有限診断](financial-null-audit.md)はNixの手動CLI。コード別の③読取だけにsingle-attempt/HTTP上限/絶対期限を適用し、保存原本のlocal再解析を分離する。既存normalizerの任意診断で理由を残し、Actions/CF/Macの通常writer・定期・計算結果は変更しない。未完partitionや原本HOLDを全履歴充足にしない。
+
 ## 機械処理と意味判断
 
 - 株価・需給・有報・IR・財務・保有・原本索引は機械処理。未取得、主体不明、期間/単位/basis不一致を別値で埋めない。
