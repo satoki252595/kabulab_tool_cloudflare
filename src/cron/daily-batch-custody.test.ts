@@ -12,6 +12,7 @@
  *   return/throw する (CLI の 1% throw の前に物理保管あり)。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { YahooSharedCooldownError } from "../shared/yahoo/shared-cooldown.js";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -701,9 +702,9 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
     expect(sqlite.prepare("SELECT count(*) AS n FROM swing_stock_indicators").get()).toMatchObject({ n: 0 });
   });
 
-  it.each([429, 503])("後続%sは新GETを止め、保管済み正常snapshotだけ保存して元例外を返す", async (status) => {
+  it.each([429, 503, "shared-cooldown"])("後続%sは新GETを止め、保管済み正常snapshotだけ保存して元例外を返す", async (status) => {
     vi.mocked(fetchChart).mockImplementation(chartWithRaw(sessionChart("2026-09-28")));
-    const sourceError = new Error(`Chart API HTTP エラー [1332]: ${status} source stop`);
+    const sourceError = status === "shared-cooldown" ? new YahooSharedCooldownError() : new Error(`Chart API HTTP エラー [1332]: ${status} source stop`);
     vi.mocked(fetchStockRawData).mockImplementationOnce(stockWithRaw(stockRaw(260, "2026-09-28")))
       .mockRejectedValueOnce(sourceError);
     const db = freshDb(); seedTarget(1, "1301"); seedTarget(2, "1332"); seedTarget(3, "1333");
@@ -711,7 +712,11 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
       expect(sqlite.prepare("SELECT count(*) AS n FROM swing_stock_indicators").get()).toEqual({ n: 0 });
       return { pages: ["verified-page"], rawBytes: 1, compressedBytes: 1 };
     });
-    await expect(runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect, sendOverlayBatch: makeTxBatchSender(sqlite, { sends: 0 }) })).rejects.toBe(sourceError);
+    const transport = vi.fn();
+    await expect(runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect, yahooTransport: transport,
+      sendOverlayBatch: makeTxBatchSender(sqlite, { sends: 0 }) })).rejects.toBe(sourceError);
+    expect(vi.mocked(fetchChart).mock.calls[0][2]?.transport).toBe(transport);
+    expect(vi.mocked(fetchStockRawData).mock.calls[0][2]?.transport).toBe(transport);
     expect(fetchStockRawData).toHaveBeenCalledTimes(2);
     const first = vi.mocked(archiveYahooRawBatch).mock.calls.at(-1)![0];
     expect(first.captures).toHaveLength(2);

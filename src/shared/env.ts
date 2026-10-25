@@ -154,7 +154,7 @@ export const sharedEnv = {
 };
 
 /**
- * GitHub Actions / ローカル Node の全銘柄取込では、Yahoo 直アクセスを許可しない。
+ * 通常Node入口はproxyを必須にする。Actions株式の明示transportは入口で別検証する。
  * Worker 内の取込プロキシは yahooFetchDirect() を明示的に呼ぶため、この検査は
  * Node エントリポイントだけが実行する。
  */

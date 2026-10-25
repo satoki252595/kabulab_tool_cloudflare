@@ -30,6 +30,7 @@ import { isCalendarDateString, isIntraSourceStatus, jstDateSec, type IntraSource
 import { STOCK_CODE_REGEX } from "../jpx/stock-code.js";
 import { sha256HexBytes } from "../sha256.js";
 import { fetchYahooWithSpacing } from "./request-spacing.js";
+import { YahooSharedCooldownError } from "./shared-cooldown.js";
 import { parseCorporateEvents, yahooChartSourceUrl, type CorporateEvents } from "./corporate-events.js";
 import { buildStockCorporateDiagnostics, extractStockCorporateEvents, type StockCorporateDiagnostics } from "./stock-corporate-events.js";
 
@@ -127,14 +128,14 @@ export async function yahooHttpErrorMessage(
   const details: string[] = [];
   const upstreamStatus = response.headers.get("X-Kabulab-Yahoo-Status");
   const cfRay = response.headers.get("CF-Ray");
-  const source = upstreamStatus
+  const stage = response.headers.get("X-Kabulab-Yahoo-Stage");
+  const source = stage === "shared-cooldown" ? "shared-cooldown" : upstreamStatus
     ? "yahoo-upstream"
     : sharedEnv.YAHOO_PROXY_BASE()
       ? "ingest-proxy"
       : "yahoo-direct";
   details.push(`source=${source}`);
   if (upstreamStatus) details.push(`yahoo-status=${upstreamStatus}`);
-  const stage = response.headers.get("X-Kabulab-Yahoo-Stage");
   if (stage !== null) {
     details.push(`yahoo-stage=${["auth-page", "auth-crumb", "chart", "quote-summary", "shared-cooldown", "unknown"].includes(stage) ? stage : "unrecognized"}`);
   }
@@ -449,8 +450,8 @@ function invalidateYahooCredential(used: YahooCredential): void {
 
 /**
  * crumb 付きの直接 fetch (401 時のみ 1 度 crumb を取り直して retry)。
- * **エッジ (Worker) 上で動く前提**。エッジからでも crumb 取得で 429 を
- * 観測した実績あり (typed deadline + cooldown で扱う)。
+ * Workerと明示Node directで使う。Workerではcrumb取得の429を観測済み。
+ * Node実通信は別受入とし、同じtyped deadlineとcooldownで扱う。
  * 取込プロキシルート (/api/ingest/yahoo) からも直接呼ばれる (export)。
  */
 export async function yahooFetchDirect(url: string, beforeRequest?: () => void): Promise<Response> {
@@ -492,7 +493,10 @@ export async function yahooFetchDirect(url: string, beforeRequest?: () => void):
  *
  * CLAUDE.md ルール2: プロキシ未到達でも別値で握り潰さず、エラーはそのまま伝播させる。
  */
-async function yahooFetch(url: string, beforeRequest?: () => void): Promise<Response> {
+export type YahooTransport = (url: string, beforeRequest?: () => void) => Promise<Response>;
+
+async function yahooFetch(url: string, beforeRequest?: () => void, transport?: YahooTransport): Promise<Response> {
+  if (transport !== undefined) return transport(url, beforeRequest);
   const proxyBase = sharedEnv.YAHOO_PROXY_BASE();
   const secret = sharedEnv.CRON_SECRET();
   if (proxyBase && !secret) {
@@ -770,12 +774,12 @@ export function parseChartResponse(json: unknown, symbol: string): ParsedChartRe
 export async function fetchChart(
   symbol: string,
   range = "5y",
-  options?: FetchChartOptions & { stockDailyScopes?: true }
+  options?: FetchChartOptions & { stockDailyScopes?: true; transport?: YahooTransport }
 ): Promise<ChartResult> {
   if (options?.stockDailyScopes) assertStockDailyScopeRequest(symbol, range, options.onRaw);
   const normalized = normalizeSymbol(symbol);
   const url = `${CHART_API_BASE}/${normalized}?range=${range}&interval=1d&events=split%2Cdiv`;
-  const response = await yahooFetch(url, options?.beforeRequest);
+  const response = await yahooFetch(url, options?.beforeRequest, options?.transport);
 
   let sourceBytes: Uint8Array | undefined;
   let receivedAt: string | undefined;
@@ -1426,7 +1430,7 @@ export interface QuoteSummaryResult {
   annualFinancials: AnnualFinancial[];
 }
 
-export async function fetchQuoteSummary(code: string, options?: FetchChartOptions): Promise<QuoteSummaryResult> {
+export async function fetchQuoteSummary(code: string, options?: FetchChartOptions & { transport?: YahooTransport }): Promise<QuoteSummaryResult> {
   if (!JP_STOCK_PATTERN.test(code)) {
     throw new Error(
       `不正な銘柄コード: ${code} (数字4桁または数字3桁+末尾英字である必要があります)`
@@ -1434,7 +1438,7 @@ export async function fetchQuoteSummary(code: string, options?: FetchChartOption
   }
 
   const url = `${QUOTE_SUMMARY_API_BASE}/${code}.T?modules=${QUOTE_SUMMARY_MODULES}`;
-  const response = await yahooFetch(url, options?.beforeRequest);
+  const response = await yahooFetch(url, options?.beforeRequest, options?.transport);
 
   if (options?.onRaw) {
     const bytes = await readRawBytes(response, code);
@@ -1575,7 +1579,7 @@ function parseQuoteSummaryResponse(json: unknown, code: string): QuoteSummaryRes
 export async function fetchStockRawData(
   code: string,
   range = "5y",
-  options?: { onChartRaw?: FetchChartOptions["onRaw"]; onSummaryRaw?: FetchChartOptions["onRaw"]; stockDailyScopes?: true; beforeRequest?: () => void }
+  options?: { onChartRaw?: FetchChartOptions["onRaw"]; onSummaryRaw?: FetchChartOptions["onRaw"]; stockDailyScopes?: true; beforeRequest?: () => void; transport?: YahooTransport }
 ): Promise<StockRawData & { rsiHistoryHold?: RsiHistoryHold }> {
   if (options?.stockDailyScopes) assertStockDailyScopeRequest(code, range, options.onChartRaw);
   if (!JP_STOCK_PATTERN.test(code)) {
@@ -1587,15 +1591,15 @@ export async function fetchStockRawData(
   // Yahoo に並列送信しない。制限なら相方を取得せず STOP。
   // 非制限の parse 失敗では従来どおり相方の原文を capture してから失敗を返す。
   const results = await Promise.allSettled([
-    fetchChart(code, range, { onRaw: options?.onChartRaw, stockDailyScopes: options?.stockDailyScopes, beforeRequest: options?.beforeRequest }),
+    fetchChart(code, range, { onRaw: options?.onChartRaw, stockDailyScopes: options?.stockDailyScopes, beforeRequest: options?.beforeRequest, transport: options?.transport }),
   ]);
   const chartAttempt = results[0];
   if (chartAttempt.status === "rejected" &&
-      (chartAttempt.reason instanceof YahooRateLimitError || chartAttempt.reason instanceof YahooRawTooLargeError)) {
+      (chartAttempt.reason instanceof YahooRateLimitError || chartAttempt.reason instanceof YahooRawTooLargeError || chartAttempt.reason instanceof YahooSharedCooldownError)) {
     throw chartAttempt.reason;
   }
   const summaryResults = await Promise.allSettled([
-    fetchQuoteSummary(code, { onRaw: options?.onSummaryRaw, beforeRequest: options?.beforeRequest }),
+    fetchQuoteSummary(code, { onRaw: options?.onSummaryRaw, beforeRequest: options?.beforeRequest, transport: options?.transport }),
   ]);
   // 相方のparse失敗に先行されても、原文超過のrun STOPを失わない。
   for (const result of [...results, ...summaryResults]) {

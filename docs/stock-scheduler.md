@@ -70,6 +70,24 @@ VWAPは最大30社/30wave/8MiBごとに原本保管と条件付きR2保存を行
 CF version`ac3d1414-d93f-43fa-99da-89411874025a`を配置し、同じ10triggerを確認した。
 この修正から株式全量の成功・過去データの充足を推定しない。
 
+### 株式Actionsの明示direct transport
+
+株式stepは`pnpm sync:daily:core --stocks-only --yahoo-direct`を明示する。
+元job開始時計を必須とし、通常のdefault・context・SSH・月次・VWAP・moneyflowは従来のproxy設定を使う。
+`YAHOO_PROXY_BASE`やsecretを消さず、失敗時のproxy/direct切替・同run再取得は行わない。
+N225と各銘柄のChart/QuoteSummaryを既存の認証・1秒間隔・CONCURRENCY1でNodeから取得する。
+HTTP応答は実upstream status/stage、共有停止はshared-cooldownとして診断し、proxy設定だけから障害元を決めない。
+
+各logical APIの前に、proxyと同じD1単一行`yahoo_proxy_cooldown`を読む。
+既存のSessions未使用bindingとRESTはprimaryを読む（[D1の読取整合性とRESTの制約](https://developers.cloudflare.com/d1/best-practices/read-replication/)）。
+欠損・不正・結果不明はYahooへ進まず専用source STOP、観測429/503と認証の型付き停止は同じMAX更新で期限を短縮しない。
+保存結果不明でも元Chart/QuoteSummaryのstatus・bytesをcaptureしてmarkerを残し、原本閉鎖後に停止する。
+新規source期限と23:30/native job由来のhard期限、既開始HTTPのabort、原本物理照合後だけのD1保存は維持する。
+readからYahoo開始までのcross-host原子性や、既に開始した別hostのIO停止は保証しない。
+
+D1読取はN社で通常`2N+1`回（各2API＋N225）。従来proxyの同じPK読取をNodeのD1 RESTへ移すため、通常時のD1行数を増やさない。
+制限観測時のみ同じ行へ書く。Node側REST待ちが増えるため、実行時間短縮や全量完走を保証せず、実通信成功は別の有限受入とする。
+
 - POST 前ガード: 未知 cron・未来・土日・UTC 日跨ぎ・各sourceの実開始締切超過
   は POST 前に error。既存の price guard・close guard・完了期限・失敗率
   1% 判定は不変。
