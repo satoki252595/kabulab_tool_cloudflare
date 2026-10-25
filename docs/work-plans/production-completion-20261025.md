@@ -4,22 +4,24 @@
 
 | 残件 | 完了とする条件 | 10/25時点の確認 |
 |---|---|---|
-| 定時起動・実時間の締切 | 未来予定を拒否し、許容遅配・source停止・原本保存・native timeout・receiptの順序が全入口で一致 | #560と機械publisher追補#568、元job時計の有限再資格#570、SSH手動株式CLIの翌06時通信停止#584をCI・main配備・SSHへ反映済み。改修後の全自然定期実績は別受入 |
+| 定時起動・実時間の締切 | 未来予定を拒否し、許容遅配・source停止・原本保存・native timeout・receiptの順序が全入口で一致 | #560と機械publisher追補#568、元job時計の有限再資格#570、SSH手動株式CLIの翌06時通信停止#584をCI・main配備・SSHへ反映済み。10/23 MWF/VWAPは17:15〜17:25 JSTの遅配が旧受付外となった。#560の予定時刻基準による根本修正後の自然定期実績は別受入 |
 | 本文39項目・基本情報の補足同期 | Linuxの通常定期処理がモデル・語彙判定に依存せず差分同期し、旧タグ根拠と最新本文を区別 | #565/#568/#569を反映、共有状態移行・有効化済み。634Aは39列SHA・本文入力SHA・receipt一致と意味15列保持を確認。初回Actionsは選択50社中31社を同期、HOLD0・未着手19・モデル0。10分の新規開始予算による有限結果であり、全社完了ではない |
-| 優待の機械要約 | 既存compiler・検証・原子的publisherをLinuxから呼び、未解析は保留。Macの成否を先行条件にしない | 移行・有効化済み。2307は額面のない基準日変更で正当HOLD。#579の2872・#586の3521・#588の7360を各3群/3行、SSHの通常原子取込で適用し、完全POST・cursor不変・owner/pending閉鎖を確認。11:33 JSTの新しい本番再集計は未完138群/206行/49銘柄。他の保留を同じ理由と断定しない |
+| 優待の機械要約 | 既存compiler・検証・原子的publisherをLinuxから呼び、未解析は保留。Macの成否を先行条件にしない | 移行・有効化済み。2307は額面のない基準日変更で正当HOLD。#579の2872・#586の3521・#588の7360を各3群/3行、SSHの通常原子取込で適用し、完全POST・cursor不変・owner/pending閉鎖を確認。さらに#593の通常reviewed入口で7502の1群/1行、3377/7599の2群/3行を適用・全tier POST確認。14:03 JSTの新しい本番再集計は未完135群/202行/48銘柄で、旧件数からの差し引きではない。他の保留を同じ理由と断定しない |
 | Notionの保存結果不明 | 非冪等書込の529等を再送せず、runnerと文書callerでも成功化・次文書続行しない | #563をmain `2fa25380`へ反映、CI・CF・SSH確認済み。読取529と明示拒否429は別契約のまま |
 | 33業種更新の先行条件 | 株価・RSI失敗でも独立した原典取得を実行。取消・対象外の停止と通信枠を維持 | #562をmain `a90df635`へ反映、CI・CF・SSH確認済み。native境界は#560で同じ元job時計へ束縛。自然定期での更新成功はコード受入と分ける |
 | Yahoo等の源欠測 | 保存原応答からNULL・0・項目欠測・通信障害を区別し、根拠なく無取引と断定しない | 結果区分の#561に加え、認証/crumb/価格API/共有停止の段階診断#564をmain `dee57443`へ配備・SSH反映済み。各欠測の原因確定・最新対象日の充足とは別 |
-| 財務NULL・本文空欄・歴史relation | 保存原典との対応を機械分類し、原典に値がある取りこぼしだけ修復。非公表を数値で埋めない | 別50社の初回37保留は、#591と通常原本修復後、7社・30社の別時刻の通常照合で解消。30社は1,170セル＝一致1,128・同CSV要素なし42、HOLD0。全50社の同時再照合・全市場の分類は未検収で、旧6,251セル・35,158履歴行・relation1,649行を現在残数にしない |
+| 財務NULL・本文空欄・歴史relation | 保存原典との対応を機械分類し、原典に値がある取りこぼしだけ修復。非公表を数値で埋めない | 別50社の初回37保留は、#591と通常原本修復後、7社・30社の別時刻の通常照合で解消。次50社の40保留もCSV限定修復17回/40文書記録後に通常RO照合し、40社1,560セル＝一致1,528・同CSV要素なし32、資格不足0。財務7911/8566は現行原本2行の26既存値不変・12NULLに抽出差0、履歴17行の残15行はlocal-map不足HOLD。全市場分類は未検収で、旧6,251セル・35,158履歴行・relation1,649行を現在残数にしない |
 | 株価・VWAP・IR原本 | 必要対象日の保存物と通常producerの実行を照合し、原典不足を別値で埋めない | 株式10/23未更新38件の原応答は35件全NULL・技術障害3件。VWAP固定3513/2198は日足[40144871284](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40144871284)・5分足[40145161209](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40145161209)で10/23まで補完し、summary物理全bytes・4POST全文SHAと通常資格を受入。旧PUT不明・全市場snapshot保留は維持し、全5分間隔の完全性へ広げない。TDnet1279652は単一再開を1回実施し、元URL/同一文書JPXとも404。対象D1全列/本文は不変、原本未取得HOLD。無取引や世界中の原本消失とは断定しない |
 | 保有明細・権利処理 | 主体・株式種類・価格日・株数日・分割/併合/増資等の根拠と計算basisを資格化 | 明示不該当の分類は#561で配備済み。現在の開始可否と同世代HOLDの観測は下記。全保有価格・全権利種別の資格成立は未完 |
 | マクロ・個別スクリーニング | 元仕様と同じ指標・対象・期間を使い、未取得を通過にしない | プライム売買代金比率、個別④需給・⑤将来カタリストは既存の未接続。#572で手動案内を元仕様へ修正済み。自動判定の完成扱いや、新条件の推定実装はしない。定義は下記 |
 | 内部API・MCP | 既存の有効な認証情報で代表的な読取を本番通し確認 | 旧認証3ケース＋新REST7ケース/77行、MCP3ケースの段階受入済み。公開読取も5ケースPASS。全API・全データ充足の保証へ広げない。私有証跡は下記 |
-| 本番受入・文書 | PR/CI/main/CF配備とSSH revisionを照合し、必要な有限補完を実行。設定と自然時刻の成功を区別 | #591までPR/main CI成功・同mainのCF100%・SSHを確認。株式direct経路の実上流通信の受入は別確認。財務634A・固定7社/30社の通常CLI受入と優待の有限本番適用は下記。初回Actionsの部分結果、次の自然定期、月次メール/実モデルを全件成功へ読み替えない |
+| 本番受入・文書 | PR/CI/main/CF配備とSSH revisionを照合し、必要な有限補完を実行。設定と自然時刻の成功を区別 | #593〜#596を含むmain `4d061c3c`のCI3本成功・CF100%・SSHを確認。VWAP日足の全銘柄run[40164923672](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40164923672)は本更新時点で実行中・結果未検収。株式direct経路の実上流は別受入。財務・本文・優待の有限受入を全市場・全自然定期・月次実モデルの成功へ読み替えない |
 
 取得元の停止・非公表・原本消失は取得成功としない。理由付きHOLDを実装しても、その値自体の取得完了には数えない。旧件数と固定集合の完了を現在の全市場の残数へ読み替えない。
 
 ## コード・配備の受入証跡
+
+最新の#593〜#596はmain `4d061c3c`、[CI 40164440106](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40164440106)の3本成功・SSH同SHAを確認済み。10/25 14:16 JSTの管理APIではdeployment `74bc3f1c-3d12-4326-a0c4-aa7db1108e08` / version `06e33ad7-638a-4f17-919f-596641cc3bf4`が100%だった。以下は個別の受入履歴。
 
 | 修正 | main | CI成功run | CF配備・SSH |
 |---|---|---|---|
@@ -86,6 +88,8 @@ canonicalのClef journal検査は978ディレクトリ、accepted977/rejected1�
 
 12:40〜12:43 JSTの通常`audit:supplement:texts`で30社全ての物理原本資格・通常本文一致・現在latest文書と固定planの一致を確認した。1,170セル＝一致1,128・同CSVに対象要素なし42、空欄42も同理由。exit0・未観測/未着手/停止/失敗0、343 HTTP（Notion221・429/再試行0）、source/model/業務write0。初回50社で保留だった37社は上記7社と今回30社で解消したが、観測時刻は異なり、全50社の同時再照合・原本全体の非開示・全市場の充足は証明しない。Mac私有`tmp/feature-audit-20261025/supplement-typedmissing30-accepted-v1/AGGREGATE.private.json` SHA `416d6ca437fb852cd0edc6bd36306ca31f39477b651179425726ca88fc328528`、SSH report SHA `901367b3957432b77123148f0c9fc13f9c9cbf1eec73ecc8f69c7d441788d2dc`、control FINISHED SHA `85350e3a8edde4da693f6289d2d143d4fbc0d3697a1b0ca867215d6bd8efe64e`。
 
+次の50社で型付きCSV不足だった40文書は、#594の通常`--type=5`を17群で実行し、記録40・既存再利用/非提供/失敗0で閉鎖した。未読type1の完成・非提供は判定しない。続くmain `65ed4992`の通常RO照合は40社全てのsource資格と固定docID/期/提出時計が一致し、1,560セル＝一致1,528・同CSV要素なし32、空欄32も同理由だった。未観測/未着手/停止/失敗0、HTTP 502回（Notion340・429 retry1・transient0）、業務write/源API/model0。元の次50社の40保留を解消した有限結果であり、時刻の異なる50社全体の合成を同時観測や全市場完了にしない。Mac私有`tmp/feature-audit-20261025/supplement-fixed40-after-source-prep-v1/accepted-production/AGGREGATE.private.json` SHA `5dd5af6061cfdcd8af09b5cdd7f8eb456c8b8b8701944c9b44145e9f3ae14f8f`。
+
 3776は現旧type1 ZIPの43/43 member bytes、全facts、本文37節・索引が同値だった。#578の通常CLIで派生metadata4列だけを物理PRE/CAS/POST付き訂正し、別の通常strict再資格化で観測2件を解決、HOLD0・進捗revision18・予約閉鎖・財務/本文不変を確認した。旧receiptと現progressの不一致は最初のplanがSTOPし、現在の保存原本receiptを資格化してから実行した。比較条件を緩めていない。私有受入`tmp/feature-audit-20261025/edinet3776-production-acceptance/`の`completed.json` SHA `db84bc403eace11378b7ad91697dafef9ffab05ff1cd4c67c5adea307b57938d`、`FINISHED.json` SHA `01c8b31dda13eadf72aa7577236da85c194ae4b9a99dde901c374ce07f1991cd`。
 
 1279652は#581の通常CLIへ9/8 JST・exact ID・実clock+10分を渡し、1回だけ実行した。元URLと同一filenameのJPXとも404、exit0でも`skippedNoFile=1`・created/updated0。PRE/POST各3ROで対象D1全列/本文/cache投影は同値、既知child live/親一致・exact key0を確認した。元PDF未取得HOLDを、取得成功へ読み替えない。40日窓外なので次の日次catchupでは対象外で、手動再投入もしない。失敗理由は実行log/receiptへ残し、新規の空Notion行・監視は作らない。私有`tmp/feature-audit-20261025/tdnet1279652-post-readonly-v1/POST.private.json` SHA `1416afe6d068630c7cf03a225ada52584a4894b18d1485f279f25148dffcf3a0`。
@@ -95,6 +99,8 @@ canonicalのClef journal検査は978ディレクトリ、accepted977/rejected1�
 財務は無条件100行queryがNotionの明示incompleteでSTOPしたため、現在候補に採用していない。code634Aへ先限定した完全1行は19数値中NULL8・未知型0、4キー/source/rawrelationが保存入力と一致。fresh⑤ metadataとhosted原ZIPは2ROで79,467 bytes/fullSHAを資格化し、保存原本と全bytes一致した。この物理資格はNULL理由判定や全active対象の分類完了とは別である。原本SHA `0278f0d855e184c0252019e82c2e0e4a4f4bda6e342094c6b80a18dc82ba1637`、私有`tmp/financial-null-634a-fresh-raw-20261025-v1/RESULT.private.json` SHA `4225d3e9158220c6d19b9a977692d11a4928a110dd92d3fbff37835a91b65a65`。
 
 財務634Aは#585後、SSHの同main/Nixから通常captureを2HTTP・code先限定で実行し、complete1行を得た。exact保存原本のoffline診断は19値不変・HOLD0・抽出差候補0。空欄8は非数値/nil1、選択scope内の該当context/直接値なし7で、原本全体の非開示や全active分類を意味しない。源API/業務write/model/再送0。私有`tmp/financial-null-production-634a-20261025-v1/FINISHED.private.json` SHA `d761d2691d9f59df26704b7f6cb3ed3f7c0d0ae55419105e598de3539ed3d22c`、診断SHA `6f15be15096d8e50251945435e90a1af8cd6b8db3c15a247882b6de3bdb74447`。先行のdriver/argv停止はどちらもHTTP前と確認し、旧STARTED/EXIT/失敗logを保全した継続記録に分離している。
+
+7911/8566もcode先限定の現行原本2行を通常captureとoffline診断で確認し、26既存値は不変、12NULLは選択原本scope内に候補がなく抽出差0だった。同2銘柄の履歴17行中、診断した2行以外の15行はexact local source-map不足HOLDであり、非公表や分類完了としない。
 
 初回の既存Actions `all` [40133382741](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40133382741)はsource `45629c8`で自然終了し、**overall FAILURE**だった。
 
@@ -115,6 +121,8 @@ canonicalのClef journal検査は978ディレクトリ、accepted977/rejected1�
 7360は保存済み電子ギフトの掲載額・ポイント換算・両交換先・贈呈期限を保持し、#588後の通常compiler・同銘柄全tier集計・原子取込で3群/3行を適用した。物理Notion PRE/POST・全列POST・cursor不変・owner/pending閉鎖を確認し、D1送信1回・source/model0だった。Mac私有`tmp/feature-audit-20261025/yutai-point-exchange-literal-v1/accepted-production/FINISHED.json` SHA `8b787074b2be16871567d6db400c2e130b94b31096c8321ad815c9aa5a302d6c`。
 
 11:33 JSTに通常selectorを単一SELECTで新たに再集計し、有効普通株の優待7,729行に対して未完138群/206行/49銘柄を確認した。全138群が要約missing、contract違反/rework0。過去141群からの引き算ではなく、同statementのwindow総数と返却全行の一致を検証した測定である。D1読取28,523行・約208ms・1HTTP、write/Notion/R2/source/model0。Mac私有`tmp/feature-audit-20261025/yutai-pending-post-7360-count-plan-v1/FINISHED.production.private.json` SHA `21db455c3adb5e9604c6d4bd941e130d9d0c01166f20b4db8dcc520b6df6c933`。この件数確認を個別の原本・適用資格や全データ充足へ読み替えない。
+
+明示レビューの7502は1群/1行、3377/7599は2群/3行を#593の通常CLIで適用した。両実行とも物理PRE/POST・同issuer全tierの完全POST・cursor2本の全bytes不変・owner/pending閉鎖を確認し、モデル/新上流取得0だった。14:03 JSTの新しい通常selector測定は未完135群/202行/48銘柄。旧138群からの差し引きではなく、現行集合の単一SELECTによる実測である。上の11:33値は履歴として保持する。
 
 Calendarは2026-11-11開始・毎月11日09:00 JST・開始0分前メールと短い5行のコマンド/privateログ手順への参照を読戻し済み。初メール受信・月次の本モデル実行は未観測。
 
