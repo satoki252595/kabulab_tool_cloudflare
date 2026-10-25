@@ -73,6 +73,8 @@ export interface ProcessDeps {
   readStockTextRow: (rowPageId: string) => Promise<StockTextSection[]>;
   /** 期限付き完全読取。通常pipelineだけが現在target39の検査へ接続する。 */
   readSupplementRowFully?: (pageId: string) => Promise<SupplementRow>;
+  /** 商号差の候補だけ、旧新doc/issuer/原本/旧39/relationを独立に資格化する。 */
+  qualifyCompanyNameRefresh?: (item: WorkItem) => Promise<SupplementRow>;
   /** モデル待ち後、business writeの直前に最新doc/本文pointerを1社だけ照合する。 */
   assertLatestDocCurrent: (stockCode: string, doc: LatestDoc["doc"], metadata?: Pick<LatestDoc, "companyName" | "sector33">) => Promise<void>;
   createSupplementRow: (input: SupplementRowInput, evidence?: unknown | null) => Promise<string>;
@@ -129,6 +131,7 @@ export function savedRowGuard(row: NonNullable<WorkItem["row"]>): Record<string,
       attempts: row.attempts, nextRetryAt: row.nextRetryAt, error: row.error }),
     [SUPPLEMENT_PROPS.textStatus]: { select: row.textStatus === null ? null : { name: row.textStatus } },
     [SUPPLEMENT_PROPS.tagStatus]: { select: row.tagStatus === null ? null : { name: row.tagStatus } },
+    ...(row.masterPageIds === undefined ? {} : { [SUPPLEMENT_PROPS.master]: { relation: row.masterPageIds.map(id => ({ id })) } }),
   };
 }
 
@@ -143,13 +146,14 @@ async function writeRowWithEvidence(
   const doc = item.doc;
   const beforeWrite = async () => {
     try {
-      if (item.basicMetadataOnly) await deps.assertLatestDocCurrent(item.stockCode, doc, { companyName: item.companyName, sector33: item.sector33 });
+      if (item.basicMetadataOnly || item.refreshCompanyName) await deps.assertLatestDocCurrent(item.stockCode, doc, { companyName: item.companyName, sector33: item.sector33 });
       else await deps.assertLatestDocCurrent(item.stockCode, doc);
     }
     catch (cause) { throw new SupplementWriteHeldError(`書込直前の最新有報照合をHOLD: ${cause instanceof Error ? cause.message : String(cause)}`, { cause }); }
   };
   if (item.row) {
     const expected = savedRowGuard(item.row);
+    if (item.refreshCompanyName) Object.assign(expected, buildSupplementProperties({ texts: item.row.texts }));
     if (expectedTexts !== undefined) Object.assign(expected, buildSupplementProperties({ texts: expectedTexts }));
     await deps.replaceEvidenceBlock(item.row.pageId, evidenceBlock, input, expected, beforeWrite);
     return item.row.pageId;
@@ -192,7 +196,7 @@ function missingMetadata(item: WorkItem, deps: ProcessDeps): SupplementRowInput 
   const row = item.row, doc = item.doc;
   if (row === null || !item.basicMetadataOnly && (doc === null || row.docId !== doc.docId)) throw new Error("メタ補完の現docが未資格です");
   const input: SupplementRowInput = {};
-  if (row.companyName.trim() === "" && item.companyName.trim() !== "") input.companyName = item.companyName;
+  if ((row.companyName.trim() === "" || item.refreshCompanyName === true) && item.companyName.trim() !== "") input.companyName = item.companyName;
   if (row.sector33 === null && item.sector33 !== null) input.sector33 = item.sector33;
   if (!item.basicMetadataOnly && doc !== null) {
     if (row.docType === null) input.docType = docTypeLabelOf(doc.docTypeCode);
@@ -222,6 +226,7 @@ async function syncMetadata(item: WorkItem, deps: ProcessDeps): Promise<ProcessO
       ...(input.submittedAt === undefined ? {} : { submittedAt: input.submittedAt }),
       ...(input.textStatus === undefined ? {} : { textStatus: input.textStatus }),
       masterLinked: item.row.masterLinked || input.masterPageId !== undefined,
+      ...(input.masterPageId === undefined ? {} : { masterPageIds: input.masterPageId === null ? [] : [input.masterPageId] }),
     };
     const outcome = await verifyTexts({ ...item, row: deps.dryRun ? item.row : row, verifyCurrentTexts: false }, deps);
     return { ...outcome, metadataRepaired: changed || outcome.metadataRepaired,
@@ -353,6 +358,10 @@ function idsFromActiveLabels(vocab: Vocabulary, labels: string[]): string[] {
  * 1 銘柄ぶんの作業項目 (`plan.ts` の `WorkItem`) を実行する。
  */
 export async function processStock(item: WorkItem, deps: ProcessDeps): Promise<ProcessOutcome> {
+  if (item.refreshCompanyName && item.kind !== "skip") {
+    if (deps.qualifyCompanyNameRefresh === undefined) throw new SupplementWriteHeldError("商号変更の主体資格がありません。旧値を保持");
+    item = { ...item, row: await deps.qualifyCompanyNameRefresh(item) };
+  }
   switch (item.kind) {
     case "sync_metadata":
     case "verify_text":

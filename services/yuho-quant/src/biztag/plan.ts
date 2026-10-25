@@ -152,6 +152,8 @@ export interface WorkItem {
   verifyCurrentTexts?: boolean;
   /** 現active基本metaだけ。原本文書/本文/タグ/状態は欠測HOLDのまま保持する。 */
   basicMetadataOnly?: boolean;
+  /** 現表示名は旧提出者名と別物。正常処理で原本/主体資格を閉じるまで書かない。 */
+  refreshCompanyName?: boolean;
 }
 
 /** 同じ現docの欠落だけ。非空不同や旧docを最新の根拠へ付け替えない。 */
@@ -210,6 +212,8 @@ function planOne(
     sector33: latest.sector33,
     doc: latest.doc,
     row,
+    ...(row !== null && row.companyName.trim() !== "" && displayName(row.companyName) !== displayName(latest.companyName)
+      ? { refreshCompanyName: true } : {}),
   };
 
   if (latest.reportedHoldReason !== undefined) {
@@ -247,6 +251,13 @@ function planOne(
     return { ...base, kind: "skip", qualificationHeld: true, reason: "最新有報の本文が無いため HOLD。保存済み本文・タグ・判定状態は保持" };
   }
 
+  if (base.refreshCompanyName) {
+    try {
+      const receipt = rowTextSyncReceipt(row);
+      if (receipt === null || receipt.docId !== row.docId) throw new Error("旧本文の書類束縛がありません");
+    } catch { return { ...base, kind: "skip", qualificationHeld: true, reason: "商号差の旧本文来歴が不明。旧値を保持してHOLD" }; }
+  }
+
   const doc = latest.doc;
   if (row.tagStatus === "判定済") {
     // 保存形式は「docId 会計期末」。最新有報ではなく、保存済みの書類同士を照合する。
@@ -276,13 +287,13 @@ function planOne(
       return { ...base, kind: "retag", sourceChangedLocalJudge: true, checkSourceInput: true,
         reason: "同じ書類の現在本文4節SHAが保存判定と不同。旧タグを保持して月次ローカル再判定" };
     }
-    if (row.companyName.trim() !== "" && displayName(row.companyName) !== displayName(latest.companyName) ||
-        row.docType !== null && row.docType !== (doc.docTypeCode === "120" ? "有報" : "訂正有報") ||
+    if (row.docType !== null && row.docType !== (doc.docTypeCode === "120" ? "有報" : "訂正有報") ||
         row.periodEnd !== null && row.periodEnd !== doc.periodEnd ||
         row.submittedAt !== null && Date.parse(row.submittedAt) !== Date.parse(doc.submittedAt) ||
         row.sector33 !== null && latest.sector33 !== null && row.sector33 !== latest.sector33) {
       return { ...base, kind: "skip", qualificationHeld: true, reason: "同docの非空メタが原典と不同。欠落補完で上書きせずHOLD" };
     }
+    if (base.refreshCompanyName) return { ...base, kind: "sync_metadata", reason: "旧新書類の同一主体と保存原本を資格化した後だけ現表示名を同期" };
     const syncedCurrent = textSync !== null && textSync.docId === doc.docId && textSync.textPageId === doc.notionDocPageId;
     if (receipt !== null && receipt.textPageId !== doc.notionDocPageId &&
         !(syncedCurrent && textSync?.equivalentJudgmentInputSha256 === receipt.sectionsSha256)) {
@@ -363,7 +374,7 @@ export function planWork(
     const item = planOne(l, rowByCode.get(l.stockCode) ?? null, today, eligibility);
     if (!repairEmptyTags) return item;
     const row = item.row;
-    if (!item.qualificationHeld && !item.sourceChangedLocalJudge && hasUsableText(item.doc) &&
+    if (!item.qualificationHeld && !item.sourceChangedLocalJudge && !item.refreshCompanyName && hasUsableText(item.doc) &&
         row?.tagStatus === "判定済" && row.docId === item.doc.docId &&
         row.upstream.length + row.downstream.length + row.distribution.length === 0) {
       return { ...item, kind: "retag", emptyTagRepair: true,

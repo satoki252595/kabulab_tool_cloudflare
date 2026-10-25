@@ -15,14 +15,11 @@ import { notionRequest, notionStats } from "../../../src/shared/notion-archive/c
 import { NotionConfigError, notionEnv } from "../../../src/shared/notion-archive/env.js";
 import { loadSupplementRows, normalizeSupplementText, readSupplementRowFully, SUPPLEMENT_DB_TITLE, SUPPLEMENT_PROPS, type SupplementRow } from "../../../src/shared/notion-archive/stock-supplement.js";
 import { installCatchupDeadline } from "../../../scripts/sync/catchup-launch.js";
-import { loadLatestDocs, type BiztagSourceDb, type LatestDoc } from "../src/biztag/source.js";
+import { loadLatestDocs, qualifyBiztagArchiveSource, type BiztagSourceDb, type LatestDoc } from "../src/biztag/source.js";
 import { hasUsableText, rowTextSyncReceipt } from "../src/biztag/plan.js";
 import * as schema from "../src/db/schema.js";
 import { readSavedEdinetZip, SavedEdinetZipQualificationError } from "../src/services/edinet/archive.js";
-import { edinetArchiveNativeMetadata } from "../src/services/edinet/archive-metadata.js";
-import { parseEdinetCsvZip } from "../src/services/edinet/csv.js";
 import { extractTextSections, matchesTextSection, TEXT_SECTIONS } from "../src/services/edinet/text-sections.js";
-import { parseSubmitDateTime, secCodeToTicker } from "../src/services/edinet/types.js";
 import { readVerifiedDocText } from "../src/services/text-backup.js";
 
 const sha = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
@@ -124,17 +121,7 @@ export function parseAuditArgs(argv: string[]) {
 
 /** Same active/latest/reported-HOLD and strict saved body qualification as normal publishing; extra ZIP evidence is read-only. */
 export function qualifyAuditSource(latest: LatestDoc, document: Document, source: Source) {
-  assert(hasUsableText(latest.doc) && latest.reportedHoldReason === undefined, "latest_body_unqualified");
-  const metadata = edinetArchiveNativeMetadata(source.metadata);
-  assert(document.docId === latest.doc.docId && document.periodEnd === latest.doc.periodEnd && document.docTypeCode === latest.doc.docTypeCode &&
-    document.notionDocPageId === latest.doc.notionDocPageId && document.textParseStatus === "ok" &&
-    document.submittedAt.toISOString() === latest.doc.submittedAt, "document_changed");
-  assert(metadata.docID === document.docId && metadata.edinetDocType === 5 && metadata.edinetCode === document.edinetCode &&
-    typeof metadata.secCode === "string" && secCodeToTicker(metadata.secCode) === latest.stockCode && metadata.periodEnd === document.periodEnd &&
-    metadata.periodStart === document.periodStart && metadata.docTypeCode === document.docTypeCode && metadata.filerName === document.filerName &&
-    typeof metadata.submitDateTime === "string" && parseSubmitDateTime(metadata.submitDateTime).getTime() === document.submittedAt.getTime(), "source_identity_incomplete_or_mismatch");
-  const rows = parseEdinetCsvZip(source.bytes), sections = extractTextSections(rows);
-  assert(sections.length > 0, "source_39_empty");
+  const { rows, sections } = qualifyBiztagArchiveSource(latest, document, source);
   return { rows, sections, texts: texts39(sections) };
 }
 
