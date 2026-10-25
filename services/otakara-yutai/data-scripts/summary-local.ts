@@ -209,6 +209,16 @@ export function compileSimpleSummary(task: SummaryTask): SummaryResult | null {
   if (source.malformed) return null;
   const grammar = /^(QUOカードPay|QUOカード|クオカード|図書カードNEXT|図書カード|商品券|ギフトカード|自社商品|カタログギフト)[ \t]*(?:([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)円(分|相当))(?:を贈呈|贈呈)?[。]?$/u;
   const body = source.body.normalize("NFKC").trim();
+  // 数量以外は保存済み全文のSHAへ束縛する。原文段落は公開せず、約換算から金額を作らない。
+  if (source.heading?.normalize("NFKC").trim() === "プレミアム優待倶楽部ポイント") {
+    const points = /^([1-9][0-9]{0,2}(?:,[0-9]{3})+|[1-9][0-9]*)ポイント\n/u.exec(body);
+    if (points === null || sha(body.slice(points[0].length)) !== "302bbc296773a9bbe7f04971fe162d1272be78401e0c2d9ea27444589454eb06") return null;
+    const count = Number(points[1].replaceAll(",", "")), amount = companyValue(task);
+    if (!Number.isSafeInteger(count) || amount.value !== null || amount.reason !== "approx") return null;
+    const shortSummary = `${count}ポイント(WEB商品選択・寄付・WILLsCoin交換、翌年12月末同番号継続記録2回以上で繰越1回のみ)`;
+    if (checkSummary(shortSummary).length > 0) return null;
+    return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion, shortSummary, estimatedValue: null });
+  }
   // 掲載額と明示された両送付月を保持する。余分な注記・数量・保有条件は全文一致で拒否する。
   const shipment = /^([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)円(分|相当)\n【送付時期】\n(1[0-2]|[1-9])月~(1[0-2]|[1-9])月$/u.exec(body);
   if (source.heading?.normalize("NFKC").trim() === "自社製品詰合せ(アイス等)" && shipment !== null) {
