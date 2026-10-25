@@ -608,7 +608,7 @@ describe("株式とマクロの日次分離", () => {
       expect(store.r2GetVersion).toHaveBeenCalledWith("macro/jp-close/2026-10-14.json", {
         singleAttempt: true, beforeAttempt: expect.any(Function), abortSignal: expect.any(AbortSignal),
       });
-      expect(vi.mocked(store.r2GetVersion).mock.calls[0][1]?.abortSignal?.aborted).toBe(true);
+      await vi.waitFor(() => expect(vi.mocked(store.r2GetVersion).mock.calls[0][1]?.abortSignal?.aborted).toBe(true));
       expect(store.r2Put).not.toHaveBeenCalled();
       expect(globalThis.fetch).toBe(native);
     } finally {

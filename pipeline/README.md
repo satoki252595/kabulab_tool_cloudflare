@@ -32,6 +32,8 @@ uv run pytest        # テスト
 
 全ジョブ `--dry-run` 対応（Notion に書き込まない）。
 
+銘柄限定の`--codes`は`master_sync`だけが対応する。EDINET・TDnet・需給・管理ジョブとsector33では、`--codes`・略記`--code`・空指定を引数解析時に拒否し、設定・DB・原本取得へ進まない。EDINETの`--limit`は当日全体の件数上限であり、銘柄指定の代用ではない。
+
 ### 財務NULLの有限読取とoffline診断
 
 `pnpm audit:financial:null`はコードファイル全SHA・code/page/HTTP上限・絶対期限を必須にして、③をコード別に薄く読む。原本API・モデル・業務書込は0。既存再解析CLIの`--diagnose-capture`でexact原本snapshotとlocal全SHA原本を結び、共有normalizerの実分岐で項目別の理由を確認できる。原本不足・多値・key不成立はHOLD。[入力形式と手順](../docs/financial-null-audit.md)。`--limit`付き旧auditは読取HTTP上限の代用にしない。

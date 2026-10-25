@@ -17,7 +17,7 @@ subprocess で呼ぶ 1 経路のみ。`ctx.upload_raw` / local / R2 原本 SDK �
 - source/sector 未知は確証済みの既値を NULL 消去せず保持する。current active
   の sector33 不足が残れば partial (exit 1) → moneyflow は進まない。
 - D1 設定は必須。想定外の local 設定は `run_job` 前の typed config STOP。
-  `--limit` / `--codes` は部分 scope を作るため受けない (config STOP)。
+  `--codes` は引数解析で拒否し、`--limit` も部分 scope を作るため受けない (config STOP)。
 - `--archive-only` は物理 custody 後に終了し、業種 DML はしない。
   共通 runner の D1 実行記録は通常どおり残す。
 """

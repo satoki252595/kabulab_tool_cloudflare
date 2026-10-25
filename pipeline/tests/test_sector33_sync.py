@@ -399,7 +399,6 @@ class TestConfigStop:
             ({}, []),
             ({"LOCAL_DB_HOST": "h"}, []),
             (_D1_ENV, ["--limit", "5"]),
-            (_D1_ENV, ["--codes", "7203"]),
         ],
     )
     def test_main_returns_2_without_run_job(self, monkeypatch, env_extra, argv):

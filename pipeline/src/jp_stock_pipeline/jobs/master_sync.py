@@ -515,7 +515,7 @@ def _hold_absent_codes(
 
 
 def main(argv: list[str] | None = None, *, env: dict[str, str] | None = None) -> int:
-    parser = build_parser("EDINETコードリスト → ① 銘柄マスタ同期 (月1)")
+    parser = build_parser("EDINETコードリスト → ① 銘柄マスタ同期 (月1)", supports_codes=True)
     parser.add_argument("--reconcile-financial-pre", default=None, help="既知PRE URL400の固定証跡FILE")
     parser.add_argument("--reconcile-financial-pre-sha256", default=None, help="明示認可した証跡SHA256")
     return run_job(JOB_NAME, execute, argv, parser=parser, env=env)

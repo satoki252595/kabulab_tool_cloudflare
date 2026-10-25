@@ -1,6 +1,7 @@
 """ジョブ共通基盤 (DESIGN.md §8.1 共通フロー / §10 dry-run 必須 / §8.1-7 ⑦記録)。
 
-- 全ジョブ: --dry-run / --date YYYY-MM-DD / --limit N / --codes に対応
+- 共通引数: --dry-run / --date YYYY-MM-DD / --limit N (各ジョブの制約に従う)
+- --codes は対象限定に対応する master_sync だけが明示登録し、他ジョブは取得前に拒否
 - dry-run では Notion へ一切書き込まない（client が記録のみ §3-6）。
   未設定の DB ID は合成ID ("dry-run-db-*") で埋め、設定なしでも完走できる
 - 終了時に ⑦ 収集ジョブログへ 1 行記録（成功 / 一部失敗 / 失敗）
@@ -287,7 +288,7 @@ class JobContext:
         return raw_page_id
 
 
-def build_parser(description: str) -> argparse.ArgumentParser:
+def build_parser(description: str, *, supports_codes: bool = False) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--dry-run", action="store_true", help="Notion へ書き込まない (§3-6)")
     parser.add_argument("--require-cloud", action="store_true", help="本番保存にD1/R2の両資格情報を必須とする")
@@ -296,7 +297,10 @@ def build_parser(description: str) -> argparse.ArgumentParser:
         help="対象日 (省略時はジョブ毎の既定)",
     )
     parser.add_argument("--limit", type=int, default=None, help="処理件数上限 (段階的取り込み §1)")
-    parser.add_argument("--codes", default=None, help="対象銘柄コードのカンマ区切り (テスト用)")
+    # 未対応ジョブで限定指定を黙って無視しない。Namespaceの形は既存callerへ維持する。
+    parser.set_defaults(codes=None)
+    if supports_codes:
+        parser.add_argument("--codes", help="対象銘柄コードのカンマ区切り (限定同期)")
     parser.add_argument(
         "--db-target", choices=DB_TARGETS, default=DB_TARGET_CLOUD,
         help="ローカルDB接続プロファイル (cloud=既定/クラウド経由, lan=同一LAN)",
