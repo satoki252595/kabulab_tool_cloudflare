@@ -53,6 +53,7 @@ import { RAW34TEXT } from "./raw34-excerpts.js";
 import { buildPublicBenefitFacts } from "../../data-scripts/public-facts.js";
 import { parsePublicBenefitFacts } from "../public-facts.js";
 import { benefitKey } from "../../data-scripts/benefit-key.js";
+import { SUMMARY_MAX_CHARS } from "../../data-scripts/summary-contract.js";
 
 /** drizzle/d1 の全マイグレーションを番号順に流す (本番 D1 と同じ形)。 */
 function applyD1Migrations(target: DatabaseSync): void {
@@ -681,6 +682,29 @@ describe("planCarry (退避計画の純関数。原文抜粋)", () => {
     const key = carryKey("5929", RAW34TEXT["5929"], 100, 3);
     expect(p.carried.get(key)).toEqual({ shortSummary: "2年未満保有で優待品 500円相当", estimatedValue: 500, estimateValueSource: "company" });
     expect(p.promotedKeys).toEqual(new Set([key]));
+    expect(p.nulledKeys).toEqual(new Set());
+  });
+
+  it.each([
+    ["too_long", "あ".repeat(SUMMARY_MAX_CHARS + 1)],
+    ["annotation", "商品券1000円相当※"],
+    ["prose", "商品券1000円相当です。"],
+    ["internal", '【種別："商品券"】商品券1000円相当'],
+    ["empty", ""],
+  ])("共有要約契約の %s 違反は要約・金額・出典を持ち越さない", (_rule, shortSummary) => {
+    const rows = [srcRow({ description: "商品券1000円相当", shortSummary, estimatedValue: 1000, estimateValueSource: "company" })];
+    const key = carryKey(rows[0].code, rows[0].description, 100, 3);
+    const p = planCarry(rows, metaOf(rows, "商品券"), grpOf(rows));
+    expect(p.carried.get(key)).toEqual({ shortSummary: null, estimatedValue: null, estimateValueSource: null });
+    expect(p.nulledKeys).toEqual(new Set([key]));
+    expect(p.promotedKeys).toEqual(new Set());
+  });
+
+  it("要約未作成のnullだけでは資格済み金額を消さない", () => {
+    const rows = [srcRow({ description: "商品券1000円相当", shortSummary: null, estimatedValue: 1000, estimateValueSource: "company" })];
+    const key = carryKey(rows[0].code, rows[0].description, 100, 3);
+    const p = planCarry(rows, metaOf(rows, "商品券"), grpOf(rows));
+    expect(p.carried.get(key)).toEqual({ shortSummary: null, estimatedValue: 1000, estimateValueSource: "company" });
     expect(p.nulledKeys).toEqual(new Set());
   });
 

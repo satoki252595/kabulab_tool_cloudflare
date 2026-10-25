@@ -85,7 +85,7 @@ yutai_benefits
 ├── stock_id    FK → core_stocks(id)
 ├── genre_id    FK → yutai_genres
 ├── description     text        # スクレイピング元テキスト (長文)
-├── short_summary   text?       # 契約検証済みの短縮文言 (120文字以内)
+├── short_summary   text?       # 契約検証済みの短縮文言 (256文字以内)
 ├── min_shares      integer     # 最低必要株数
 ├── record_month    integer     # 権利確定月 (1-12)
 ├── record_date     text?       # 単発の実基準日 (YYYY-MM-DD)。NULL は従来の月表現
@@ -192,7 +192,11 @@ GitHub Actions 月次
 
 変更・未要約の優待は、Linux/GitHub Actionsの毎日04:17 JSTの本文job終了後に最大60群ずつ通常CLIで処理する。通常は決定的compilerだけを使い、モデルは使用しない。意味判断が必要な群は明示した手動レビューの保存結果を同じ共有publisherへ渡す。旧Macの自動起動は廃止し、受入済みの固定Mac runtimeを自動更新しない。手順は[機械公開](mechanical-publishing.md)と[Mac月次手動](mac-monthly-manual.md)を参照。
 
-生成するのは `shortSummary` だけ。`estimatedValue` は既存の `qualifyCompanyPerGrantValue` で一意に認定できた企業提示の1回分額面だけを採用し、曖昧なものは理由とともにNULLを保持する。原文・受取条件と異なる単位付き数値、120字超、転載、内部ラベル、旧版結果を同じ共有契約で拒否する。拒否された群は前値を保持し、未処理数を記録して非0終了する。private進捗で先頭の拒否群が後続を永久に妨げないようにする。
+生成するのは `shortSummary` だけ。`estimatedValue` は既存の `qualifyCompanyPerGrantValue` で一意に認定できた企業提示の1回分額面だけを採用し、曖昧なものは理由とともにNULLを保持する。原文・受取条件と異なる単位付き数値、256字超、転載、内部ラベル、旧版結果を同じ共有契約で拒否する。通常再取込のcarryも同じ長さ・注記・文体・内部記号の契約を検査する。拒否された群は前値を保持し、未処理数を記録して非0終了する。private進捗で先頭の拒否群が後続を永久に妨げないようにする。
+
+契約`2026-10-26.3`の256字は重要条件を保持するための共有上限であり、DBの物理制約ではない。詳細は全文、一覧カードは既存の80字clipと省略記号で表示する。保存済みの現行全7,728行は最長119字で、上限変更だけで既存要約を新たに有効扱いする行はない。この実測を未確認の旧長文の受入証明には用いず、新しい結果は現行taskから全共有検証を通す。
+
+9種類の優待券を含む対応済み全文は、全文SHAに束縛した完全な定型要約だけを通常compilerで生成する。全9種類の内容と重要条件を保持し、実recipientが単一の100株・7月・単発基準日なしの場合だけ共有照合する。種類や条件の省略・追加、全文・recipientの変更はHOLDし、割引等を受取額へ換算せず推定額はNULLを保持する。
 
 入力・生成結果・適用計画・PRE/POSTはprivateに保存し、D1更新前のNotion実体保管と全バイト照合、銘柄単位の原子適用、実POST再読を必須にする。未確定の書込みやPOST保管の失敗は保留マーカーを残し、翌日の自動再送を止める。対象0群ならモデル・Notion・業務書込みは0。TypeSafeの設定は変更しない。
 

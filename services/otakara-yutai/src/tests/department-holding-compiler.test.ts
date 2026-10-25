@@ -26,7 +26,7 @@ it("不完全な百貨店の保有判定scopeを一般株数へ降格させず�
   expect(isSummaryNumbersGrounded(description, "3年判定:100株・7回以上", { minShares: [100], recordMonths: [2] })).toBe(false);
   expect(isSummaryNumbersGrounded("合成商品券1000円", "500株:1000円", { minShares: [500], recordMonths: [2] })).toBe(true);
   expect(isSummaryNumbersGrounded("合成商品券1000円", "100株:1000円", { minShares: [500], recordMonths: [2] })).toBe(false);
-  expect(SUMMARY_MAX_CHARS).toBe(120);
+  expect(SUMMARY_MAX_CHARS).toBe(256);
 });
 
 it.skipIf(!existsSync(privatePath))("保存6tier/12行の全文・両利用枠と歴史100株を通常compiler/import/selector/carryで保持する", () => {
