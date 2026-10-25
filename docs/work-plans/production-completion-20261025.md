@@ -15,7 +15,7 @@
 | 保有明細・権利処理 | 主体・株式種類・価格日・株数日・分割/併合/増資等の根拠と計算basisを資格化 | 明示不該当の分類は#561で配備済み。現在の開始可否と同世代HOLDの観測は下記。全保有価格・全権利種別の資格成立は未完 |
 | マクロ・個別スクリーニング | 元仕様と同じ指標・対象・期間を使い、未取得を通過にしない | プライム売買代金比率、個別④需給・⑤将来カタリストは既存の未接続。#572で手動案内を元仕様へ修正済み。自動判定の完成扱いや、新条件の推定実装はしない。定義は下記 |
 | 内部API・MCP | 既存の有効な認証情報で代表的な読取を本番通し確認 | 旧認証3ケース＋新REST7ケース/77行、MCP3ケースの段階受入済み。公開読取も5ケースPASS。全API・全データ充足の保証へ広げない。私有証跡は下記 |
-| 本番受入・文書 | PR/CI/main/CF配備とSSH revisionを照合し、必要な有限補完を実行。設定と自然時刻の成功を区別 | #582までCI・CF100%・SSHを確認。有限本番適用の結果は下記。初回Actionsの部分結果、次の自然定期、月次メール/実モデルを全件成功へ読み替えない |
+| 本番受入・文書 | PR/CI/main/CF配備とSSH revisionを照合し、必要な有限補完を実行。設定と自然時刻の成功を区別 | #585までPR CI・CF100%・SSHを確認。財務634Aの通常CLI受入は下記。有限本番適用の結果は下記。初回Actionsの部分結果、次の自然定期、月次メール/実モデルを全件成功へ読み替えない |
 
 取得元の停止・非公表・原本消失は取得成功としない。理由付きHOLDを実装しても、その値自体の取得完了には数えない。旧件数と固定集合の完了を現在の全市場の残数へ読み替えない。
 
@@ -39,6 +39,8 @@
 | [#579](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/579) 送付月付き優待の機械要約 | `9e7356ab` | [40144212644](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40144212644) | build `b4e10992`、version `569d9bde-f2c6-4cd1-a511-1985d2d91405`・100%、SSH同SHA。2872の3群/3行を本番適用 |
 | [#581](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/581) 単一IR再開・元PDF識別 | `6f52395f` | [40145400482](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40145400482) | version `b4ff24cb-3ede-4efc-9b91-300c0283be18`・100%、SSH同SHA。1279652だけ実行し両入口404/HOLDを確認 |
 | [#582](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/582) 旧海外入口の退役 | `844790eb` | [40146402645](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40146402645) | version `c721cb23-7acc-41e6-bf5d-7caa98994964`・100%、SSH同SHA。通常ingest/saved engineは維持 |
+| [#583](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/583) 原本と既存parserによる有限財務診断 | `1bfc2c4b` | [40148979259](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40148979259) | version `32e2a264-84d7-4af4-9580-46d86f5c7e1e`・100%、SSH同SHA。通常CLI入口のargv不備は#585で修正 |
+| [#585](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/585) 財務CLIの必須SHA引数を修正 | `07b82532` | [PR 40149308878](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40149308878) | version `6656d185-ce5a-4763-94fe-d479d9a5311a`・100%、SSH同SHA。通常captureとoffline診断を受入 |
 
 CF管理APIのnames-only確認で`GITHUB_ACTIONS_TOKEN`・`CRON_SECRET`・`EDINET_API_KEY`・`NOTION_TOKEN`の登録と、必要なNotion plain varsのbindingを確認した。GitHubのworkflow参照Secretは登録済み。初回切替後の`MECHANICAL_PUBLISHING_ENABLED=true`も読戻し済みで、GitHubのR2 global secretは変更していない。Macは同account/bucketの既存SSH資格へ2 credentialだけを補正した。設定名の監査と配備実体は私有証跡へ分離している。
 
@@ -68,6 +70,8 @@ canonicalのClef journal検査は978ディレクトリ、accepted977/rejected1�
 保有の9:23有限ROはactive `local-9fe26841-activation1`・session10/16・3685 members、既知DBの価格unknown/再開queueはcomplete0。要確認先頭2502は同世代HOLDだけを観測し、全残数にはしなかった。9:27の既存reopen条件と同じ別世代filterもcomplete0で、同世代resumeは実行しない。価格・原本は再取得していない。1798/FY2026-03-31の実原本では法的4/1・普通株1→5と期末分割前株数を資格化できるが、providerの3/30イベントとAPI価格単位への結合は未資格でHOLDを維持する。[Yahoo公式Help](https://help.yahoo.com/kb/finance-for-web/adjusted-close-sln28256.html)の調整後終値の説明や`close=adjclose`だけから、Chart API各フィールドの株数単位を推定しない（10/25有限調査）。併合・増資への率流用もしない。
 
 財務は無条件100行queryがNotionの明示incompleteでSTOPしたため、現在候補に採用していない。code634Aへ先限定した完全1行は19数値中NULL8・未知型0、4キー/source/rawrelationが保存入力と一致。fresh⑤ metadataとhosted原ZIPは2ROで79,467 bytes/fullSHAを資格化し、保存原本と全bytes一致した。この物理資格はNULL理由判定や全active対象の分類完了とは別である。原本SHA `0278f0d855e184c0252019e82c2e0e4a4f4bda6e342094c6b80a18dc82ba1637`、私有`tmp/financial-null-634a-fresh-raw-20261025-v1/RESULT.private.json` SHA `4225d3e9158220c6d19b9a977692d11a4928a110dd92d3fbff37835a91b65a65`。
+
+財務634Aは#585後、SSHの同main/Nixから通常captureを2HTTP・code先限定で実行し、complete1行を得た。exact保存原本のoffline診断は19値不変・HOLD0・抽出差候補0。空欄8は非数値/nil1、選択scope内の該当context/直接値なし7で、原本全体の非開示や全active分類を意味しない。源API/業務write/model/再送0。私有`tmp/financial-null-production-634a-20261025-v1/FINISHED.private.json` SHA `d761d2691d9f59df26704b7f6cb3ed3f7c0d0ae55419105e598de3539ed3d22c`、診断SHA `6f15be15096d8e50251945435e90a1af8cd6b8db3c15a247882b6de3bdb74447`。先行のdriver/argv停止はどちらもHTTP前と確認し、旧STARTED/EXIT/失敗logを保全した継続記録に分離している。
 
 初回の既存Actions `all` [40133382741](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40133382741)はsource `45629c8`で自然終了し、**overall FAILURE**だった。
 

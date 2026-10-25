@@ -564,6 +564,60 @@ describe("株式とマクロの日次分離", () => {
     expect(verifyArchivedAttachments).toHaveBeenCalledTimes(1);
   });
 
+  it("job時計のないSSH株式CLIも翌06時に通信中HTTPを止め、次IOを送らず復元する", async () => {
+    // 原本値は使用せず、未完のtransportと絶対期限だけを制御するwrapper回帰。
+    vi.resetModules();
+    vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const deadline = Date.parse("2026-10-14T21:00:00.000Z");
+    vi.setSystemTime(deadline - 100);
+    for (const key of ["R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET"]) vi.stubEnv(key, "symbolic-test-credential");
+    vi.stubEnv("STOCK_SYNC_TARGET", undefined);
+    vi.stubEnv("BATCH_JOB_STARTED_AT", undefined);
+    vi.stubEnv("YAHOO_PROXY_BASE", "https://proxy.test");
+    vi.stubEnv("CRON_SECRET", "test-secret");
+    const native = vi.fn<typeof fetch>((_input, init) => new Promise((_resolve, reject) => {
+      init!.signal!.addEventListener("abort", () => reject(init!.signal!.reason), { once: true });
+    }));
+    vi.stubGlobal("fetch", native);
+    const entryDaily = await import("./daily.js");
+    const store = await import("../../scripts/vwap/lib/r2.js");
+    const createDb = vi.spyOn(entryDaily, "createDailyDb").mockReturnValue(recordingDb().db);
+    const sync = vi.spyOn(entryDaily, "runDailySync").mockImplementation(async (_db, options) => {
+      await options!.jpLegStore!.get("macro/jp-close/2026-10-14.json");
+      await expect(fetch("https://proxy.test", { signal: new AbortController().signal }))
+        .rejects.toMatchObject({ name: "TimeoutError" });
+      vi.setSystemTime(deadline);
+      expect(() => fetch("https://proxy.test", { method: "POST" })).toThrow("21:00 UTC期限");
+      expect(() => options!.jpLegStore!.get("macro/jp-close/2026-10-14.json")).toThrow("21:00 UTC期限");
+      expect(() => options!.jpLegStore!.put("macro/jp-close/2026-10-14.json", "{}", null)).toThrow("21:00 UTC期限");
+      throw new Error("declared transport-only deadline stop");
+    });
+    const argv = process.argv;
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      process.argv = [argv[0], "scripts/sync/daily.ts", "--stocks-only"];
+      await import("../../scripts/sync/daily.js");
+      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(1));
+      expect(errors).toHaveBeenCalledWith("[sync-daily] エラー:", "declared transport-only deadline stop");
+      expect(sync).toHaveBeenCalledTimes(1);
+      expect(native).toHaveBeenCalledTimes(1);
+      expect(native.mock.calls[0][1]?.signal?.aborted).toBe(true);
+      expect(store.r2GetVersion).toHaveBeenCalledTimes(1);
+      expect(store.r2GetVersion).toHaveBeenCalledWith("macro/jp-close/2026-10-14.json", {
+        singleAttempt: true, beforeAttempt: expect.any(Function), abortSignal: expect.any(AbortSignal),
+      });
+      expect(vi.mocked(store.r2GetVersion).mock.calls[0][1]?.abortSignal?.aborted).toBe(true);
+      expect(store.r2Put).not.toHaveBeenCalled();
+      expect(globalThis.fetch).toBe(native);
+    } finally {
+      process.argv = argv;
+      createDb.mockRestore(); sync.mockRestore(); exit.mockRestore(); errors.mockRestore();
+      vi.unstubAllGlobals(); vi.unstubAllEnvs();
+    }
+  });
+
   it("09:10 境界の symbolic N225 は直前実バー 9/29 で確定する", async () => {
     // 09:10 JST (NY 引け後)。session 形成中の 9/30 バーを除外し、
     // 「昨日決め打ち」ではなく直前実バーで確定する。

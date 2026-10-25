@@ -86,29 +86,27 @@ async function main(): Promise<void> {
     console.info("[sync-context] 完了 (株式全量同期は対象外)");
     return;
   }
-  let restore: (() => void) | undefined;
   const scheduled = sharedEnv.STOCK_SYNC_TARGET() === "scheduled-stocks";
   const jobStartedAt = sharedEnv.BATCH_JOB_STARTED_AT();
-  if (scheduled || jobStartedAt !== undefined) {
-    const date = scheduled ? sharedEnv.SCHEDULED_DATE() : stockSyncRunDate(Date.now());
-    if (date === undefined) throw new Error("定時株式にはSCHEDULED_DATEが必須です");
-    if (scheduled) assertStockSyncStart(scheduledAtForDate(sharedEnv.SCHEDULED_AT(), date, Date.now()), date);
-    const { deadline } = stockSyncExecutionWindow(date, scheduled, Date.now(), jobStartedAt);
-    restore = installStockSyncDeadline(date, { scheduled, jobStartedAt });
-    const assertActive = () => {
-      assertStockSyncDeadline(date, Date.now(), scheduled);
-      if (Date.now() >= deadline) throw new Error("株式jobの原本閉鎖期限です（未完・再送なし）");
-    };
-    jpLegStore.get = key => {
-      assertActive();
-      return r2GetVersion(key, { singleAttempt: true, beforeAttempt: assertActive,
-        abortSignal: AbortSignal.timeout(deadline - Date.now()) });
-    };
-    jpLegStore.put = (key, body, version) => { assertActive(); return r2Put(key, body, version); };
-  }
+  const date = scheduled ? sharedEnv.SCHEDULED_DATE() : stockSyncRunDate(Date.now());
+  if (date === undefined) throw new Error("定時株式にはSCHEDULED_DATEが必須です");
+  if (scheduled) assertStockSyncStart(scheduledAtForDate(sharedEnv.SCHEDULED_AT(), date, Date.now()), date);
+  const { deadline } = stockSyncExecutionWindow(date, scheduled, Date.now(), jobStartedAt);
+  // SSH手動も既存の翌06時期限を実通信へ適用し、開始済みHTTPを持ち越さない。
+  const restore = installStockSyncDeadline(date, { scheduled, jobStartedAt });
+  const assertActive = () => {
+    assertStockSyncDeadline(date, Date.now(), scheduled);
+    if (Date.now() >= deadline) throw new Error("株式jobの原本閉鎖期限です（未完・再送なし）");
+  };
+  jpLegStore.get = key => {
+    assertActive();
+    return r2GetVersion(key, { singleAttempt: true, beforeAttempt: assertActive,
+      abortSignal: AbortSignal.timeout(deadline - Date.now()) });
+  };
+  jpLegStore.put = (key, body, version) => { assertActive(); return r2Put(key, body, version); };
   let result;
   try { result = await runDailySync(db, { stocksOnly: true, jpLegStore }); }
-  finally { restore?.(); }
+  finally { restore(); }
 
   if (result.failures.length > 0) {
     printFailureSummary(result.failures);
