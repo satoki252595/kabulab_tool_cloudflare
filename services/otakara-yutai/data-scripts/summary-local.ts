@@ -171,7 +171,7 @@ export function companyValue(task: SummaryTask): {
   return evaluateCompanyValue(task.description, context);
 }
 
-export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v8";
+export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v9";
 
 /** 対応する種類＋額面・全文1点選択・全文対応の期間/名簿条件を定型化する。未対応条件を削らない。 */
 export function compileSimpleSummary(task: SummaryTask): SummaryResult | null {
@@ -216,6 +216,17 @@ export function compileSimpleSummary(task: SummaryTask): SummaryResult | null {
     const count = Number(points[1].replaceAll(",", "")), amount = companyValue(task);
     if (!Number.isSafeInteger(count) || amount.value !== null || amount.reason !== "approx") return null;
     const shortSummary = `${count}ポイント(WEB商品選択・寄付・WILLsCoin交換、翌年12月末同番号継続記録2回以上で繰越1回のみ)`;
+    if (checkSummary(shortSummary).length > 0) return null;
+    return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion, shortSummary, estimatedValue: null });
+  }
+  // 保有・名簿・選択・贈呈時期の残全文を固定し、掲載額を受取額へ認定しない。
+  if (source.heading?.normalize("NFKC").trim() === "株主優待商品(長期保有者向け)") {
+    const catalog = /^【1年以上保有株主】\n([1-9][0-9]{0,2}(?:,[0-9]{3})+|[1-9][0-9]*)円相当\n([\s\S]+)$/u.exec(body);
+    if (catalog === null || sha(catalog[2]) !== "7e419099cc02ad5e0b5630ad03ea918d0efb0b621b731167e34a792e59d743e4") return null;
+    const count = Number(catalog[1].replaceAll(",", "")), amount = companyValue(task);
+    if (!Number.isSafeInteger(count) || amount.value !== null || amount.reason !== "choice" ||
+      task.recipients.some(recipient => recipient.recordMonth !== 12 || recipient.recordDate !== null)) return null;
+    const shortSummary = `1年以上保有・毎年12月末同一株主番号継続記録、${count.toLocaleString("en-US")}円相当商品/寄付をカタログ/WEBで1点選択(2月下旬贈呈)`;
     if (checkSummary(shortSummary).length > 0) return null;
     return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion, shortSummary, estimatedValue: null });
   }
