@@ -274,7 +274,7 @@ describe("importYutaiFull は母集団の銘柄の優待だけを作り直す", 
     const nextMonth = await loadMonthScopePreimage(db, "8336");
     expect(nextMonth.benefits.map(row => row.description)).toEqual(post.benefits.map(row => row.description));
     expect(nextMonth.benefits.map(row => row.shortSummary)).toEqual(post.benefits.map(row => row.shortSummary));
-    expect(nextMonth.benefits.every(row => parsePublicBenefitFacts(row.publicFacts, "8336")?.source.officialStatus === "verified")).toBe(true);
+    expect(nextMonth.benefits.every(row => parsePublicBenefitFacts(row.publicFacts, data.code)?.source.officialStatus === "verified")).toBe(true);
   });
 
   it("受信時計と純計算の公開条件を保存し、個別時計の欠落をバッチ時計で埋めない", async () => {
