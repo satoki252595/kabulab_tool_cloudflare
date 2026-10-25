@@ -178,6 +178,21 @@ describe("parseStockDetail は表ローカル月を優待に付ける", () => {
       expect(benefitRowsOf(data).rows.map(row => row.recordMonth)).toEqual([3]);
     });
 
+  it("正整数枚数と月限定だけの全文セルを絞り、利用・発送月や複数内容を推定しない", () => {
+    // 保存4661のセル表記だけを既存HTMLの枠へ入れた合成対照。原本全文はprivate。
+    for (const month of [3, 9]) {
+      const description = `1枚※${month}月のみ`;
+      const data = unwrapOk(parseStockDetail("8022", rowMonthHtml(description)));
+      expect(data.benefits[0].description).toBe(description);
+      expect(data.benefits[0].localRecordMonths).toEqual([month]);
+      expect(benefitRowsOf(data).rows.map(row => row.recordMonth)).toEqual([month]);
+    }
+    expect(parseStockDetail("8022", rowMonthHtml("1枚※3月のみ", "2月")).status).toBe("unknown");
+    for (const description of ["1枚※3月のみ利用", "1枚※3月のみ発送", "1枚※3月のみ<br />2枚※9月のみ", "1枚※3月のみ)"]) {
+      expect(unwrapOk(parseStockDetail("8022", rowMonthHtml(description))).benefits[0].localRecordMonths).toEqual([3, 9]);
+    }
+  });
+
   it.each([
     "1,000円相当（3月のみ利用）", "1,000円相当（3月のみ開催）",
     "1,000円相当（3月のみ申込）", "1,000円相当（3月のみ発送）",
