@@ -2,6 +2,18 @@ import { createHash } from "node:crypto";
 import type { BenefitHoldingStructure } from "../src/public-facts.js";
 import { splitHeadedDescription } from "./estimated-value-guard.js";
 
+/** 保存全文1件だけ。全商品・寄付先・選択条件と翌年の保有要件を保持する。 */
+export function compileHoldingGiftChoiceLiteral(description: string): string | null {
+  if (createHash("sha256").update(description).digest("hex") !== "f8bbc945eff462d9429e0fa49d2fed5fa6ba4d7d184498292a2ff68a0e0656d7") return null;
+  return "2026年10月末の優待:保有3年未満は1,000円相当(mtマスキングテープ/HABRIC comfyシート/QUOカード)、3年以上は2,000円相当(岡山県産桃のフルーツプリン詰合せ/大原美術館ミュージアムショップグッズ/スパイス香る牛スジカレー/北海道ラーメン詰合せ)より各1点(枠内複数可)または日本赤十字社/AMDA/大原美術館へ寄付。2027年10月31日提供から1年以上保有。毎年10月31日/4月30日名簿に同一株主番号で各最低株数以上を維持、1年以上3回/3年以上7回以上連続記載または記録";
+}
+
+/** 保存全文1件だけ。基本・初回・長期の別枠と各上限・実加算額の倍率を保持する。 */
+export function compileEqualAllocationHoldingLiteral(description: string): string | null {
+  if (createHash("sha256").update(description).digest("hex") !== "d35926fa1ca5aac28e95da7bef2ea2684d4e54aa8fa0a81c956b24002265bb04") return null;
+  return "QUOカードPay:基本枠総額上限1,000万円を対象株主で均等割(1円未満切捨・上限5,000円相当)。初回2027年1月31日のみ記念枠1,000万円を全対象株主へ均等加算(1名上限なし)。2028年1月31日から長期枠総額上限1,000万円を対象株主で分配加算:保有1年以上2年未満は上限5,000円相当、2年以上は1年以上2年未満の加算額の2倍。継続条件:1月31日/7月31日名簿に同一株主番号・毎回1,000株以上、1年以上3回/2年以上5回以上連続記載または記録。基準日から3か月以内贈呈";
+}
+
 /** 保存全文3件だけ。分割前株数・予定分割・両掲載額と歴史100株条件を保持する。 */
 export function compileMealTicketSplitLiteral(description: string): { shortSummary: string; minShares: number } | null {
   const hash = createHash("sha256").update(description).digest("hex");
