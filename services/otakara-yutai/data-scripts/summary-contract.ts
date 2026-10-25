@@ -22,7 +22,7 @@
  */
 
 import { HEADED_MARK } from "./estimated-value-guard.js";
-import { compileVenueAdmissionLiteral } from "./holding-structure.js";
+import { compilePointExchangeLiteral, compileVenueAdmissionLiteral } from "./holding-structure.js";
 
 /**
  * 要約契約の版。タスクファイルと結果ファイルの各行に載り、取り込み時に
@@ -30,7 +30,7 @@ import { compileVenueAdmissionLiteral } from "./holding-structure.js";
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-10-25.1";
+export const SUMMARY_CONTRACT_VERSION = "2026-10-25.2";
 
 /** 比較時だけ同じ月期間の表記を揃え、数値・比較条件・保存文面は変えない。 */
 function normalizeMonthPeriods(text: string): string {
@@ -124,6 +124,8 @@ export function isSummaryNumbersGrounded(
   shortSummary: string,
   context: { minShares: readonly number[]; recordMonths: readonly number[] },
 ): boolean {
+  const pointExchange = compilePointExchangeLiteral(description);
+  if (pointExchange !== null && shortSummary.normalize("NFKC").trim() !== pointExchange.shortSummary.normalize("NFKC")) return false;
   const admission = compileVenueAdmissionLiteral(description);
   const normalized = shortSummary.normalize("NFKC").trim();
   if (admission !== null && normalized !== admission.normalize("NFKC")) return false;
