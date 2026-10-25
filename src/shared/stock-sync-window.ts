@@ -58,7 +58,7 @@ export function assertStockSyncDeadline(targetDate: string, now: number, schedul
   }
 }
 
-/** Node定時入口だけで使う。既存signalを保ち、待機後のHTTP開始も固定期限で止める。 */
+/** 既存signalを保ち、待機後のHTTP開始も固定期限で止める。 */
 export function installStockSyncDeadline(targetDate: string, options: { scheduled?: boolean; jobStartedAt?: string } = {}): () => void {
   const scheduled = options.scheduled !== false;
   const { deadline } = stockSyncExecutionWindow(targetDate, scheduled, Date.now(), options.jobStartedAt);
