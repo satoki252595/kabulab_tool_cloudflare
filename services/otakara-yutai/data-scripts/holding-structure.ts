@@ -2,6 +2,16 @@ import { createHash } from "node:crypto";
 import type { BenefitHoldingStructure } from "../src/public-facts.js";
 import { splitHeadedDescription } from "./estimated-value-guard.js";
 
+/** 保存全文1件だけ。通常・特例の保有期間と歴史的名簿条件を現在tierへ転用しない。 */
+export function compileBankHoldingHistoryLiteral(description: string): { shortSummary: string; listedYen: number } | null {
+  if (createHash("sha256").update(description).digest("hex") !== "4482e903938f82100c0e98e972f9da38c00858e4ff2544b3456de6d5970c67d4") return null;
+  const amount = /^【1年以上保有】\n([1-9][0-9]{0,2}(?:,[0-9]{3})+|[1-9][0-9]*)円相当\n/u.exec(splitHeadedDescription(description).body);
+  if (amount === null) return null;
+  const listedYen = Number(amount[1].replaceAll(",", ""));
+  if (!Number.isSafeInteger(listedYen) || listedYen <= 0) return null;
+  return { listedYen, shortSummary: `カタログ${listedYen}円相当(継続条件:通常1年以上保有:3月31日基準、9月30日/3月31日同一株主番号1000株以上3回以上連続記録。2027年3月31日基準は半年以上保有)` };
+}
+
 /** 掲載全文が一致する2施設の優待券だけ。施設・各枚数・利用制限を省略しない。 */
 export function compileVenueAdmissionLiteral(description: string): string | null {
   const source = splitHeadedDescription(description);
