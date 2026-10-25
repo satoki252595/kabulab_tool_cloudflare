@@ -2,6 +2,26 @@ import { createHash } from "node:crypto";
 import type { BenefitHoldingStructure } from "../src/public-facts.js";
 import { splitHeadedDescription } from "./estimated-value-guard.js";
 
+/** 保存全文6件だけ。現在tierと名簿・移転前株数・参考画像・観劇枠を区別する。 */
+export function compileRegistryTierLiteral(description: string) {
+  const hash = createHash("sha256").update(description).digest("hex");
+  const source = [
+    { hash: "2c1e36318109370db8a035354a2abab9bd395df18bd5f58a96ebd0b39bef4ecb", stockCode: "3139", minShares: 100, recordMonths: [11], listedYen: null, valueReason: "choice",
+      shortSummary: "カタログ1点選択:2年以上保有で3,000円相当(三祐チーズセット/LicoLico自家製ジェラート/町村農場特製新鮮純良バター/ホテルオークラバームクーヘン/夢一喜フーズ熟成ハム・ウインナー、2026年参考)または寄付。画像はAコース3,000円相当の例。継続条件:11月30日/5月31日の全基準日に100株以上または300株以上、同一株主番号5回以上連続記載。各株数の保有開始時点から回数を数える。毎年2月末目処に順次発送" },
+    { hash: "63f6a544ee461523e5572d0860df9f5791ab6b89cc446a399a8f38095fd05567", stockCode: "3139", minShares: 300, recordMonths: [11], listedYen: null, valueReason: "ambiguous_condition_tiers",
+      shortSummary: "カタログ1点選択:2年以上保有で5,000円相当(三祐チーズセット/銀座千疋屋アイス＆ソルベ/町村農場3種のバター/ゴディバパティスリーアソートメント/伊豆沼ハム宮城県産豚ロース味噌漬け)または寄付。画像はAコース3,000円相当の例。継続条件:11月30日/5月31日の全基準日に100株以上または300株以上、同一株主番号5回以上連続記載。各株数の保有開始時点から回数を数える。毎年2月末目処に順次発送" },
+    { hash: "56b2deee9fbe571e0cf641884efae2ec77d18c30a99490bcf6655580631359c5", stockCode: "4814", minShares: 500, recordMonths: [3, 9], listedYen: null, valueReason: "no_source_yen_amount",
+      shortSummary: "OSK先着観劇券:ブルックリンパーラー劇場は顔認証登録あり全公演観劇可、なし30枚。対象はOSK自主公演および同劇場の全公演(同劇場約250ステージ/OSK約50ステージ)。対象公演と申込可能枠数は保有株数・顔認証登録の有無で異なる。案内10月下旬発送、日程2027年1月1日～2027年6月30日" },
+    { hash: "fb4d3db60d78ec10fe6e8bae6b17ef7dd61a5a1f9c521d470da975b9ac920a76", stockCode: "4814", minShares: 3000, recordMonths: [3, 9], listedYen: null, valueReason: "no_source_yen_amount",
+      shortSummary: "OSK先着観劇券:ブルックリンパーラー劇場は顔認証登録あり全公演観劇可(チケットレス入場)、なし30枚。OSK自主公演30枚。対象は両者の全公演(同劇場約250ステージ/OSK約50ステージ)。対象公演と申込可能枠数は保有株数・顔認証登録の有無で異なる。案内10月下旬発送、日程2027年1月1日～2027年6月30日" },
+    { hash: "dfce867bbaeb4b6b1aa50f0d376400774a6d331da60c06f7290659c14e85b605", stockCode: "640A", minShares: 1000, recordMonths: [3], listedYen: 5000, valueReason: "qualified_company_per_grant",
+      shortSummary: "ASNOVA×monotomoiギフト:1年以上保有で5,000円相当の商品。継続条件:基準日を含む3月末/9月末の直近3回名簿に同一株主番号・各1,000株以上を確認予定。初回の1年以上要件の経過措置:2026年9月30日に旧ASNOVAを500株以上保有・名簿記載または記録、株式移転後も継続し2027年3月31日に当社1,000株以上保有なら要件を満たす扱い" },
+    { hash: "bd1a934ded15f1c305e6f575eb0a41c42472a60cb28c1c6d456b8e347885e827", stockCode: "640A", minShares: 5000, recordMonths: [3], listedYen: 10000, valueReason: "qualified_company_per_grant",
+      shortSummary: "ASNOVA×monotomoiギフト:1年以上保有で10,000円相当の商品。継続条件:基準日を含む3月末/9月末の直近3回名簿に同一株主番号・各1,000株以上を確認予定。初回の1年以上要件の経過措置:2026年9月30日に旧ASNOVAを500株以上保有・名簿記載または記録、株式移転後も継続し2027年3月31日に当社1,000株以上保有なら要件を満たす扱い" },
+  ].find(source => source.hash === hash);
+  return source === undefined ? null : source;
+}
+
 /** 保存全文1件だけ。全商品・寄付先・選択条件と翌年の保有要件を保持する。 */
 export function compileHoldingGiftChoiceLiteral(description: string): string | null {
   if (createHash("sha256").update(description).digest("hex") !== "f8bbc945eff462d9429e0fa49d2fed5fa6ba4d7d184498292a2ff68a0e0656d7") return null;
