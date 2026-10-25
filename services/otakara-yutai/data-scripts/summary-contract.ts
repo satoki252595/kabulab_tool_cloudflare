@@ -23,6 +23,7 @@
 
 import { createHash } from "node:crypto";
 import { compileMusashinoOfficialLiteral } from "./musashino-source.js";
+import { compileNoteOfficialLiteral } from "./note-source.js";
 import { HEADED_MARK, splitHeadedDescription } from "./estimated-value-guard.js";
 import { compileAnnualGiftHistoryLiteral, compileBankDepositChoiceLiteral, compileBankHoldingHistoryLiteral, compileDepartmentHoldingLiteral, compileEqualAllocationHoldingLiteral, compileHoldingGiftChoiceLiteral, compileHoldingPointCarryLiteral, compileHotelHoldingLiteral, compileMealTicketSplitLiteral, compilePointExchangeLiteral, compilePremiumClubCarryLiteral, compileSkiTicketBundleLiteral, compileVenueAdmissionLiteral } from "./holding-structure.js";
 
@@ -127,6 +128,11 @@ export function isSummaryNumbersGrounded(
   context: { minShares: readonly number[]; recordMonths: readonly number[]; recordDates?: readonly (string | null)[] },
 ): boolean {
   const normalized = shortSummary.normalize("NFKC").trim();
+  const note = compileNoteOfficialLiteral(description);
+  if (note !== null || normalized.startsWith("note公式:")) return note !== null && normalized === note.shortSummary.normalize("NFKC") &&
+    context.minShares.length === 1 && context.minShares[0] === note.minShares &&
+    context.recordMonths.length === 1 && context.recordMonths[0] === 11 &&
+    context.recordDates?.length === 1 && context.recordDates[0] === null;
   const holdingGift = compileHoldingGiftChoiceLiteral(description);
   // 翌年条件・全選択肢を完全句へ束縛し、既存1000株tierへ転用しない。
   if (holdingGift !== null || normalized.startsWith("2026年10月末の優待:")) return holdingGift !== null && normalized === holdingGift &&

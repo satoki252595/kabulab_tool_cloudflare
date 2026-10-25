@@ -17,6 +17,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, realpath
 import { createHash } from "node:crypto";
 import { ROOT } from "../../../../src/shared/db/tests/source-scan.js";
 import musashinoMetadata from "./fixtures/musashino-source-saved3.json";
+import noteMetadata from "./fixtures/note-source-saved2.json";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
@@ -588,18 +589,19 @@ describe("collectAllStockCodes は既知の最終ページだけで完了する"
     await expect(collectAllStockCodes(async () => pageWith(1, null, "9100"))).rejects.toThrow(/全件数/);
   });
 
-  it.skipIf(!existsSync(join(ROOT, musashinoMetadata.privateFixtureDir, "official-8336.pdf")))("8336公式実体添付と新3本文の照合前には通常取込へ進まない（private制御）", async () => {
-    const fixture = join(ROOT, musashinoMetadata.privateFixtureDir);
+  for (const { code, fixtureMetadata } of [{ code: "8336", fixtureMetadata: musashinoMetadata }, { code: "5243", fixtureMetadata: noteMetadata }])
+  it.skipIf(!existsSync(join(ROOT, fixtureMetadata.privateFixtureDir, "SAVED-SOURCE-PACKET.private.json")))(`${code}公式実体添付と全新本文の照合前には通常取込へ進まない（private制御）`, async () => {
+    const fixture = join(ROOT, fixtureMetadata.privateFixtureDir);
     const packet = JSON.parse(readFileSync(join(fixture, "SAVED-SOURCE-PACKET.private.json"), "utf8")) as { pages: { url: string; contentType: string; bodyBase64: string }[] };
     const cwd = process.cwd(), dir = mkdtempSync(join(tmpdir(), "musashino-collector-"));
     const fetched = vi.spyOn(globalThis, "fetch").mockImplementation(async url => {
-      if (url === "https://minkabu.jp/yutai/search?order=&page=1") return new Response(pageWith(1, null, "8336").replace("全2件", "全1件"));
+      if (url === "https://minkabu.jp/yutai/search?order=&page=1") return new Response(pageWith(1, null, code).replace("全2件", "全1件"));
       const page = packet.pages.find(page => page.url === url);
       if (page === undefined) throw new Error("unexpected_source_request");
       return new Response(Buffer.from(page.bodyBase64, "base64"), { headers: { "Content-Type": page.contentType } });
     });
     vi.mocked(recordPrimaryData).mockResolvedValue({ pageId: "controlled-page", outcome: "recorded", fileTooLarge: false, manifestMatch: "written" });
-    vi.mocked(verifyArchivedAttachments).mockImplementation(async (_id, _files, label) => { if (label === "8336公式原本と提供元") throw new Error("controlled_archive_stop"); });
+    vi.mocked(verifyArchivedAttachments).mockImplementation(async (_id, _files, label) => { if (label === `${code}公式原本と提供元`) throw new Error("controlled_archive_stop"); });
     try {
       process.chdir(dir);
       await expect(main()).rejects.toThrow("controlled_archive_stop");
@@ -610,8 +612,8 @@ describe("collectAllStockCodes は既知の最終ページだけで完了する"
       expect(raw.map((page: { url: string }) => page.url)).toEqual(["https://minkabu.jp/yutai/search?order=&page=1", packet.pages[0].url]);
       expect(adopted.files).toHaveLength(3);
       for (const [index, file] of adopted.files!.entries()) expect(Buffer.from(file.bytes)).toEqual(Buffer.from(packet.pages[index].bodyBase64, "base64"));
-      expect(adopted.metadata).toMatchObject({ adoption: "full_source_qualified", providerArchive: { key: base.key, sha256: createHash("sha256").update(base.files![0].bytes).digest("hex") }, rows: musashinoMetadata.expectedRows });
-      expect(verifyArchivedAttachments).toHaveBeenCalledWith("controlled-page", adopted.files, "8336公式原本と提供元");
+      expect(adopted.metadata).toMatchObject({ adoption: "full_source_qualified", providerArchive: { key: base.key, sha256: createHash("sha256").update(base.files![0].bytes).digest("hex") }, rows: fixtureMetadata.expectedRows });
+      expect(verifyArchivedAttachments).toHaveBeenCalledWith("controlled-page", adopted.files, `${code}公式原本と提供元`);
     } finally { process.chdir(cwd); fetched.mockRestore(); vi.clearAllMocks(); rmSync(dir, { recursive: true, force: true }); }
   });
 
