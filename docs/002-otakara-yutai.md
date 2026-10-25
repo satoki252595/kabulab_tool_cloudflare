@@ -194,9 +194,23 @@ GitHub Actions 月次
 
 生成するのは `shortSummary` だけ。`estimatedValue` は既存の `qualifyCompanyPerGrantValue` で一意に認定できた企業提示の1回分額面だけを採用し、曖昧なものは理由とともにNULLを保持する。原文・受取条件と異なる単位付き数値、256字超、転載、内部ラベル、旧版結果を同じ共有契約で拒否する。通常再取込のcarryも同じ長さ・注記・文体・内部記号の契約を検査する。拒否された群は前値を保持し、未処理数を記録して非0終了する。private進捗で先頭の拒否群が後続を永久に妨げないようにする。
 
-契約`2026-10-26.3`の256字は重要条件を保持するための共有上限であり、DBの物理制約ではない。詳細は全文、一覧カードは既存の80字clipと省略記号で表示する。保存済みの現行全7,728行は最長119字で、上限変更だけで既存要約を新たに有効扱いする行はない。この実測を未確認の旧長文の受入証明には用いず、新しい結果は現行taskから全共有検証を通す。
+契約`2026-10-26.4`の256字は重要条件を保持するための共有上限であり、DBの物理制約ではない。詳細は全文、一覧カードは既存の80字clipと省略記号で表示する。保存済みの現行全7,728行は最長119字で、上限変更だけで既存要約を新たに有効扱いする行はない。この実測を未確認の旧長文の受入証明には用いず、新しい結果は現行taskから全共有検証を通す。
 
 9種類の優待券を含む対応済み全文は、全文SHAに束縛した完全な定型要約だけを通常compilerで生成する。全9種類の内容と重要条件を保持し、実recipientが単一の100株・7月・単発基準日なしの場合だけ共有照合する。種類や条件の省略・追加、全文・recipientの変更はHOLDし、割引等を受取額へ換算せず推定額はNULLを保持する。
+
+8336の正常月次取得は、元提供元を保全したうえで公式HTML・導入PDFの全文を資格化し、3月の3段階を同じ通常取込へ渡す。両公式原本と元提供元は実体添付し、URL・受信日時・SHA・新本文との対応を通常アーカイブで照合する。2027年の半年/2回と2028年以降の1年/3回以上、歴史保有200株と同一株主番号、選択・預金・国内配送を定型要約にも保持する。未知の原本変更はHOLDし、初回2026年9月の単発追加はこの対応に含めない。
+
+既存3月3行の訂正だけは、全市場を取得せず、同じparser/canonical/compilerを使う明示modeへ保存原本packet・全4表PREと各完全SHAを渡す。
+
+```bash
+nix develop --offline --no-write-lock-file --command pnpm yutai:fetch \
+  --adopt-musashino-source --saved-source=<private packet.json> --saved-source-sha256=<64桁SHA> \
+  --expected-pre=<private 全4表PRE.json> --expected-pre-sha256=<64桁SHA> --state-dir=<新規private state>
+```
+
+packetは`version:1`、元provider原本の`providerArchiveKey`/`providerArchiveSha256`/`providerBatchFetchedAt`と、provider HTML・公式HTML・導入PDFの順の`pages`を持つ。各pageは通常rawと同じ`url/receivedAt/status/contentType/byteLength/bodyBase64`。固定した2026-10-21 providerの全原本SHAと8336本文bytesを資格化し、新公式の全文を同じ通常parserへ通す。raw packet・原文をGitへ入れない。
+
+このmodeは8336全3tier・ID62011/62012/62013・旧3全文SHA・単発日なしへ限定し、fresh全4表と期待PREを照合してから、既存共有writerと全列CASで3UPDATEだけを原子適用する。ID/genre/月/date/created_atと非対象列を保持し、通常の利回り・スコア計算が他列更新を要求した場合は停止する。同じ原本のPOST再計画はSQL0。原本・PRE・POSTは共有の実体保管と全bytes読戻しが必須で、不明結果や既存stateは自動再送せず保全する。現在の原本取得・実装検証は本番Notion保管や現存3行への適用とは区別する。
 
 入力・生成結果・適用計画・PRE/POSTはprivateに保存し、D1更新前のNotion実体保管と全バイト照合、銘柄単位の原子適用、実POST再読を必須にする。未確定の書込みやPOST保管の失敗は保留マーカーを残し、翌日の自動再送を止める。対象0群ならモデル・Notion・業務書込みは0。TypeSafeの設定は変更しない。
 
