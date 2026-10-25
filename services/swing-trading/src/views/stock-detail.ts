@@ -1,4 +1,5 @@
 import { BASE_PATH } from "../../base-path.js";
+import { termTip } from "../../../../src/shared/term-tip.js";
 import { h, fmtNum, fmtYen, pctCell, layout } from "./layout.js";
 import { publicStockMetaLabel } from "../../../../src/shared/db/public-columns.js";
 
@@ -176,14 +177,14 @@ export function stockDetailPage(data: StockDetailData): string {
       <div class="sub">5MA&lt;20MA 株価&lt;5MA</div>
     </div>
     <div class="stat-cell">
-      <div class="lbl">④ 需給</div>
+      <div class="lbl">④ ${termTip("需給（買残高と出来高の比率）", "信用買い残高（未返済の信用買いの株数）を出来高（売買された株数）と比べる指標。対象日・出来高の集計期間を確認します。本画面では自動判定しません。")}</div>
       <div class="val" style="font-size:14px;color:var(--text-muted)">外部未対応</div>
       <div class="sub"><a href="https://finance.matsui.co.jp/ranking-credit-unpurchased/index" target="_blank" rel="noopener">松井証券で確認</a></div>
     </div>
     <div class="stat-cell">
-      <div class="lbl">⑤ カタリスト</div>
+      <div class="lbl">⑤ ${termTip("カタリスト（2週間以内）", "株価が動くきっかけとなる材料。決算・レーティング変更・自社株買い・政策などの公表情報や予定を確認します。本画面では自動判定しません。")}</div>
       <div class="val" style="font-size:14px;color:var(--text-muted)">外部未対応</div>
-      <div class="sub"><a href="https://kabuyoho.jp/calender" target="_blank" rel="noopener">株予報で確認</a></div>
+      <div class="sub"><a href="https://kabuyoho.jp/calender" target="_blank" rel="noopener">決算予定の参考資料</a></div>
     </div>
   </div>
 
