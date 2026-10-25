@@ -1,0 +1,320 @@
+{
+  "privateFixtureDir": "tmp/yutai-department-card-proof-v1",
+  "privateFixtureFile": "saved15.private.json",
+  "privateFixtureSha256": "c393b63798aaf641cea0fbfa4a90914b27b9d338213b005d0f203d7b7c98afea",
+  "sourceRows": 26,
+  "groups": [
+    {
+      "stockCode": "3099",
+      "taskId": "8ab598e15dccd241",
+      "sourceSha256": "bc9b3d38bc6165b5ffca37a42eaa9d1f9228af454fe3efc122eda376b48acf8e",
+      "ids": [
+        57942,
+        57943
+      ],
+      "recipients": [
+        {
+          "minShares": 2000,
+          "recordMonth": 3,
+          "recordDate": null
+        },
+        {
+          "minShares": 2000,
+          "recordMonth": 9,
+          "recordDate": null
+        }
+      ],
+      "summarySha256": "afa5277d5fabac301bbb708dae1509b2242231f06eaf84873cab38a4187dc3ed",
+      "listedYen": null,
+      "valueReason": "discount"
+    },
+    {
+      "stockCode": "3099",
+      "taskId": "d67daffd889751a7",
+      "sourceSha256": "38318830370e45bb8305c42161ea92c0fd15c256950cf7b3bc42410891796863",
+      "ids": [
+        57944,
+        57945
+      ],
+      "recipients": [
+        {
+          "minShares": 6000,
+          "recordMonth": 3,
+          "recordDate": null
+        },
+        {
+          "minShares": 6000,
+          "recordMonth": 9,
+          "recordDate": null
+        }
+      ],
+      "summarySha256": "55158c68f356e0ea5bc71b838353f927936647c1d0228b305bbf1950c3ecb705",
+      "listedYen": null,
+      "valueReason": "discount"
+    },
+    {
+      "stockCode": "3099",
+      "taskId": "d1544759b982f17d",
+      "sourceSha256": "edd78c862677b3f3e90d1a9b1643e78b0b2ffabd040229f8f8ae98cff368a64e",
+      "ids": [
+        57934,
+        57935
+      ],
+      "recipients": [
+        {
+          "minShares": 100,
+          "recordMonth": 3,
+          "recordDate": null
+        },
+        {
+          "minShares": 100,
+          "recordMonth": 9,
+          "recordDate": null
+        }
+      ],
+      "summarySha256": "a6975c8395af96e2a4d2dcba5c2723da761a4d572c39fc1dd910c54ba28d0fb7",
+      "listedYen": null,
+      "valueReason": "discount"
+    },
+    {
+      "stockCode": "3099",
+      "taskId": "ed9cca0d3ac83b63",
+      "sourceSha256": "0ae574eab606bb4c4d11424a3e86f74ebea1b048f5cbc4c8112827a0d41cbd11",
+      "ids": [
+        57946,
+        57947
+      ],
+      "recipients": [
+        {
+          "minShares": 10000,
+          "recordMonth": 3,
+          "recordDate": null
+        },
+        {
+          "minShares": 10000,
+          "recordMonth": 9,
+          "recordDate": null
+        }
+      ],
+      "summarySha256": "0cae3e3b35cf737f53c0e7c6d05a2cfab9aded192bfff18a51ea31c0f51490cd",
+      "listedYen": null,
+      "valueReason": "discount"
+    },
+    {
+      "stockCode": "3099",
+      "taskId": "99766f4f2f695d8d",
+      "sourceSha256": "dac9db84764ead7da07b7b9ff1253623d430aabe914ca54550a34eaffb28e9b0",
+      "ids": [
+        57948,
+        57949
+      ],
+      "recipients": [
+        {
+          "minShares": 20000,
+          "recordMonth": 3,
+          "recordDate": null
+        },
+        {
+          "minShares": 20000,
+          "recordMonth": 9,
+          "recordDate": null
+        }
+      ],
+      "summarySha256": "c80b4ae9f95e3fa31d8f49e773a2f04e2c67f32624f83ba3f1a10730b2ef816f",
+      "listedYen": null,
+      "valueReason": "discount"
+    },
+    {
+      "stockCode": "3099",
+      "taskId": "dd4e8744ec89e291",
+      "sourceSha256": "bc3adf5d878b2aad14fa9a895325d68c42b96a396f88e429618571196bb36941",
+      "ids": [
+        57936,
+        57937
+      ],
+      "recipients": [
+        {
+          "minShares": 200,
+          "recordMonth": 3,
+          "recordDate": null
+        },
+        {
+          "minShares": 200,
+          "recordMonth": 9,
+          "recordDate": null
+        }
+      ],
+      "summarySha256": "7ec2fc558d202b041aa4c1d68a7d50458a9e93d27dba8cd698e8b94eaefc7490",
+      "listedYen": null,
+      "valueReason": "discount"
+    },
+    {
+      "stockCode": "3099",
+      "taskId": "8679b0fe46caf607",
+      "sourceSha256": "e8c4d3e70b73c3526b294253a9f0d4e751c9a4ea4b9e8caf65107afd957ad43a",
+      "ids": [
+        57938,
+        57939
+      ],
+      "recipients": [
+        {
+          "minShares": 600,
+          "recordMonth": 3,
+          "recordDate": null
+        },
+        {
+          "minShares": 600,
+          "recordMonth": 9,
+          "recordDate": null
+        }
+      ],
+      "summarySha256": "81c785ddb3f873da8e7198e0876f813a2fbffb7da2dd66132d32d33a36606a53",
+      "listedYen": null,
+      "valueReason": "discount"
+    },
+    {
+      "stockCode": "3099",
+      "taskId": "acf20e370965dfcc",
+      "sourceSha256": "84298613c565451f34e8e15d29166cb2ffd027a1033a36836282f4f90b2da63c",
+      "ids": [
+        57940,
+        57941
+      ],
+      "recipients": [
+        {
+          "minShares": 1000,
+          "recordMonth": 3,
+          "recordDate": null
+        },
+        {
+          "minShares": 1000,
+          "recordMonth": 9,
+          "recordDate": null
+        }
+      ],
+      "summarySha256": "ae191f38aabb8b4e8cbad765b3863de33544d742548dbbb2748a480aeb4f8e7d",
+      "listedYen": null,
+      "valueReason": "discount"
+    },
+    {
+      "stockCode": "3139",
+      "taskId": "6b0debdc1a91000e",
+      "sourceSha256": "2c1e36318109370db8a035354a2abab9bd395df18bd5f58a96ebd0b39bef4ecb",
+      "ids": [
+        57966
+      ],
+      "recipients": [
+        {
+          "minShares": 100,
+          "recordMonth": 11,
+          "recordDate": null
+        }
+      ],
+      "summarySha256": "8207bfa01db7fbcf0cf4bbf15e91bd5de5169afc58c492015f019c5d5dcbd4aa",
+      "listedYen": null,
+      "valueReason": "choice"
+    },
+    {
+      "stockCode": "3139",
+      "taskId": "6fa24facb25dc4fb",
+      "sourceSha256": "63f6a544ee461523e5572d0860df9f5791ab6b89cc446a399a8f38095fd05567",
+      "ids": [
+        57967
+      ],
+      "recipients": [
+        {
+          "minShares": 300,
+          "recordMonth": 11,
+          "recordDate": null
+        }
+      ],
+      "summarySha256": "85954d9965628957f53e4f50c731c490c4c7751f3c46bfdbf9f96f2163b8641c",
+      "listedYen": null,
+      "valueReason": "ambiguous_condition_tiers"
+    },
+    {
+      "stockCode": "4814",
+      "taskId": "1a2190b4717ca83d",
+      "sourceSha256": "56b2deee9fbe571e0cf641884efae2ec77d18c30a99490bcf6655580631359c5",
+      "ids": [
+        59522,
+        59523
+      ],
+      "recipients": [
+        {
+          "minShares": 500,
+          "recordMonth": 3,
+          "recordDate": null
+        },
+        {
+          "minShares": 500,
+          "recordMonth": 9,
+          "recordDate": null
+        }
+      ],
+      "summarySha256": "72af52375c26462f1a2bc78af9fbb110ceb21467eae97157f2c1b015a5accbac",
+      "listedYen": null,
+      "valueReason": "no_source_yen_amount"
+    },
+    {
+      "stockCode": "4814",
+      "taskId": "21ea62509d8c340c",
+      "sourceSha256": "fb4d3db60d78ec10fe6e8bae6b17ef7dd61a5a1f9c521d470da975b9ac920a76",
+      "ids": [
+        59524,
+        59525
+      ],
+      "recipients": [
+        {
+          "minShares": 3000,
+          "recordMonth": 3,
+          "recordDate": null
+        },
+        {
+          "minShares": 3000,
+          "recordMonth": 9,
+          "recordDate": null
+        }
+      ],
+      "summarySha256": "1b33817c96aed77f812c7a0bc3827574ba8561eeeb5ef084dbf6b64477986c8f",
+      "listedYen": null,
+      "valueReason": "no_source_yen_amount"
+    },
+    {
+      "stockCode": "640A",
+      "taskId": "d10f194d64f5ba2b",
+      "sourceSha256": "bd1a934ded15f1c305e6f575eb0a41c42472a60cb28c1c6d456b8e347885e827",
+      "ids": [
+        60175
+      ],
+      "recipients": [
+        {
+          "minShares": 5000,
+          "recordMonth": 3,
+          "recordDate": null
+        }
+      ],
+      "summarySha256": "1886d60e0f34298c187b4151840782688a990789e1310610562be022280d8fd5",
+      "listedYen": 10000,
+      "valueReason": "qualified_company_per_grant"
+    },
+    {
+      "stockCode": "640A",
+      "taskId": "8555ab286cd00ab9",
+      "sourceSha256": "dfce867bbaeb4b6b1aa50f0d376400774a6d331da60c06f7290659c14e85b605",
+      "ids": [
+        60174
+      ],
+      "recipients": [
+        {
+          "minShares": 1000,
+          "recordMonth": 3,
+          "recordDate": null
+        }
+      ],
+      "summarySha256": "e9a346f8920b79e80fa4996632e11515edded5070848ac51f43280b46ebfe345",
+      "listedYen": 5000,
+      "valueReason": "qualified_company_per_grant"
+    }
+  ]
+}

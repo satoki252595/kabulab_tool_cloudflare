@@ -2,9 +2,21 @@ import { createHash } from "node:crypto";
 import type { BenefitHoldingStructure } from "../src/public-facts.js";
 import { splitHeadedDescription } from "./estimated-value-guard.js";
 
-/** 保存全文6件だけ。現在tierと名簿・移転前株数・参考画像・観劇枠を区別する。 */
+/** 保存全文だけ。現在tierと名簿・移転前株数・参考画像・観劇枠・買物限度を区別する。 */
 export function compileRegistryTierLiteral(description: string) {
   const hash = createHash("sha256").update(description).digest("hex");
+  const card = [
+    { hash: "edd78c862677b3f3e90d1a9b1643e78b0b2ffabd040229f8f8ae98cff368a64e", minShares: 100, limitManYen: 15 },
+    { hash: "bc3adf5d878b2aad14fa9a895325d68c42b96a396f88e429618571196bb36941", minShares: 200, limitManYen: 30 },
+    { hash: "e8c4d3e70b73c3526b294253a9f0d4e751c9a4ea4b9e8caf65107afd957ad43a", minShares: 600, limitManYen: 40 },
+    { hash: "84298613c565451f34e8e15d29166cb2ffd027a1033a36836282f4f90b2da63c", minShares: 1000, limitManYen: 50 },
+    { hash: "bc9b3d38bc6165b5ffca37a42eaa9d1f9228af454fe3efc122eda376b48acf8e", minShares: 2000, limitManYen: 100 },
+    { hash: "38318830370e45bb8305c42161ea92c0fd15c256950cf7b3bc42410891796863", minShares: 6000, limitManYen: 150 },
+    { hash: "0ae574eab606bb4c4d11424a3e86f74ebea1b048f5cbc4c8112827a0d41cbd11", minShares: 10000, limitManYen: 200 },
+    { hash: "dac9db84764ead7da07b7b9ff1253623d430aabe914ca54550a34eaffb28e9b0", minShares: 20000, limitManYen: 300 },
+  ].find(source => source.hash === hash);
+  if (card !== undefined) return { ...card, stockCode: "3099", recordMonths: [3, 9], listedYen: null, valueReason: "discount",
+    shortSummary: `三越伊勢丹カード:百貨店・グループ店買物/飲食10%引、限度${card.limitManYen}万円(9月末新規のみ・限度半額)。長期:初回発行後同一株主番号で継続保有し3月末を2年連続600株以上で迎えると当年発行分から限度2倍。限度なし10%引:三越劇場(日本橋本店)/美容室/写真室/エステ等、通販カタログ、ローマ三越。5%引:伊勢丹会館(飲食/美容室)、クィーンズ伊勢丹。買物駐車無料1時間延長、三越伊勢丹有料文化展/美術展無料。三井記念美術館、三越伊勢丹旅行/ニッコトラベル指定ツアー(通常除外)、ホテル指定食事/宿泊は優待価格` };
   const source = [
     { hash: "2c1e36318109370db8a035354a2abab9bd395df18bd5f58a96ebd0b39bef4ecb", stockCode: "3139", minShares: 100, recordMonths: [11], listedYen: null, valueReason: "choice",
       shortSummary: "カタログ1点選択:2年以上保有で3,000円相当(三祐チーズセット/LicoLico自家製ジェラート/町村農場特製新鮮純良バター/ホテルオークラバームクーヘン/夢一喜フーズ熟成ハム・ウインナー、2026年参考)または寄付。画像はAコース3,000円相当の例。継続条件:11月30日/5月31日の全基準日に100株以上または300株以上、同一株主番号5回以上連続記載。各株数の保有開始時点から回数を数える。毎年2月末目処に順次発送" },
