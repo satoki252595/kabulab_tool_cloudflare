@@ -30,12 +30,14 @@
 
 - ownerにTTLはない。別host、期限超過、fresh runnerで未閉鎖状態を解除しない。
 - 送信前pendingと完全PRE bytesを保管・全文読戻ししてから業務送信。適用不明のPUT/Notion/D1は自動再送しない。
-- 通常publisherの完全POST/原本保管成功後にcompletionを保存し、pendingを閉じる。その後だけcursorをCAS更新してownerを解放する。
+- 更新する通常publisherは完全POST/原本保管成功後にcompletionを保存し、pendingを閉じる。その後だけcursorをCAS更新してownerを解放する。
 - `publishingReadOnly`で明示した純SELECT/GETが、reserve/cursor書込開始前に失敗した場合だけ、同owner/同state/STOPなしを再読しCAS解放する。schema ensure/モデル/保管/業務送信を純read扱いしない。
 - 旧FS supplement journal、Clef journal、優待pending/進捗は保持する。未知を片付けるための削除・別state・無条件上書きは禁止。モデルforwardの未知と業務書込の未知は区別し、旧Clef journalは保全して通常のモデルforward前STOPを維持する。モデル未解決だけで本文同期を意味判断へ結合し直さない。未閉鎖時は保存PRE/実結果を限定照合し、個別の明示解消が必要。
 - 通常Macのtag `run`は、canonical kernel lockの内側・共有R2owner取得前に既存Clef journalを読取検査する。既存の未閉鎖/不正だけで新たな共有ownerを残さない。機械専用・優待にはこの検査やモデル設定を必須化せず、新forward中に発生した未知・既存publisherの未閉鎖ownerを解除するものではない。
 
 旧単体 `yutai:summary:import --apply` と `backfill-public-facts.ts apply*/resume*` はCLI入口で業務IO前に拒否する。dry-run/prepare、既存の純粋planner・原子apply部品は維持する。`verify-repair-reentry` とfresh-auditは実senderがthrowする読取/保存済み検証であり、実DMLへは接続しない。旧未閉鎖intentを通常CLIの再実行やこの停止で消さない。
+
+優待のモデルなし・保存reviewedなし・更新0は、選択した全行の最新値一致とprivate入力/bundle/reportを保存し、Notion保管・publication予約・pending作成を省く。新しい一次取得も業務更新もない再判定で、HOLD/残件を解消扱いにしない。公平cursorは既存owner下でCAS更新し、結果不明ならownerを保持する。before/next cursorの全bytesと入力SHAは同じprivate bundleに残す。allow-model/reviewedと更新ありの物理PRE/POSTは従来どおり。将来sourceでのoperator受入はこの更新0を物理POST必須の更新経路と区別し、過去のoperator/受入証跡は変更しない。Mac固定runtime/契約/初期化も変更しない。
 
 ## 初回切替（root/operatorが一度だけ実施）
 
@@ -82,7 +84,7 @@ nix develop --offline --no-write-lock-file --command env -u NODE_PATH pnpm publi
 
 ## 費用・性能の上限
 
-モデル/有料API追加0、上流原本の新規取得0。Notionは毎日最大50社の現在値確認＋source所属/7メタ/strict本文の有限読取（変更がない対象も含む）＋変更分だけ通常publisher、優待は最大60群の既存一括SELECT/原子適用/バッチ保管。R2は共有状態の小さいGET/CASと、実際に変更するpublicationのPRE/completion/cursorだけ。物理PREは64MiB、状態/完了/各cursorは16KiBを超えると停止する。
+モデル/有料API追加0、上流原本の新規取得0。Notionは毎日最大50社の現在値確認＋source所属/7メタ/strict本文の有限読取（変更がない対象も含む）＋変更分だけ通常publisher、優待は最大60群の既存一括SELECTと必要な原子適用/バッチ保管。更新0の上記分岐はprivate証跡と公平cursorだけを進める。R2は共有状態の小さいGET/CAS・公平cursorと、保管を行うpublicationのPRE/completionだけ。物理PREは64MiB、状態/完了/各cursorは16KiBを超えると停止する。
 
 Notionは新job内0.8 req/sで直列、本文と優待も同時実行しない。raw/source取込を含む他全familyとのグローバルrate制御はこのownerでは成立しないため、既存の取得rateを増やさず閑散時間に置く。最大値だけから請求額や全残の所要日数を断定しない。初回本番summaryの実Notion requests/429/retryとcursor進行から算定する。
 
