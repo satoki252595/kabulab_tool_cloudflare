@@ -6,6 +6,7 @@ import { drizzle } from "drizzle-orm/d1";
 import * as irSchema from "../db/schema.js";
 import type { TdnetItemRaw } from "../services/tdnet/types.js";
 import { normalizeTdnetItem } from "../services/tdnet/types.js";
+import { loadIngestCodeToId } from "../../../../src/shared/db/active-equity.js";
 
 vi.mock("../../../../src/shared/notion-archive/index.js", () => ({
   recordPrimaryData: vi.fn().mockResolvedValue({
@@ -215,6 +216,57 @@ describe("ingestBatch の二次予算", () => {
       documentUrl: ITEM.document_url, pubdate: "2026-09-18T11:00:00.000Z"})]);
     expect(input.deadlineMs).toBeUndefined();
     expect(sqlite.prepare("SELECT * FROM ir_disclosures").all()).toEqual(before);
+  });
+
+  it("実保存2行からSELECT時にIDを限定し、元行を変えず期限付きで通常保管へ渡す", async () => {
+    await runActual(actualItems);
+    vi.clearAllMocks();
+    const before = sqlite.prepare("SELECT * FROM ir_disclosures").all();
+    // 非対象の実行はこのmapでは資格不足になる。JSで後から除外してはいけない。
+    vi.mocked(loadIngestCodeToId).mockResolvedValueOnce(new Map([[actualBatch[0].ticker, 1]]));
+    const d1 = createD1(sqlite) as {prepare: (query: string) => unknown};
+    const selected = vi.spyOn(d1, "prepare");
+    const deadlineMs = Date.now() + 60_000;
+    await resumeNotionByStock(makeDb(d1) as never, new Date("2026-10-07T00:00:00+09:00"),
+      new Date("2026-10-08T00:00:00+09:00"), {tdnetId: actualBatch[0].tdnet_id, deadlineMs});
+    expect(selected.mock.calls[0][0]).toContain('"ir_disclosures"."tdnet_id" = ?');
+    const input = vi.mocked(upsertDisclosuresByStock).mock.calls[0][0];
+    expect(input.rows.map(row => row.key)).toEqual([actualBatch[0].tdnet_id]);
+    expect(input.rows[0].documentUrl).toBe(actualBatch[0].document_url);
+    expect(input.deadlineMs).toBe(deadlineMs);
+    expect(recordPrimaryData).not.toHaveBeenCalled();
+    expect(sqlite.prepare("SELECT * FROM ir_disclosures").all()).toEqual(before);
+  });
+
+  it.each(["missing", "invalid_id", "expired", "unbounded"])("単一再開の%sは通常保管前に停止", async mode => {
+    const exact = {tdnetId: mode === "invalid_id" ? "0" : "1279652",
+      deadlineMs: Date.now() + (mode === "expired" ? -1 : mode === "unbounded" ? 3_660_000 : 60_000)};
+    const d1 = createD1(sqlite) as {prepare: (query: string) => unknown};
+    const selected = vi.spyOn(d1, "prepare");
+    await expect(resumeNotionByStock(makeDb(d1) as never, new Date("2026-09-08T00:00:00+09:00"),
+      new Date("2026-09-09T00:00:00+09:00"), exact)).rejects.toThrow();
+    expect(upsertDisclosuresByStock).not.toHaveBeenCalled();
+    expect(recordPrimaryData).not.toHaveBeenCalled();
+    if (mode !== "missing") expect(selected).not.toHaveBeenCalled();
+  });
+
+  it("保存行/主体の読取中に期限が切れた場合はNotion保管を開始しない", async () => {
+    await runActual(actualItems);
+    vi.clearAllMocks();
+    const nowMs = Date.now();
+    const deadlineMs = nowMs + 60_000;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(nowMs);
+    vi.mocked(loadIngestCodeToId).mockImplementationOnce(async () => {
+      clock.mockReturnValue(deadlineMs);
+      return new Map([[actualBatch[0].ticker, 1]]);
+    });
+    try {
+      await expect(resumeNotionByStock(makeDb(createD1(sqlite)) as never,
+        new Date("2026-10-07T00:00:00+09:00"), new Date("2026-10-08T00:00:00+09:00"),
+        {tdnetId: actualBatch[0].tdnet_id, deadlineMs})).rejects.toThrow("絶対締切");
+      expect(upsertDisclosuresByStock).not.toHaveBeenCalled();
+      expect(recordPrimaryData).not.toHaveBeenCalled();
+    } finally { clock.mockRestore(); }
   });
 
   it.each([{status:null,insertApplied:false,mismatch:false},{status:"pending",insertApplied:true,mismatch:false},{status:"ok",insertApplied:false,mismatch:false},{status:"pending",insertApplied:true,mismatch:true}])("通常budgetは7日外の本文INSERT未完を保存ページへ限定し、一致INSERT再送0 (%j)", async ({status,insertApplied,mismatch}) => {

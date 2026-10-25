@@ -579,13 +579,22 @@ export async function ingestBatch(
 
 /** 保存済み D1 入力から二次保管を再開する。TDnet 一覧は再取得しない。 */
 export async function resumeNotionByStock(
-  db: Database, from: Date, toExclusive: Date
+  db: Database, from: Date, toExclusive: Date,
+  exact?: { tdnetId: string; deadlineMs: number }
 ): Promise<IngestResult["notionByStock"]> {
+  const nowMs = Date.now();
   if (!Number.isFinite(from.getTime()) || !Number.isFinite(toExclusive.getTime())
     || from >= toExclusive) throw new Error("TDnet 再開期間が不正です。");
+  if (exact !== undefined && (!/^[1-9]\d*$/.test(exact.tdnetId)
+      || !Number.isSafeInteger(exact.deadlineMs) || exact.deadlineMs <= nowMs
+      || exact.deadlineMs - nowMs > 60 * 60_000)) {
+    throw new Error("TDnet 単一再開のID/絶対締切が不正です。");
+  }
   const stored = await db.select().from(disclosures)
-    .where(and(gte(disclosures.pubdate, from), lt(disclosures.pubdate, toExclusive)))
+    .where(and(gte(disclosures.pubdate, from), lt(disclosures.pubdate, toExclusive),
+      exact === undefined ? undefined : eq(disclosures.tdnetId, exact.tdnetId)))
     .orderBy(disclosures.pubdate, disclosures.tdnetId);
+  if (exact !== undefined && stored.length !== 1) throw new Error("TDnet 単一再開の保存行が一意ではありません。");
   const codeToId = await loadIngestCodeToId(db);
   const rows: ByStockRow[] = stored.map((p) => {
     const ticker = companyCodeToTicker(p.companyCode);
@@ -597,8 +606,10 @@ export async function resumeNotionByStock(
       pubdate: p.pubdate.toISOString(), title: p.title,
       documentUrl: p.documentUrl, markets: p.marketsString};
   });
+  if (exact !== undefined && Date.now() >= exact.deadlineMs) throw new Error("TDnet 単一再開の絶対締切です。");
   console.info(`[ir-tdnet] 保存済み二次入力 ${rows.length}件（一覧取得0）`);
-  return archiveDisclosuresByStock(db, rows, {notionByStock: true});
+  return archiveDisclosuresByStock(db, rows, {notionByStock: true,
+    notionByStockDeadlineMs: exact?.deadlineMs});
 }
 
 const EMPTY_NOTION_BY_STOCK = {

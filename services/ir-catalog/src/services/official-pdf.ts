@@ -17,6 +17,12 @@ export function officialPdfId(value: string): string | null {
     ?? /^https:\/\/www2\.jpx\.co\.jp\/disc\/[0-9A-Z]{5}\/(\d{18})\.pdf$/.exec(observed)?.[1] ?? null;
 }
 
+/** A known original filename cannot become another disclosure or an unknown redirect. */
+export function matchesKnownOfficialPdf(originalUrl: string, resolvedUrl: string): boolean {
+  const expected = officialPdfId(originalUrl);
+  return expected === null || officialPdfId(resolvedUrl) === expected;
+}
+
 export function jpxPdfUrl(companyCode: string, observedUrl: string): string | null {
   if (companyCode.length !== 5 || !/^[0-9A-Z]{4}0$/.test(companyCode)) return null;
   const id = officialPdfId(observedUrl);
@@ -81,6 +87,10 @@ export async function downloadPdf(url: string, timeoutMs: number, noRedirect = f
     return { status: "transient", code: "network_or_timeout" };
   }
   const resolvedUrl = response.url || url;
+  if (!matchesKnownOfficialPdf(url, resolvedUrl)) {
+    await response.body?.cancel();
+    return { status: "unavailable", code: "source_identity_mismatch", resolvedUrl };
+  }
   if (!response.ok || response.body === null) {
     await response.body?.cancel();
     return { status: response.status >= 500 || response.status === 429 ? "transient" : "unavailable",
@@ -125,6 +135,7 @@ export async function fetchOfficialPdf(documentUrl: string, companyCode: string,
   const catalog = await downloadPdf(documentUrl, timeoutMs);
   if (catalog.status === "available") return { ...catalog, source: "catalog", attempts };
   attempts.push({ source: "catalog", code: catalog.code, httpStatus: catalog.httpStatus });
+  if (catalog.code === "source_identity_mismatch") return { status: "unavailable", attempts };
   const jpx = jpxPdfUrl(companyCode, catalog.resolvedUrl === undefined ? documentUrl : catalog.resolvedUrl);
   if (jpx === null || jpx === documentUrl || jpx === catalog.resolvedUrl) {
     return { status: catalog.status, attempts };
