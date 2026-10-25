@@ -2,6 +2,17 @@ import { createHash } from "node:crypto";
 import type { BenefitHoldingStructure } from "../src/public-facts.js";
 import { splitHeadedDescription } from "./estimated-value-guard.js";
 
+/** 掲載全文が一致する2施設の優待券だけ。施設・各枚数・利用制限を省略しない。 */
+export function compileVenueAdmissionLiteral(description: string): string | null {
+  const source = splitHeadedDescription(description);
+  if (source.malformed || source.heading?.normalize("NFKC").trim() !== "温浴施設「テルマー湯」優待券") return null;
+  const match = /^新宿店 ([1-9][0-9]*)枚\n六本木・西麻布店 ([1-9][0-9]*)枚\n※1枚につき1名が入場できる。\n※土日、祝日および特定日は\n[ \t]*利用できない。$/u.exec(source.body.normalize("NFKC").trim());
+  if (match === null) return null;
+  const counts = [Number(match[1]), Number(match[2])];
+  if (!counts.every(value => Number.isSafeInteger(value) && value > 0)) return null;
+  return `テルマー湯優待券:新宿店${counts[0]}枚、六本木・西麻布店${counts[1]}枚(1枚1名、土日祝・特定日利用不可)`;
+}
+
 /** 保存全文にある単一期間と掲載額・枚数の対応だけを読む。本人の適用条件は未確認。 */
 export function parseBenefitHoldingStructure(description: string): BenefitHoldingStructure | null {
   const source = splitHeadedDescription(description);

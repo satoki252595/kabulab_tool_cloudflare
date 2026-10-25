@@ -22,6 +22,7 @@
  */
 
 import { HEADED_MARK } from "./estimated-value-guard.js";
+import { compileVenueAdmissionLiteral } from "./holding-structure.js";
 
 /**
  * 要約契約の版。タスクファイルと結果ファイルの各行に載り、取り込み時に
@@ -29,7 +30,7 @@ import { HEADED_MARK } from "./estimated-value-guard.js";
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-10-05.15";
+export const SUMMARY_CONTRACT_VERSION = "2026-10-25.1";
 
 /** 比較時だけ同じ月期間の表記を揃え、数値・比較条件・保存文面は変えない。 */
 function normalizeMonthPeriods(text: string): string {
@@ -123,11 +124,17 @@ export function isSummaryNumbersGrounded(
   shortSummary: string,
   context: { minShares: readonly number[]; recordMonths: readonly number[] },
 ): boolean {
+  const admission = compileVenueAdmissionLiteral(description);
+  const normalized = shortSummary.normalize("NFKC").trim();
+  if (admission !== null && normalized !== admission.normalize("NFKC")) return false;
+  // 全文資格と施設・枚数・利用制限の同値が成立した場合だけ、固有施設名の
+  // 「六本」を数量に数えない。原文・公開要約自体は変更しない。
+  const withoutVenue = admission === null ? normalized : normalized.replace("六本木・西麻布店", "");
   // 実製品名の3Dは数量ではない。同じ製品語が原文にもある場合だけを
   // 数値検査から外し、33D/13Dや語の後の額・率・数量には触れない。
   const productName = /(?<![0-9A-Za-z.,+\-万千百億兆])3Dプリンター住宅/g;
   const sourceHasProductName = description.normalize("NFKC").match(productName) !== null;
-  const normalizedSummary = shortSummary.normalize("NFKC").replace(productName, name =>
+  const normalizedSummary = withoutVenue.replace(productName, name =>
     sourceHasProductName ? name.slice(2) : name);
   // 同一(の)株主番号の「一株」は数量ではない。この同義2表記だけを
   // 原文で確認して比較時に外し、実際の株数・保有期間・金額には触れない。

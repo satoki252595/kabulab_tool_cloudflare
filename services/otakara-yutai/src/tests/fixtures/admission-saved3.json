@@ -1,0 +1,71 @@
+{
+  "provenance": {
+    "source": "saved-first-gha-pre",
+    "observedAt": "2026-10-24T21:26:11.249Z",
+    "prePageId": "403d74ff-84cd-8176-9864-e35f734e3844",
+    "preGzipSha256": "6cf387b43d8dcbefb39d955d4f841f7597117dc67c1f78a2d0ab19d50ca243cc",
+    "originalTaskFileSha256": "1421126be401d592cf34df81b52422d7c7f9b085945d984b9c04744a5597e06e",
+    "originalPreSha256": "5591523726dcacbc24338a684de5919347a0b6c28aec37ad420126430b956a1b",
+    "originalContractVersion": "2026-10-05.15",
+    "privateFixtureSha256": "90b4940aad086accddbf5f31c5add0ee38300495add5897bd4aabe142a6cf47c",
+    "taskScope": 3,
+    "firstGhaScope": 60,
+    "wholePendingScopeVerified": false
+  },
+  "groups": [
+    {
+      "taskId": "59fe9120ef060b94",
+      "stockCode": "3521",
+      "sourceSha256": "ca9e93c97b12f9462345183f8b85841537a595b5d87365cf62f25a2900b5a613",
+      "recipients": [
+        {
+          "minShares": 300,
+          "recordMonth": 3,
+          "recordDate": null
+        }
+      ],
+      "quantities": [
+        1,
+        1
+      ],
+      "expectedValue": null,
+      "expectedSummary": "テルマー湯優待券:新宿店1枚、六本木・西麻布店1枚(1枚1名、土日祝・特定日利用不可)"
+    },
+    {
+      "taskId": "2e59cbd986afcca5",
+      "stockCode": "3521",
+      "sourceSha256": "352c9ace7fb460b72a864fb0f9531c7857909721778618564deeb940518253d2",
+      "recipients": [
+        {
+          "minShares": 1200,
+          "recordMonth": 3,
+          "recordDate": null
+        }
+      ],
+      "quantities": [
+        2,
+        2
+      ],
+      "expectedValue": null,
+      "expectedSummary": "テルマー湯優待券:新宿店2枚、六本木・西麻布店2枚(1枚1名、土日祝・特定日利用不可)"
+    },
+    {
+      "taskId": "decb6f323d5e2a8f",
+      "stockCode": "3521",
+      "sourceSha256": "66e774db4b8664cd5576177e1fe2bd1d6895d049a64e95a3d4aa830edcf77b75",
+      "recipients": [
+        {
+          "minShares": 12500,
+          "recordMonth": 3,
+          "recordDate": null
+        }
+      ],
+      "quantities": [
+        3,
+        3
+      ],
+      "expectedValue": null,
+      "expectedSummary": "テルマー湯優待券:新宿店3枚、六本木・西麻布店3枚(1枚1名、土日祝・特定日利用不可)"
+    }
+  ]
+}
