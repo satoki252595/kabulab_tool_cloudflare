@@ -10,12 +10,12 @@
 | Notionの保存結果不明 | 非冪等書込の529等を再送せず、runnerと文書callerでも成功化・次文書続行しない | #563をmain `2fa25380`へ反映、CI・CF・SSH確認済み。読取529と明示拒否429は別契約のまま |
 | 33業種更新の先行条件 | 株価・RSI失敗でも独立した原典取得を実行。取消・対象外の停止と通信枠を維持 | #562をmain `a90df635`へ反映、CI・CF・SSH確認済み。native境界は#560で同じ元job時計へ束縛。自然定期での更新成功はコード受入と分ける |
 | Yahoo等の源欠測 | 保存原応答からNULL・0・項目欠測・通信障害を区別し、根拠なく無取引と断定しない | 結果区分の#561に加え、認証/crumb/価格API/共有停止の段階診断#564をmain `dee57443`へ配備・SSH反映済み。各欠測の原因確定・最新対象日の充足とは別 |
-| 財務NULL・本文空欄・歴史relation | 保存原典との対応を機械分類し、原典に値がある取りこぼしだけ修復。非公表を数値で埋めない | #566/#567の有限読取と#575/#577の原本修復を反映。固定5社に続き、現在code集合から別50社の本文1,950セルを通常CLIで照合した。結果は下記。全市場の分類は未検収で、旧6,251セル・35,158セル・relation1,649行を現在残数にしない |
+| 財務NULL・本文空欄・歴史relation | 保存原典との対応を機械分類し、原典に値がある取りこぼしだけ修復。非公表を数値で埋めない | 別50社の初回37保留は、#591と通常原本修復後、7社・30社の別時刻の通常照合で解消。30社は1,170セル＝一致1,128・同CSV要素なし42、HOLD0。全50社の同時再照合・全市場の分類は未検収で、旧6,251セル・35,158履歴行・relation1,649行を現在残数にしない |
 | 株価・VWAP・IR原本 | 必要対象日の保存物と通常producerの実行を照合し、原典不足を別値で埋めない | 株式10/23未更新38件の原応答は35件全NULL・技術障害3件。VWAP固定3513/2198は日足[40144871284](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40144871284)・5分足[40145161209](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40145161209)で10/23まで補完し、summary物理全bytes・4POST全文SHAと通常資格を受入。旧PUT不明・全市場snapshot保留は維持し、全5分間隔の完全性へ広げない。TDnet1279652は単一再開を1回実施し、元URL/同一文書JPXとも404。対象D1全列/本文は不変、原本未取得HOLD。無取引や世界中の原本消失とは断定しない |
 | 保有明細・権利処理 | 主体・株式種類・価格日・株数日・分割/併合/増資等の根拠と計算basisを資格化 | 明示不該当の分類は#561で配備済み。現在の開始可否と同世代HOLDの観測は下記。全保有価格・全権利種別の資格成立は未完 |
 | マクロ・個別スクリーニング | 元仕様と同じ指標・対象・期間を使い、未取得を通過にしない | プライム売買代金比率、個別④需給・⑤将来カタリストは既存の未接続。#572で手動案内を元仕様へ修正済み。自動判定の完成扱いや、新条件の推定実装はしない。定義は下記 |
 | 内部API・MCP | 既存の有効な認証情報で代表的な読取を本番通し確認 | 旧認証3ケース＋新REST7ケース/77行、MCP3ケースの段階受入済み。公開読取も5ケースPASS。全API・全データ充足の保証へ広げない。私有証跡は下記 |
-| 本番受入・文書 | PR/CI/main/CF配備とSSH revisionを照合し、必要な有限補完を実行。設定と自然時刻の成功を区別 | #589までPR/main CI成功・同mainのCF100%・SSHを確認。株式direct経路の実上流通信の受入は別確認。財務634Aの通常CLI受入と優待の有限本番適用は下記。初回Actionsの部分結果、次の自然定期、月次メール/実モデルを全件成功へ読み替えない |
+| 本番受入・文書 | PR/CI/main/CF配備とSSH revisionを照合し、必要な有限補完を実行。設定と自然時刻の成功を区別 | #591までPR/main CI成功・同mainのCF100%・SSHを確認。株式direct経路の実上流通信の受入は別確認。財務634A・固定7社/30社の通常CLI受入と優待の有限本番適用は下記。初回Actionsの部分結果、次の自然定期、月次メール/実モデルを全件成功へ読み替えない |
 
 取得元の停止・非公表・原本消失は取得成功としない。理由付きHOLDを実装しても、その値自体の取得完了には数えない。旧件数と固定集合の完了を現在の全市場の残数へ読み替えない。
 
@@ -46,6 +46,8 @@
 | [#587](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/587) 未対応銘柄指定の拒否・テスト競合修正 | `034bbd1c` | [40152192772](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40152192772) | version `6612c0b3-5c20-4211-ada7-46d0ca592304`・100%、SSH同SHA |
 | [#588](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/588) 電子ギフトの機械要約 | `f01de317` | [40154274111](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40154274111) | version `0ba0a313-63fd-431f-8daa-0fab67e2fcdb`・100%、SSH同SHA。7360の3群/3行を本番適用 |
 | [#589](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/589) 株式Actionsの明示direct経路 | `9b9f836a` | PR CI成功、[main 40154905961](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40154905961)は11:38 JSTに自然SUCCESS | version `5c94f549-7a66-4d32-97e9-11e559fec92f`・100%、SSH同SHA。実上流通信の受入は別確認 |
+| [#590](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/590) 優待受入・現在未完の記録 | `30586b83` | [40156087102](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40156087102) | version `5885b8db-939e-4a1c-a18c-9c62064102d8`・100%、SSH同SHA |
+| [#591](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/591) 保存primary形式のreader対応 | `0c968492` | [40156592721](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40156592721) | build `f1730210-2ef4-4712-85c9-363f3c388c3c`、version `55348eac-467e-4169-b3cc-ec92b333667f`・100%、SSH同SHA。固定7社の通常再照合を受入 |
 
 mainの[40150836132](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40150836132)はPython成功・Nodeの1テスト失敗だった。`daily-mode.test.ts`がHTTP側signalの停止後、別タイマーのR2 signalも停止済みと即断する競合を通信0で再現した。同じR2 assertionを有限の`vi.waitFor`で待つ修正とし、製品の期限・停止guardは変更していない。失敗runを成功へ読み替えず、#587のPR/main CI成功を別に受け入れた。
 
@@ -74,7 +76,15 @@ canonicalのClef journal検査は978ディレクトリ、accepted977/rejected1�
 
 11:09 JSTに別50社の本文39項目をSSHの通常`audit:supplement:texts`で照合した。現在のcode-only 1SELECTで得た有効普通株3,686社から元固定5社を除く先頭50社を固定し、文書を先読みしていない。50社全て観測、未観測/未着手/実行停止0、1,950セルは一致487・同CSV要素なし20・原本/主体資格不足1,443。資格不足37社の内訳は型付き保存行なし31・主体識別不足/不一致6で、物理原本の消失を確定した分類ではない。空欄75セルのうち55は資格不足のため理由未確定、残20は同CSVに対象要素なし。原本資格が成立した範囲では抽出差による空欄0だった。313 HTTP、write/源API/model0。exit1は資格不足を含む結果で、全社成功や非開示の証明にしない。SSH私有`tmp/supplement-next50-readonly-20261025-v1/report.json` SHA `cec8ff9ba9432efcaff86337360636a460d429baf23ddc8b330d0dcf2353df68`、cohort SHA `9b239f96c00896ed22c33e095e522f408ed77565dd1b94dc96091e45fdf86580`。私有FS集計`tmp/feature-audit-20261025/supplement-next50-fs-summary-v1/AGGREGATE.private.json` SHA `c06413b07437af49721b1ea97d6db25f95f12eee106ae631c0579e3fdcf8acf5`。
 
-130A/S100XSITは保存されたprimary内の識別情報が現D1と一致し、audit readerの保存形式非対応を確認した。修正・通常再照合は未実施、他5社は未診断で、元publisher時計の資格も未確認。metadata限定3ROと後続FS照合の結果で、ZIP・原典取得・業務write・model0。11:36 JSTのmetadata読取receiptは私有`tmp/feature-audit-20261025/edinet130a-type5-metadata-readonly-prep-v1/accepted-production/FINISHED.private.json` SHA `c59d0ac1d074bc4458facf4e09f90d7828cec1524caa7b8b3812b293c3f0e0d3`。
+130A/S100XSITは保存されたprimary内の識別情報が現D1と一致し、audit readerの保存形式非対応と判明した。#591でreaderを対応させ、下記7社を通常再照合した。診断時の元publisher時計未確認は旧証跡のまま保持する。11:36 JSTのmetadata限定3ROのreceiptは私有`tmp/feature-audit-20261025/edinet130a-type5-metadata-readonly-prep-v1/accepted-production/FINISHED.private.json` SHA `c59d0ac1d074bc4458facf4e09f90d7828cec1524caa7b8b3812b293c3f0e0d3`。
+
+1301/S100YE8Kは通常のsource captureで当該文書1件のmetadataを資格化し、通常source-only修復で既存type1を再利用、不足CSVだけを記録した。記録1・既存type再利用1・非提供0、exit0で、facts/本文のwrite・model0。Mac私有`tmp/feature-audit-20261025/edinet1301-source-capture-prep-v1/accepted-production/FINISHED.private.json` SHA `d3598353bb85cb1c124457872c3d72ef58829d35fe5733327a1974bd33b03f09`、`accepted-repair/FINISHED.private.json` SHA `59326f77f58b9469392ec00cbaea9c766b8cdf68ed6e1f0d5601f4bf0f35f3ab`。
+
+12:04 JSTの通常`audit:supplement:texts`は130A/138A/145A/146A/148A/149A/1301の7社を観測し、273セル＝一致260・同CSVに対象要素なし13、空欄13も同CSVの対象要素なしだった。exit0・未観測/未着手/HOLD0、82 HTTP（Notion52・429/再試行0）、source/model/業務write0。初回50社の37保留中7社を解消した。Mac私有`tmp/feature-audit-20261025/supplement-identity6-plus1301-accepted-v1/AGGREGATE.private.json` SHA `bd33ece479fa2948d2c38c62d2c4ed298483495563e7fb77963a34c0a63e610d`、SSH report SHA `ea36b231f99f70bd9ffe2736e2564f7d41551ca480c24a2e47b321570bdaef91`。
+
+残る固定30文書は通常source-only修復20回で記録30・既存type再利用17・失敗0となった。財務・本文のwriteではなく、sourceのnative日時は保存表現のまま保持した。Mac私有`tmp/feature-audit-20261025/edinet-typedmissing30-repair-prep-v1/accepted-production/FINISHED.private.json` SHA `e74075cfe7f360fd3b8ee3bcb20b3515acb8793730ea7e3ead6495460708802b`。
+
+12:40〜12:43 JSTの通常`audit:supplement:texts`で30社全ての物理原本資格・通常本文一致・現在latest文書と固定planの一致を確認した。1,170セル＝一致1,128・同CSVに対象要素なし42、空欄42も同理由。exit0・未観測/未着手/停止/失敗0、343 HTTP（Notion221・429/再試行0）、source/model/業務write0。初回50社で保留だった37社は上記7社と今回30社で解消したが、観測時刻は異なり、全50社の同時再照合・原本全体の非開示・全市場の充足は証明しない。Mac私有`tmp/feature-audit-20261025/supplement-typedmissing30-accepted-v1/AGGREGATE.private.json` SHA `416d6ca437fb852cd0edc6bd36306ca31f39477b651179425726ca88fc328528`、SSH report SHA `901367b3957432b77123148f0c9fc13f9c9cbf1eec73ecc8f69c7d441788d2dc`、control FINISHED SHA `85350e3a8edde4da693f6289d2d143d4fbc0d3697a1b0ca867215d6bd8efe64e`。
 
 3776は現旧type1 ZIPの43/43 member bytes、全facts、本文37節・索引が同値だった。#578の通常CLIで派生metadata4列だけを物理PRE/CAS/POST付き訂正し、別の通常strict再資格化で観測2件を解決、HOLD0・進捗revision18・予約閉鎖・財務/本文不変を確認した。旧receiptと現progressの不一致は最初のplanがSTOPし、現在の保存原本receiptを資格化してから実行した。比較条件を緩めていない。私有受入`tmp/feature-audit-20261025/edinet3776-production-acceptance/`の`completed.json` SHA `db84bc403eace11378b7ad91697dafef9ffab05ff1cd4c67c5adea307b57938d`、`FINISHED.json` SHA `01c8b31dda13eadf72aa7577236da85c194ae4b9a99dde901c374ce07f1991cd`。
 
@@ -112,7 +122,7 @@ Calendarは2026-11-11開始・毎月11日09:00 JST・開始0分前メールと�
 
 全20機能のうち、財務NULL・歴史relation、受注/海外の全対象分類、保有の全価格basisは固定5社の本文確認では検収できない。過去の件数を現在残数にせず、既存の対象限定監査で原本不足・非該当・実漏れを分ける。旧`audit:overseas`と非saved補完は廃止し、固定cohort・通信上限付きsaved prepare/inspectへ誘導する。旧入口は本番の定期処理では呼ばれていない。
 
-10/23の株式未更新38件は保存済み証拠では35件の全NULLと技術障害3件に分かれる。NULLは出来高0ではなく、売買不成立は候補に留める。2385/2438のQuoteSummary409全文は設定proxyホストのCloudflare1001/DNS resolution errorで、Yahooデータ不在とは異なる。5884はChart原応答capture missing/ECONNRESET、QuoteSummary200の保存はある。取得した保存物はpart0だけでpart1〜35は未読、3件は未補完。私有`tmp/feature-audit-20261025/stock-tech3-saved-part0-readonly-v1/TARGET-ERROR-CLASSIFICATION.private.json` SHA `6d8fdc94e894ebbff83b3b2cec6d7a39efb3553bf214b1fbaa733fc500018c74`。別の8303長期履歴HOLDを38件へ重複計上せず、過去の原本欠測やVWAP旧unknownの解消とも混同しない。#343の全権利種別の資格化、上記の未接続指標、原本/主体不足は理由付き未充足として残す。次の対象日の自然実行待ちは、それ自体を障害に数えない。
+10/23の株式未更新38件は保存済み証拠では35件の全NULLと技術障害3件に分かれる。NULLは出来高0ではなく、売買不成立は候補に留める。2385/2438のQuoteSummary409全文は設定proxyホストのCloudflare1001/DNS resolution errorで、Yahooデータ不在とは異なる。5884はChart原応答capture missing/ECONNRESET、QuoteSummary200の保存はある。取得した保存物はpart0だけでpart1〜35は未読、3件は未補完。私有`tmp/feature-audit-20261025/stock-tech3-saved-part0-readonly-v1/TARGET-ERROR-CLASSIFICATION.private.json` SHA `6d8fdc94e894ebbff83b3b2cec6d7a39efb3553bf214b1fbaa733fc500018c74`。12:33 JSTの固定35社の現在metadata読取は1SELECT・35行・D1 read105・write0で、全てactive/equity、Standard31・Growth4、event0だった。対象日10/23の資格・無取引は未確定のまま。私有`tmp/feature-audit-20261025/stock-null35-current-metadata-readonly-prep-v1/accepted-production/FINISHED.private.json` SHA `65090016dc1351c7285ffa75b577a7c10cf27a2e612c39b6b2d23219264aae42`。別の8303長期履歴HOLDを38件へ重複計上せず、過去の原本欠測やVWAP旧unknownの解消とも混同しない。#343の全権利種別の資格化、上記の未接続指標、原本/主体不足は理由付き未充足として残す。次の対象日の自然実行待ちは、それ自体を障害に数えない。
 
 ## 元仕様で確認した指標
 
@@ -122,6 +132,6 @@ Calendarは2026-11-11開始・毎月11日09:00 JST・開始0分前メールと�
 - 個別④需給は**買残高と出来高の比率**（2倍超で悪化）。買残/売残の信用倍率や日証金の融資/貸株倍率とは別である。出来高の対象日と平均期間を、勝手に補って実装しない。
 - 個別⑤は**2週間以内のカタリストの存在**。決算だけでなく、レーティング・自社株買い・政策等も含む。決算跨ぎの回避条件と置換しない。過去の決算短信の発表日から将来予定を生成しない。
 
-Primeの既存接続原典から、同一定義の当日実代金と20日平均の系列はまだ資格化できていない。[日報](https://www.jpx.co.jp/markets/statistics-equities/daily/01.html)は翌営業日掲載、[月報](https://www.jpx.co.jp/markets/statistics-equities/monthly/01.html)は原則翌月21日で、当日夕方の値へ代用しない。全市場・週次両側合算・終値×出来高にも置き換えない。
+Primeの既存接続原典から、同一定義の当日実代金と20日平均の系列はまだ資格化できていない。[日報](https://www.jpx.co.jp/markets/statistics-equities/daily/01.html)は翌営業日掲載、[月報](https://www.jpx.co.jp/markets/statistics-equities/monthly/01.html)は原則翌月21日で、当日夕方の値へ代用しない。全市場・週次両側合算・終値×出来高にも置き換えない。[入力条件と公開出典](../research/prime-turnover-input-contract-20261025.md)を記録し、既存の許諾済み提供元の有無はユーザーへ確認中。返答待ちを許諾や契約不存在とは扱わない。個別④の出来高期間の確認もpendingのままで、指標の接続や定義選択は未実施。
 
 [JPXの株式市況](https://www.jpx.co.jp/markets/equities/summary/index.html)は蓄積・加工等を禁止している。一般公開されていることだけを根拠に原本蓄積へ使用せず、既存の利用可能な公式統計原本を先に調べる。[JPXの決算予定一覧](https://www.jpx.co.jp/listing/event-schedules/financial-announcement/)は対象・更新時期と未掲載/予定変更の注意書きがあるため、掲載がない銘柄を「イベントなし」と判定しない。

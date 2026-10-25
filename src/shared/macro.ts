@@ -91,7 +91,7 @@ export function judgeMacro(input: MacroInput): MacroResult {
       reason = `日経VI ${vi.toFixed(1)} (20-25だが売買代金/ギャップが条件未達)`;
     } else {
       const missing = [
-        input.topixTurnoverRatio === null ? "TOPIX売買代金比率" : null,
+        input.topixTurnoverRatio === null ? "東証プライム売買代金の20日平均比" : null,
         input.futuresGap === null ? "先物ギャップ" : null,
       ].filter((field) => field !== null);
       judgment = "HOLD";
