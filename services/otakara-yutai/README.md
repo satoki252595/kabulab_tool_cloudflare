@@ -37,6 +37,18 @@ pnpm biztag:monthly --runtime .runtime/mac-main554-20261020 --preflight
 限定する。本文・株数・備考は保持し、利用・開催・申込・発送の月や複数商品の注記から
 権利月を推定しない。表と行の月が矛盾する場合や随時との混在は取込前に停止する。
 
+保存済み同一原本からの月限定重複の是正は、通常`yutai:fetch`の明示
+`--repair-month-scope`だけで行う。`--code`、`--saved-raw`と`--saved-raw-sha256`、
+`--raw-archive-page-id`と元の`--raw-filename`、`--expected-pre`と
+`--expected-pre-sha256`、未作成の専用`--state-dir`をすべて指定する。
+入力はprivate実体0600で、PREはschema全列の`parent/benefits/financial/scores`。
+JSON列はDBの文字列、日時はunix秒を保持する。全gzipをSHA/EOF検証し、指定銘柄の
+HTML1件だけを通常parseする。原本のNotion物理照合と全現行行・DTO出典時計の一致後、
+明示月限定による余剰1行かつ欠落0だけを共有writer・物理PRE/POST・単一原子batchで
+是正する。他行のID/全列/時計は保持し、通常の利回り・スコアのみ追随する。
+source取得・モデル・cursor更新は行わない。結果不明はowner/pendingとstateを保全し、
+再実行・別stateでの回避をしない。全量取得の95%/廃止判定は従来どおりである。
+
 ## 内部API
 
 銘柄詳細SSRは、既存本文から純計算した `public_facts` を使い、期間表記・選択・

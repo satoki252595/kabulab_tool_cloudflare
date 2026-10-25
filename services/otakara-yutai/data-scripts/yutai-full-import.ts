@@ -94,6 +94,8 @@ export type BenefitDetail = {
    * 呼び出し側が月を推測で補わないこと。
    */
   localRecordMonths: number[];
+  /** 通常parserが読む元tableの明示月。saved月限定是正の根拠専用でDBへ書かない。 */
+  tableRecordMonths?: number[];
   /** 由来 (h3 見出しの原文)。表の特定用で、判定には使わない。 */
   heading: string;
 };
@@ -108,6 +110,12 @@ export type StockYutaiData = {
   /** 個別ページの実受信時計。旧保存入力では未記録。 */
   sourceFetchedAt?: string;
 };
+
+/** 全文セルで明示された月限定だけ。利用・発送等の月を推測しない。 */
+export function explicitRowRecordMonth(description: string): number | undefined {
+  const found = description.normalize("NFKC").match(/^(?:(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)円相当\s*\(([0-9]{1,2})月のみ\)|[1-9][0-9]*枚※([0-9]{1,2})月のみ)$/);
+  return found === null ? undefined : Number(found[1] === undefined ? found[2] : found[1]);
+}
 
 /**
  * `core_stocks` と優待の表を読み書きできれば足りる drizzle db 型。Node の D1 HTTP 版
