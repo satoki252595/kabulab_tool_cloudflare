@@ -37,7 +37,8 @@ import {
 import { semifEnv } from "../../../src/shared/semif/env.js";
 import { z } from "../../../src/shared/zod-mini.js";
 import { parseBenefitChoiceStructure } from "./choice-structure.js";
-import { compileAnnualGiftHistoryLiteral, compileBankHoldingHistoryLiteral, compileDepartmentHoldingLiteral, compileHoldingPointCarryLiteral, compileHotelHoldingLiteral, compilePointExchangeLiteral, compilePremiumClubCarryLiteral, compileSkiTicketBundleLiteral, compileVenueAdmissionLiteral, parseBenefitHoldingStructure } from "./holding-structure.js";
+import { compileAnnualGiftHistoryLiteral, compileBankDepositChoiceLiteral, compileBankHoldingHistoryLiteral, compileDepartmentHoldingLiteral, compileHoldingPointCarryLiteral, compileHotelHoldingLiteral, compilePointExchangeLiteral, compilePremiumClubCarryLiteral, compileSkiTicketBundleLiteral, compileVenueAdmissionLiteral, parseBenefitHoldingStructure } from "./holding-structure.js";
+import { compileMusashinoOfficialLiteral } from "./musashino-source.js";
 import { parseBenefitRecordTierStructure } from "./record-tier-structure.js";
 import { benefitKey } from "./benefit-key.js";
 import { loadBenefitRows, openOtakaraD1 } from "./benefit-rows.js";
@@ -173,10 +174,29 @@ export function companyValue(task: SummaryTask): {
   return evaluateCompanyValue(task.description, context);
 }
 
-export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v16";
+export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v17";
 
 /** 対応する種類＋額面・全文1点選択・全文対応の期間/名簿条件を定型化する。未対応条件を削らない。 */
 export function compileSimpleSummary(task: SummaryTask): SummaryResult | null {
+  const bankDeposit = compileBankDepositChoiceLiteral(task.description);
+  if (bankDeposit !== null) {
+    const amount = companyValue(task);
+    if (task.rowCount !== 1 || task.stockCode !== "8551" || amount.value !== null || amount.reason !== "choice" ||
+      checkSummary(bankDeposit.shortSummary).length > 0 || !isSummaryNumbersGrounded(task.description, bankDeposit.shortSummary, {
+        minShares: task.recipients.map(r => r.minShares), recordMonths: task.recipients.map(r => r.recordMonth),
+        recordDates: task.recipients.map(r => r.recordDate),
+      })) return null;
+    return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion, shortSummary: bankDeposit.shortSummary, estimatedValue: null });
+  }
+  const musashino = compileMusashinoOfficialLiteral(task.description);
+  if (musashino !== null) {
+    const amount = companyValue(task);
+    if (task.stockCode !== "8336" || task.rowCount !== 1 ||
+      (amount.value !== null && amount.value !== musashino.listedYen) || checkSummary(musashino.shortSummary).length > 0 ||
+      !isSummaryNumbersGrounded(task.description, musashino.shortSummary, { minShares: task.recipients.map(r => r.minShares),
+        recordMonths: task.recipients.map(r => r.recordMonth), recordDates: task.recipients.map(r => r.recordDate) })) return null;
+    return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion, shortSummary: musashino.shortSummary, estimatedValue: amount.value });
+  }
   const skiTickets = compileSkiTicketBundleLiteral(task.description);
   if (skiTickets !== null) {
     const amount = companyValue(task);

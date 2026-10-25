@@ -2,6 +2,18 @@ import { createHash } from "node:crypto";
 import type { BenefitHoldingStructure } from "../src/public-facts.js";
 import { splitHeadedDescription } from "./estimated-value-guard.js";
 
+/** 保存全文3件だけ。預金・特産品の選択、取扱日、除外と名簿条件を全て保持する。 */
+export function compileBankDepositChoiceLiteral(description: string): { shortSummary: string; minShares: number } | null {
+  const hash = createHash("sha256").update(description).digest("hex");
+  const minShares = hash === "d3387c4d55ca00d52f24d7bf264e5c895845a9b2901de17ca18d489ab658b859" ? 300
+    : hash === "7138c36a8be45b7c36e94a8f7f453a01ec9fc811a7edeb5ec5f9db4e9a22fb0b" ? 1500
+    : hash === "a3ee4dbfb4e621cfbd26c5377d20c23d446eac69b304f77df377d7decc5534c2" ? 3000 : null;
+  if (minShares === null) return null;
+  const amounts = /^①([0-9]+)枚\(0\.2%上乗せ\)※([0-9]+)万円まで\n②([0-9,]+)円相当$/mu.exec(splitHeadedDescription(description).body);
+  if (amounts === null) return null;
+  return { minShares, shortSummary: `1年以上保有:定期預金優待券${amounts[1]}枚(0.2%上乗せ・${amounts[2]}万円まで)または地域特産品${amounts[3]}円相当を選択。カタログは東日本大震災復興応援の地場産品中心、寄付も選択可。定期は証書式スーパー定期・期間1年、取扱2026年7月1日から1年間、ひまわりポイントサービス3ステップ以上の定期預金金利優遇サービス対象外。継続条件:3月31日/9月30日株主名簿に同一株主番号3回以上連続記載` };
+}
+
 /** 保存全文1件の9券種だけ。枚数・各利用人数・季節・割引対象を全て保持する。 */
 export function compileSkiTicketBundleLiteral(description: string): string | null {
   // ponytail: 保存全文1型のみ。別形式は全条件を確認した文法を追加するまでHOLD。

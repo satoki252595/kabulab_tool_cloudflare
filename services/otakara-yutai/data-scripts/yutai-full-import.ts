@@ -109,6 +109,8 @@ export type StockYutaiData = {
   benefits: BenefitDetail[];
   /** 個別ページの実受信時計。旧保存入力では未記録。 */
   sourceFetchedAt?: string;
+  /** 通常collectorで物理原本を保管・照合してから渡す明示公式採用。 */
+  official?: { url: string; verifiedAt: string };
 };
 
 /** 全文セルで明示された月限定だけ。利用・発送等の月を推測しない。 */
@@ -637,7 +639,7 @@ export async function importYutaiFull(
       code: p.data.code, description: row.description, context,
       fetchedAt: p.data.sourceFetchedAt === undefined ? null : p.data.sourceFetchedAt,
       batchFetchedAt: sourceFetchedAt === undefined ? null : sourceFetchedAt,
-      official: verifiedOfficial.get(key),
+      official: p.data.official === undefined ? verifiedOfficial.get(key) : p.data.official,
     }));
   }
 

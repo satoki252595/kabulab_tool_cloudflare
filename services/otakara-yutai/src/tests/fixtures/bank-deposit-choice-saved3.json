@@ -1,0 +1,58 @@
+{
+  "privateFixtureSha256": "2eee3cd7294ebef0e1b9c99614e280d64b87b1cb82bc7e9c49d094e15364a852",
+  "sourceFileSha256": "190c66310fe3cf165796b8df4893cefd21169ccd7a9eeef7124f06472d15156e",
+  "historicalFixtureNotCurrentPendingCount": true,
+  "groups": [
+    {
+      "taskId": "eb17dc71e169ac8d",
+      "ids": [
+        62114
+      ],
+      "sourceSha256": "d3387c4d55ca00d52f24d7bf264e5c895845a9b2901de17ca18d489ab658b859",
+      "sourceCharacters": 346,
+      "recipients": [
+        {
+          "minShares": 300,
+          "recordMonth": 3,
+          "recordDate": null
+        }
+      ],
+      "summarySha256": "8499f197fbdb4c66c7a1974ff83eaee43fe2abb142a92de0bb18287ce7d532cd",
+      "summaryCharacters": 189
+    },
+    {
+      "taskId": "853d8fda0804ea05",
+      "ids": [
+        62115
+      ],
+      "sourceSha256": "7138c36a8be45b7c36e94a8f7f453a01ec9fc811a7edeb5ec5f9db4e9a22fb0b",
+      "sourceCharacters": 346,
+      "recipients": [
+        {
+          "minShares": 1500,
+          "recordMonth": 3,
+          "recordDate": null
+        }
+      ],
+      "summarySha256": "e04a8a1e077b804e4ffe60be4d59aafc4d44b151428ca2f4a5c172b587a57a77",
+      "summaryCharacters": 189
+    },
+    {
+      "taskId": "ced8b0dcf63fe21b",
+      "ids": [
+        62116
+      ],
+      "sourceSha256": "a3ee4dbfb4e621cfbd26c5377d20c23d446eac69b304f77df377d7decc5534c2",
+      "sourceCharacters": 346,
+      "recipients": [
+        {
+          "minShares": 3000,
+          "recordMonth": 3,
+          "recordDate": null
+        }
+      ],
+      "summarySha256": "87a143f6254937d0472c35b97e86fd2e7830fa42352a638f49032bab7fd4405d",
+      "summaryCharacters": 189
+    }
+  ]
+}

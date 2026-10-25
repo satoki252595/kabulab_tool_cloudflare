@@ -208,7 +208,7 @@ export function assertMonthScopeRowsEqual(expected: MonthScopePreimage, actual: 
 }
 
 /** schema由来の列名だけをSQL化し、値は単一JSONへbindする。全4表の補完CAS。 */
-function fullCas(pre: MonthScopePreimage, clock?: { minimum: number; maximum: number }): D1BatchStatement {
+export function fullCas(pre: MonthScopePreimage, clock?: { minimum: number; maximum: number }): D1BatchStatement {
   const conditions: string[] = [], params: (string | number)[] = [JSON.stringify(pre)];
   for (const name of Object.keys(tables) as (keyof typeof tables)[]) {
     const count = name === "benefits" ? pre.benefits.length : pre[name] === null ? 0 : 1;
@@ -275,7 +275,7 @@ export function planSavedMonthScope(pre: MonthScopePreimage, data: StockYutaiDat
 }
 
 /** 通常builderだけが変える財務時計を範囲検証し、残り全列/IDは完全一致させる。 */
-export function assertMonthScopePost(plan: ReturnType<typeof planSavedMonthScope>, actual: MonthScopePreimage): void {
+export function assertMonthScopePost(plan: Pick<ReturnType<typeof planSavedMonthScope>, "expected" | "clock">, actual: MonthScopePreimage): void {
   const expected = structuredClone(plan.expected);
   if (plan.clock !== undefined) {
     assert(actual.financial !== null && typeof actual.financial.fetchedAt === "number" && Number.isSafeInteger(actual.financial.fetchedAt) && actual.financial.fetchedAt >= plan.clock.minimum && actual.financial.fetchedAt <= plan.clock.maximum, "通常再計算の財務時計が範囲外です");
