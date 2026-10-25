@@ -93,7 +93,7 @@
 
 ## 旧Mac自動起動と月次手動の対象機能
 
-**M01/M02/M06はLinux/Actionsの日次機械処理として移行・有効化済み。M03/M04/M05はMac月次手動。** plist・env・モデル・原本・進捗・未完journalを保持し、2labelを永続disable/unloadした。月次手動では受入済みMac runtimeと既存の未完状態・writer排他を使う。23:30の旧Mac日次receipt期待は廃止し、月次手動を旧日次成功へ偽装しない。初回Actionsは本文31社同期/今回未着手19・優待60件保留/適用0・モデル0でFAILURE終了。詳細と全データ充足の境界は[受入台帳](work-plans/production-completion-20261025.md)を参照。
+**M01/M02/M06はLinux/Actionsの日次機械処理として移行・有効化済み。M03/M04/M05はMac月次手動。** plist・env・モデル・原本・進捗・未完journalを保持し、2labelを永続disable/unloadした。月次手動では受入済みMac runtimeと既存の未完状態・writer排他を使う。23:30の旧Mac日次receipt期待は廃止し、月次手動を旧日次成功へ偽装しない。各実行の採用・保留・未着手数と全データ充足の境界は[受入台帳](work-plans/production-completion-20261025.md)へ記録する。
 
 | ID | 機能 | 現在の予定 | LLM | 移設の境界 |
 |---|---|---|---|---|
@@ -102,7 +102,7 @@
 | M03 | keywords/excludes、候補抽出、上流/下流タグ・テーマ導出、同入力判定再利用 | Mac月次手動の通常biztag内 | なし | 既存no/uncertainを単語一致だけで覆さない。日次本文同期から独立 |
 | M04 | 適格新規・実入力変更の事業タグClef判定 | M03と同じ月次手動 | **あり** | 現行torch-MPS専用、モデル約19GB。受入済みruntimeで実行し、旧モデル結果不明の停止を維持 |
 | M05 | 競合入力・質問・候補の機械準備 | 月次biztag成功後、設定対象から最大5社 | なし | 現envキーは設定あり。同じMac runtimeのcursor/pendingを再利用。意味判定は行わない |
-| M06 | 優待の機械要約、金額/条件検証、PRE/CAS/POST | 本文job終了後、Linux/Actions最大60群 | なし | 既知本文HOLDとは独立。原文取込とも同じ共有writer、機械未対応は保留。10/25の通常2窓で4群/7行採用・runtimeモデル0、15:16 JSTの完全POSTを通常selectorでFS再計数し残118群/175行/46社 |
+| M06 | 優待の機械要約、金額/条件検証、PRE/CAS/POST | 本文job終了後、Linux/Actions最大60群 | なし | 既知本文HOLDとは独立。原文取込とも同じ共有writer、機械未対応は保留。実行時モデルなし。保存済み意味レビューの取込は入力全SHA・契約を通常publisherで再検証 |
 | M07 | 旧日次の30分期限・R2 receipt（保全）、共有lock・原文/journal | 両処理共通 | なし | 月次はstageごとの独立期限。旧日次receiptは更新せず、既存stateを使う |
 
 根拠: [launcher](../scripts/biztag-local/main.ts)、[OS/lock条件](../scripts/biztag-local/runtime.ts)、[優待CLI](../services/otakara-yutai/data-scripts/summary-local.ts)、[Clef](../services/yuho-quant/scripts/clef_server.py)。優待の定期実行は`--allow-model`なしだった。月次`sync:monthly`は優待取得→再計算。要約は独立Linux jobとし、月次手動driverからも除去する。詳細は[機械同期](mechanical-publishing.md)。
