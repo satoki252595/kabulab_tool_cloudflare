@@ -7,14 +7,17 @@ import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ROOT } from "../../../../src/shared/db/tests/source-scan.js";
 import { SHARED_WRITER_KEY, withSharedPublishingWriter, type PublishingStore } from "../../../../scripts/mechanical-publishing/shared-writer.js";
+import * as publishing from "../../../../scripts/mechanical-publishing/shared-writer.js";
+import * as d1 from "../../../../src/shared/db/d1-http-client.js";
+import * as runtime from "../../../../scripts/biztag-local/runtime.js";
 import { runMechanicalSummary } from "../../data-scripts/summary-mechanical.js";
-import { parseLocalArgs, readReviewedInput, runLocalSummary, type LocalDependencies, type LocalOptions } from "../../data-scripts/summary-local.js";
+import { main as runLocalCli, parseLocalArgs, readReviewedInput, runLocalSummary, type LocalDependencies, type LocalOptions } from "../../data-scripts/summary-local.js";
 import { type ImportPlan } from "../../data-scripts/summary-import.js";
 import { selectSummaryTasks, type BenefitRow } from "../../data-scripts/summary-tasks.js";
 
 const dirs: string[] = [];
 const cursorKey = "mechanical-publishing/v1/cursors/yutai-summary.json";
-afterEach(() => { vi.useRealTimers(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.useRealTimers(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 function state() {
   const path = mkdtempSync(join(tmpdir(), "yutai-mechanical-unit-")); dirs.push(path); return path;
 }
@@ -144,6 +147,49 @@ function reviewedOptions(initial: BenefitRow[], summary = "QUOカード3,000円�
   return { stateDir: state(), limit: 1, reviewedInput: { tasks: tasksPath, results: resultsPath,
     tasksSha256: createHash("sha256").update(tasksText).digest("hex"), resultsSha256: createHash("sha256").update(resultsText).digest("hex") } };
 }
+
+function reviewedCliBoundary() {
+  const options = reviewedOptions([row(1)]), files = options.reviewedInput!;
+  const argv = ["--state-dir", options.stateDir, "--limit=1", "--reviewed-tasks", files.tasks,
+    "--reviewed-tasks-sha256", files.tasksSha256, "--reviewed-results", files.results, "--reviewed-results-sha256", files.resultsSha256];
+  for (const key of ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "D1_DATABASE_ID", "NOTION_TOKEN"]) vi.stubEnv(key, "controlled-test-credential");
+  vi.stubEnv("NOTION_ARCHIVE_PAGE_ID", "0123456789abcdef0123456789abcdef"); vi.stubEnv("NOTION_MAX_RPS", undefined);
+  const db = vi.spyOn(d1, "createD1HttpDb");
+  const writer = vi.spyOn(publishing, "withSharedPublishingWriter").mockImplementation(async () => { throw new Error("test_writer_boundary"); });
+  const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
+  return { argv, db, writer, fetch };
+}
+
+it.each(["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "D1_DATABASE_ID", "NOTION_TOKEN", "NOTION_ARCHIVE_PAGE_ID"])(
+  "reviewed CLI missing %s stops before the shared owner or any fetch", async key => {
+    const io = reviewedCliBoundary(); vi.stubEnv(key, "");
+    await expect(runLocalCli(io.argv)).rejects.toThrow(key);
+    expect(io.writer).not.toHaveBeenCalled(); expect(io.fetch).not.toHaveBeenCalled();
+  },
+);
+it.each(["invalid-id", "0", "2.7", "NaN"])("reviewed CLI invalid archive/pacing stops before owner (%s)", async value => {
+  const io = reviewedCliBoundary(); vi.stubEnv(value === "invalid-id" ? "NOTION_ARCHIVE_PAGE_ID" : "NOTION_MAX_RPS", value);
+  await expect(runLocalCli(io.argv)).rejects.toThrow(/Notion ID|Notion pacing|NOTION_MAX_RPS/);
+  expect(io.writer).not.toHaveBeenCalled(); expect(io.fetch).not.toHaveBeenCalled();
+});
+it("reviewed CLI rejects input SHA before constructing D1 or checking missing settings", async () => {
+  const io = reviewedCliBoundary(); io.argv[io.argv.length - 1] = "0".repeat(64); vi.stubEnv("CLOUDFLARE_API_TOKEN", "");
+  await expect(runLocalCli(io.argv)).rejects.toThrow("sha_mismatch");
+  expect(io.db).not.toHaveBeenCalled(); expect(io.writer).not.toHaveBeenCalled(); expect(io.fetch).not.toHaveBeenCalled();
+});
+it("qualified reviewed CLI constructs dependencies without I/O before owner and needs no model/supplement settings", async () => {
+  const io = reviewedCliBoundary();
+  for (const key of ["NOTION_DB_STOCK_MASTER", "NOTION_YUHO_TEXT_DB_ID", "NOTION_STOCK_INFO_PAGE_ID", "NOTION_STOCK_SUPPLEMENT_DB_ID"]) vi.stubEnv(key, undefined);
+  await expect(runLocalCli(io.argv)).rejects.toThrow("test_writer_boundary");
+  expect(io.db).toHaveBeenCalledOnce(); expect(io.writer).toHaveBeenCalledOnce(); expect(io.fetch).not.toHaveBeenCalled();
+});
+it("normal local CLI keeps dependency creation after canonical runtime environment loading", async () => {
+  const db = vi.spyOn(d1, "createD1HttpDb"), shared = vi.spyOn(publishing, "withSharedPublishingWriter"), fetch = vi.fn();
+  vi.stubEnv("CLOUDFLARE_API_TOKEN", ""); vi.stubGlobal("fetch", fetch);
+  const writer = vi.spyOn(runtime, "withBiztagWriter").mockImplementation(async () => { throw new Error("test_local_writer_boundary"); });
+  await expect(runLocalCli(["--state-dir", state(), "--limit=1"])).rejects.toThrow("test_local_writer_boundary");
+  expect(writer).toHaveBeenCalledOnce(); expect(db).not.toHaveBeenCalled(); expect(shared).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+});
 
 describe("explicit reviewed results / same normal publisher", () => {
   const actual = join(ROOT, "tmp/yutai-reviewed-proof-v1");
