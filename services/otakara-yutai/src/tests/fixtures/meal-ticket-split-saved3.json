@@ -1,0 +1,76 @@
+{
+  "privateFixtureSha256": "fb83a638051d1b7f9d6bd47cb31b119e5c0201f2a93eb3f9bd25e4126783480a",
+  "sourcePostCompressedSha256": "3b990a56acd1dd629aa962a1645574c626a0db93ca97f2d6d85d975afd6d7e26",
+  "privateFixtureDir": "tmp/yutai-meal-ticket-split-proof-v1",
+  "groups": [
+    {
+      "taskId": "44a5a4ad7b621584",
+      "ids": [
+        56607,
+        56608
+      ],
+      "sourceSha256": "161211b9c5dae6eef820682d944e2c43ed16521f49656b9dfbf7d8866fb2c02c",
+      "sourceCharacters": 310,
+      "recipients": [
+        {
+          "minShares": 100,
+          "recordMonth": 5,
+          "recordDate": null
+        },
+        {
+          "minShares": 100,
+          "recordMonth": 11,
+          "recordDate": null
+        }
+      ],
+      "summarySha256": "d721319b738afbd86aa878dfd7bebde00bf1aa34f69ab5e895086f3f117ded79",
+      "summaryCharacters": 198
+    },
+    {
+      "taskId": "b4f9d0e7bf2abe1c",
+      "ids": [
+        56609,
+        56610
+      ],
+      "sourceSha256": "ca6451a00c51f8cbe814dddcd759f6328fee33afd2a66916158d27d8ad8a190d",
+      "sourceCharacters": 270,
+      "recipients": [
+        {
+          "minShares": 300,
+          "recordMonth": 5,
+          "recordDate": null
+        },
+        {
+          "minShares": 300,
+          "recordMonth": 11,
+          "recordDate": null
+        }
+      ],
+      "summarySha256": "3f6e59f4e73d58d65995ce67b0063d3c1b1944b21dfef71b58495e7dfcfe8338",
+      "summaryCharacters": 165
+    },
+    {
+      "taskId": "bac5889a4dbe42d7",
+      "ids": [
+        56611,
+        56612
+      ],
+      "sourceSha256": "4c416b5e4abe9fd1447f9701ab840d2b1e6826a8793b882f96e04e6659a1efe5",
+      "sourceCharacters": 270,
+      "recipients": [
+        {
+          "minShares": 500,
+          "recordMonth": 5,
+          "recordDate": null
+        },
+        {
+          "minShares": 500,
+          "recordMonth": 11,
+          "recordDate": null
+        }
+      ],
+      "summarySha256": "0c682588b7a507ab7b22fe8c85b38aa85eecab5221098251c2439a929e67fe2f",
+      "summaryCharacters": 165
+    }
+  ]
+}
