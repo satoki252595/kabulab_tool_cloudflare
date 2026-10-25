@@ -123,7 +123,7 @@ jobs:
           SCHEDULED_DATE: ${{ github.event.inputs.scheduled_date }}
           SCHEDULED_AT: ${{ github.event.inputs.scheduled_at }}
           STOCK_SYNC_TARGET: ${{ github.event.inputs.target }}
-        run: pnpm sync:daily:core --stocks-only
+        run: pnpm sync:daily:core --stocks-only --yahoo-direct
 
       # sector33は価格非依存。株式処理が失敗しても実行し、context/monthlyでは実行しない。
       # 同じjobのYahoo/Notion通信枠と、moneyflowの価格資格条件は維持する。

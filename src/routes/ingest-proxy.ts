@@ -12,6 +12,7 @@ import {
   redactYahooDiagnostic,
   yahooFetchDirect,
 } from "../shared/yahoo/client.js";
+import { assertYahooCooldown, checkedYahooDeadline, isAllowedYahooTarget, YAHOO_COOLDOWN_SELECT, YAHOO_COOLDOWN_UPSERT } from "../shared/yahoo/shared-cooldown.js";
 
 /**
  * 取込プロキシ — Node(GitHub Actions / ローカル)からの Yahoo 取得を Cloudflare
@@ -31,30 +32,8 @@ export const ingestProxyRoute = new Hono<{ Bindings: Bindings }>({
   strict: false,
 });
 
-/** SSRF/オープンプロキシ防止: Yahoo Finance API ホストのみ許可。 */
-const ALLOWED_HOSTS = new Set([
-  "query1.finance.yahoo.com",
-  "query2.finance.yahoo.com",
-]);
-
-type Cooldown = { retry_at_ms: number; upstream_status: 429 | 503 | null };
-function assertCooldown(value: unknown): asserts value is Cooldown {
-  if (typeof value !== "object" || value === null || Array.isArray(value) || !("retry_at_ms" in value) || !("upstream_status" in value) ||
-      !Number.isSafeInteger(value.retry_at_ms) || typeof value.retry_at_ms !== "number" || value.retry_at_ms < 0 ||
-      (value.retry_at_ms === 0 ? value.upstream_status !== null : value.upstream_status !== 429 && value.upstream_status !== 503)) {
-    throw new Error("Yahoo shared cooldown row is missing or invalid");
-  }
-}
-function checkedDeadline(value: number | null): number {
-  if (value === null || !Number.isSafeInteger(value) || value <= 0) throw new Error("Yahoo cooldown deadline is invalid");
-  return value;
-}
 async function persistCooldown(db: D1Database, status: 429 | 503, retryAt: number): Promise<void> {
-  const result = await db.prepare(`INSERT INTO yahoo_proxy_cooldown (id,retry_at_ms,upstream_status)
-    SELECT 1,?,? WHERE EXISTS (SELECT 1 FROM yahoo_proxy_cooldown WHERE id=1)
-    ON CONFLICT(id) DO UPDATE SET
-    upstream_status=CASE WHEN excluded.retry_at_ms>yahoo_proxy_cooldown.retry_at_ms THEN excluded.upstream_status ELSE yahoo_proxy_cooldown.upstream_status END,
-    retry_at_ms=MAX(yahoo_proxy_cooldown.retry_at_ms,excluded.retry_at_ms)`).bind(retryAt, status).run();
+  const result = await db.prepare(YAHOO_COOLDOWN_UPSERT).bind(retryAt, status).run();
   if (result.success !== true || result.meta.changes !== 1) throw new Error("Yahoo shared cooldown write was not acknowledged");
 }
 function cooldownFault(operation: "read" | "persist"): void {
@@ -77,16 +56,13 @@ ingestProxyRoute.get("/yahoo", async (c) => {
   } catch {
     return c.json({ error: "bad url" }, 400);
   }
-  if (target.protocol !== "https:" || target.port !== "" || target.username || target.password ||
-      !ALLOWED_HOSTS.has(target.hostname) ||
-      !/^\/v(?:8\/finance\/chart|10\/finance\/quoteSummary)\/[A-Za-z0-9.^=+-]+$/.test(decodedPath) ||
-      target.searchParams.has("crumb")) {
+  if (!isAllowedYahooTarget(target, decodedPath)) {
     return c.json({ error: `host not allowed: ${target.hostname}` }, 403);
   }
 
   try {
-    const cooldown: unknown = await c.env.DB.prepare("SELECT retry_at_ms,upstream_status FROM yahoo_proxy_cooldown WHERE id=1").first();
-    assertCooldown(cooldown);
+    const cooldown: unknown = await c.env.DB.prepare(YAHOO_COOLDOWN_SELECT).first();
+    assertYahooCooldown(cooldown);
     if (Date.now() < cooldown.retry_at_ms) {
       if (cooldown.upstream_status === null) throw new Error("Yahoo active cooldown has no status");
       return c.json({ error: "yahoo shared cooldown active; no upstream request" }, cooldown.upstream_status, {
@@ -115,7 +91,7 @@ ingestProxyRoute.get("/yahoo", async (c) => {
       let retryAt: number;
       try {
         if (error.retryAtMs === null && error.retryAfterMs !== null && (!Number.isFinite(error.retryAfterMs) || error.retryAfterMs < 0)) throw new Error("invalid retry delay", { cause: error });
-        retryAt = checkedDeadline(error.retryAtMs !== null ? error.retryAtMs : rateLimitRetryAt(new Response(null, {
+        retryAt = checkedYahooDeadline(error.retryAtMs !== null ? error.retryAtMs : rateLimitRetryAt(new Response(null, {
           status: error.status,
           headers: error.retryAfterMs === null ? {} : { "Retry-After": String(Math.ceil(error.retryAfterMs / 1000)) },
         })));
@@ -169,7 +145,7 @@ ingestProxyRoute.get("/yahoo", async (c) => {
   const retryAfter = res.headers.get("Retry-After");
   if (retryAfter) headers.set("Retry-After", retryAfter);
   if (res.status === 429 || res.status === 503) {
-    try { await persistCooldown(c.env.DB, res.status, checkedDeadline(rateLimitRetryAt(res))); }
+    try { await persistCooldown(c.env.DB, res.status, checkedYahooDeadline(rateLimitRetryAt(res))); }
     catch { headers.set("X-Kabulab-Yahoo-Cooldown", "persist-failed"); cooldownFault("persist"); }
   }
   return new Response(res.body, {

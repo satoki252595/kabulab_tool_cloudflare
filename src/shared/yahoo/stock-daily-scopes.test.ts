@@ -29,6 +29,22 @@ function serve(code: string, chart = fixture[`${code}-chart`]) {
 }
 
 describe("通常株式日次の用途別資格 (実原典の最小projection・追加取得0)", () => {
+  it("明示transportはChart/QuoteSummaryの両方へ届き、proxy設定を変えず実原典をcaptureする", async () => {
+    const unexpected = vi.fn(() => { throw new Error("implicit transport must not run"); });
+    vi.stubGlobal("fetch", unexpected);
+    const transport = vi.fn(async (url: string) => new Response(
+      url.includes("quoteSummary") ? fixture["8303-quote-summary"] : fixture["8303-chart"],
+      { headers: { "Content-Type": "application/json" } }));
+    const captures: YahooRawCapture[] = [];
+    const raw = await client.fetchStockRawData("8303", "5y", { transport, stockDailyScopes: true,
+      onChartRaw: capture => { captures.push(capture); }, onSummaryRaw: capture => { captures.push(capture); } });
+    expect(transport).toHaveBeenCalledTimes(2);
+    expect(transport.mock.calls[0][0]).toContain("/v8/finance/chart/8303.T");
+    expect(transport.mock.calls[1][0]).toContain("/v10/finance/quoteSummary/8303.T");
+    expect(raw.ohlcv.at(-1)?.date).toBe("2026-10-14");
+    expect(captures).toHaveLength(2); expect(unexpected).not.toHaveBeenCalled();
+    expect(process.env.YAHOO_PROXY_BASE).toBe("https://kabulab.example.test");
+  });
   it("実projectionの調整値を明示的に欠損させると、過去RSIはHOLD・直近指標は通常終値で補完せずSTOP", async () => {
     const { buildStockSnapshot } = await import("../../cron/daily.js");
     const { requiredAdjustedClose } = await import("./bar-sanity.js");

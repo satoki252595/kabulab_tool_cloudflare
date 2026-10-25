@@ -7,8 +7,8 @@
  * 実行形態（計算は Node、proxy / D1 は Workers Paid アカウントを利用）:
  *   - **Node で実行**（GitHub Actions / ローカル CLI）。D1 へは `createD1HttpDb`
  *     (sqlite-proxy → D1 REST) で直接書き込む。
- *   - Yahoo は共有クライアントが `YAHOO_PROXY_BASE`（Cloudflare エッジの
- *     `/api/ingest/yahoo`）経由で取得する。Yahoo 側の 429 は発生し得る。
+ *   - Yahoo は通常 `YAHOO_PROXY_BASE` 経由。Actions株式の明示directは同じD1
+ *     停止行を確認してNodeから取得する。どちらもYahooの429は発生し得る。
  *     proxy / D1 は Paid の包含枠と超過分の従量課金が適用される。
  *   - 起動: `pnpm sync:daily:core`（scripts/sync/daily.ts）/ GitHub Actions。
  *
@@ -86,7 +86,9 @@ import {
   YahooRawTooLargeError,
   type YahooRawCapture,
   type RsiHistoryHold,
+  type YahooTransport,
 } from "../shared/yahoo/client.js";
+import { YahooSharedCooldownError } from "../shared/yahoo/shared-cooldown.js";
 import { archiveYahooRawBatch, type YahooRawAttempt, type YahooRawMissing } from "../shared/yahoo/raw-custody.js";
 import { checkFreshClose, requiredAdjustedClose } from "../shared/yahoo/bar-sanity.js";
 import { fetchNikkeiVi } from "../shared/yahoo/nikkei-vi.js";
@@ -1203,6 +1205,7 @@ export async function runDailySync(
     collectOverlay?: OverlayCollectFn;
     sendOverlayBatch?: OverlayBatchSender;
     jpLegStore?: MacroJpLegStore;
+    yahooTransport?: YahooTransport;
   } = {},
 ): Promise<DailySyncResult> {
   const startedAtMs = Date.now();
@@ -1219,6 +1222,7 @@ export async function runDailySync(
       options.collectOverlay,
       options.sendOverlayBatch,
       options.jpLegStore,
+      options.yahooTransport,
     );
   } catch (e) {
     await recordPriceSyncFailureSafely(e, mode, startedAtMs, corporateDiagnostics, officialRightsCustody);
@@ -1240,6 +1244,7 @@ async function runDailySyncAndRecord(
   collectOverlay?: OverlayCollectFn,
   sendOverlayBatch?: OverlayBatchSender,
   jpLegStore?: MacroJpLegStore,
+  yahooTransport?: YahooTransport,
 ): Promise<DailySyncResult> {
   const startedAt = Date.now();
   // 日付キーと週1ゲートは run 開始時刻に固定する (F-05。Phase 実行時刻で
@@ -1299,7 +1304,7 @@ async function runDailySyncAndRecord(
     let session;
     let sessionArchivePages: string[];
     try {
-      session = await fetchChart("^N225", "1mo", { beforeRequest: assertStockSource,
+      session = await fetchChart("^N225", "1mo", { beforeRequest: assertStockSource, transport: yahooTransport,
         onRaw: (capture) => { captures.push({ api: "chart", attempt: 0, capture }); } });
       if (captures.length !== 1 || captures[0]?.capture.symbol !== "^N225") {
         throw new Error("日経225の応答原本captureが一致しないためSTOP");
@@ -1435,7 +1440,7 @@ async function runDailySyncAndRecord(
     try {
       return await buildSnapshot(target.id, target.code, target.sector, targetDate,
         jssAnnualByCode.get(target.code) ?? [], { onChartRaw: add("chart"), onSummaryRaw: add("quote-summary"), assertCaptured,
-          beforeRequest: assertStockSource,
+          beforeRequest: assertStockSource, transport: yahooTransport,
           onCorporateDiagnostics: diagnostic => { corporateDiagnostics.push({ code: symbol, attempt, expectedDate: targetDate, diagnostic }); } });
     } catch (error) {
       if (error instanceof YahooRawTooLargeError) custodyStop = error;
@@ -2034,6 +2039,7 @@ async function buildSnapshot(
     },
     onSummaryRaw: rawOptions.onSummaryRaw,
     beforeRequest: rawOptions.beforeRequest,
+    transport: rawOptions.transport,
   });
   rawOptions?.assertCaptured();
   if (raw.corporateDiagnostics !== undefined) rawOptions?.onCorporateDiagnostics?.(raw.corporateDiagnostics);
@@ -3273,7 +3279,7 @@ async function fetchMarketContextTarget(
 }
 
 function isYahooSourceStop(error: unknown): boolean {
-  return error instanceof YahooRateLimitError || /(?:Yahoo|Chart|QuoteSummary).*\b(?:429|503)\b/.test(rootCauseMessage(error));
+  return error instanceof YahooRateLimitError || error instanceof YahooSharedCooldownError || /(?:Yahoo|Chart|QuoteSummary).*\b(?:429|503)\b/.test(rootCauseMessage(error));
 }
 
 async function fetchMarketContextDraft(jpLeg?: MacroJpLeg, beforeSource?: () => void): Promise<{

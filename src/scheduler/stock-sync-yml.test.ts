@@ -46,6 +46,9 @@ describe("stock-sync.yml target routing", () => {
       "SCHEDULED_DATE: ${{ github.event.inputs.scheduled_date }}"
     );
     expect(yml).toContain("STOCK_SYNC_TARGET: ${{ github.event.inputs.target }}");
+    expect(yml).toContain("run: pnpm sync:daily:core --stocks-only --yahoo-direct");
+    expect(yml.match(/--yahoo-direct/g)).toHaveLength(1);
+    expect(yml).toContain("run: pnpm sync:daily:core --context-only");
   });
 
   it("価格非依存の33業種は株式失敗後も実行し、skipと取消では実行しない", () => {

@@ -3,7 +3,7 @@
  *
  * 株式と引け後JP legを更新。--context-onlyは保存JP leg + 米国3sourceを翌朝結合する。
  * core/rsi/swing が必要とする財務・指標・OHLCV を Yahoo から取得し D1 へ書き込む。
- * Yahoo は共有クライアントが `YAHOO_PROXY_BASE`(Worker エッジ)経由で取得し、上流の制限を尊重する。
+ * Yahoo は通常proxy経由、明示したActions株式だけdirectを使う。どちらも同じD1停止行を尊重する。
  * 同じrunのYahoo再取得は行わない。D1 へは `createD1HttpDb`(CLOUDFLARE_* env)。
  * 実装本体は src/cron/daily.ts。
  *
@@ -29,6 +29,7 @@ import type { MacroJpLegStore } from "../../src/cron/macro-jp-leg.js";
 import { notionStats } from "../../src/shared/notion-archive/client.js";
 import { scheduledAtForDate } from "../../src/shared/scheduled-admission.js";
 import { assertStockSyncDeadline, assertStockSyncStart, installStockSyncDeadline, stockSyncExecutionWindow, stockSyncRunDate } from "../../src/shared/stock-sync-window.js";
+import { createStockYahooDirectTransport } from "./yahoo-direct.js";
 
 const MAX_CODES_PER_ERROR = 50;
 const MAX_ERROR_GROUPS = 20;
@@ -67,13 +68,19 @@ function printFailureSummary(
 }
 
 async function main(): Promise<void> {
-  const args = process.argv.slice(2);
+  const originalArgs = process.argv.slice(2);
+  const direct = originalArgs.includes("--yahoo-direct");
+  const args = originalArgs.filter(arg => arg !== "--yahoo-direct");
+  if (direct && (originalArgs.filter(arg => arg === "--yahoo-direct").length !== 1 ||
+      args.length !== 1 || args[0] !== "--stocks-only" || sharedEnv.BATCH_JOB_STARTED_AT() === undefined)) {
+    throw new Error("--yahoo-directはjob開始時計のあるActions株式--stocks-onlyだけで指定してください");
+  }
   if (args.length > 1 || (args.length === 1 &&
       args[0] !== "--stocks-only" && args[0] !== "--context-only")) {
     throw new Error("指定できる引数は --stocks-only または --context-only です");
   }
-  // Node から Yahoo を直接叩く構成は 429 と全銘柄リトライを招くため、DB 接続前に拒否。
-  requireYahooProxyForNodeSync();
+  // 明示したActions株式だけが同じD1停止行を通るdirect。失敗時のtransport切替はしない。
+  if (!direct) requireYahooProxyForNodeSync();
   // 必須設定はsource取得より前に検証。JP原本の持越しは既存R2 bucketへ日付別1object。
   sharedEnv.R2_ACCOUNT_ID();
   sharedEnv.R2_ACCESS_KEY_ID();
@@ -105,7 +112,11 @@ async function main(): Promise<void> {
   };
   jpLegStore.put = (key, body, version) => { assertActive(); return r2Put(key, body, version); };
   let result;
-  try { result = await runDailySync(db, { stocksOnly: true, jpLegStore }); }
+  try {
+    if (direct) console.info("[sync-daily] Yahoo transport=node-direct shared-cooldown=D1");
+    result = await runDailySync(db, { stocksOnly: true, jpLegStore,
+      ...(direct ? { yahooTransport: createStockYahooDirectTransport() } : {}) });
+  }
   finally { restore(); }
 
   if (result.failures.length > 0) {
