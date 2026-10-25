@@ -475,6 +475,8 @@ export type LocalReport = {
   modelResidents: 0 | 1;
   deterministic: number;
   reviewed?: number;
+  /** 通常の機械HOLDは最大60群。原文・要約・可変エラーdetailをログへ返さない。 */
+  holds?: { stockCode: string; taskId: string; sourceSha256: string; reason: string }[];
   outcome: "empty" | "complete" | "partial_rejection";
 };
 
@@ -654,6 +656,10 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
     modelResidents: modelTasks.length > 0 ? 1 : 0,
     deterministic: deterministic.length,
     ...(reviewed === undefined ? {} : { reviewed: reviewed.reviewed }),
+    ...(held.length === 0 ? {} : { holds: held.map((item, index) => ({
+      stockCode: unresolved[index].stockCode, taskId: item.taskId,
+      sourceSha256: sha(unresolved[index].description), reason: item.reason,
+    })) }),
     outcome: rejected > 0 ? "partial_rejection" : "complete",
   };
   writePrivate(
