@@ -178,14 +178,19 @@ export async function captureFinancials(options: FinancialCaptureOptions, contra
   await json("capture.json", result); return result;
 }
 
-async function main() {
+export function parseFinancialCaptureArgs(argv: readonly string[]) {
   const required = ["codes", "codes-sha256", "offset", "max-codes", "max-pages", "max-http", "deadline", "out", "env-file", "python"];
   const args = new Map<string, string>();
-  for (const arg of process.argv.slice(2)) {
-    const match = /^--([a-z-]+)=(.+)$/.exec(arg);
+  for (const arg of argv) {
+    const match = /^--([a-z0-9-]+)=(.+)$/.exec(arg);
     assert(match && required.includes(match[1]!) && !args.has(match[1]!), "explicit_arguments_required"); args.set(match[1]!, match[2]!);
   }
   assert(required.every(key => args.has(key)));
+  return args;
+}
+
+async function main() {
+  const args = parseFinancialCaptureArgs(process.argv.slice(2));
   const envFile = await fs.realpath(args.get("env-file")!), stat = await fs.stat(envFile);
   assert((stat.mode & 0o077) === 0 && stat.uid === process.getuid!(), "private_canonical_env_required");
   assert(config({ path: envFile, override: true, quiet: true }).error === undefined);
