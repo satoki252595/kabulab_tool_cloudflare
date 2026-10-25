@@ -501,23 +501,83 @@ def test_verified_repair_clears_wrong_values_and_protects_newer_disclosure():
     wrong = replace(original, net_sales=117_513_000_000, dps_actual=999)
     old_row = record_to_row(wrong, stock_id=None, doc_id="S100YNQJ", raw_sha256=None)
     old_row[COLUMNS.index("license_tag")] = "factual-cite"
-    conn.execute(reparse._repair_sql(), [json.dumps([old_row])])
+    conn.execute(reparse._repair_sql(), [json.dumps([{"new": old_row, "old": None}])])
     correct_row = record_to_row(original, stock_id=None, doc_id=None, raw_sha256="a" * 64)
     for _ in range(2):
-        conn.execute(reparse._repair_sql(), [json.dumps([correct_row])])
+        before = list(conn.execute("SELECT * FROM jss_financials").fetchone())
+        conn.execute(reparse._repair_sql(), [json.dumps([{"new": correct_row, "old": before}])])
     assert conn.execute("SELECT net_sales,dps_actual,doc_id,license_tag,raw_sha256 "
                         "FROM jss_financials").fetchone() == (
         547_779_000_000, None, "S100YNQJ", "factual-cite", "a" * 64,
     )
     newer = replace(original, disclosed_at=original.disclosed_at + timedelta(days=1),
                     net_sales=original.net_sales + 1)
-    conn.execute(reparse._repair_sql(), [json.dumps([
-        record_to_row(newer, stock_id=None, doc_id=None, raw_sha256="b" * 64)
-    ])])
-    conn.execute(reparse._repair_sql(), [json.dumps([correct_row])])
+    before = list(conn.execute("SELECT * FROM jss_financials").fetchone())
+    conn.execute(reparse._repair_sql(), [json.dumps([{
+        "new": record_to_row(newer, stock_id=None, doc_id=None, raw_sha256="b" * 64),
+        "old": before,
+    }])])
+    before = list(conn.execute("SELECT * FROM jss_financials").fetchone())
+    conn.execute(reparse._repair_sql(), [json.dumps([{"new": correct_row, "old": before}])])
     assert conn.execute("SELECT net_sales,raw_sha256 FROM jss_financials").fetchone() == (
         newer.net_sales, "b" * 64,
     )
+
+
+@pytest.mark.parametrize("changed", [None, "net_sales", "raw_sha256", "fetched_at", "raw_page_id"])
+def test_row_cas_requires_the_full_observed_row_at_the_same_disclosure(changed):
+    case = EDINET_CASES[0]
+    record = tidy_to_financial_record(fixture_tidy(case), case["code"], fixture_provenance(case))
+    old = record_to_row(replace(record, net_sales=None), stock_id=None,
+                        doc_id=None, raw_sha256=case["raw_sha256"])
+    new = record_to_row(record, stock_id=None, doc_id=None,
+                        raw_sha256=case["raw_sha256"])
+    conn = sqlite3.connect(":memory:")
+    conn.execute(_FINANCIALS)
+    conn.execute(reparse._repair_sql(), [json.dumps([{"new": old, "old": None}])])
+    if changed is not None:
+        # 実原本由来の行へ並行変更を障害注入。開示日時は同じままにする。
+        concurrent = {"net_sales": record.net_sales + 1,
+                      "raw_sha256": EDINET_CASES[1]["raw_sha256"],
+                      "fetched_at": old[COLUMNS.index("fetched_at")] + 1,
+                      "raw_page_id": EDINET_CASES[1]["page_id"]}[changed]
+        conn.execute(f"UPDATE jss_financials SET {changed} = ?", [concurrent])
+    current = conn.execute("SELECT * FROM jss_financials").fetchone()
+    assert current[COLUMNS.index("disclosed_at")] == old[COLUMNS.index("disclosed_at")]
+    changes = conn.total_changes
+    conn.execute(reparse._repair_sql(), [json.dumps([{"new": new, "old": old}])])
+    assert conn.total_changes - changes == (1 if changed is None else 0)
+    assert conn.execute("SELECT * FROM jss_financials").fetchone() == (
+        tuple(new) if changed is None else current
+    )
+
+
+def test_row_cas_keeps_an_insert_that_arrived_after_observed_absence():
+    case = EDINET_CASES[0]
+    record = tidy_to_financial_record(fixture_tidy(case), case["code"], fixture_provenance(case))
+    new = record_to_row(record, stock_id=None, doc_id=None, raw_sha256=case["raw_sha256"])
+    concurrent = record_to_row(replace(record, net_sales=None), stock_id=None,
+                               doc_id=None, raw_sha256=case["raw_sha256"])
+    conn = sqlite3.connect(":memory:")
+    conn.execute(_FINANCIALS)
+    conn.execute(reparse._repair_sql(), [json.dumps([{"new": concurrent, "old": None}])])
+    changes = conn.total_changes
+    conn.execute(reparse._repair_sql(), [json.dumps([{"new": new, "old": None}])])
+    assert conn.total_changes == changes
+    assert conn.execute("SELECT * FROM jss_financials").fetchone() == tuple(concurrent)
+
+
+@pytest.mark.parametrize("shape", ["legacy", "missing_old", "short_old"])
+def test_row_cas_does_not_treat_unqualified_payload_as_observed_absence(shape):
+    case = EDINET_CASES[0]
+    record = tidy_to_financial_record(fixture_tidy(case), case["code"], fixture_provenance(case))
+    new = record_to_row(record, stock_id=None, doc_id=None, raw_sha256=case["raw_sha256"])
+    item = {"legacy": new, "missing_old": {"new": new},
+            "short_old": {"new": new, "old": new[:-1]}}[shape]
+    conn = sqlite3.connect(":memory:")
+    conn.execute(_FINANCIALS)
+    conn.execute(reparse._repair_sql(), [json.dumps([item])])
+    assert conn.execute("SELECT COUNT(*) FROM jss_financials").fetchone() == (0,)
 
 
 @pytest.mark.parametrize("wrong_value", [False, True])
@@ -598,10 +658,11 @@ def test_d1_repair_does_not_keep_document_id_from_a_known_different_raw_sha():
     conn = sqlite3.connect(":memory:")
     conn.execute(_FINANCIALS)
     row = record_to_row(record, stock_id=None, doc_id="previous-document", raw_sha256="a" * 64)
-    conn.execute(reparse._repair_sql(), [json.dumps([row])])
+    conn.execute(reparse._repair_sql(), [json.dumps([{"new": row, "old": None}])])
+    before = list(row)
     row[COLUMNS.index("doc_id")] = None
     row[COLUMNS.index("raw_sha256")] = case["raw_sha256"]
-    conn.execute(reparse._repair_sql(), [json.dumps([row])])
+    conn.execute(reparse._repair_sql(), [json.dumps([{"new": row, "old": before}])])
     assert conn.execute("SELECT doc_id,raw_sha256 FROM jss_financials").fetchone() == (
         None, case["raw_sha256"],
     )
@@ -629,9 +690,9 @@ def test_verified_repair_carries_only_the_same_fresh_original_relation(
     conn.execute("CREATE TABLE core_stocks(id INTEGER,code TEXT)")
     conn.execute("INSERT INTO core_stocks VALUES(1,?)", [record.code])
     unknown = replace(record, provenance=replace(record.provenance, raw_page_id=None))
-    conn.execute(reparse._repair_sql(), [json.dumps([record_to_row(
+    conn.execute(reparse._repair_sql(), [json.dumps([{"new": record_to_row(
         unknown, stock_id=1, doc_id=reparse._doc_id(item), raw_sha256=case["raw_sha256"],
-    )])])
+    ), "old": None}])])
     before = dict(conn.execute("SELECT * FROM jss_financials").fetchone())
     fresh = replace(record, provenance=replace(record.provenance, raw_page_id=EDINET_CASES[1]["page_id"])) if relation_changed else record
 
@@ -749,11 +810,11 @@ def test_notion_verified_d1_repair_retires_only_matching_old_key(tmp_path, monke
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.execute(_FINANCIALS)
-    conn.execute(reparse._repair_sql(), [json.dumps([
-        record_to_row(old, stock_id=None,
+    conn.execute(reparse._repair_sql(), [json.dumps([{
+        "new": record_to_row(old, stock_id=None,
                       doc_id="140120260917537640" if source == "TDnet" else None,
-                      raw_sha256=stored_hash)
-    ])])
+                      raw_sha256=stored_hash), "old": None,
+    }])])
     conn.execute("CREATE TABLE core_stocks (id INTEGER, code TEXT)")
     conn.execute("INSERT INTO core_stocks VALUES (1,'8154')")
 
