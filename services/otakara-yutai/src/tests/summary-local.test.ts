@@ -40,6 +40,7 @@ const pointExchangePrivatePath = join(ROOT, "tmp/yutai-point-exchange-proof-v1/s
 const pointExchangeDescription = (amount: number) =>
   "【種別：\"電子ギフト\"】\n" + amount.toLocaleString("en-US") + "円相当\n※電子ギフトは1ポイント1円相当の各種電子マネーやポイントと交換することが可能です。\n■贈呈時期\n基準日から3カ月以内";
 const admissionPrivatePath = join(ROOT, "tmp/yutai-admission-proof-v1/saved3.private.json");
+const cinemaPrivatePath = join(ROOT, "tmp/yutai-monthly-cinema-proof-v1/saved3.private.json");
 const admissionDescription = (first: number, second: number) =>
   `【種別："温浴施設「テルマー湯」優待券"】\n新宿店 ${first}枚\n六本木・西麻布店 ${second}枚\n※1枚につき1名が入場できる。\n※土日、祝日および特定日は\n\u3000利用できない。`;
 
@@ -138,6 +139,59 @@ function dependencies(initial: BenefitRow[]): {
 }
 
 describe("local summary generation/import boundary", () => {
+  it("映画の未知本文・注記欠落を月間回数だけで機械採用しない", () => {
+    for (const description of [
+      '【種別："あべのアポロシネマ映画鑑賞無料ご招待"】\n毎月6回',
+      '【種別："あべのアポロシネマ映画鑑賞無料ご招待"】\n毎月6回\n未対応の座席指定方法',
+    ]) expect(compileSimpleSummary(selectSummaryTasks([row(1, { description })])[0])).toBeNull();
+  });
+  it.skipIf(!existsSync(cinemaPrivatePath))("保存実9636の3全文/6行を条件とnull額保持のまま通常取込し、同型の正整数だけ読む", async () => {
+    const bytes = readFileSync(cinemaPrivatePath);
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe("c9c4a1a053c00c9a122f7921b27d763adea329ee90c4922c4a04f0f47e7eefa6");
+    const saved = JSON.parse(bytes.toString()) as { tasks: SummaryTask[]; rows: BenefitRow[]; results: Array<{
+      taskId: string; contractVersion: string; shortSummary: string; estimatedValue: null;
+    }> };
+    const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+    const tasks = selectSummaryTasks(saved.rows);
+    expect(digest(tasks)).toBe(digest(saved.tasks)); expect(tasks).toHaveLength(3); expect(saved.rows).toHaveLength(6);
+    expect(tasks.every(task => task.contractVersion === "2026-10-25.3")).toBe(true);
+    const results = tasks.map(task => compileSimpleSummary(task));
+    expect(digest(results)).toBe(digest(saved.results));
+    const plan = planSummaryImport({ tasks, currentRows: saved.rows, resultsText: results.map(result => JSON.stringify(result)).join("\n") });
+    expect(plan.rejections).toEqual([]); expect(plan.updates).toHaveLength(3);
+    expect(plan.updates.flatMap(update => update.ids)).toHaveLength(6);
+    for (const result of results) expect(result!.shortSummary.length).toBeLessThanOrEqual(60);
+
+    const original = tasks[0].description;
+    for (const count of [1, 2, 4, 20, Number.MAX_SAFE_INTEGER]) {
+      // 同じ実原文の数量slotだけを変える対照入力。年額やrecipientは生成しない。
+      const description = original.replace(/毎月[0-9]+回/, `毎月${count}回`);
+      const rows = saved.rows.filter(row => row.description === original).map(row => ({ ...row, description }));
+      const scopedTasks = selectSummaryTasks(rows), result = compileSimpleSummary(scopedTasks[0]);
+      expect(result !== null && result.estimatedValue === null).toBe(true);
+      expect(result!.shortSummary.includes(`毎月${count}回`)).toBe(true);
+      expect(result!.shortSummary.length).toBeLessThanOrEqual(60);
+      expect(planSummaryImport({ tasks: scopedTasks, currentRows: rows, resultsText: JSON.stringify(result) }).rejections).toEqual([]);
+    }
+    for (const description of [
+      ...["0", "-1", "1.5", "01", "1,0", "9007199254740992"].map(value => original.replace(/毎月[0-9]+回/, `毎月${value}回`)),
+      original.replace("毎月", "毎年"), original.replace("あべのアポロシネマ", "別会場"),
+      original.replace("インターネット", "電話"), original.replace("または", "および"),
+      original.replace("自動券売機", "別窓口"), original.replace("チケットカウンター", "別窓口"),
+      original.replace("ご招待カード", "購入カード"), original.split("\n").slice(0, -1).join("\n"),
+      ...["1年以上保有", "抽選", "申込必要", "併用不可", "別途1,000円", "別条件あり"].map(note => `${original}\n${note}`),
+    ]) {
+      expect(description === original).toBe(false);
+      expect(compileSimpleSummary({ ...tasks[0], description })).toBeNull();
+    }
+    const { deps, rows } = dependencies(saved.rows);
+    expect(await runLocalSummary({ stateDir: state(), limit: 3 }, deps)).toMatchObject({
+      accepted: 3, rejected: 0, deterministic: 3, pendingAfter: 0, modelCalls: 0, modelResidents: 0,
+    });
+    expect(deps.generate).not.toHaveBeenCalled();
+    expect(digest(rows().map(({ shortSummary: _summary, updatedAt: _clock, ...row }) => row)))
+      .toBe(digest(saved.rows.map(({ shortSummary: _summary, updatedAt: _clock, ...row }) => row)));
+  });
   it.each(pointExchangeSaved.groups)("電子ギフトの掲載額・換算・両交換先・贈呈期限を全callerで保つ: $taskId", group => {
     // 全文文法の対照入力。元の表記・全bytes/SHAは保存実原文の私有回帰で照合する。
     const description = pointExchangeDescription(group.expectedValue);
@@ -367,7 +421,7 @@ describe("local summary generation/import boundary", () => {
     expect(rows()[0]).toMatchObject({ shortSummary: "QUOカード 3,000円分", estimatedValue: 3000 });
     const run = readdirSync(dir).find(name => name !== "progress.json")!;
     const pre = JSON.parse(gunzipSync(readFileSync(join(dir, run, "pre-import.json.gz"))).toString());
-    expect(pre).toMatchObject({ model: null, revision: null, protocol: "", deterministicRule: "simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v7" });
+    expect(pre).toMatchObject({ model: null, revision: null, protocol: "", deterministicRule: "simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v8" });
     expect(parseTaskFile(readFileSync(join(dir, run, "model-tasks.jsonl"), "utf8"))).toEqual([]);
   });
   it("全文1点選択はモデル0で通常PRE/原子取込/POSTへ通し、選択肢の掲載額を評価しない", async () => {

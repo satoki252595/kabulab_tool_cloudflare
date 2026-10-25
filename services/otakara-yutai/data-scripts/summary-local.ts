@@ -171,7 +171,7 @@ export function companyValue(task: SummaryTask): {
   return evaluateCompanyValue(task.description, context);
 }
 
-export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v7";
+export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v8";
 
 /** 対応する種類＋額面・全文1点選択・全文対応の期間/名簿条件を定型化する。未対応条件を削らない。 */
 export function compileSimpleSummary(task: SummaryTask): SummaryResult | null {
@@ -216,6 +216,16 @@ export function compileSimpleSummary(task: SummaryTask): SummaryResult | null {
     if (amount.value === null || !Number.isSafeInteger(amount.value) || amount.value !== Number(shipment[1].replaceAll(",", ""))) return null;
     return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion,
       shortSummary: `自社製品詰合せ(アイス等) ${amount.value.toLocaleString("en-US")}円${shipment[2]}・${shipment[3]}月〜${shipment[4]}月送付`, estimatedValue: amount.value });
+  }
+  // 座席指定経路の残全文を同値確認する。私有原文を公開せず、数量だけを原文から読む。
+  const cinema = /^毎月([1-9][0-9]*)回\n([\s\S]+)$/u.exec(body);
+  if (source.heading?.normalize("NFKC").trim() === "あべのアポロシネマ映画鑑賞無料ご招待" && cinema !== null &&
+    sha(cinema[2]) === "0bd4590313a989d9bb80ea81e8969e8849a8658eeded3d53d7d8f34c25d67db6") {
+    const count = Number(cinema[1]), amount = companyValue(task);
+    if (!Number.isSafeInteger(count) || amount.value !== null || amount.reason !== "no_source_yen_amount") return null;
+    const shortSummary = `あべのアポロシネマ毎月${count}回無料(ネット又は招待カード利用の券売機・窓口で座席指定)`;
+    if (checkSummary(shortSummary).length > 0) return null;
+    return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion, shortSummary, estimatedValue: null });
   }
   let match = grammar.exec(body);
   // 種類だけの表見出し＋本文の額面も同じ全文文法で読む。金額は本文で認定する。
