@@ -175,17 +175,17 @@ pnpm biztag:monthly --runtime .runtime/mac-publishing-20261025 --preflight # 月
 
 ### 現在の復旧状況
 
-10/25の[完了条件と残件](docs/work-plans/production-completion-20261025.md)に、追加改修・データ不足・本番受入をまとめています。共有publisher移行と有効化は完了し、初回Actionsでは本文31社を同期、選択分19社は時間予算で未着手でした。次の固定40社はCSV限定修復後、1,560セル＝一致1,528・同CSV要素なし32、原本資格不足0を確認しました。優待は明示レビュー済みの追加13群/20行を通常publisherで適用し、14:48 JSTの本番単一SELECTで未完122群/182行/47銘柄を実測しました。全件充足は未完です。
+10/25の[完了条件と残件](docs/work-plans/production-completion-20261025.md)に、追加改修・データ不足・本番受入をまとめています。共有publisher移行と有効化は完了し、初回Actionsでは本文31社を同期、選択分19社は時間予算で未着手でした。次の固定40社はCSV限定修復後、1,560セル＝一致1,528・同CSV要素なし32、原本資格不足0を確認しました。優待は明示レビュー済み13群/20行の適用に続き、通常機械処理2窓で4群/7行を追加採用しました。15:16 JSTの正常POST全行を通常selectorでFS再計数し、未完118群/175行/46銘柄を確認しました。全件充足は未完です。
 
 **定期設定と全データ充足は別です。** CFの14 trigger、GitHubの14有効workflow（機械同期を含む）は継続。Macの20/21時calendarは廃止し、専用分は月次手動スクリプトへ変更しました。歴史RAW用workflow1本も意図的停止。10/21の株式429・VWAP保存不明・有報停止と修正範囲は[10/22の稼働確認](docs/test-logs/recovery-functional-status-20261022.md)、現設定は[全件一覧](docs/batch-data-inventory.md)へ記録します。以下は10/25までの有限確認で、全件充足を示す数値ではありません。残件は[Issue #348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)で追跡します。
 
 | 対象 | 確認済み | 残り・未検収 |
 | --- | --- | --- |
-| 実行環境 | main `0e031c6`の[CI3本成功](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40165706391)・CF `fd618f6b` 100%・SSH同headを受入。共有publisher移行・有効化済み。SSH株式CLIの翌06時停止、Python未対応銘柄指定の取得前拒否も配備済み | 10/23 MWF/VWAPの17:15〜17:25遅配は旧受付外で停止。#560の根本修正後の自然定期は未検収。Mac専用の意味判断は月次手動 |
-| 株価・VWAP | 欠測/0/技術障害を分類、時間条件を修正。VWAP固定3513/2198は日足・5分足を10/23まで補完し、物理原本・全POSTを受入 | 株式10/23未更新38件＝原応答全NULL35＋proxy DNS障害2/通信切断1。2385/2438は設定proxyのDNS障害、5884はChart原応答未保存の通信断で、未補完。NULL35は現在metadataで全てactive/equityだが、対象日資格・無取引は未確定。VWAP日足全銘柄run[40164923672](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40164923672)は本更新時点で実行中、結果未検収。VWAP旧PUT不明・全市場snapshot保留は維持し、全5分間隔の完全性は未検収 |
+| 実行環境 | main `56b023dc`の[CI3本成功](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40168060832)・CF `d9a69f52` 100%・SSH同headを受入。共有publisher移行・有効化済み。SSH株式CLIの翌06時停止、Python未対応銘柄指定の取得前拒否も配備済み | 10/23 MWF/VWAPの17:15〜17:25遅配は旧受付外で停止。#560の根本修正後の自然定期は未検収。Mac専用の意味判断は月次手動 |
+| 株価・VWAP | 欠測/0/技術障害を分類、時間条件を修正。VWAP固定3513/2198は日足・5分足を10/23まで補完し、物理原本・全POSTを受入 | 10/23未更新38件（全NULL35・技術障害3）は未補完。全銘柄run[40164923672](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40164923672)は988更新後のR2読取timeoutでexit2、旧snapshot保持。旧PUT不明と全5分足の完全性も未検収。詳細は[受入台帳](docs/work-plans/production-completion-20261025.md) |
 | 本文39列・有報・財務 | 初回50社の保留37社を別時刻の7社/30社照合で解消。次50社の保留40社もCSV限定修復17回・40文書記録後、通常RO照合で資格不足0・1,560セル一致/同CSV要素なしのみを確認。財務634Aと7911/8566の現行原本2行は値変更・抽出差0 | source-only原本修復は財務・本文の更新ではない。7911/8566の履歴17行中15行はlocal-map不足HOLD。全50社の同時再照合、全市場の本文・財務・歴史relationは未検収 |
 | IR | 単一ID・期限付き再開と元PDF識別guardを配備。1279652は元URL/同一文書JPXとも404、対象D1/本文は不変 | 1279652は原本未取得HOLD。40日窓外で日次再取得対象外、9/9差替PDFを代用しない |
-| 優待 | 月次10/22は通常CLI成功。共通compilerの追加と既存補完に続き、明示レビュー済み13群/20行を通常publisherで適用。物理PRE/POST・全issuer完全POST・cursor不変・owner閉鎖を確認。今回runtimeモデル起動0、新規上流取得0で、金額根拠のない値はnull保持 | 10/25 14:48 JSTの新しい本番単一SELECTで未完122群/182行/47銘柄を実測（旧件数からの差し引きではない）。未対応形式・条件・額面根拠の分類と、意味レビューが残る |
+| 優待 | 月次10/22は通常CLI成功。共通compilerの追加と既存補完に続き、明示レビュー済み13群/20行を通常publisherで適用。物理PRE/POST・全issuer完全POST・cursor不変・owner閉鎖を確認。その後の通常機械処理2窓で4群/7行を追加採用。今回runtimeモデル起動0、新規上流取得0で、金額根拠のない値はnull保持 | 10/25 15:16 JSTの正常POST7,729行を通常selectorでFS再計数し、未完118群/175行/46銘柄を確認（旧件数からの差し引き・追加HTTPなし）。未対応形式・条件・額面根拠の分類と、意味レビューが残る |
 | 保有・権利処理 | 現snapshotに対する既知DBのunknown/再開queue/別世代HOLD候補0を有限確認。同世代の無駄な再実行はしない | 全保有価格・分割/併合/増資等の法的日付・株数/価格basisの検収。新しい観測と旧残数を混ぜない |
 | 指標・意味判断 | API/MCPは代表読取を本番確認済み。Clefの保存済み結果を保持 | Prime売買代金20日比、個別需給/カタリスト（2週間、過去/未来の範囲は確認中）は未接続。タグ・競合等の意味判断は合意済み月次手動 |
 
