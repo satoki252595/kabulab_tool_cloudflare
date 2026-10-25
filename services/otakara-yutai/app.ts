@@ -868,7 +868,7 @@ function renderBenefitGroups(groups: GenreGroup[]): string {
 /** 公開DTOの事実と確認状態だけを表示する。掲載情報を会社の公式確認と取り違えない。 */
 export function renderBenefitFacts(facts: PublicBenefitFacts | null, amount: number | null): string {
   if (facts === null) return `<p class="product-desc-empty">適用条件・出典情報は未確認です</p>`;
-  const holding = facts.holding
+  const holding = facts.version === 6 ? `初回${facts.conditionStructure.ast.recordDate}は継続保有期間の定めなし（同日株主名簿に${facts.conditionStructure.ast.minimumRegistryShares}株以上の記載・記録が必要。本人への適用は未確認）` : facts.holding
     ? facts.holdingPeriods.length > 0 ? `掲載の期間表記 ${facts.holdingPeriods.join("・")}（保有条件・株数との対応は掲載元で確認）` : "保有に関する記載あり（期間未確定）"
     : "掲載に記載なし（不要と確認したものではありません）";
   const combination = { allowed: "併用可の記載あり（対象未確認）", not_allowed: "併用不可の記載あり（対象未確認）", unverified: "併用可否は未確認" }[facts.combination];
@@ -881,7 +881,8 @@ export function renderBenefitFacts(facts: PublicBenefitFacts | null, amount: num
     if (clause.kind === "same_name_holding") return `毎年${dates}の基準日時点で、同一名義で${clause.holdingPeriod}継続保有`;
     return `${clause.recurrence === "annual" ? "毎年" : "年間の頻度は未記載、基準日"}${dates}の株主名簿に、同一株主番号で${clause.minimumShares === null ? "" : `${clause.minimumShares.toLocaleString("ja-JP")}株以上の保有を`}連続${clause.minimumConsecutiveRecords}回以上${clause.entryMeaning === "listed" ? "記載" : "記録"}`;
   }).join("。");
-  const structure = facts.version === 5
+  const structure = facts.version === 6 ? "掲載初回の基準日・名簿と保有期間の定めなしを確認。贈答・預金などの追加条件は要約と公式掲載元でご確認ください。本人への適用・掲載額の合算や評価額への換算は行いません"
+    : facts.version === 5
     ? `${[facts.conditionStructure.ast.tiers.length > 0 ? `掲載行の対応: ${facts.conditionStructure.ast.tiers.map(tier => `${tier.holdingPeriod}は${tier.listedYen.toLocaleString("ja-JP")}円${tier.notation}`).join("、")}` : "", facts.conditionStructure.ast.combinationClauses.map(clause => `券の利用時に${clause.counterpart === "other_coupon" ? "他の券" : "他の割引"}との併用${clause.allowed ? "可" : "不可"}の記載`).join("、")].filter(text => text.length > 0).join("。")}。追加条件は${facts.conditionStructure.ast.remainingConditionLines}行が未解析です。期間の重なり・株数・名義・名簿・本人への適用は未確認です。掲載額は合算せず、年間額や評価額には換算しません`
     : facts.version === 4
     ? `掲載${facts.conditionStructure.ast.tiers.map(tier => `${tier.holdingPeriod}はQUOカード${tier.listedYen.toLocaleString("ja-JP")}円${tier.notation}`).join("、")}。${facts.conditionStructure.ast.registryDefinition.continuousHoldingPeriod}継続保有の定義は株主名簿への記載または記録${facts.conditionStructure.ast.registryDefinition.minimumEntries}回以上。毎年${facts.conditionStructure.ast.shipment.month}月${facts.conditionStructure.ast.shipment.part}発送予定（本人・株数・同じ名義や連続記録の条件は未確認。掲載額は評価額・合計額ではありません）`

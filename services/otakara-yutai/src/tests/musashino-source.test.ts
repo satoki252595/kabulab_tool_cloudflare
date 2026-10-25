@@ -10,8 +10,13 @@ import { parseStockDetail, fetchStockDetail, readSavedMusashinoSource, parseMusa
 import { benefitRowsOf, carryKey, planCarry, type StockYutaiData } from "../../data-scripts/yutai-full-import.js";
 import { checkSummary, isSummaryNumbersGrounded } from "../../data-scripts/summary-contract.js";
 import { compileSimpleSummary } from "../../data-scripts/summary-local.js";
-import { selectSummaryTasks, type BenefitRow } from "../../data-scripts/summary-tasks.js";
+import { selectSummaryTasks, SummaryTask, type BenefitRow } from "../../data-scripts/summary-tasks.js";
 import { planSummaryImport } from "../../data-scripts/summary-import.js";
+import { SUMMARY_CONTRACT_VERSION } from "../../data-scripts/summary-contract.js";
+import { benefitKey } from "../../data-scripts/benefit-key.js";
+import { buildPublicBenefitFacts } from "../../data-scripts/public-facts.js";
+import { parsePublicBenefitFacts } from "../public-facts.js";
+import { renderBenefitFacts } from "../../app.js";
 import metadata from "./fixtures/musashino-source-saved3.json";
 
 const privateDir = join(ROOT, metadata.privateFixtureDir);
@@ -26,15 +31,61 @@ it("未資格の8336公式sourceと要約scopeを一般照合へ降格させな�
   expect(isSummaryNumbersGrounded("", "武蔵野銀行公式:200株", { minShares: [200], recordMonths: [3], recordDates: [null] })).toBe(false);
 });
 
-it("限定adoptの既存unknown制御stateは原本読取/送信前に停止し再送しない", async () => {
+it.each(["--adopt-musashino-source", "--add-musashino-initial-event"])("限定mode %s の既存unknown制御stateは原本読取/送信前に停止し再送しない", async mode => {
   const dir = mkdtempSync(join(tmpdir(), "musashino-unknown-control-")), path = join(dir, "INTENT.private.json");
   const body = JSON.stringify({ status: "unknown_control" }); writeFileSync(path, body, { mode: 0o600 });
-  const args = ["--adopt-musashino-source", "--saved-source=/not-read-control", `--saved-source-sha256=${"0".repeat(64)}`,
+  const args = [mode, "--saved-source=/not-read-control", `--saved-source-sha256=${"0".repeat(64)}`,
     "--expected-pre=/not-read-control", `--expected-pre-sha256=${"0".repeat(64)}`, `--state-dir=${dir}`];
   try {
     for (let i = 0; i < 2; i++) await expect(main(args)).rejects.toThrow("musashino_adoption_state_already_started");
     expect(readFileSync(path, "utf8")).toBe(body);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+it.skipIf(!existsSync(join(privateDir, "official-8336.pdf")))("同じ公式全原本から初回9月だけを日付付き3段階へ定型化し、年次化や条件改変を拒否する", async () => {
+  const packet = metadata.files.find(file => file.path === "SAVED-SOURCE-PACKET.private.json")!;
+  const { data, annual, packet: captured } = await readSavedMusashinoSource(join(privateDir, packet.path), packet.sha256, true);
+  const rows = benefitRowsOf(data).rows;
+  expect(rows.map(row => ({ minShares: row.minShares, recordMonth: row.recordMonth, recordDate: "2026-09-30", descriptionSha256: digest(row.description), descriptionChars: row.description.length }))).toEqual(metadata.expectedInitialRows);
+  expect(benefitRowsOf(annual).rows.map(row => digest(row.description))).toEqual(metadata.expectedRows.map(row => row.descriptionSha256));
+  for (const row of rows) {
+    const task = SummaryTask.parse({ taskId: benefitKey("8336", row.description), contractVersion: SUMMARY_CONTRACT_VERSION, stockCode: "8336", stockName: "武蔵野銀行",
+      description: row.description, reason: "missing", violations: [], rowCount: 1, recipients: [{ minShares: row.minShares, recordMonth: 9, recordDate: "2026-09-30" }] });
+    const result = compileSimpleSummary(task);
+    expect(result).not.toBeNull();
+    const canonical = metadata.initialCanonical.find(value => value.minShares === row.minShares)!;
+    expect(digest(result!.shortSummary)).toBe(canonical.summarySha256);
+    expect(result!.shortSummary.length).toBe(canonical.summaryCharacters);
+    expect(result!.estimatedValue).toBeNull();
+    expect(checkSummary(result!.shortSummary)).toEqual([]);
+    expect(result!.shortSummary).toContain("継続保有期間の定めなし");
+    expect(result!.shortSummary).not.toContain("年1回");
+    const facts = buildPublicBenefitFacts({ code: data.code, description: row.description, context: { minShares: [row.minShares], recordMonths: [9] },
+      fetchedAt: data.sourceFetchedAt!, batchFetchedAt: captured.providerBatchFetchedAt, official: data.official });
+    expect(facts).toMatchObject({ version: 6, holding: false, holdingPeriods: [], valueStatus: "unresolved", qualifiedAmount: null,
+      conditionStructure: { ast: { recordDate: "2026-09-30", minimumRegistryShares: 200, holdingPeriod: "not_required" } } });
+    const html = renderBenefitFacts(facts, null);
+    expect(html).toContain("初回2026-09-30は継続保有期間の定めなし");
+    expect(html).not.toContain("保有に関する記載あり（期間未確定）");
+    expect(html).not.toContain("掲載に記載なし（不要と確認したものではありません）");
+    expect(() => parsePublicBenefitFacts({ ...facts, holding: true }, data.code)).toThrow();
+    if (facts.version !== 6) throw new Error("initial_holding_structure_missing");
+    expect(() => parsePublicBenefitFacts({ ...facts, conditionStructure: { ...facts.conditionStructure, sourceSha256: "0".repeat(64) } }, data.code)).toThrow();
+    for (const ast of [{ ...facts.conditionStructure.ast, holdingPeriod: "1年以上" }, { ...facts.conditionStructure.ast, recordDate: "2026-09-29" }])
+      expect(() => parsePublicBenefitFacts({ ...facts, conditionStructure: { ...facts.conditionStructure, ast } }, data.code)).toThrow();
+    for (const recipient of [{ ...task.recipients[0], recordDate: null }, { ...task.recipients[0], recordDate: "2026-09-29" },
+      { ...task.recipients[0], recordMonth: 3 }, { ...task.recipients[0], minShares: 100 }]) expect(compileSimpleSummary({ ...task, recipients: [recipient] })).toBeNull();
+    for (const term of ["初回", "定めなし", "200株", "0.3%", "100万円", "日本国内", "店頭窓口"]) {
+      const description = task.description.replace(term, "変更条件");
+      expect(description).not.toBe(task.description);
+      expect(compileSimpleSummary({ ...task, description })).toBeNull();
+    }
+    for (const description of [task.description + "\n追加条件", ...task.description.split("\n").map((_, i, lines) => lines.filter((__, j) => i !== j).join("\n"))])
+      expect(compileSimpleSummary({ ...task, description })).toBeNull();
+    expect(compileSimpleSummary({ ...task, recipients: [...task.recipients, ...task.recipients] })).toBeNull();
+    expect(compileSimpleSummary({ ...task, rowCount: 2 })).toBeNull();
+  }
+  expect(() => parseMusashinoAdoptionArgs(["--adopt-musashino-source", "--add-musashino-initial-event"])).toThrow();
 });
 
 it.skipIf(!existsSync(join(privateDir, "official-8336.pdf")))("実体2原本・提供元から3月3段階を通常取得/要約/翌月carryへ通す（CIはprivate不在skip）", async () => {

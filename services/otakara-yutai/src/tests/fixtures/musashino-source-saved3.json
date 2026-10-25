@@ -44,6 +44,11 @@
       "path": "SAVED-SOURCE-PACKET.private.json",
       "sha256": "a8f7b1d4ae22ac1e54bae2cc71bd522393daf1ef222229a422575cc9ddf46cfc",
       "bytes": 624804
+    },
+    {
+      "path": "INITIAL-CANONICAL-v2.private.json",
+      "sha256": "c6f72cecc7fc3cc38e1ef704eaa121be83068a7bd9edffc51b8c86990b43152b",
+      "bytes": 9582
     }
   ],
   "expectedRows": [
@@ -64,6 +69,46 @@
       "recordMonth": 3,
       "recordDate": null,
       "descriptionSha256": "5e91dd8a2163b4ba66bbd4ddff8862fbc0b767139aef6ee93125daf007411d11"
+    }
+  ],
+  "expectedInitialRows": [
+    {
+      "minShares": 200,
+      "recordMonth": 9,
+      "recordDate": "2026-09-30",
+      "descriptionSha256": "51526c6d54f3796fc3cc76cc422a5622215cc17aa0857eb460f12cfd408dbc54",
+      "descriptionChars": 345
+    },
+    {
+      "minShares": 600,
+      "recordMonth": 9,
+      "recordDate": "2026-09-30",
+      "descriptionSha256": "335537d00f3bd5acb80b730c5042af98e16defead0f94e3cbe9c0b6285a98f73",
+      "descriptionChars": 403
+    },
+    {
+      "minShares": 2000,
+      "recordMonth": 9,
+      "recordDate": "2026-09-30",
+      "descriptionSha256": "f705b2ae0ecae5f3f72a784cb4683bd5451922d942f4a1a38e15159b548fae3f",
+      "descriptionChars": 397
+    }
+  ],
+  "initialCanonical": [
+    {
+      "minShares": 200,
+      "summarySha256": "238a3c50262ff093a03357b846d036a79c95e9e45144cc63121c001a8cc1f17e",
+      "summaryCharacters": 160
+    },
+    {
+      "minShares": 600,
+      "summarySha256": "f72c8263c7ae42c8f57efb1613f79464e442cc776a46c1dce62b48a03b41a32d",
+      "summaryCharacters": 181
+    },
+    {
+      "minShares": 2000,
+      "summarySha256": "fbd244591324c578574452e8fe74682a3ed869fc7203804c7879c109b00e98e5",
+      "summaryCharacters": 175
     }
   ]
 }

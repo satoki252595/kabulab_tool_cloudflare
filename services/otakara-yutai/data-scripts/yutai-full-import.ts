@@ -635,12 +635,15 @@ export async function importYutaiFull(
     const context = plannedGroups.get(p.data.code)?.get(carryBody(row.description));
     if (context === undefined) throw new Error("公開条件のrecipient群が未確定です");
     const key = carryKey(p.data.code, row.description, row.minShares, row.recordMonth);
-    publicFactsByKey.set(key, buildPublicBenefitFacts({
+    const facts = buildPublicBenefitFacts({
       code: p.data.code, description: row.description, context,
       fetchedAt: p.data.sourceFetchedAt === undefined ? null : p.data.sourceFetchedAt,
       batchFetchedAt: sourceFetchedAt === undefined ? null : sourceFetchedAt,
       official: p.data.official === undefined ? verifiedOfficial.get(key) : p.data.official,
-    }));
+    });
+    // 初回原本を通常月DTOへ誤渡ししても、新規NULL日付の年次行を作らない。
+    if (facts.version === 6 && carriedRecordDates.get(carryKey(p.data.code, carryBody(row.description), row.minShares, row.recordMonth)) !== facts.conditionStructure.ast.recordDate) throw new Error("初回単発の実基準日を同定できないため通常取込を削除前STOP");
+    publicFactsByKey.set(key, facts);
   }
 
   // 全保存成功後の post-image の利回り・スコア追随 (1 回だけ呼ぶ)。
