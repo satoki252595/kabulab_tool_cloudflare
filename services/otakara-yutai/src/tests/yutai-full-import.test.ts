@@ -28,6 +28,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
@@ -53,11 +54,15 @@ import { RAW34TEXT } from "./raw34-excerpts.js";
 import { buildPublicBenefitFacts } from "../../data-scripts/public-facts.js";
 import { parsePublicBenefitFacts } from "../public-facts.js";
 import { benefitKey } from "../../data-scripts/benefit-key.js";
-import { SUMMARY_MAX_CHARS } from "../../data-scripts/summary-contract.js";
-import { planMusashinoSourceAdoption } from "../../data-scripts/musashino-repair.js";
+import { SUMMARY_CONTRACT_VERSION, SUMMARY_MAX_CHARS } from "../../data-scripts/summary-contract.js";
+import { assertMusashinoInitialPost, planMusashinoInitialEvent, planMusashinoSourceAdoption } from "../../data-scripts/musashino-repair.js";
+import { readSavedMusashinoSource } from "../../data-scripts/fetch-yutai-full.js";
 import { loadMonthScopePreimage, assertMonthScopePost } from "../../data-scripts/saved-month-scope.js";
 import { fetchYieldInputs } from "../../data-scripts/recompute-yields.js";
 import musashinoMetadata from "./fixtures/musashino-source-saved3.json";
+import admissionMetadata from "./fixtures/admission-saved3.json";
+import { compileSimpleSummary } from "../../data-scripts/summary-local.js";
+import type { SummaryTask } from "../../data-scripts/summary-tasks.js";
 
 /** drizzle/d1 の全マイグレーションを番号順に流す (本番 D1 と同じ形)。 */
 function applyD1Migrations(target: DatabaseSync): void {
@@ -223,6 +228,84 @@ function isYutaiOf(id: number): unknown {
 }
 
 describe("importYutaiFull は母集団の銘柄の優待だけを作り直す", () => {
+  it.skipIf(!existsSync(join(ROOT, musashinoMetadata.privateFixtureDir, "SAVED-SOURCE-PACKET.private.json")))("実8336初回3INSERTは自動ID・全列CASで原子適用し、完全再入SQL0・翌月の単発原行を保つ（SQLite制御DB）", async () => {
+    captureConsole();
+    const fixture = join(ROOT, musashinoMetadata.privateFixtureDir), packet = musashinoMetadata.files.find(file => file.path === "SAVED-SOURCE-PACKET.private.json")!;
+    const source = await readSavedMusashinoSource(join(fixture, packet.path), packet.sha256, true);
+    const original = JSON.parse(readFileSync(join(fixture, "SAVED-ROWS.private.json"), "utf8")) as { id: number; description: string; minShares: number; updatedAt: number }[];
+    sqlite.prepare("UPDATE core_stocks SET code='8336',is_yutai=1 WHERE id=?").run(NEW_HOLDER.id);
+    const genreId = YUTAI_GENRES.findIndex(genre => genre.slug === "other") + 1;
+    for (const row of original) sqlite.prepare("INSERT INTO yutai_benefits (id,stock_id,genre_id,description,min_shares,record_month,updated_at) VALUES (?,?,?,?,?,3,?)").run(row.id, NEW_HOLDER.id, genreId, row.description, row.minShares, row.updatedAt);
+    const beforeAnnual = await loadMonthScopePreimage(db, "8336"), annualInputs = await fetchYieldInputs(db, [NEW_HOLDER.id]);
+    const planOf = (pre: Awaited<ReturnType<typeof loadMonthScopePreimage>>, inputs: Awaited<ReturnType<typeof fetchYieldInputs>>) =>
+      planMusashinoInitialEvent(db, pre, source.annual, source.data, source.packet.providerBatchFetchedAt, inputs);
+    expect(() => planOf(beforeAnnual, annualInputs)).toThrow("musashino_annual_adoption_must_be_complete");
+    const annual = planMusashinoSourceAdoption(db, beforeAnnual, source.annual, source.packet.providerBatchFetchedAt, annualInputs);
+    await makeRecordingSender().sender(annual.batch!.statements);
+    const pre = await loadMonthScopePreimage(db, "8336"), inputs = await fetchYieldInputs(db, [NEW_HOLDER.id]), plan = planOf(pre, inputs);
+    expect(plan.insertedRows).toBe(3);
+    expect(plan.batch!.statements.filter(statement => /^insert /iu.test(statement.sql))).toHaveLength(3);
+    expect(plan.batch!.statements.some(statement => /\b(?:UPDATE|DELETE)\b/iu.test(statement.sql))).toBe(false);
+    const sha = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+    const all = () => ["core_stocks", "yutai_benefits", "otakara_stock_financials", "otakara_stock_scores", "yutai_genres"].map(table => sqlite.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all());
+    const before = sha(all()), current = pre.benefits[0];
+    // 実3521全文を8336/初回200株へ故意に誤束縛するfault injection。原文は作らない。
+    const faultBytes = readFileSync(join(ROOT, "tmp/yutai-admission-proof-v1/saved3.private.json"));
+    expect(createHash("sha256").update(faultBytes).digest("hex")).toBe(admissionMetadata.provenance.privateFixtureSha256);
+    const fault = (JSON.parse(faultBytes.toString()) as { tasks: SummaryTask[] }).tasks[0];
+    const rebound = { ...fault, taskId: benefitKey(source.data.code, fault.description), contractVersion: SUMMARY_CONTRACT_VERSION, stockCode: source.data.code, stockName: String(pre.parent.name),
+      recipients: [{ minShares: 200, recordMonth: 9, recordDate: "2026-09-30" }] };
+    expect(compileSimpleSummary(rebound)).toMatchObject({ estimatedValue: null });
+    const wrong = { ...source.data, benefits: source.data.benefits.map((row, i) => i === 0 ? { ...row, heading: "", description: fault.description, notes: "" } : row) };
+    const faultSender = makeRecordingSender();
+    await expect(async () => {
+      const faultPlan = planMusashinoInitialEvent(db, pre, source.annual, wrong, source.packet.providerBatchFetchedAt, inputs);
+      if (faultPlan.batch !== null) await faultSender.sender(faultPlan.batch.statements);
+    }).rejects.toThrow("musashino_initial_full_source_changed");
+    expect(faultSender.calls).toHaveLength(0); expect(sha(all())).toBe(before);
+    const misrouted = makeRecordingSender();
+    await expect(importYutaiFull(db, [...HELD.map(stock => fetched(stock.code)), source.data], misrouted.sender, source.packet.providerBatchFetchedAt)).rejects.toThrow("初回単発の実基準日を同定できない");
+    expect(misrouted.calls).toHaveLength(0); expect(sha(all())).toBe(before);
+    const mutations: [() => void, () => void][] = [
+      [() => { sqlite.prepare("UPDATE core_stocks SET name=name||'-drift' WHERE id=?").run(NEW_HOLDER.id); }, () => { sqlite.prepare("UPDATE core_stocks SET name=? WHERE id=?").run(pre.parent.name, NEW_HOLDER.id); }],
+      [() => { sqlite.prepare("UPDATE yutai_benefits SET public_facts='{}' WHERE id=?").run(current.id); }, () => { sqlite.prepare("UPDATE yutai_benefits SET public_facts=? WHERE id=?").run(current.publicFacts, current.id); }],
+      [() => { sqlite.prepare("INSERT INTO otakara_stock_financials (stock_id,price,data_date) VALUES (?,1000,'2026-10-26')").run(NEW_HOLDER.id); }, () => { sqlite.prepare("DELETE FROM otakara_stock_financials WHERE stock_id=?").run(NEW_HOLDER.id); }],
+      [() => { sqlite.prepare("INSERT INTO otakara_stock_scores (stock_id,fundamental_score,technical_score,total_score) VALUES (?,0,0,0)").run(NEW_HOLDER.id); }, () => { sqlite.prepare("DELETE FROM otakara_stock_scores WHERE stock_id=?").run(NEW_HOLDER.id); }],
+    ];
+    for (const [mutate, undo] of mutations) {
+      mutate(); const drifted = sha(all());
+      await expect(makeRecordingSender().sender(plan.batch!.statements)).rejects.toThrow();
+      expect(sha(all())).toBe(drifted); undo(); expect(sha(all())).toBe(before);
+    }
+    // 中間INSERTの失敗と、INSERT後の各種列driftを同じpost-CASでrollbackする。
+    for (const effect of ["SELECT RAISE(ABORT,'initial_insert_failure')", `UPDATE core_stocks SET name=name||'-post-drift' WHERE id=${NEW_HOLDER.id}`,
+      `UPDATE yutai_benefits SET short_summary='post-drift' WHERE id=${current.id}`, "UPDATE yutai_benefits SET short_summary='post-drift' WHERE id=NEW.id",
+      `INSERT INTO otakara_stock_financials (stock_id,price,data_date) VALUES (${NEW_HOLDER.id},1000,'2026-10-26')`,
+      `INSERT INTO otakara_stock_scores (stock_id,fundamental_score,technical_score,total_score) VALUES (${NEW_HOLDER.id},0,0,0)`]) {
+      sqlite.exec(`CREATE TRIGGER initial_control AFTER INSERT ON yutai_benefits WHEN NEW.stock_id=${NEW_HOLDER.id} AND NEW.min_shares=600 AND NEW.record_date='2026-09-30' BEGIN ${effect}; END`);
+      await expect(makeRecordingSender().sender(plan.batch!.statements)).rejects.toThrow();
+      expect(sha(all())).toBe(before); sqlite.exec("DROP TRIGGER initial_control");
+    }
+    for (const changed of [{ ...pre, parent: { ...pre.parent, code: "8551" } }, { ...pre, benefits: [...pre.benefits, { ...current, id: 1, recordMonth: 9, recordDate: "2026-09-30" }] }])
+      expect(() => planOf(changed, inputs)).toThrow();
+    await makeRecordingSender().sender(plan.batch!.statements);
+    const post = await loadMonthScopePreimage(db, "8336"); assertMusashinoInitialPost(plan.expected, post);
+    const historical = post.benefits.filter(row => row.recordDate !== null);
+    expect(historical).toHaveLength(3);
+    expect(historical.every(row => row.recordMonth === 9 && row.recordDate === "2026-09-30" && row.estimatedValue === null && row.estimateValueSource === null)).toBe(true);
+    expect(new Set(post.benefits.map(row => row.id)).size).toBe(6);
+    expect(sha(post.benefits.filter(row => row.recordDate === null))).toBe(sha(pre.benefits));
+    expect(planOf(post, await fetchYieldInputs(db, [NEW_HOLDER.id])).batch).toBeNull();
+    for (const altered of [post.benefits.slice(0, -1), [...post.benefits, historical[0]],
+      post.benefits.map(row => row === historical[0] ? { ...row, recordDate: "2026-09-29" } : row),
+      post.benefits.map(row => row === historical[0] ? { ...row, shortSummary: "改変条件" } : row)])
+      expect(() => planOf({ ...post, benefits: altered }, inputs)).toThrow();
+    await importYutaiFull(db, [...HELD.map(stock => fetched(stock.code)), source.annual], makeRecordingSender().sender, "2026-10-26T00:00:00.000Z");
+    const next = await loadMonthScopePreimage(db, "8336");
+    expect(sha(next.benefits.filter(row => row.recordDate !== null))).toBe(sha(historical));
+    expect(next.benefits.filter(row => row.recordDate === null)).toHaveLength(3);
+  });
+
   it.skipIf(!existsSync(join(ROOT, musashinoMetadata.privateFixtureDir, "CORRECTED-8336.private.json")))("実8336三段階の限定3UPDATEは全4表driftでrollbackし、POST再入SQL0・翌月通常carryを保つ（SQLite制御DB）", async () => {
     captureConsole();
     const fixture = join(ROOT, musashinoMetadata.privateFixtureDir);

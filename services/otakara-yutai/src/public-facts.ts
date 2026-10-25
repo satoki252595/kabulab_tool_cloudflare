@@ -85,7 +85,9 @@ export type BenefitRegistryStructure = {
 
 export type PublicBenefitFacts = ({ version: 1 } | { version: 2; conditionStructure: BenefitConditionStructure }
   | { version: 3; conditionStructure: BenefitHoldingStructure } | { version: 4; conditionStructure: BenefitRecordTierStructure }
-  | { version: 5; conditionStructure: BenefitTierLiterals }) & {
+  | { version: 5; conditionStructure: BenefitTierLiterals }
+  | { version: 6; conditionStructure: { status: "literal_extracted"; rule: "initial-event-no-holding-period-v1"; sourceSha256: string;
+      applicability: "unverified"; ast: { recordDate: "2026-09-30"; minimumRegistryShares: 200; holdingPeriod: "not_required" } } }) & {
   sourceGroup: string;
   /** 掲載表記の検出。必要条件・適用対象を確認済みという意味ではない。 */
   holding: boolean;
@@ -173,9 +175,9 @@ export function parsePublicBenefitFacts(value: unknown, code?: string): PublicBe
   const raw: unknown = typeof value === "string" ? JSON.parse(value) : value;
   const version = typeof raw === "object" && raw !== null && "version" in raw ? raw.version : undefined;
   const facts = record(raw,
-    ["version", "sourceGroup", "holding", "holdingPeriods", "choice", "lottery", "application", "combination", "valueStatus", "qualifiedAmount", "valueReasons", "source", ...(version === 2 || version === 3 || version === 4 || version === 5 ? ["conditionStructure"] : [])]);
+    ["version", "sourceGroup", "holding", "holdingPeriods", "choice", "lottery", "application", "combination", "valueStatus", "qualifiedAmount", "valueReasons", "source", ...(version === 2 || version === 3 || version === 4 || version === 5 || version === 6 ? ["conditionStructure"] : [])]);
   const source = record(facts.source, ["listingUrl", "fetchedAt", "batchFetchedAt", "officialStatus", "officialUrl", "verifiedAt"]);
-  if ((facts.version !== 1 && facts.version !== 2 && facts.version !== 3 && facts.version !== 4 && facts.version !== 5) || typeof facts.sourceGroup !== "string" || !/^[0-9a-f]{16}$/.test(facts.sourceGroup) ||
+  if ((facts.version !== 1 && facts.version !== 2 && facts.version !== 3 && facts.version !== 4 && facts.version !== 5 && facts.version !== 6) || typeof facts.sourceGroup !== "string" || !/^[0-9a-f]{16}$/.test(facts.sourceGroup) ||
       [facts.holding, facts.choice, facts.lottery, facts.application].some(v => typeof v !== "boolean") ||
       !Array.isArray(facts.holdingPeriods) || facts.holdingPeriods.some(v => typeof v !== "string" || !/^(?:[0-9]+|半)(?:年|か月)(?:以上|未満|以下|超)$/.test(v)) ||
       (facts.holding === false && facts.holdingPeriods.length > 0) ||
@@ -276,6 +278,16 @@ export function parsePublicBenefitFacts(value: unknown, code?: string): PublicBe
       const clause = record(value, ["scope", "counterpart", "allowed"]);
       if (clause.scope !== "coupon_use" || !["other_discount", "other_coupon"].includes(clause.counterpart as string) || typeof clause.allowed !== "boolean") throw new Error("券利用時の併用条件が不正です");
     }
+  }
+  if (facts.version === 6) {
+    const structure = record(facts.conditionStructure, ["status", "rule", "sourceSha256", "applicability", "ast"]);
+    const ast = record(structure.ast, ["recordDate", "minimumRegistryShares", "holdingPeriod"]);
+    if (structure.status !== "literal_extracted" || structure.rule !== "initial-event-no-holding-period-v1" ||
+        typeof structure.sourceSha256 !== "string" || !["51526c6d54f3796fc3cc76cc422a5622215cc17aa0857eb460f12cfd408dbc54", "335537d00f3bd5acb80b730c5042af98e16defead0f94e3cbe9c0b6285a98f73", "f705b2ae0ecae5f3f72a784cb4683bd5451922d942f4a1a38e15159b548fae3f"].includes(structure.sourceSha256) || structure.applicability !== "unverified" ||
+        ast.recordDate !== "2026-09-30" || ast.minimumRegistryShares !== 200 || ast.holdingPeriod !== "not_required" ||
+        facts.holding !== false || facts.holdingPeriods.length !== 0 || facts.lottery !== false || facts.application !== false ||
+        facts.combination !== "unverified" || facts.valueStatus !== "unresolved" || facts.qualifiedAmount !== null ||
+        source.listingUrl !== "https://minkabu.jp/stock/8336/yutai" || source.officialStatus !== "verified" || source.officialUrl !== "https://www.musashinobank.co.jp/ir/stock/benefits.html") throw new Error("初回単発の保有期間条件が不正です");
   }
   if (code !== undefined && source.listingUrl !== `https://minkabu.jp/stock/${code}/yutai`) {
     throw new Error("公開条件の銘柄と掲載出典が一致しません");

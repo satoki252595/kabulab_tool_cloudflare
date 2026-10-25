@@ -32,7 +32,7 @@ import { compileAnnualGiftHistoryLiteral, compileBankDepositChoiceLiteral, compi
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-10-26.4";
+export const SUMMARY_CONTRACT_VERSION = "2026-10-26.5";
 
 /** 比較時だけ同じ月期間の表記を揃え、数値・比較条件・保存文面は変えない。 */
 function normalizeMonthPeriods(text: string): string {
@@ -134,11 +134,11 @@ export function isSummaryNumbersGrounded(
     context.recordMonths.length === 1 && context.recordMonths[0] === 3 &&
     context.recordDates?.length === 1 && context.recordDates[0] === null;
   const musashino = compileMusashinoOfficialLiteral(description);
-  // 公式採用後の全文3型・完全句・単一現在tierだけ。200株の歴史条件をtierへ転用しない。
+  // 公式採用後の年次/初回全文・完全句・単一実recipientだけ。初回を年次9月へ変えない。
   if (musashino !== null || normalized.startsWith("武蔵野銀行公式:")) return musashino !== null && normalized === musashino.shortSummary.normalize("NFKC") &&
     context.minShares.length === 1 && context.minShares[0] === musashino.minShares &&
-    context.recordMonths.length === 1 && context.recordMonths[0] === 3 &&
-    context.recordDates?.length === 1 && context.recordDates[0] === null;
+    context.recordMonths.length === 1 && context.recordMonths[0] === musashino.recordMonth &&
+    context.recordDates?.length === 1 && context.recordDates[0] === musashino.recordDate;
   const skiTickets = compileSkiTicketBundleLiteral(description);
   // 人数・季節・割引対象を別券へ移さない。全文・完全句・単一実recipientだけ。
   if (skiTickets !== null || normalized.includes("日本スキー場開発グループ")) return skiTickets !== null && normalized === skiTickets &&

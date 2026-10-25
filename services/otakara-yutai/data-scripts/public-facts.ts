@@ -5,6 +5,7 @@ import { benefitKey } from "./benefit-key.js";
 import { extractYenAmounts, qualifyCompanyPerGrantValue } from "./estimated-value-guard.js";
 import { sourceSummaryConditions } from "./summary-contract.js";
 import { parsePublicBenefitFacts, type PublicBenefitFacts as Facts } from "../src/public-facts.js";
+import { compileMusashinoOfficialLiteral } from "./musashino-source.js";
 
 /** モデルを起動せず既存の厳密額面判定を共用する。候補の最大値・合計を採らない。 */
 export function evaluateCompanyValue(description: string, context: { minShares: readonly number[]; recordMonths: readonly number[] }) {
@@ -39,11 +40,14 @@ export function buildPublicBenefitFacts(input: {
   const recordTier = parseBenefitRecordTierStructure(input.description);
   const qualifiedRecordTier = recordTier !== null && evaluation.value === null && evaluation.reason === "ambiguous_condition_tiers";
   const tierLiterals = holdingStructure === null && !qualifiedRecordTier && choiceStructure.status !== "literal_parsed" ? extractBenefitTierLiterals(input.description) : null;
+  const initial = compileMusashinoOfficialLiteral(input.description)?.recordDate === "2026-09-30";
   const facts = parsePublicBenefitFacts({
-    version: qualifiedRecordTier ? 4 : holdingStructure !== null ? 3 : tierLiterals !== null ? 5 : 2,
-    conditionStructure: qualifiedRecordTier ? recordTier : holdingStructure !== null ? holdingStructure : tierLiterals !== null ? tierLiterals : choiceStructure,
+    version: initial ? 6 : qualifiedRecordTier ? 4 : holdingStructure !== null ? 3 : tierLiterals !== null ? 5 : 2,
+    conditionStructure: initial ? { status: "literal_extracted", rule: "initial-event-no-holding-period-v1", sourceSha256: choiceStructure.sourceSha256,
+      applicability: "unverified", ast: { recordDate: "2026-09-30", minimumRegistryShares: 200, holdingPeriod: "not_required" } } : qualifiedRecordTier ? recordTier : holdingStructure !== null ? holdingStructure : tierLiterals !== null ? tierLiterals : choiceStructure,
     sourceGroup: benefitKey(input.code, input.description),
     ...conditions,
+    ...(initial ? { holding: false, holdingPeriods: [] } : {}),
     combination: allowed === forbidden ? "unverified" : forbidden ? "not_allowed" : "allowed",
     valueStatus: evaluation.value === null ? "unresolved" : "source_amount_qualified",
     qualifiedAmount: evaluation.value,
