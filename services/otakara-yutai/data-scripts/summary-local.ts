@@ -3,12 +3,15 @@ import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
+  constants,
   existsSync,
+  fstatSync,
   fsyncSync,
   lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  realpathSync,
   renameSync,
   unlinkSync,
   writeFileSync,
@@ -18,7 +21,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual, parseArgs } from "node:util";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { withBiztagWriter } from "../../../scripts/biztag-local/runtime.js";
-import { currentPublishingWriter, publishingReadOnly } from "../../../scripts/mechanical-publishing/shared-writer.js";
+import { currentPublishingWriter, publishingReadOnly, withSharedPublishingWriter } from "../../../scripts/mechanical-publishing/shared-writer.js";
+import { parseStockCode } from "../../../src/shared/jpx/stock-code.js";
 import { createD1HttpBatchSender } from "../../../src/shared/db/d1-http-client.js";
 import { recordPrimaryData, verifyArchivedAttachments } from "../../../src/shared/notion-archive/index.js";
 import {
@@ -40,7 +44,7 @@ import { splitHeadedDescription } from "./estimated-value-guard.js";
 import { applyImportAtomically } from "./import-summary-results.js";
 import { assertNotCommittable } from "./private-path.js";
 import { SummaryResult, planSummaryImport, type ImportPlan } from "./summary-import.js";
-import { checkSummary, missingSummaryConditions } from "./summary-contract.js";
+import { checkSummary, missingSummaryConditions, SUMMARY_CONTRACT_VERSION } from "./summary-contract.js";
 import {
   parseTaskFile,
   selectSummaryTasks,
@@ -76,7 +80,8 @@ const Ready = z.strictObject({
   artifacts: z.record(z.string(), z.string().check(z.regex(/^[0-9a-f]{64}$/))),
 });
 const GeneratedSummary = z.strictObject({ shortSummary: z.string() });
-export type LocalOptions = { limit: number; stateDir: string; allowModel?: boolean };
+type ReviewedFiles = { tasks: string; tasksSha256: string; results: string; resultsSha256: string };
+export type LocalOptions = { limit: number; stateDir: string; allowModel?: boolean; reviewedInput?: ReviewedFiles };
 
 export function parseLocalArgs(argv: readonly string[]): LocalOptions {
   const { values } = parseArgs({
@@ -86,16 +91,57 @@ export function parseLocalArgs(argv: readonly string[]): LocalOptions {
       limit: { type: "string", default: "60" },
       "state-dir": { type: "string" },
       "allow-model": { type: "boolean", default: false },
+      "reviewed-tasks": { type: "string" }, "reviewed-tasks-sha256": { type: "string" },
+      "reviewed-results": { type: "string" }, "reviewed-results-sha256": { type: "string" },
     },
   });
   if (!values["state-dir"] || !/^(?:[1-9]|[1-5][0-9]|60)$/.test(values.limit ?? "")) {
     throw new Error("--state-dir と1～60件の --limit が必要です。");
   }
+  const reviewed = [values["reviewed-tasks"], values["reviewed-tasks-sha256"], values["reviewed-results"], values["reviewed-results-sha256"]];
+  if (reviewed.some(value => value !== undefined) && (values["allow-model"] ||
+    reviewed.some(value => typeof value !== "string" || value.length === 0) ||
+    !/^[a-f0-9]{64}$/.test(reviewed[1]!) || !/^[a-f0-9]{64}$/.test(reviewed[3]!)))
+    throw new Error("invalid_reviewed_input_arguments");
   return {
     limit: Number(values.limit),
     stateDir: resolve(values["state-dir"]),
     allowModel: values["allow-model"],
+    ...(reviewed[0] === undefined ? {} : { reviewedInput: { tasks: resolve(reviewed[0]), tasksSha256: reviewed[1]!,
+      results: resolve(reviewed[2]!), resultsSha256: reviewed[3]! } }),
   };
+}
+
+/** 保存レビューの全bytesを固定する。モデルprotocolへの変換や旧契約の読み替えはしない。 */
+export function readReviewedInput(options: LocalOptions) {
+  if (options.reviewedInput === undefined) return undefined;
+  if (options.allowModel === true || !Number.isInteger(options.limit) || options.limit < 1 || options.limit > 60)
+    throw new Error("invalid_reviewed_input_arguments");
+  const read = (path: string, hash: string) => {
+    assertNotCommittable(path);
+    if (!/^[a-f0-9]{64}$/.test(hash) || realpathSync(path) !== resolve(path)) throw new Error("reviewed_file_unqualified");
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const stat = fstatSync(fd);
+      if (!stat.isFile() || stat.uid !== process.getuid?.() || (stat.mode & 0o777) !== 0o600 || stat.size === 0 || stat.size > 8 * 1024 ** 2)
+        throw new Error("reviewed_file_unqualified");
+      const bytes = readFileSync(fd);
+      if (bytes.length !== stat.size || sha(bytes) !== hash) throw new Error("reviewed_file_sha_mismatch");
+      return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+    } finally { closeSync(fd); }
+  };
+  const files = options.reviewedInput, tasksText = read(files.tasks, files.tasksSha256), resultsText = read(files.results, files.resultsSha256);
+  const tasks = parseTaskFile(tasksText);
+  if (tasks.length === 0 || tasks.length > options.limit || tasks.some(task => task.contractVersion !== SUMMARY_CONTRACT_VERSION ||
+    parseStockCode(task.stockCode) !== task.stockCode)) throw new Error("reviewed_tasks_unqualified");
+  let results: SummaryResult[];
+  try { results = resultsText.split("\n").filter(line => line.trim() !== "").map(line => SummaryResult.parse(JSON.parse(line))); }
+  catch { throw new Error("reviewed_results_unqualified"); }
+  if (results.length !== tasks.length || new Set(results.map(result => result.taskId)).size !== tasks.length ||
+    results.some(result => result.contractVersion !== SUMMARY_CONTRACT_VERSION || !tasks.some(task => task.taskId === result.taskId)))
+    throw new Error("reviewed_results_unqualified");
+  return { tasks, tasksText, resultsText, tasksSha256: files.tasksSha256, resultsSha256: files.resultsSha256,
+    codes: [...new Set(tasks.map(task => task.stockCode))].sort(), reviewed: tasks.length };
 }
 
 /** 採用済みの cursor も元行で位置を確かめ、保留群の反復で未処理群を遅らせない。 */
@@ -294,9 +340,9 @@ function privateDir(path: string): void {
 }
 
 export type LocalDependencies = {
-  loadRows: () => Promise<BenefitRow[]>;
+  loadRows: (codes?: readonly string[]) => Promise<BenefitRow[]>;
   generate: (tasksPath: string, runDir: string) => Promise<string>;
-  archive: (bytes: Uint8Array, clock: string, phase: "pre" | "post", generation: { deterministic: number; modelTasks: number }) => Promise<void>;
+  archive: (bytes: Uint8Array, clock: string, phase: "pre" | "post", generation: { deterministic: number; modelTasks: number; reviewed?: number; tasksSha256?: string; resultsSha256?: string }) => Promise<void>;
   apply: (rows: readonly BenefitRow[], plan: ImportPlan) => Promise<void>;
 };
 export type LocalReport = {
@@ -311,19 +357,23 @@ export type LocalReport = {
   modelCalls: number;
   modelResidents: 0 | 1;
   deterministic: number;
+  reviewed?: number;
   outcome: "empty" | "complete" | "partial_rejection";
 };
 
 export async function runLocalSummary(options: LocalOptions, deps: LocalDependencies): Promise<LocalReport> {
+  const reviewed = readReviewedInput(options);
+  if (reviewed !== undefined && currentPublishingWriter() === undefined) throw new Error("reviewed_shared_writer_required");
   const state = options.stateDir;
   assertNotCommittable(join(state, "progress.json"));
   privateDir(state);
   const pendingWrite = join(state, "pending-write.json");
   if (existsSync(pendingWrite)) throw new Error("previous_write_unresolved");
   const writer = currentPublishingWriter();
+  if (reviewed !== undefined) await writer!.assertReady();
   const cursorPath = join(state, "progress.json");
   // R2がhost共通の正本。Macの旧cursorは初回移行時だけ取り込み、毎回上書きしない。
-  const savedCursor = writer === undefined
+  const savedCursor = reviewed !== undefined ? null : writer === undefined
     ? (existsSync(cursorPath) ? readFileSync(cursorPath, "utf8") : null)
     : await writer.readCursor("yutai-summary");
   let cursor: string | null = null;
@@ -334,7 +384,17 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
     if (!parsed.success) throw new Error("invalid_progress");
     cursor = parsed.data.cursor;
   }
-  const rows = await publishingReadOnly(() => deps.loadRows());
+  const readSelectedRows = () => publishingReadOnly(async () => {
+    const current = await deps.loadRows(reviewed?.codes);
+    if (reviewed !== undefined) {
+      readReviewedInput(options);
+      const currentTasks = selectSummaryTasks(current);
+      if (!current.every(row => reviewed.codes.includes(row.stockCode)) || reviewed.tasks.some(task =>
+        !currentTasks.some(candidate => isDeepStrictEqual(candidate, task)))) throw new Error("reviewed_input_stale_or_inactive");
+    }
+    return current;
+  });
+  const rows = await readSelectedRows();
   const allTasks = selectSummaryTasks(rows);
   if (allTasks.length === 0)
     return {
@@ -351,11 +411,11 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
       deterministic: 0,
       outcome: "empty",
     };
-  const tasks = selectFairBatch(allTasks, cursor, options.limit, rows);
+  const tasks = reviewed === undefined ? selectFairBatch(allTasks, cursor, options.limit, rows) : reviewed.tasks;
   const clock = new Date().toISOString();
   const runDir = join(state, randomUUID());
   privateDir(runDir);
-  const tasksText = serializeTasks(tasks);
+  const tasksText = reviewed === undefined ? serializeTasks(tasks) : reviewed.tasksText;
   // Validate our exact emitted task bytes with the same importer contract.
   parseTaskFile(tasksText);
   writePrivate(join(runDir, "tasks.jsonl"), tasksText);
@@ -363,30 +423,31 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
     join(runDir, "selected-pre.json"),
     JSON.stringify(rows.filter((r) => tasks.some((t) => t.taskId === benefitKey(r.stockCode, r.description)))),
   );
-  const deterministic = tasks.flatMap(task => { const result = compileSimpleSummary(task); return result === null ? [] : [result]; });
+  const deterministic = reviewed === undefined ? tasks.flatMap(task => { const result = compileSimpleSummary(task); return result === null ? [] : [result]; }) : [];
   const deterministicIds = new Set(deterministic.map(result => result.taskId));
-  const unresolved = tasks.filter(task => !deterministicIds.has(task.taskId));
+  const unresolved = reviewed === undefined ? tasks.filter(task => !deterministicIds.has(task.taskId)) : [];
   const modelTasks = options.allowModel === true ? unresolved : [];
   const held = options.allowModel === true ? [] : unresolved.map(task => ({ taskId: task.taskId,
     reason: "mechanical_rule_unavailable_model_disabled" }));
-  const generation = { deterministic: deterministic.length, modelTasks: modelTasks.length };
+  const generation = { deterministic: deterministic.length, modelTasks: modelTasks.length,
+    ...(reviewed === undefined ? {} : { reviewed: reviewed.reviewed, tasksSha256: reviewed.tasksSha256, resultsSha256: reviewed.resultsSha256 }) };
   const modelTasksText = serializeTasks(modelTasks);
   parseTaskFile(modelTasksText);
-  writePrivate(join(runDir, "model-tasks.jsonl"), modelTasksText);
+  if (reviewed === undefined) writePrivate(join(runDir, "model-tasks.jsonl"), modelTasksText);
   writePrivate(join(runDir, "deterministic.json"), JSON.stringify({ rule: DETERMINISTIC_SUMMARY_RULE, results: deterministic,
     modelAllowed: options.allowModel === true, modelRequired: unresolved.map(task => task.taskId), held }));
   const protocol = modelTasks.length > 0 ? await deps.generate(join(runDir, "model-tasks.jsonl"), runDir) : "";
-  writePrivate(join(runDir, "generation.jsonl"), protocol);
+  if (reviewed === undefined) writePrivate(join(runDir, "generation.jsonl"), protocol);
   const model = modelTasks.length > 0 ? buildLocalResults(modelTasks, protocol)
     : { resultsText: "", amountReasons: [], generationRejections: [], modelCalls: 0 };
-  const generated = { ...model, resultsText: deterministic.map(result => JSON.stringify(result) + "\n").join("") + model.resultsText,
+  const generated = { ...model, resultsText: reviewed === undefined ? deterministic.map(result => JSON.stringify(result) + "\n").join("") + model.resultsText : reviewed.resultsText,
     generationRejections: [...held, ...model.generationRejections],
     deterministicRule: DETERMINISTIC_SUMMARY_RULE, deterministicTaskIds: [...deterministicIds],
     amountReasons: [...deterministic.map(result => ({ taskId: result.taskId, value: result.estimatedValue,
       reason: "qualified_company_per_grant" })), ...model.amountReasons] };
   writePrivate(join(runDir, "results.jsonl"), generated.resultsText);
   writePrivate(join(runDir, "qualification.json"), JSON.stringify(generated));
-  const fresh = await publishingReadOnly(() => deps.loadRows());
+  const fresh = await readSelectedRows();
   const plan = planSummaryImport({
     tasks,
     resultsText: generated.resultsText,
@@ -398,15 +459,14 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
     JSON.stringify({
       version: 1,
       clock,
-      modelAllowed: options.allowModel === true,
-      model: modelTasks.length > 0 ? SEMIF_HF_MODEL : null,
-      revision: modelTasks.length > 0 ? SEMIF_HF_REVISION : null,
       tasksText,
-      protocol,
+      ...(reviewed === undefined ? { modelAllowed: options.allowModel === true, model: modelTasks.length > 0 ? SEMIF_HF_MODEL : null,
+        revision: modelTasks.length > 0 ? SEMIF_HF_REVISION : null, protocol } : { reviewedInput: { tasksText: reviewed.tasksText,
+        resultsText: reviewed.resultsText, tasksSha256: reviewed.tasksSha256, resultsSha256: reviewed.resultsSha256, reviewed: reviewed.reviewed } }),
       ...generated,
       plan,
-      selectedPre: rows.filter((r) => tasks.some((t) => t.taskId === benefitKey(r.stockCode, r.description))),
-      freshPre: fresh.filter((r) => tasks.some((t) => t.taskId === benefitKey(r.stockCode, r.description))),
+      selectedPre: reviewed === undefined ? rows.filter((r) => tasks.some((t) => t.taskId === benefitKey(r.stockCode, r.description))) : rows,
+      freshPre: reviewed === undefined ? fresh.filter((r) => tasks.some((t) => t.taskId === benefitKey(r.stockCode, r.description))) : fresh,
     }),
   );
   const bundle = gzipSync(plain);
@@ -422,12 +482,12 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
     }),
   );
   const publication = writer === undefined ? undefined : await writer.reserve("yutai-summary",
-    { clock, tasksSHA256: sha(tasksText), deterministicRule: DETERMINISTIC_SUMMARY_RULE }, plain.toString("utf8"));
+    { clock, tasksSHA256: sha(tasksText), deterministicRule: DETERMINISTIC_SUMMARY_RULE, ...generation }, plain.toString("utf8"));
   await deps.archive(bundle, clock, "pre", generation); // No D1 mutation if physical/archive/readback fails.
   if (plan.updates.length > 0) {
     await deps.apply(fresh, plan);
   }
-  const post = plan.updates.length > 0 || publication !== undefined ? await publishingReadOnly(() => deps.loadRows()) : fresh;
+  const post = plan.updates.length > 0 || publication !== undefined ? await publishingReadOnly(() => deps.loadRows(reviewed?.codes)) : fresh;
   const updates = new Map(plan.updates.flatMap((u) => u.ids.map((id) => [id, u] as const)));
   if (post.length !== fresh.length || new Set(post.map((r) => r.id)).size !== post.length)
     throw new Error("summary_post_mismatch");
@@ -466,6 +526,7 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
     modelCalls: generated.modelCalls,
     modelResidents: modelTasks.length > 0 ? 1 : 0,
     deterministic: deterministic.length,
+    ...(reviewed === undefined ? {} : { reviewed: reviewed.reviewed }),
     outcome: rejected > 0 ? "partial_rejection" : "complete",
   };
   writePrivate(
@@ -494,11 +555,13 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
     await deps.archive(postBundle, postClock, "post", generation);
   }
   if (publication !== undefined) await publication.complete({ preBundleSHA256: sha(bundle), postSHA256, report });
-  const nextProgress = JSON.stringify({ cursor: tasks[tasks.length - 1].taskId });
-  if (writer !== undefined) await writer.writeCursor("yutai-summary", nextProgress);
-  const nextCursor = join(state, `progress-${randomUUID()}.json`);
-  writePrivate(nextCursor, nextProgress);
-  renameSync(nextCursor, cursorPath);
+  if (reviewed === undefined) {
+    const nextProgress = JSON.stringify({ cursor: tasks[tasks.length - 1].taskId });
+    if (writer !== undefined) await writer.writeCursor("yutai-summary", nextProgress);
+    const nextCursor = join(state, `progress-${randomUUID()}.json`);
+    writePrivate(nextCursor, nextProgress);
+    renameSync(nextCursor, cursorPath);
+  }
   writePrivate(join(runDir, "complete.json"), JSON.stringify(report));
   unlinkSync(pendingWrite);
   return report;
@@ -542,7 +605,7 @@ function generate(tasksPath: string, runDir: string): Promise<string> {
 export function dependencies(): LocalDependencies {
   const db = openOtakaraD1();
   return {
-    loadRows: () => loadBenefitRows(db, "active-equity"),
+    loadRows: codes => loadBenefitRows(db, "active-equity", codes),
     generate,
     async archive(bytes, clock, phase, generation) {
       const file = {
@@ -553,7 +616,8 @@ export function dependencies(): LocalDependencies {
       const result = await recordPrimaryData({
         service: "otakara-yutai",
         key: `summary-local-${sha(bytes)}`,
-        source: "D1 current benefits / deterministic rules and optional pinned cached Qwen local generation",
+        source: generation.reviewed === undefined ? "D1 current benefits / deterministic rules and optional pinned cached Qwen local generation"
+          : "D1 current benefits / explicit saved reviewed summary results",
         fetchedAt: clock,
         force: false,
         metadata: {
@@ -563,8 +627,8 @@ export function dependencies(): LocalDependencies {
           sha256: sha(bytes),
           deterministicRule: DETERMINISTIC_SUMMARY_RULE,
           ...generation,
-          model: generation.modelTasks > 0 ? SEMIF_HF_MODEL : null,
-          revision: generation.modelTasks > 0 ? SEMIF_HF_REVISION : null,
+          ...(generation.reviewed === undefined ? { model: generation.modelTasks > 0 ? SEMIF_HF_MODEL : null,
+            revision: generation.modelTasks > 0 ? SEMIF_HF_REVISION : null } : {}),
         },
         files: [file],
       });
@@ -584,11 +648,15 @@ export function dependencies(): LocalDependencies {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  withBiztagWriter(async () => {
-    const report = await runLocalSummary(parseLocalArgs(process.argv.slice(2)), dependencies());
+  const execute = async () => {
+    const options = parseLocalArgs(process.argv.slice(2));
+    readReviewedInput(options); // Invalid saved input must not acquire remote ownership or construct DB dependencies.
+    const run = () => runLocalSummary(options, dependencies());
+    const report = await (options.reviewedInput === undefined ? withBiztagWriter(run) : withSharedPublishingWriter(run));
     console.info(`[yutai:summary:local] ${JSON.stringify(report)}`);
     if (report.rejected > 0) process.exitCode = 1;
-  }).catch(() => {
+  };
+  execute().catch(() => {
     // Shared exceptions may contain company text/private paths; keep terminal logs aggregate-only.
     console.error("[yutai:summary:local] STOP。私有証跡を確認してください。再試行しません。");
     process.exitCode = 1;

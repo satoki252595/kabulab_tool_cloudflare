@@ -21,6 +21,7 @@ export async function runMechanicalSummary(
   store?: PublishingStore,
 ): Promise<LocalReport> {
   if (options.allowModel === true) throw new Error("mechanical_summary_model_forbidden");
+  if (options.reviewedInput !== undefined) throw new Error("mechanical_summary_reviewed_forbidden");
   if (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 60 || !options.stateDir.trim())
     throw new Error("mechanical_summary_invalid_options");
   const assertStart = () => {
