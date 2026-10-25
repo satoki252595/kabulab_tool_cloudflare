@@ -32,6 +32,9 @@ import { activeEquityCondition } from "../../../../src/shared/db/active-equity.j
 import { stocks as coreStocks } from "../../../../src/shared/db/core-schema.js";
 import type { D1BatchStatement } from "../../../../src/shared/db/d1-http-client.js";
 import { scoreStock } from "../../../../src/shared/scoring.js";
+import { loadMonthScopePreimage, planSavedMonthScope, assertMonthScopePost, type SavedMonthScopePage } from "../../data-scripts/saved-month-scope.js";
+import { buildPublicBenefitFacts } from "../../data-scripts/public-facts.js";
+import { benefitRowsOf, type StockYutaiData } from "../../data-scripts/yutai-full-import.js";
 import { ROOT } from "../../../../src/shared/db/tests/source-scan.js";
 import type {
   AtomicBatchSender,
@@ -815,5 +818,75 @@ describe("applyAtomicBatches の StockBatch.key (再開キーの取り違え防�
     // キーなし (従来呼び出し) はそのまま通る
     await applyAtomicBatches(sender, [one(), one()]);
     expect(sent).toHaveLength(4);
+  });
+});
+
+describe("保存済み原本の月限定余剰1行", () => {
+  const clock = "2026-10-22T03:04:05.123Z";
+  const data: StockYutaiData = { code: "9101", name: null, market: null, category: null, sourceFetchedAt: clock,
+    benefits: [{ heading: "入場券", description: "1枚※3月のみ", notes: "", minShares: 100, localRecordMonths: [3], tableRecordMonths: [3, 9] }] };
+  const raw: SavedMonthScopePage = { html: "", url: "https://minkabu.jp/stock/9101/yutai", receivedAt: clock,
+    batchFetchedAt: clock, sha256: "a".repeat(64), pages: 1, rawBytes: 1, compressedBytes: 1 };
+  async function prepare() {
+    const description = benefitRowsOf(data).rows[0].description;
+    const facts = JSON.stringify(buildPublicBenefitFacts({ code: data.code, description,
+      context: { minShares: [100, 100], recordMonths: [3, 9] }, fetchedAt: clock, batchFetchedAt: clock }));
+    sqlite.prepare("UPDATE yutai_benefits SET description=?, public_facts=?, estimated_value=NULL, estimate_value_source=NULL WHERE id=1001").run(description, facts);
+    sqlite.prepare("INSERT INTO yutai_benefits(id,stock_id,genre_id,description,public_facts,min_shares,record_month,created_at,updated_at) VALUES(1002,101,1,?,?,100,9,2,3)").run(description, facts);
+    const pre = await loadMonthScopePreimage(db, "9101");
+    const inputs = await fetchYieldInputs(db, [STOCK_A]);
+    return { pre, inputs, plan: planSavedMonthScope(pre, data, raw, inputs) };
+  }
+  it("1送信で余剰だけを削除し、通常yield/scoreと全列POSTを満たす", async () => {
+    const { pre, plan } = await prepare(), { sender, calls } = makeAtomicSender();
+    const neighbor = await loadMonthScopePreimage(db, "9103");
+    await applyAtomicBatches(sender, [plan.batch]);
+    const post = await loadMonthScopePreimage(db, "9101");
+    assertMonthScopePost(plan, post);
+    expect(calls).toHaveLength(1); expect(post.benefits).toEqual(pre.benefits.filter(row => row.id !== 1002));
+    expect(post.financial!.dataDate).toBe(pre.financial!.dataDate);
+    expect(await loadMonthScopePreimage(db, "9103")).toEqual(neighbor);
+  });
+  it("再計算が同値でもDELETE batchは省略しない", async () => {
+    await prepare(); sqlite.prepare("UPDATE otakara_stock_financials SET yutai_yield=NULL WHERE stock_id=101").run();
+    sqlite.prepare("DELETE FROM otakara_stock_scores WHERE stock_id=101").run();
+    const pre = await loadMonthScopePreimage(db, "9101"), inputs = await fetchYieldInputs(db, [STOCK_A]);
+    const plan = planSavedMonthScope(pre, data, raw, inputs), { sender, calls } = makeAtomicSender();
+    expect(plan.yieldPlan.entries[0].changed).toBe(false);
+    await applyAtomicBatches(sender, [plan.batch]); expect(calls).toHaveLength(1);
+    assertMonthScopePost(plan, await loadMonthScopePreimage(db, "9101"));
+  });
+  it.each([
+    "UPDATE yutai_benefits SET public_facts=public_facts||' ' WHERE id=1001",
+    "UPDATE yutai_benefits SET created_at=4 WHERE id=1001",
+    "UPDATE yutai_benefits SET genre_id=2 WHERE id=1001",
+    "UPDATE core_stocks SET name=name||'変更' WHERE id=101",
+    "UPDATE otakara_stock_financials SET eps=123 WHERE stock_id=101",
+    "UPDATE otakara_stock_scores SET scored_at=1 WHERE stock_id=101",
+    "INSERT INTO yutai_benefits(stock_id,genre_id,description,min_shares,record_month) SELECT stock_id,genre_id,description,min_shares,record_month FROM yutai_benefits WHERE id=1001",
+  ])("projection外や追加行のdriftを全列CASで止める: %s", async mutation => {
+    const { plan } = await prepare(), { sender, calls } = makeAtomicSender();
+    sqlite.prepare("INSERT INTO yutai_genres(id,name,slug) VALUES(2,'別','another')").run();
+    sqlite.exec(mutation);
+    const before = await loadMonthScopePreimage(db, "9101");
+    await expect(applyAtomicBatches(sender, [plan.batch])).rejects.toThrow();
+    expect(await loadMonthScopePreimage(db, "9101")).toEqual(before); expect(calls).toHaveLength(1);
+  });
+  it("削除後の派生UPDATE失敗も全体rollbackし、自動再送しない", async () => {
+    const { pre, plan } = await prepare(), { sender, calls } = makeAtomicSender();
+    sqlite.exec("CREATE TRIGGER fail_scope BEFORE UPDATE ON otakara_stock_financials BEGIN SELECT RAISE(ABORT,'stop'); END");
+    await expect(applyAtomicBatches(sender, [plan.batch])).rejects.toThrow();
+    expect(await loadMonthScopePreimage(db, "9101")).toEqual(pre); expect(calls).toHaveLength(1);
+  });
+  it("同原本時計/明示月/全行対応が崩れた場合は計画しない", async () => {
+    const { pre, inputs } = await prepare();
+    expect(() => planSavedMonthScope(pre, data, { ...raw, batchFetchedAt: "2026-10-22T03:04:00.000Z" }, inputs)).toThrow();
+    expect(() => planSavedMonthScope(pre, { ...data, benefits: [{ ...data.benefits[0], description: "入場券1枚", localRecordMonths: [3] }] }, raw, inputs)).toThrow();
+    expect(() => planSavedMonthScope(pre, { ...data, benefits: [{ ...data.benefits[0], tableRecordMonths: [3] }] }, raw, inputs)).toThrow();
+    expect(() => planSavedMonthScope({ ...pre, benefits: pre.benefits.slice(0, 1) }, data, raw, inputs)).toThrow();
+    const fresh = structuredClone(pre); fresh.benefits[0].recordDate = "2026-03-31";
+    expect(() => planSavedMonthScope(fresh, data, raw, inputs)).toThrow();
+    const drift = structuredClone(inputs); drift.prices.get(STOCK_A)!.price = 999;
+    expect(() => planSavedMonthScope(pre, data, raw, drift)).toThrow();
   });
 });
