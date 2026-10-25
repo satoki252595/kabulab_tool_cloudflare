@@ -24,7 +24,7 @@
 import { createHash } from "node:crypto";
 import { compileMusashinoOfficialLiteral } from "./musashino-source.js";
 import { HEADED_MARK, splitHeadedDescription } from "./estimated-value-guard.js";
-import { compileAnnualGiftHistoryLiteral, compileBankDepositChoiceLiteral, compileBankHoldingHistoryLiteral, compileDepartmentHoldingLiteral, compileHoldingPointCarryLiteral, compileHotelHoldingLiteral, compilePointExchangeLiteral, compilePremiumClubCarryLiteral, compileSkiTicketBundleLiteral, compileVenueAdmissionLiteral } from "./holding-structure.js";
+import { compileAnnualGiftHistoryLiteral, compileBankDepositChoiceLiteral, compileBankHoldingHistoryLiteral, compileDepartmentHoldingLiteral, compileHoldingPointCarryLiteral, compileHotelHoldingLiteral, compileMealTicketSplitLiteral, compilePointExchangeLiteral, compilePremiumClubCarryLiteral, compileSkiTicketBundleLiteral, compileVenueAdmissionLiteral } from "./holding-structure.js";
 
 /**
  * 要約契約の版。タスクファイルと結果ファイルの各行に載り、取り込み時に
@@ -32,7 +32,7 @@ import { compileAnnualGiftHistoryLiteral, compileBankDepositChoiceLiteral, compi
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-10-26.5";
+export const SUMMARY_CONTRACT_VERSION = "2026-10-26.6";
 
 /** 比較時だけ同じ月期間の表記を揃え、数値・比較条件・保存文面は変えない。 */
 function normalizeMonthPeriods(text: string): string {
@@ -127,6 +127,13 @@ export function isSummaryNumbersGrounded(
   context: { minShares: readonly number[]; recordMonths: readonly number[]; recordDates?: readonly (string | null)[] },
 ): boolean {
   const normalized = shortSummary.normalize("NFKC").trim();
+  const mealTicket = compileMealTicketSplitLiteral(description);
+  // 分割比率・歴史100株を現在tierへ転用しない。全文・完全句・実recipientだけ。
+  if (mealTicket !== null || normalized.includes("分割前表示")) return mealTicket !== null && normalized === mealTicket.shortSummary &&
+    (context.minShares.length === 1 || context.minShares.length === 2) && context.minShares.every(value => value === mealTicket.minShares) &&
+    context.recordMonths.length === context.minShares.length && context.recordMonths.every(value => value === 5 || value === 11) &&
+    new Set(context.recordMonths).size === context.recordMonths.length &&
+    context.recordDates?.length === context.minShares.length && context.recordDates.every(value => value === null);
   const bankDeposit = compileBankDepositChoiceLiteral(description);
   // ステップは回数ではない。預金上限・優遇と歴史的名簿条件を完全句へ束縛する。
   if (bankDeposit !== null || normalized.includes("ひまわりポイントサービス")) return bankDeposit !== null && normalized === bankDeposit.shortSummary &&

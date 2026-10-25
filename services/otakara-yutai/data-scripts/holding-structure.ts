@@ -2,6 +2,21 @@ import { createHash } from "node:crypto";
 import type { BenefitHoldingStructure } from "../src/public-facts.js";
 import { splitHeadedDescription } from "./estimated-value-guard.js";
 
+/** 保存全文3件だけ。分割前株数・予定分割・両掲載額と歴史100株条件を保持する。 */
+export function compileMealTicketSplitLiteral(description: string): { shortSummary: string; minShares: number } | null {
+  const hash = createHash("sha256").update(description).digest("hex");
+  const minShares = hash === "161211b9c5dae6eef820682d944e2c43ed16521f49656b9dfbf7d8866fb2c02c" ? 100
+    : hash === "ca6451a00c51f8cbe814dddcd759f6328fee33afd2a66916158d27d8ad8a190d" ? 300
+    : hash === "4c416b5e4abe9fd1447f9701ab840d2b1e6826a8793b882f96e04e6659a1efe5" ? 500 : null;
+  if (minShares === null) return null;
+  const amounts = [...splitHeadedDescription(description).body.normalize("NFKC").matchAll(/^([0-9,]+)円相当\(年間 ([0-9,]+)円相当\)$/gm)];
+  if (amounts.length !== (minShares === 100 ? 2 : 1)) return null;
+  const benefit = minShares === 100
+    ? `食事券:1年未満保有${amounts[0][1]}円相当(年${amounts[0][2]}円相当)、1年以上保有${amounts[1][1]}円相当(年${amounts[1][2]}円相当)。`
+    : `食事券${amounts[0][1]}円相当(年${amounts[0][2]}円相当)。`;
+  return { minShares, shortSummary: benefit + "居酒屋事業で利用可・電子チケット1枚5,000円相当。株数は2026年12月1日を効力発生日とする予定1:2分割前表示。継続保有の定義:基準日を含む同年5月末/前年11月末の名簿に同一株主番号100株以上3回以上連続して記載または記録。5月末確定分8月、11月末確定分翌年2月贈呈" };
+}
+
 /** 保存全文3件だけ。預金・特産品の選択、取扱日、除外と名簿条件を全て保持する。 */
 export function compileBankDepositChoiceLiteral(description: string): { shortSummary: string; minShares: number } | null {
   const hash = createHash("sha256").update(description).digest("hex");

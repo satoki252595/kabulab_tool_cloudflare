@@ -37,7 +37,7 @@ import {
 import { semifEnv } from "../../../src/shared/semif/env.js";
 import { z } from "../../../src/shared/zod-mini.js";
 import { parseBenefitChoiceStructure } from "./choice-structure.js";
-import { compileAnnualGiftHistoryLiteral, compileBankDepositChoiceLiteral, compileBankHoldingHistoryLiteral, compileDepartmentHoldingLiteral, compileHoldingPointCarryLiteral, compileHotelHoldingLiteral, compilePointExchangeLiteral, compilePremiumClubCarryLiteral, compileSkiTicketBundleLiteral, compileVenueAdmissionLiteral, parseBenefitHoldingStructure } from "./holding-structure.js";
+import { compileAnnualGiftHistoryLiteral, compileBankDepositChoiceLiteral, compileBankHoldingHistoryLiteral, compileDepartmentHoldingLiteral, compileHoldingPointCarryLiteral, compileHotelHoldingLiteral, compileMealTicketSplitLiteral, compilePointExchangeLiteral, compilePremiumClubCarryLiteral, compileSkiTicketBundleLiteral, compileVenueAdmissionLiteral, parseBenefitHoldingStructure } from "./holding-structure.js";
 import { compileMusashinoOfficialLiteral } from "./musashino-source.js";
 import { parseBenefitRecordTierStructure } from "./record-tier-structure.js";
 import { benefitKey } from "./benefit-key.js";
@@ -174,10 +174,19 @@ export function companyValue(task: SummaryTask): {
   return evaluateCompanyValue(task.description, context);
 }
 
-export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v18";
+export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v19";
 
 /** 対応する種類＋額面・全文1点選択・全文対応の期間/名簿条件を定型化する。未対応条件を削らない。 */
 export function compileSimpleSummary(task: SummaryTask): SummaryResult | null {
+  const mealTicket = compileMealTicketSplitLiteral(task.description);
+  if (mealTicket !== null) {
+    const amount = companyValue(task);
+    if (task.stockCode !== "138A" || task.rowCount !== 2 || task.recipients.length !== 2 ||
+      amount.value !== null || amount.reason !== "multi_month_amounts" || checkSummary(mealTicket.shortSummary).length > 0 ||
+      !isSummaryNumbersGrounded(task.description, mealTicket.shortSummary, { minShares: task.recipients.map(r => r.minShares),
+        recordMonths: task.recipients.map(r => r.recordMonth), recordDates: task.recipients.map(r => r.recordDate) })) return null;
+    return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion, shortSummary: mealTicket.shortSummary, estimatedValue: null });
+  }
   const bankDeposit = compileBankDepositChoiceLiteral(task.description);
   if (bankDeposit !== null) {
     const amount = companyValue(task);
