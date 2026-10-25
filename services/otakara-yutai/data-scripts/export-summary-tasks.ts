@@ -110,7 +110,7 @@ async function main(): Promise<void> {
   if (tasks.length > 0) {
     console.info(
       "[summary:export] 次は: services/otakara-yutai/docs/llm-summary-task.md とこのファイルをクラウド LLM に渡して要約させ、\n" +
-        `  pnpm yutai:summary:import --tasks ${out} --results <結果ファイル>  (dry-run で確認後 --apply)`,
+        `  保存結果を通常planで検証し、全file SHAを固定して yutai:summary:local の明示reviewed入力へ渡してください。旧 standalone --apply は使用できません。`,
     );
   }
 }
