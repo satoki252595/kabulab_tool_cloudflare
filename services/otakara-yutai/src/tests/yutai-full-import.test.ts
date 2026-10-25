@@ -718,6 +718,26 @@ describe("planCarry (退避計画の純関数。原文抜粋)", () => {
     expect(p.promotedKeys).toEqual(new Set());
   });
 
+  it("宣言された見出しが空集合なら数値資格を成功扱いせず再作成へ回す", () => {
+    const rows = [srcRow({})], key = carryKey(rows[0].code, rows[0].description, 100, 3);
+    const p = planCarry(rows, new Map([[key, []]]), grpOf(rows));
+    expect(p.carried.get(key)).toEqual({ shortSummary: null, estimatedValue: null, estimateValueSource: null });
+    expect(p.nulledKeys.has(key)).toBe(true); expect(p.promotedKeys.size).toBe(0);
+  });
+
+  it("各取得見出しを別々に数値照合し、一つの表だけの数量を別表へ持ち越さない", () => {
+    const rows = [srcRow({ description: "合成優待品500円", shortSummary: "優待品500円2枚", estimatedValue: null })];
+    const key = carryKey(rows[0].code, rows[0].description, 100, 3);
+    for (const headings of [["2枚の優待", "株主優待"], ["株主優待", "2枚の優待"]]) {
+      const p = planCarry(rows, new Map([[key, headings]]), grpOf(rows));
+      expect(p.carried.get(key)?.shortSummary).toBeNull(); expect(p.nulledKeys.has(key)).toBe(true);
+    }
+    const valid = planCarry(rows, new Map([[key, ["2枚の優待", "優待品2枚"]]]), grpOf(rows));
+    expect(valid.carried.get(key)?.shortSummary).toBe(rows[0].shortSummary);
+    const restricted = planCarry(rows, new Map([[key, ["2枚の優待", "2枚の優待(抽選)"]]]), grpOf(rows));
+    expect(restricted.carried.get(key)?.shortSummary).toBeNull();
+  });
+
   it("保有期間の落ちた旧要約と金額を持ち越さず、原文と条件を保持して再作成へ回す", () => {
     const rows = [srcRow({ description: "5年以上継続保有で合成商品3万円相当", shortSummary: "合成商品3万円相当", estimatedValue: 30000, estimateValueSource: "company" })];
     const p = planCarry(rows, metaOf(rows), grpOf(rows));

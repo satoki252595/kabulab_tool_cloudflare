@@ -326,10 +326,14 @@ export function planCarry(
     }
     const headings = plannedMeta.get(key);
     const conditions = headings === undefined ? row.description : [...headings, row.description].join("\n");
+    // 条件欠落は全見出しを保持して検査し、数値は各取得見出しの正準保存形で照合する。
+    // 前置きの連結でheaded markerを壊したり、複数表の先頭だけを採用したりしない。
+    const numericSources = headings === undefined ? [row.description]
+      : headings.map(heading => headedDescription(heading, carryBody(row.description)));
     if (missingSummaryConditions(conditions, shortSummary === null ? "" : shortSummary).length > 0 ||
-        (shortSummary !== null && !isSummaryNumbersGrounded(conditions, shortSummary, {
+        (shortSummary !== null && (numericSources.length === 0 || numericSources.some(source => !isSummaryNumbersGrounded(source, shortSummary!, {
           minShares: [row.minShares], recordMonths: [row.recordMonth],
-        }))) {
+        }))))) {
       shortSummary = null;
       estimatedValue = null;
       estimateValueSource = null;

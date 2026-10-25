@@ -1,8 +1,9 @@
 /**
  * 優待要約タスクの選定とファイル形式 (提供元に依存しない部分)。
  *
- * 要約 (`yutai_benefits.short_summary`) と推定金額はリポジトリの外のクラウド LLM
- * (Cursor Automations 等) が作る。このモジュールは
+ * 要約 (`yutai_benefits.short_summary`) と推定金額は通常の決定的compiler、または
+ * 明示された保存済みreviewed入力を共有契約で検証して採用する。ここからモデルは起動しない。
+ * このモジュールは
  *   1. D1 の現行行から「要約が要る (銘柄, 掲載文)」を選び、
  *   2. 外部エージェントへ渡すタスク行の形を決める。
  * D1 / ファイル I/O は CLI (`export-summary-tasks.ts`) 側に置き、ここは純関数に

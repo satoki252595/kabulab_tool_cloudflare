@@ -1,0 +1,125 @@
+{
+  "provenance": {
+    "sourcePostSha256": "6ebf3178b6d8d2ae1f8473aa5f491d201e929a60876e09d3a976447d0ecbf7d1",
+    "clock": "2026-10-25T14:02:12.998Z",
+    "privateFixtureSha256": "1e702297126f7fc9823a6c4a7884a5effb4ab2ac01159c0d2e1108c08feded49",
+    "normalizedTailSha256": "2f6025c9442eee30a8a56d84752967c165f5b92dce7d9ac16a82084a7018079b",
+    "historicalFixtureNotCurrentPendingCount": true
+  },
+  "groups": [
+    {
+      "taskId": "50db8ece3f512f66",
+      "stockCode": "3086",
+      "sourceSha256": "0d9d83131d428bd984c67d50e4a770ee1818559db33043f8d05579f90e02a82f",
+      "rowCount": 2,
+      "recipients": [
+        {
+          "minShares": 500,
+          "recordMonth": 2,
+          "recordDate": null
+        },
+        {
+          "minShares": 500,
+          "recordMonth": 8,
+          "recordDate": null
+        }
+      ],
+      "expectedSummarySha256": "a9053b472f4aafcdabcdc541d117b9ec9563134c8da0efaae6811e0796ce2a54"
+    },
+    {
+      "taskId": "3e784673441983c5",
+      "stockCode": "3086",
+      "sourceSha256": "e3b8471cb3d77b64c1c578306ae34a553aa7cfaaeabd7d87c5dbf008e8931750",
+      "rowCount": 2,
+      "recipients": [
+        {
+          "minShares": 1000,
+          "recordMonth": 2,
+          "recordDate": null
+        },
+        {
+          "minShares": 1000,
+          "recordMonth": 8,
+          "recordDate": null
+        }
+      ],
+      "expectedSummarySha256": "d19438d9856f7786724fb50749661da76575dee9699a8ff32213056d3e8040e8"
+    },
+    {
+      "taskId": "96f26efa170dfe22",
+      "stockCode": "3086",
+      "sourceSha256": "e59313e7f60d2194654ce582c03d4181dbc466a1e98f5ded7335422cb4ccb081",
+      "rowCount": 2,
+      "recipients": [
+        {
+          "minShares": 2000,
+          "recordMonth": 2,
+          "recordDate": null
+        },
+        {
+          "minShares": 2000,
+          "recordMonth": 8,
+          "recordDate": null
+        }
+      ],
+      "expectedSummarySha256": "cd89e80d4f06649b3addabf55e6e9da7a9b890d4e3772cfd3a85667a939e4a52"
+    },
+    {
+      "taskId": "8e999a315b974e5f",
+      "stockCode": "3086",
+      "sourceSha256": "d8b7d6fc124d934a2331e6ee6cd50979fcc5e993d7657286077045af187b8a8c",
+      "rowCount": 2,
+      "recipients": [
+        {
+          "minShares": 3000,
+          "recordMonth": 2,
+          "recordDate": null
+        },
+        {
+          "minShares": 3000,
+          "recordMonth": 8,
+          "recordDate": null
+        }
+      ],
+      "expectedSummarySha256": "289009995ce97e75a5f0919f6f33514bd748464a6a14cf94958a973de33d19ed"
+    },
+    {
+      "taskId": "7a4145818119f510",
+      "stockCode": "3086",
+      "sourceSha256": "cdca7159ec96d6b6efac4604498a31e056e2ff21a016b291ee2c57123848a0b2",
+      "rowCount": 2,
+      "recipients": [
+        {
+          "minShares": 4000,
+          "recordMonth": 2,
+          "recordDate": null
+        },
+        {
+          "minShares": 4000,
+          "recordMonth": 8,
+          "recordDate": null
+        }
+      ],
+      "expectedSummarySha256": "e0d7cb682bd00df3da5d2b8bcab15ddb3349c08e32f976a67395c2175df3933a"
+    },
+    {
+      "taskId": "1db5b22abb3dc1bf",
+      "stockCode": "3086",
+      "sourceSha256": "213ea6eb12eb241ef827bba93343f77b17aedae119d41b2a68ee34bc8c038436",
+      "rowCount": 2,
+      "recipients": [
+        {
+          "minShares": 100,
+          "recordMonth": 2,
+          "recordDate": null
+        },
+        {
+          "minShares": 100,
+          "recordMonth": 8,
+          "recordDate": null
+        }
+      ],
+      "expectedSummarySha256": "d6cb35c4cc7f42ec40800f442bfead881a928762e7aae769be91b749015d987d"
+    }
+  ]
+}

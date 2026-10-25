@@ -23,7 +23,7 @@
 
 import { createHash } from "node:crypto";
 import { HEADED_MARK, splitHeadedDescription } from "./estimated-value-guard.js";
-import { compileHoldingPointCarryLiteral, compilePointExchangeLiteral, compilePremiumClubCarryLiteral, compileVenueAdmissionLiteral } from "./holding-structure.js";
+import { compileDepartmentHoldingLiteral, compileHoldingPointCarryLiteral, compilePointExchangeLiteral, compilePremiumClubCarryLiteral, compileVenueAdmissionLiteral } from "./holding-structure.js";
 
 /**
  * 要約契約の版。タスクファイルと結果ファイルの各行に載り、取り込み時に
@@ -31,7 +31,7 @@ import { compileHoldingPointCarryLiteral, compilePointExchangeLiteral, compilePr
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-10-25.7";
+export const SUMMARY_CONTRACT_VERSION = "2026-10-25.8";
 
 /** 比較時だけ同じ月期間の表記を揃え、数値・比較条件・保存文面は変えない。 */
 function normalizeMonthPeriods(text: string): string {
@@ -126,6 +126,11 @@ export function isSummaryNumbersGrounded(
   context: { minShares: readonly number[]; recordMonths: readonly number[] },
 ): boolean {
   const normalized = shortSummary.normalize("NFKC").trim();
+  const departmentHolding = compileDepartmentHoldingLiteral(description);
+  // 歴史的100株は現在tierではない。完全な全文と定型句だけを別scopeで照合する。
+  if (departmentHolding !== null || normalized.includes("3年判定:")) return departmentHolding !== null && normalized === departmentHolding &&
+    context.minShares.length > 0 && context.minShares.every(value => Number.isSafeInteger(value) && value >= 100) &&
+    context.recordMonths.length > 0 && context.recordMonths.every(value => value === 2 || value === 8);
   const holdingPointCarry = compileHoldingPointCarryLiteral(description);
   // 600株は保有期間/繰越の定義。既知全文と完全な定型句以外を一般株数へ降格させない。
   if (holdingPointCarry !== null || normalized.includes("繰越条件")) return holdingPointCarry !== null && normalized === holdingPointCarry &&

@@ -47,6 +47,17 @@ export function compileHoldingPointCarryLiteral(description: string): string | n
   return `保有1年未満${below}/1年以上${above}ポイント(WEB商品選択/WILLsCoin交換)、1年以上/繰越条件:毎年12月末同一株主番号600株以上継続保有・記載、繰越次回1回、翌3月上旬開始`;
 }
 
+/** 買物利用枠の両期間と歴史的保有定義を、その他の条件全文へ束縛する。 */
+export function compileDepartmentHoldingLiteral(description: string): string | null {
+  const source = splitHeadedDescription(description);
+  if (source.malformed || source.heading?.normalize("NFKC").trim() !== "大丸・松坂屋 買物優待カード 10%割引") return null;
+  const match = /^【3年未満保有株主】\n利用限度額 ([1-9][0-9]*)万円\n【3年以上保有株主】\n利用限度額 ([1-9][0-9]*)万円\n([\s\S]+)$/u.exec(source.body.normalize("NFKC").trim());
+  if (match === null || createHash("sha256").update(match[3]).digest("hex") !== "2f6025c9442eee30a8a56d84752967c165f5b92dce7d9ac16a82084a7018079b") return null;
+  const below = Number(match[1]), above = Number(match[2]);
+  if (![below, above].every(value => Number.isSafeInteger(value) && value > 0)) return null;
+  return `大丸松坂屋10%引(一部除外/現金・指定カード等)、上限3年未満${below}万/3年以上${above}万円。3年判定:毎年2月末、2・8月末同一株主番号100株以上7回以上連続記載、8月末新規半額、大丸松坂屋等有料文化催事/パルコアートスペース入場無料`;
+}
+
 /** 保存全文にある単一期間と掲載額・枚数の対応だけを読む。本人の適用条件は未確認。 */
 export function parseBenefitHoldingStructure(description: string): BenefitHoldingStructure | null {
   const source = splitHeadedDescription(description);
