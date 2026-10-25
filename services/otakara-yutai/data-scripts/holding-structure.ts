@@ -2,6 +2,13 @@ import { createHash } from "node:crypto";
 import type { BenefitHoldingStructure } from "../src/public-facts.js";
 import { splitHeadedDescription } from "./estimated-value-guard.js";
 
+/** 保存全文1件の9券種だけ。枚数・各利用人数・季節・割引対象を全て保持する。 */
+export function compileSkiTicketBundleLiteral(description: string): string | null {
+  // ponytail: 保存全文1型のみ。別形式は全条件を確認した文法を追加するまでHOLD。
+  if (createHash("sha256").update(description).digest("hex") !== "46692d4d1b2d2fde1726d52c92b2e2b59a25982940add4f8d398573e0113cabc") return null;
+  return "割引券:日本スキー場開発グループ・アライアンスパートナーリゾートの通年ゴンドラ・アクティビティ5枚/冬期リフト7枚、スパイシーレンタル・白馬EXアドベンチャーのレンタル5枚、白馬岩岳マウンテンリゾート特別券2枚、白馬姫川温泉岩岳の湯2枚(以上各1枚5名利用可)、日本駐車場開発運営の時間貸駐車場1日料金30%引5枚、那須ハイランドパーク2枚・那須高原りんどう湖ファミリー牧場2枚(各1枚4名まで)、那須高原TOWAピュアコテージ朝食付きプラン50%引2枚";
+}
+
 /** 保存全文2件だけ。期間別額・株数毎加算・倍率と歴史保有条件を現在tierから分離する。 */
 export function compileHotelHoldingLiteral(description: string): { shortSummary: string; minShares: number } | null {
   const hash = createHash("sha256").update(description).digest("hex");

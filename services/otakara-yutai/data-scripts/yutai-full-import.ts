@@ -51,7 +51,7 @@ import { activeEquityCondition } from "../../../src/shared/db/active-equity.js";
 import { stockFinancials, stocks, yutaiBenefits, yutaiGenres } from "../src/db/schema.js";
 import { type AtomicBatchSender, snapshotStockPreimages } from "./atomic-apply.js";
 import { benefitKey } from "./benefit-key.js";
-import { isSummaryNumbersGrounded, missingSummaryConditions } from "./summary-contract.js";
+import { checkSummary, isSummaryNumbersGrounded, missingSummaryConditions } from "./summary-contract.js";
 import { buildPublicBenefitFacts } from "./public-facts.js";
 import { parsePublicBenefitFacts } from "../src/public-facts.js";
 import { assertBenefitSchedule, assertRecordMonth } from "../src/record-date.js";
@@ -330,7 +330,8 @@ export function planCarry(
     // 前置きの連結でheaded markerを壊したり、複数表の先頭だけを採用したりしない。
     const numericSources = headings === undefined ? [row.description]
       : headings.map(heading => headedDescription(heading, carryBody(row.description)));
-    if (missingSummaryConditions(conditions, shortSummary === null ? "" : shortSummary).length > 0 ||
+    if ((shortSummary !== null && checkSummary(shortSummary).length > 0) ||
+        missingSummaryConditions(conditions, shortSummary === null ? "" : shortSummary).length > 0 ||
         (shortSummary !== null && (numericSources.length === 0 || numericSources.some(source => !isSummaryNumbersGrounded(source, shortSummary!, {
           minShares: [row.minShares], recordMonths: [row.recordMonth], recordDates: [row.recordDate],
         }))))) {

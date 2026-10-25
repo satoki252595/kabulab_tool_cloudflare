@@ -101,8 +101,8 @@ describe("checkSummary — 本番で実在した違反", () => {
     expect(rules("◇保有する株式数に応じて付与")).toContain("annotation");
   });
 
-  it("120字まで条件を保持し、121字を拒否する", () => {
-    expect(SUMMARY_MAX_CHARS).toBe(120);
+  it("256字まで条件を保持し、257字を拒否する", () => {
+    expect(SUMMARY_MAX_CHARS).toBe(256);
     expect(rules("あ".repeat(SUMMARY_MAX_CHARS + 1))).toContain("too_long");
     expect(rules("あ".repeat(SUMMARY_MAX_CHARS))).not.toContain("too_long");
   });
