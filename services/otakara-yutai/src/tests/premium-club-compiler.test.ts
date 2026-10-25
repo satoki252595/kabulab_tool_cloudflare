@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { ROOT } from "../../../../src/shared/db/tests/source-scan.js";
+import { SUMMARY_CONTRACT_VERSION } from "../../data-scripts/summary-contract.js";
 import { companyValue, compileSimpleSummary } from "../../data-scripts/summary-local.js";
 import { planSummaryImport, type SummaryResult } from "../../data-scripts/summary-import.js";
 import { selectSummaryTasks, type BenefitRow, type SummaryTask } from "../../data-scripts/summary-tasks.js";
@@ -19,7 +20,7 @@ function fixture() {
 it.each(saved.groups)("数量が既知でも条件全文が未資格なら機械HOLD: $points", group => {
   // 合成の不完全入力。実原文はGitへ置かず、下の私有黒箱回帰で照合する。
   const task = { description: `【種別："プレミアム優待倶楽部ポイント"】\n${group.points}ポイント\n合成の未資格条件`,
-    stockCode: "9001", stockName: "合成テスト社", contractVersion: "2026-10-25.3", taskId: "0".repeat(16),
+    stockCode: "9001", stockName: "合成テスト社", contractVersion: SUMMARY_CONTRACT_VERSION, taskId: "0".repeat(16),
     reason: "missing", violations: [], rowCount: 1, recipients: group.recipients } satisfies SummaryTask;
   expect(compileSimpleSummary(task)).toBeNull();
 });
@@ -27,7 +28,10 @@ it.each(saved.groups)("数量が既知でも条件全文が未資格なら機械
 it.skipIf(!existsSync(privatePath))("保存4原文を独立意味レビュー済み結果と照合し、通常planで金額nullを保つ", () => {
   const source = fixture();
   expect(source.tasks.length).toBe(4); expect(source.rows.length).toBe(4);
-  const results = source.tasks.map(task => {
+  const tasks = selectSummaryTasks(source.rows);
+  const withoutVersion = ({ contractVersion: _version, ...value }: SummaryTask | SummaryResult) => value;
+  expect(sha(JSON.stringify(tasks.map(withoutVersion)))).toBe(sha(JSON.stringify(source.tasks.map(withoutVersion))));
+  const results = tasks.map(task => {
     const metadata = saved.groups.find(group => group.taskId === task.taskId);
     expect(metadata !== undefined).toBe(true);
     expect(sha(task.description)).toBe(metadata?.sourceSha256);
@@ -35,10 +39,12 @@ it.skipIf(!existsSync(privatePath))("保存4原文を独立意味レビュー済
     const result = compileSimpleSummary(task);
     expect(result !== null).toBe(true);
     // テスト失敗時にも原文・候補本文をstdoutへ出さず、SHA同士を比較する。
-    expect(sha(JSON.stringify(result))).toBe(sha(JSON.stringify(source.expectedResults.find(value => value.taskId === task.taskId))));
+    const expected = source.expectedResults.find(value => value.taskId === task.taskId);
+    if (result === null || expected === undefined) throw new Error("premium_expected_result_missing");
+    expect(sha(JSON.stringify(withoutVersion(result)))).toBe(sha(JSON.stringify(withoutVersion(expected))));
     return result!;
   });
-  const plan = planSummaryImport({ tasks: source.tasks, currentRows: source.rows, resultsText: results.map(result => JSON.stringify(result)).join("\n") });
+  const plan = planSummaryImport({ tasks, currentRows: source.rows, resultsText: results.map(result => JSON.stringify(result)).join("\n") });
   expect(plan.rejections.map(rejection => rejection.reason)).toEqual([]);
   expect(plan.updates.length).toBe(4);
   expect(plan.updates.every(update => update.estimatedValue === null && update.estimateValueSource === null)).toBe(true);

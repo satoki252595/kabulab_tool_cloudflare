@@ -30,7 +30,7 @@ import {
   type BenefitRow,
   type SummaryTask,
 } from "../../data-scripts/summary-tasks.js";
-import { planSummaryImport, type ImportPlan } from "../../data-scripts/summary-import.js";
+import { planSummaryImport, type ImportPlan, type SummaryResult } from "../../data-scripts/summary-import.js";
 import shippingSaved from "./fixtures/shipping-saved3.json";
 import admissionSaved from "./fixtures/admission-saved3.json";
 import pointExchangeSaved from "./fixtures/point-exchange-saved3.json";
@@ -42,6 +42,7 @@ const pointExchangeDescription = (amount: number) =>
 const admissionPrivatePath = join(ROOT, "tmp/yutai-admission-proof-v1/saved3.private.json");
 const cinemaPrivatePath = join(ROOT, "tmp/yutai-monthly-cinema-proof-v1/saved3.private.json");
 const heldCatalogPrivatePath = join(ROOT, "tmp/yutai-held-catalog-proof-v1/saved3.private.json");
+const withoutContractVersion = ({ contractVersion: _version, ...value }: SummaryTask | SummaryResult) => value;
 const admissionDescription = (first: number, second: number) =>
   `【種別："温浴施設「テルマー湯」優待券"】\n新宿店 ${first}枚\n六本木・西麻布店 ${second}枚\n※1枚につき1名が入場できる。\n※土日、祝日および特定日は\n\u3000利用できない。`;
 
@@ -147,12 +148,14 @@ describe("local summary generation/import boundary", () => {
   it.skipIf(!existsSync(heldCatalogPrivatePath))("保存実4820の3全文を保有・選択・名簿・時期とnull額保持のまま通常取込し、条件変化はHOLD", async () => {
     const bytes = readFileSync(heldCatalogPrivatePath);
     expect(createHash("sha256").update(bytes).digest("hex")).toBe("6adee57001f20028f738aa38108d964d06627d24fa79c51f2f3cb7c38a766925");
-    const saved = JSON.parse(bytes.toString()) as { tasks: SummaryTask[]; rows: BenefitRow[]; results: unknown[] };
+    const saved = JSON.parse(bytes.toString()) as { tasks: SummaryTask[]; rows: BenefitRow[]; results: SummaryResult[] };
     const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
     const tasks = selectSummaryTasks(saved.rows), results = tasks.map(task => compileSimpleSummary(task));
-    expect(digest(tasks)).toBe(digest(saved.tasks)); expect(tasks).toHaveLength(3); expect(saved.rows).toHaveLength(3);
-    expect(digest(results)).toBe(digest(saved.results));
-    expect(tasks.every(task => companyValue(task).reason === "choice" && task.contractVersion === "2026-10-25.3")).toBe(true);
+    expect(digest(tasks.map(withoutContractVersion))).toBe(digest(saved.tasks.map(withoutContractVersion)));
+    expect(tasks).toHaveLength(3); expect(saved.rows).toHaveLength(3);
+    expect(digest(results.map(result => result === null ? null : withoutContractVersion(result))))
+      .toBe(digest(saved.results.map(withoutContractVersion)));
+    expect(tasks.every(task => companyValue(task).reason === "choice" && task.contractVersion === SUMMARY_CONTRACT_VERSION)).toBe(true);
     const plan = planSummaryImport({ tasks, currentRows: saved.rows, resultsText: results.map(result => JSON.stringify(result)).join("\n") });
     expect(plan.rejections).toEqual([]); expect(plan.updates).toHaveLength(3);
     expect(plan.updates.every(update => update.estimatedValue === null && update.estimateValueSource === null)).toBe(true);
@@ -200,10 +203,12 @@ describe("local summary generation/import boundary", () => {
     }> };
     const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
     const tasks = selectSummaryTasks(saved.rows);
-    expect(digest(tasks)).toBe(digest(saved.tasks)); expect(tasks).toHaveLength(3); expect(saved.rows).toHaveLength(6);
-    expect(tasks.every(task => task.contractVersion === "2026-10-25.3")).toBe(true);
+    expect(digest(tasks.map(withoutContractVersion))).toBe(digest(saved.tasks.map(withoutContractVersion)));
+    expect(tasks).toHaveLength(3); expect(saved.rows).toHaveLength(6);
+    expect(tasks.every(task => task.contractVersion === SUMMARY_CONTRACT_VERSION)).toBe(true);
     const results = tasks.map(task => compileSimpleSummary(task));
-    expect(digest(results)).toBe(digest(saved.results));
+    expect(digest(results.map(result => result === null ? null : withoutContractVersion(result))))
+      .toBe(digest(saved.results.map(withoutContractVersion)));
     const plan = planSummaryImport({ tasks, currentRows: saved.rows, resultsText: results.map(result => JSON.stringify(result)).join("\n") });
     expect(plan.rejections).toEqual([]); expect(plan.updates).toHaveLength(3);
     expect(plan.updates.flatMap(update => update.ids)).toHaveLength(6);

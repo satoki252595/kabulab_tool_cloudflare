@@ -5,7 +5,7 @@
 タスクファイルがあれば作業できるように書いてあります。
 
 - 要約生成・書出し・取込は正常母集団（active かつ equity）の優待行を対象とする。母集団外の既存優待は全行退避に保持し、再生成・更新しない。
-- 契約の版: **`2026-10-25.3`**（`services/otakara-yutai/data-scripts/summary-contract.ts` の `SUMMARY_CONTRACT_VERSION`）
+- 契約の版: **`2026-10-25.4`**（`services/otakara-yutai/data-scripts/summary-contract.ts` の `SUMMARY_CONTRACT_VERSION`）
 - 書き出し: `pnpm yutai:summary:export`（`--violations-only` で契約違反の既存要約だけ）
 - 保存結果の検証は共通`planSummaryImport`。旧`yutai:summary:import --apply`は退役済み。本番は下記の明示reviewed入力を共有publisherへ渡す。
 
@@ -18,11 +18,11 @@
 
 電子ギフトは、単一掲載額・1ポイント1円相当・電子マネーとポイントへの交換・基準日から3か月以内の贈呈を含む対応済み全文形式だけ機械処理します。掲載額を換算や年額計算せず既存の1回額資格で照合し、要約にも換算・両交換先・贈呈期限を保持します。この全文形式の公開要約は共有定型と完全一致する場合だけ採用します。余分な注記や別形式は機械処理せずHOLDします。
 
-月間映画招待は、対応会場の見出し・正の安全整数の月間回数・座席指定経路の残全文SHAが一致する形式だけ機械要約します。会場・毎月の回数・ネット又は招待カードを使う券売機/窓口の経路を60字以内で保持し、金額はnullです。追加条件や残全文の変更はHOLDし、年換算・価格推計・recipientの補完は行いません。公開validatorと契約`.3`は変更しません。
+月間映画招待は、対応会場の見出し・正の安全整数の月間回数・座席指定経路の残全文SHAが一致する形式だけ機械要約します。会場・毎月の回数・ネット又は招待カードを使う券売機/窓口の経路を60字以内で保持し、金額はnullです。追加条件や残全文の変更はHOLDし、年換算・価格推計・recipientの補完は行いません。この生成分岐は公開validatorへ追加規則を持ちません。
 
-株主向けポイントの既知全文形式は、掲載ポイント数だけを読み、商品選択・寄付・コイン交換と翌年12月末の同番号連続2回以上・繰越1回の条件を保持して機械処理します。条件段落は正規化後の全文SHAで照合し、省略・変更はHOLDします。約1円という換算から推定額を作らず、金額はnullを維持します。生成側だけの追加で、契約`2026-10-25.3`の公開validatorは変更しません。
+株主向けポイントの既知全文形式は、掲載ポイント数だけを読み、商品選択・寄付・コイン交換と翌年12月末の同番号連続2回以上・繰越1回の条件を保持して機械処理します。条件段落は正規化後の全文SHAで照合し、省略・変更はHOLDします。約1円という換算から推定額を作らず、金額はnullを維持します。この生成分岐は公開validatorへ追加規則を持ちません。
 
-長期保有者向け商品の対応済み全文型は、1年以上保有・毎年12月末の同一株主番号の継続記録・掲載額・カタログ/WEBの商品又は寄付1点選択・毎年2月下旬の贈呈を保持します。金額以外の残全文SHAと12月recipientを照合し、選択肢の掲載額を受取額へ認定せず推定額はnullです。追加条件・本文やrecipientの矛盾・60字超過はHOLDし、公開validatorと契約`.3`は変更しません。
+長期保有者向け商品の対応済み全文型は、1年以上保有・毎年12月末の同一株主番号の継続記録・掲載額・カタログ/WEBの商品又は寄付1点選択・毎年2月下旬の贈呈を保持します。金額以外の残全文SHAと12月recipientを照合し、選択肢の掲載額を受取額へ認定せず推定額はnullです。追加条件・本文やrecipientの矛盾・60字超過はHOLDし、この生成分岐は公開validatorへ追加規則を持ちません。
 
 > 規則を変えるときは `summary-contract.ts` の版を上げ、この文書も同じコミットで直すこと。
 > 版の違う結果は取り込みではじかれる。
@@ -166,6 +166,7 @@ nix develop --command pnpm yutai:summary:local --state-dir <私有state> --limit
 
 全角の英数字は取り込み時に半角へ揃えるので、どちらで書いても構いません。
 掲載文と同一の製品語「3Dプリンター住宅」「1デーパスポート」に含まれる数字だけは数量として扱いません。製品語ごとに掲載文の一致を必要とし、片方があるだけでは別の製品語を認めません。数字や製品語の変更、後続の枚数・金額は通常の数値検証を通します。
+周年は、正準の正の安全整数Nによる「N周年」が掲載文と完全に同じ場合だけ同じ周年字句として照合します。別の周年数や数値の部分一致・不正表記は採用せず、周年数を円額・株数・保有年数の根拠にしません。旧契約`.3`結果は保全し、新版の現在taskを選定し直して別結果を検証します。
 掲載文に「同一株主番号」または「同一の株主番号」が実在する場合に限り、この同義2表記の「一株」を数量として扱いません。比較時だけの処理で、保存する文面・保有条件は変えず、実際の一株・株数や原文にない同語は引き続き拒否します。
 製品語の外の金額・率・数量・株数・保有条件は引き続き同じ根拠を必要とします。原Unicode省略記号「…」は数字・小数点・桁区切りの直後でない数値前の区切りだけとして照合し、ASCII小数や数値間の省略から断片を採用しません。
 
@@ -240,7 +241,7 @@ nix develop --command pnpm yutai:summary:local --state-dir <私有state> --limit
 入力（1 行、読みやすく改行しています）:
 
 ```json
-{"taskId":"0123456789abcdef","contractVersion":"2026-10-25.3","reason":"missing","violations":[],
+{"taskId":"0123456789abcdef","contractVersion":"2026-10-25.4","reason":"missing","violations":[],
  "stockCode":"9990","stockName":"架空ホールディングス",
  "description":"【1年未満】架空ギフトカタログ 2,000円相当\n【1年以上】架空ギフトカタログ 5,000円相当\n■贈呈時期\n毎年7月下旬に発送予定\n※保有株式数の確認は3月末時点","rowCount":2,"recipients":[{"minShares":100,"recordMonth":3,"recordDate":null},{"minShares":100,"recordMonth":9,"recordDate":null}]}
 ```
@@ -248,7 +249,7 @@ nix develop --command pnpm yutai:summary:local --state-dir <私有state> --limit
 出力:
 
 ```json
-{"taskId":"0123456789abcdef","contractVersion":"2026-10-25.3","shortSummary":"保有期間に応じたカタログギフト","estimatedValue":null}
+{"taskId":"0123456789abcdef","contractVersion":"2026-10-25.4","shortSummary":"保有期間に応じたカタログギフト","estimatedValue":null}
 ```
 
 ### 例 2: 割引券（金額は null）
@@ -256,7 +257,7 @@ nix develop --command pnpm yutai:summary:local --state-dir <私有state> --limit
 入力の `description`: `架空レストラン全店で使えるお食事代20%割引券を2枚\n※1回の会計につき1枚まで`
 
 ```json
-{"taskId":"fedcba9876543210","contractVersion":"2026-10-25.3","shortSummary":"食事代 20%割引券 2枚","estimatedValue":null}
+{"taskId":"fedcba9876543210","contractVersion":"2026-10-25.4","shortSummary":"食事代 20%割引券 2枚","estimatedValue":null}
 ```
 
 ### 例 3: 複数の選択肢から 1 つ
@@ -264,7 +265,7 @@ nix develop --command pnpm yutai:summary:local --state-dir <私有state> --limit
 入力の `description`: `次のいずれか1点\n①架空農園のお米 5kg\n②架空製菓の焼き菓子セット\n③寄付（架空財団へ1,000円）`
 
 ```json
-{"taskId":"00ff00ff00ff00ff","contractVersion":"2026-10-25.3","shortSummary":"お米 5kg (3点から選択)","estimatedValue":null}
+{"taskId":"00ff00ff00ff00ff","contractVersion":"2026-10-25.4","shortSummary":"お米 5kg (3点から選択)","estimatedValue":null}
 ```
 
 （お米 5kg は掲載文に金額が無いので `null`。相場を見積もって入れると取り込みではじかれる。）
@@ -274,16 +275,16 @@ nix develop --command pnpm yutai:summary:local --state-dir <私有state> --limit
 入力の `violations`: `["annotation","prose"]`、`description`: `架空トラベルの宿泊優待券 10,000円券×2枚\n■有効期限\n翌年6月末まで`
 
 ```json
-{"taskId":"a1b2c3d4e5f60718","contractVersion":"2026-10-25.3","shortSummary":"宿泊優待券 10,000円×2枚","estimatedValue":20000}
+{"taskId":"a1b2c3d4e5f60718","contractVersion":"2026-10-25.4","shortSummary":"宿泊優待券 10,000円×2枚","estimatedValue":20000}
 ```
 
 ### はじかれる出力の例
 
 ```json
-{"taskId":"a1b2c3d4e5f60718","contractVersion":"2026-10-25.3","shortSummary":"宿泊券をご利用いただけます。","estimatedValue":20000}
-{"taskId":"a1b2c3d4e5f60718","contractVersion":"2026-10-25.3","shortSummary":"宿泊優待券 ※有効期限あり","estimatedValue":20000}
-{"taskId":"fedcba9876543210","contractVersion":"2026-10-25.3","shortSummary":"食事代 20%割引券 2枚","estimatedValue":2000}
-{"taskId":"0123456789abcdef","contractVersion":"2026-10-25.3","shortSummary":"カタログギフト 5,000円相当","estimatedValue":5000,"description":"…"}
+{"taskId":"a1b2c3d4e5f60718","contractVersion":"2026-10-25.4","shortSummary":"宿泊券をご利用いただけます。","estimatedValue":20000}
+{"taskId":"a1b2c3d4e5f60718","contractVersion":"2026-10-25.4","shortSummary":"宿泊優待券 ※有効期限あり","estimatedValue":20000}
+{"taskId":"fedcba9876543210","contractVersion":"2026-10-25.4","shortSummary":"食事代 20%割引券 2枚","estimatedValue":2000}
+{"taskId":"0123456789abcdef","contractVersion":"2026-10-25.4","shortSummary":"カタログギフト 5,000円相当","estimatedValue":5000,"description":"…"}
 ```
 
 1 行目は `prose`、2 行目は `annotation`、3 行目は割引を金額にしたので金額ガード、4 行目は余計なキーでスキーマ違反です。

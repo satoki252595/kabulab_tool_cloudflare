@@ -307,7 +307,7 @@ describe("planSummaryImport", () => {
     expect(p.updates[0].ids).toEqual([1011, 1012]);
   });
 
-  it.each(["2026-10-04.3", "2026-10-05.10"])("旧%sの結果・タスクを現行契約として取り込まない", (contractVersion) => {
+  it.each(["2026-10-04.3", "2026-10-05.10", "2026-10-25.3"])("旧%sの結果・タスクを現行契約として取り込まない", (contractVersion) => {
     const p = plan(result({ contractVersion }));
     expect(p.updates).toEqual([]);
     expect(p.rejections.map((r) => r.reason)).toEqual(["contract_version"]);
