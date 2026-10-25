@@ -12,6 +12,7 @@ import { findBackupChildByTitle, queryUniqueRow } from "../../../src/shared/noti
 import { MONEYFLOW_PRIMARY_DB_TITLE } from "../../../src/shared/notion-archive/moneyflow.js";
 import { sha256HexBytes } from "../../../src/shared/sha256.js";
 import { downloadArchivedFile } from "../../../src/shared/notion-archive/archived-download.js";
+import { currentScheduledDeadline } from "../../../src/shared/scheduled-admission.js";
 export { downloadArchivedFile } from "../../../src/shared/notion-archive/archived-download.js";
 import type { SpecFile } from "../../../services/moneyflow/lib/source-spec.js";
 
@@ -131,14 +132,18 @@ export async function verifyArchivedAttachments(
     const got = hosted[i];
     if (got.name !== want.filename) fail(`添付名不一致「${got.name}」≠「${want.filename}」`);
     if (got.kind !== "file") fail(`「${want.filename}」が Notion-hosted 添付ではありません`);
-    const bytes = await downloadArchivedFile(got, context, { maxBytes: want.bytes.length });
+    const deadline = currentScheduledDeadline();
+    deadline?.assertActive();
+    const bytes = await downloadArchivedFile(got, context, { maxBytes: want.bytes.length, expectedBytes: want.bytes.length });
     if (bytes.length !== want.bytes.length) {
       fail(`「${want.filename}」のバイト長 ${bytes.length} ≠ ${want.bytes.length}`);
     }
+    deadline?.assertActive();
     const [gotSha, wantSha] = await Promise.all([
       sha256HexBytes(Uint8Array.from(bytes)),
       sha256HexBytes(Uint8Array.from(want.bytes)),
     ]);
+    deadline?.assertActive();
     if (gotSha !== wantSha) fail(`「${want.filename}」の SHA256 不一致`);
   }
 }

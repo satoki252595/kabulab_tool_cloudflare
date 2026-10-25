@@ -34,8 +34,10 @@ function installHarness() {
   const originalFetch = globalThis.fetch;
   const originalNow = Date.now;
   let t = 1_000_000;
-  Date.now = (() => (t += 10_000)) as typeof Date.now;
+  // 時計の参照だけでdeadlineを進めず、通信stubごとに経過させる。
+  Date.now = (() => t) as typeof Date.now;
   globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+    t += 10_000;
     const href = String(url);
     calls.push({ url: href, init: init ?? {} });
     const u = new URL(href);

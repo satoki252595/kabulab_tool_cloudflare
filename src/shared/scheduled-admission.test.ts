@@ -1,9 +1,11 @@
 import { readFileSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
-import { installScheduledDeadline, nativeJobExecutionWindow, scheduledAtForDate, scheduledExecutionWindow } from "./scheduled-admission.js";
+import { currentScheduledDeadline, installScheduledDeadline, nativeJobExecutionWindow, scheduledAtForDate, scheduledExecutionWindow } from "./scheduled-admission.js";
 import { scheduledStockSyncWindow, assertStockSyncSource, stockSyncExecutionWindow } from "./stock-sync-window.js";
+import { downloadArchivedFile } from "./notion-archive/archived-download.js";
+import { installReadOnlyAuditGuard } from "../../services/yuho-quant/data-scripts/audit-supplement-texts.js";
 
-afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 it("同日でも未来の予定は拒否し、遅配・同時刻だけを受ける", () => {
   const scheduled = "2026-10-23T09:00:52.000Z", at = Date.parse(scheduled);
@@ -77,4 +79,29 @@ it("閉鎖期限でHTTPを中断し、元signalを維持して次POSTを送ら�
     expect(native).toHaveBeenCalledTimes(1);
   } finally { restore(); }
   expect(globalThis.fetch).toBe(native);
+});
+
+it("nested期限を延ばさず、外側ROguard越しの非協調bodyも親hardで止めてLIFO復元する", async () => {
+  vi.useFakeTimers();
+  vi.spyOn(AbortSignal, "timeout").mockImplementation(ms => {
+    const ctl = new AbortController(); setTimeout(() => ctl.abort(new DOMException("deadline", "TimeoutError")), ms); return ctl.signal;
+  });
+  const now = Date.now(), cancel = vi.fn(() => new Promise<void>(() => {}));
+  const native = vi.fn<typeof fetch>(async () => new Response(new ReadableStream<Uint8Array>({ cancel })));
+  vi.stubGlobal("fetch", native);
+  const restoreOuter = installScheduledDeadline(now + 1000), outer = currentScheduledDeadline();
+  const restoreInner = installScheduledDeadline(now + 10_000), innerFetch = globalThis.fetch;
+  const guard = installReadOnlyAuditGuard(1, now + 10_000);
+  try {
+    expect(currentScheduledDeadline()?.deadline).toBe(now + 1000);
+    restoreOuter(); expect(currentScheduledDeadline()?.deadline).toBe(now + 1000);
+    const check = expect(downloadArchivedFile({ name: "body.gz", url: "https://file.notion.so/body.gz" }, "nested", { maxBytes: 1 })).rejects.toThrow();
+    await vi.advanceTimersByTimeAsync(1000); await check;
+    expect(guard.count()).toBe(1); expect(native).toHaveBeenCalledOnce(); expect(cancel).toHaveBeenCalledOnce();
+  } finally {
+    guard.restore(); expect(globalThis.fetch).toBe(innerFetch);
+    restoreInner(); expect(currentScheduledDeadline()).toBe(outer);
+    restoreOuter();
+  }
+  expect(currentScheduledDeadline()).toBeUndefined(); expect(globalThis.fetch).toBe(native);
 });

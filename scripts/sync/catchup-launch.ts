@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { parseScheduledAt } from "../../src/shared/scheduled-admission.js";
+import { installScheduledDeadline, parseScheduledAt } from "../../src/shared/scheduled-admission.js";
 import { CATCHUP_START_TIME, CATCHUP_JOIN_CUTOFF_TIME } from "../../src/scheduler/stock.js";
 
 type CatchupPart = "all" | "tdnet" | "edinet";
@@ -54,17 +54,13 @@ export function assertCatchupDeadline(deadlineMs: number | undefined): void {
 /** この定時CLIだけの期限。共有clientの順序/380ms/unknown分類を変更しない。 */
 export function installCatchupDeadline(deadlineMs: number): () => void {
   if (!Number.isSafeInteger(deadlineMs) || deadlineMs - Date.now() > 60 * 60_000) throw new Error("catchup絶対締切が不正です");
-  assertCatchupDeadline(deadlineMs);
-  const nativeFetch = globalThis.fetch;
-  const deadlineSignal = AbortSignal.timeout(deadlineMs - Date.now());
-  const guardedFetch: typeof fetch = async (input, init) => {
-    assertCatchupDeadline(deadlineMs);
-    const originalSignal = init?.signal !== undefined ? init.signal : input instanceof Request ? input.signal : undefined;
-    return nativeFetch(input, { ...init, signal: originalSignal ? AbortSignal.any([originalSignal, deadlineSignal]) : deadlineSignal });
-  };
-  globalThis.fetch = guardedFetch;
   // hard19:53は最も早い外部終了19:54より前。CPU/S3/長い待機の最終境界はjob54分。
-  return () => { if (globalThis.fetch === guardedFetch) globalThis.fetch = nativeFetch; };
+  const restore = installScheduledDeadline(deadlineMs, () => assertCatchupDeadline(deadlineMs));
+  const guarded = globalThis.fetch;
+  // 従来catchupのfetchは同期guard失敗もPromise rejectionとして返す。
+  const asyncGuard: typeof fetch = async (input, init) => guarded(input, init);
+  globalThis.fetch = asyncGuard;
+  return () => { if (globalThis.fetch === asyncGuard) { globalThis.fetch = guarded; restore(); } };
 }
 
 export function validateCatchupLaunch(part: CatchupPart): number | undefined {

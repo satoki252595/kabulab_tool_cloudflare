@@ -53,8 +53,10 @@ function installHarness(delayMs: number) {
   const originalFetch = globalThis.fetch;
   const originalNow = Date.now;
   let t = 1_000_000;
-  Date.now = (() => (t += 10_000)) as typeof Date.now;
+  // 時計の参照だけでdeadlineを進めず、通信stubごとに経過させる。
+  Date.now = (() => t) as typeof Date.now;
   globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+    t += 10_000;
     const href = String(url);
     if (delayMs > 0 && (href.includes("tdnet.example.test") || href.includes("file.notion.so"))) {
       await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
@@ -192,9 +194,11 @@ describe("pdf.js parse と readback の計測", () => {
     const originalFetch = globalThis.fetch;
     const originalNow = Date.now;
     let t = 1_000_000;
-    Date.now = (() => (t += 10_000)) as typeof Date.now;
+    // 時計の参照だけでdeadlineを進めず、通信stubごとに経過させる。
+    Date.now = (() => t) as typeof Date.now;
     process.env.NOTION_TOKEN = "protocol-test-token";
     globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+      t += 10_000;
       const href = String(url);
       const method = init?.method ?? "GET";
       if (method === "GET" && href.includes("/v1/pages/page-1")) {
