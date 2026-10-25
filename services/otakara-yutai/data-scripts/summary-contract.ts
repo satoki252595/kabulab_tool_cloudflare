@@ -30,7 +30,7 @@ import { compilePointExchangeLiteral, compileVenueAdmissionLiteral } from "./hol
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-10-25.2";
+export const SUMMARY_CONTRACT_VERSION = "2026-10-25.3";
 
 /** 比較時だけ同じ月期間の表記を揃え、数値・比較条件・保存文面は変えない。 */
 function normalizeMonthPeriods(text: string): string {
@@ -132,12 +132,12 @@ export function isSummaryNumbersGrounded(
   // 全文資格と施設・枚数・利用制限の同値が成立した場合だけ、固有施設名の
   // 「六本」を数量に数えない。原文・公開要約自体は変更しない。
   const withoutVenue = admission === null ? normalized : normalized.replace("六本木・西麻布店", "");
-  // 実製品名の3Dは数量ではない。同じ製品語が原文にもある場合だけを
-  // 数値検査から外し、33D/13Dや語の後の額・率・数量には触れない。
-  const productName = /(?<![0-9A-Za-z.,+\-万千百億兆])3Dプリンター住宅/g;
-  const sourceHasProductName = description.normalize("NFKC").match(productName) !== null;
+  // 数字を含む実製品語2つだけを、原文の同一literalごとに照合する。
+  // 変更した数字・原文にない別製品語・語の後の額や数量は除外しない。
+  const productName = /(?<![0-9A-Za-z.,+\-万千百億兆])(?:3Dプリンター住宅|1デーパスポート)/g;
+  const sourceProductNames = new Set(description.normalize("NFKC").match(productName));
   const normalizedSummary = withoutVenue.replace(productName, name =>
-    sourceHasProductName ? name.slice(2) : name);
+    sourceProductNames.has(name) ? name.replace(/[0-9]/g, "") : name);
   // 同一(の)株主番号の「一株」は数量ではない。この同義2表記だけを
   // 原文で確認して比較時に外し、実際の株数・保有期間・金額には触れない。
   const identityTerm = /同一(?:の)?株主番号/g;
