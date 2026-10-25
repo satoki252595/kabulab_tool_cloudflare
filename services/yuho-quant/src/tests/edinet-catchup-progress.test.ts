@@ -61,6 +61,31 @@ describe("EDINET durable day/doc checkpoint", () => {
     expect((await progressSummary(db, "main", "2026-06-12")).pendingDocuments).toBe(1);
   });
 
+  it("保存済み実日付12件の保留を最終照合日順に巡回し、後続2日を翌日に選ぶ", async () => {
+    // 2026-10-25に資格化したEDINET一覧receiptの実日付。保留状態は本番観測ではなくテスト用。
+    const dates = ["2025-10-28", "2025-11-25", "2025-11-26", "2025-12-22", "2025-12-24", "2026-01-28",
+      "2026-03-24", "2026-03-27", "2026-04-16", "2026-05-25", "2026-05-27", "2026-06-17"];
+    const pending = '[{"docId":"S100YAVT","reason":"identity_unresolved"}]';
+    for (const date of dates) {
+      sqlite.prepare("INSERT INTO yuho_edinet_catchup_progress(scope,date,finished,sealed,pending_ids) VALUES ('main',?,1,1,?)")
+        .run(date, pending);
+    }
+    const first = await progressQueue(db, "main", "2026-10-25");
+    expect(first.map((r) => r.date)).toEqual(dates.slice(0, 10));
+    for (const row of first) await saveProgress(db, row, {pendingCheckedDate: "2026-10-25"});
+    expect((await progressQueue(db, "main", "2026-10-25")).map((r) => r.date)).toEqual(dates.slice(10));
+
+    const second = await progressQueue(db, "main", "2026-10-26");
+    expect(second.map((r) => r.date)).toEqual([...dates.slice(10), ...dates.slice(0, 8)]);
+    for (const row of second) await saveProgress(db, row, {pendingCheckedDate: "2026-10-26"});
+    const third = await progressQueue(db, "main", "2026-10-27");
+    expect(third.slice(0, 2).map((r) => r.date)).toEqual(dates.slice(8, 10));
+    expect(new Set([...first, ...second].map((r) => r.date)).size).toBe(12);
+    expect((await progressSummary(db, "main", "2026-10-26")).pendingDocuments).toBe(12);
+    expect(sqlite.prepare("SELECT finished,sealed,pending_ids,completed_ids,in_flight_doc_id FROM yuho_edinet_catchup_progress").all())
+      .toEqual(dates.map(() => ({finished: 1, sealed: 1, pending_ids: pending, completed_ids: "[]", in_flight_doc_id: null})));
+  });
+
   it("JST翌日の未封印一覧のみ再観測対象に残す", async () => {
     expect(jstDate(new Date("2026-06-12T14:59:59Z"))).toBe("2026-06-12");
     expect(jstDate(new Date("2026-06-12T15:00:00Z"))).toBe("2026-06-13");
