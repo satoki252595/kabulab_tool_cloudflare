@@ -1,4 +1,4 @@
-/** 原本はprivate保存。実14群の通常バッチと、条件の改変・別tier転用を確認する。 */
+/** 原本はprivate保存。実19群の通常バッチと、条件の改変・別tier転用を確認する。 */
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -11,7 +11,7 @@ import { planSummaryImport } from "../../data-scripts/summary-import.js";
 import { companyValue, compileSimpleSummary, runLocalSummary } from "../../data-scripts/summary-local.js";
 import { selectSummaryTasks, type BenefitRow } from "../../data-scripts/summary-tasks.js";
 import { benefitRowsOf, carryKey, planCarry } from "../../data-scripts/yutai-full-import.js";
-import metadata from "./fixtures/registry-tiers-saved14.json";
+import metadata from "./fixtures/registry-tiers-saved19.json";
 
 const privatePath = join(ROOT, metadata.privateFixtureDir, metadata.privateFixtureFile);
 const digest = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -23,11 +23,11 @@ function savedRows(): BenefitRow[] {
 
 it("未知の移転条件・参考画像・観劇枠を一般の株数や金額へ降格しない", () => {
   expect(compileRegistryTierLiteral("")).toBeNull();
-  for (const summary of ["カタログ1点選択:3,000円相当", "OSK先着観劇券:30枚", "ASNOVA×monotomoiギフト:500株", "三越伊勢丹カード:10%引"])
+  for (const summary of ["カタログ1点選択:3,000円相当", "OSK先着観劇券:30枚", "ASNOVA×monotomoiギフト:500株", "三越伊勢丹カード:10%引", "阪急阪神選択:5%"])
     expect(isSummaryNumbersGrounded("", summary, { minShares: [500], recordMonths: [3], recordDates: [null] })).toBe(false);
 });
 
-it.skipIf(!existsSync(privatePath))("保存14群24行を通常生成/取込/再取込/selector/carryで閉じ、モデルを起動しない", async () => {
+it.skipIf(!existsSync(privatePath))("保存19群34行を通常生成/取込/再取込/selector/carryで閉じ、モデルを起動しない", async () => {
   const rows = savedRows(), tasks = selectSummaryTasks(rows);
   expect(rows.length).toBe(metadata.sourceRows); expect(tasks.length).toBe(metadata.groups.length);
   const results = tasks.map(task => {

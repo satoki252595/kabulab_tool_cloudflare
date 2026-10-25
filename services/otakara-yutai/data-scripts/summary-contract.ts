@@ -33,7 +33,7 @@ import { compileAnnualGiftHistoryLiteral, compileBankDepositChoiceLiteral, compi
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-10-26.10";
+export const SUMMARY_CONTRACT_VERSION = "2026-10-26.11";
 
 /** 比較時だけ同じ月期間の表記を揃え、数値・比較条件・保存文面は変えない。 */
 function normalizeMonthPeriods(text: string): string {
@@ -130,7 +130,7 @@ export function isSummaryNumbersGrounded(
   const normalized = shortSummary.normalize("NFKC").trim();
   const registryTier = compileRegistryTierLiteral(description);
   // 完全な原文・定型句・現在tierだけ。歴史株数/画像例/公演数を現在の受取条件へ移さない。
-  if (registryTier !== null || /^(?:カタログ1点選択:|OSK先着観劇券:|ASNOVA×monotomoiギフト:|三越伊勢丹カード:)/u.test(normalized))
+  if (registryTier !== null || /^(?:カタログ1点選択:|OSK先着観劇券:|ASNOVA×monotomoiギフト:|三越伊勢丹カード:|阪急阪神選択:)/u.test(normalized))
     return registryTier !== null && normalized === registryTier.shortSummary.normalize("NFKC") &&
       context.minShares.length > 0 && context.minShares.length <= registryTier.recordMonths.length &&
       context.minShares.every(value => value === registryTier.minShares) &&

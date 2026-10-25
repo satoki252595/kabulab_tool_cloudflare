@@ -1,8 +1,8 @@
 {
-  "privateFixtureDir": "tmp/yutai-department-card-proof-v1",
-  "privateFixtureFile": "saved15.private.json",
-  "privateFixtureSha256": "c393b63798aaf641cea0fbfa4a90914b27b9d338213b005d0f203d7b7c98afea",
-  "sourceRows": 26,
+  "privateFixtureDir": "tmp/yutai-hankyu-choice-proof-v1",
+  "privateFixtureFile": "saved20.private.json",
+  "privateFixtureSha256": "f71f3601737b0e3f26fcc61e421e0116ed5a74596ff3d90f1251d385b2acfdc3",
+  "sourceRows": 36,
   "groups": [
     {
       "stockCode": "3099",
@@ -315,6 +315,126 @@
       "summarySha256": "e9a346f8920b79e80fa4996632e11515edded5070848ac51f43280b46ebfe345",
       "listedYen": 5000,
       "valueReason": "qualified_company_per_grant"
+    },
+    {
+      "stockCode": "8242",
+      "taskId": "e82733b243c4c8e7",
+      "sourceSha256": "d6a9cc99d94adffc343706d9cad30e4974de8ce387696ce055d4dcc762006069",
+      "ids": [
+        61787,
+        61788
+      ],
+      "recipients": [
+        {
+          "minShares": 1000,
+          "recordMonth": 3,
+          "recordDate": null
+        },
+        {
+          "minShares": 1000,
+          "recordMonth": 9,
+          "recordDate": null
+        }
+      ],
+      "summarySha256": "376ed7a7102f5ad27053cff9d94e342bff28348f08508c4a587c4173f0a7f4e2",
+      "listedYen": null,
+      "valueReason": "choice"
+    },
+    {
+      "stockCode": "8242",
+      "taskId": "a2c979fd7f93582e",
+      "sourceSha256": "235ca983af7c5606e2e0af05151f1aecd0fc4712859011874d8b9d851c47c262",
+      "ids": [
+        61785,
+        61786
+      ],
+      "recipients": [
+        {
+          "minShares": 500,
+          "recordMonth": 3,
+          "recordDate": null
+        },
+        {
+          "minShares": 500,
+          "recordMonth": 9,
+          "recordDate": null
+        }
+      ],
+      "summarySha256": "90744cb78b924e5a36874b77b45477ee0d4ed12d0529f1169421016933bb48dd",
+      "listedYen": null,
+      "valueReason": "no_source_yen_amount"
+    },
+    {
+      "stockCode": "8242",
+      "taskId": "f1fce78bb2f4ccfa",
+      "sourceSha256": "57fa668e1d3d69c37d609c58059241922b8eef0df307eeb57a692c21a916a873",
+      "ids": [
+        61789,
+        61790
+      ],
+      "recipients": [
+        {
+          "minShares": 3000,
+          "recordMonth": 3,
+          "recordDate": null
+        },
+        {
+          "minShares": 3000,
+          "recordMonth": 9,
+          "recordDate": null
+        }
+      ],
+      "summarySha256": "0fd055c79695ebefde42aaa82d05090e4b07758f398d94129abd9db3d78f876a",
+      "listedYen": null,
+      "valueReason": "choice"
+    },
+    {
+      "stockCode": "8242",
+      "taskId": "816a4c6eca1e98f6",
+      "sourceSha256": "2c66f0a714aa61e8e243224f16bd413d9724e9585e2bd85ae30575811b35ca13",
+      "ids": [
+        61791,
+        61792
+      ],
+      "recipients": [
+        {
+          "minShares": 5000,
+          "recordMonth": 3,
+          "recordDate": null
+        },
+        {
+          "minShares": 5000,
+          "recordMonth": 9,
+          "recordDate": null
+        }
+      ],
+      "summarySha256": "6991277266c2f6fa7f4a63078c83923a28ee773d1a0886f166214263c1482eb5",
+      "listedYen": null,
+      "valueReason": "choice"
+    },
+    {
+      "stockCode": "8242",
+      "taskId": "7d69ed741d7444df",
+      "sourceSha256": "8a6854002054abdfb7520f6589cf72b4701a12ad84a51012828133b2c22d5ebb",
+      "ids": [
+        61783,
+        61784
+      ],
+      "recipients": [
+        {
+          "minShares": 100,
+          "recordMonth": 3,
+          "recordDate": null
+        },
+        {
+          "minShares": 100,
+          "recordMonth": 9,
+          "recordDate": null
+        }
+      ],
+      "summarySha256": "bdb5f66eeaad1f65b2fbb2ad329eb9b34558dd69670c2fa2b5cabd826cfabe9c",
+      "listedYen": null,
+      "valueReason": "no_source_yen_amount"
     }
   ]
 }
