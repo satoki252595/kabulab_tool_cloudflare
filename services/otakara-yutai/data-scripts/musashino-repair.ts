@@ -13,6 +13,7 @@ import { buildStockPreflightStatement, snapshotStockPreimages, type StockBatch }
 import { computeYieldEntries, type YieldInputs } from "./recompute-yields.js";
 import { assertMonthScopePreimage, assertMonthScopeRowsEqual, fullCas, type MonthScopePreimage } from "./saved-month-scope.js";
 import { compileMusashinoOfficialLiteral, MUSASHINO_OFFICIAL_URL } from "./musashino-source.js";
+import { compileNoteOfficialLiteral, NOTE_OFFICIAL_URL } from "./note-source.js";
 import { benefitKey } from "./benefit-key.js";
 import { SUMMARY_CONTRACT_VERSION } from "./summary-contract.js";
 import { parsePublicBenefitFacts } from "../src/public-facts.js";
@@ -21,27 +22,30 @@ const oldHashes = ["254833a3cbe834255b7999d7508e33afe24f7b2cb9f41b17784c9bfa89d6
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message); }
 
-/** 全3段階・全4表を束縛し、同じ通常compiler/取込/利回り計算で3UPDATEだけを計画する。 */
+/** 8336全3段階または5243全2段階だけ。全4表CASと通常compiler/取込/利回り計算を共用する。 */
 export function planMusashinoSourceAdoption(db: YutaiFullImportDb, pre: MonthScopePreimage, data: StockYutaiData, batchFetchedAt: string, inputs: YieldInputs, now = Date.now()) {
   assertMonthScopePreimage(pre);
+  const note = data.code === "5243", code = note ? "5243" : "8336", month = note ? 11 : 3;
+  const ids = note ? [59703, 59704] : [62011, 62012, 62013], shares = note ? [100, 200] : [200, 600, 2000];
   const stockId = Number(pre.parent.id), current = [...pre.benefits].sort((a, b) => Number(a.minShares) - Number(b.minShares));
-  assert(pre.parent.code === "8336" && data.code === "8336" && data.official?.url === MUSASHINO_OFFICIAL_URL && data.sourceFetchedAt !== undefined &&
-    current.length === 3 && current.every((row, i) => row.id === [62011, 62012, 62013][i] && row.minShares === [200, 600, 2000][i] && row.recordMonth === 3 && row.recordDate === null), "musashino_current_recipient_changed");
+  assert(pre.parent.code === code && data.code === code && (!note || stockId === 871) && data.official?.url === (note ? NOTE_OFFICIAL_URL : MUSASHINO_OFFICIAL_URL) && data.sourceFetchedAt !== undefined &&
+    current.length === ids.length && current.every((row, i) => row.id === ids[i] && row.minShares === shares[i] && row.recordMonth === month && row.recordDate === null), "musashino_current_recipient_changed");
   assert(Number.isSafeInteger(now) && now > 0, "musashino_execution_clock_invalid");
   const source = benefitRowsOf(data);
-  assert(source.heldBenefits === 0 && source.rows.length === 3 && source.rows.every((row, i) => row.minShares === current[i].minShares && row.recordMonth === 3), "musashino_adopted_source_incomplete");
-  const rows: BenefitRow[] = current.map((row, i) => ({ id: Number(row.id), stockId, stockCode: "8336", stockName: String(pre.parent.name),
+  assert(source.heldBenefits === 0 && source.rows.length === ids.length && source.rows.every((row, i) => row.minShares === current[i].minShares && row.recordMonth === month), "musashino_adopted_source_incomplete");
+  assert(!note || source.rows.every(row => compileNoteOfficialLiteral(row.description)?.minShares === row.minShares), "note_full_source_changed");
+  const rows: BenefitRow[] = current.map((row, i) => ({ id: Number(row.id), stockId, stockCode: code, stockName: String(pre.parent.name),
     description: source.rows[i].description, shortSummary: null, estimatedValue: null, estimateValueSource: null,
-    minShares: Number(row.minShares), recordMonth: 3, recordDate: null, updatedAt: Number(row.updatedAt) }));
+    minShares: Number(row.minShares), recordMonth: month, recordDate: null, updatedAt: Number(row.updatedAt) }));
   const tasks = selectSummaryTasks(rows), results = tasks.map(compileSimpleSummary);
-  assert(tasks.length === 3 && results.every(result => result !== null), "musashino_normal_compiler_held");
+  assert(tasks.length === ids.length && results.every(result => result !== null), "musashino_normal_compiler_held");
   const summaryPlan = planSummaryImport({ tasks, currentRows: rows, resultsText: results.map(result => JSON.stringify(result)).join("\n") });
-  assert(summaryPlan.rejections.length === 0 && summaryPlan.updates.length === 3, "musashino_normal_import_held");
+  assert(summaryPlan.rejections.length === 0 && summaryPlan.updates.length === ids.length, "musashino_normal_import_held");
   const expected = structuredClone(pre), executionSecond = Math.floor(now / 1000);
   const changes = source.rows.map((sourceRow, i) => {
     const update = summaryPlan.updates.find(value => value.ids.length === 1 && value.ids[0] === current[i].id);
     assert(update !== undefined && update.estimatedValue === null && update.estimateValueSource === null, "musashino_value_not_qualified");
-    const publicFacts = buildPublicBenefitFacts({ code: "8336", description: sourceRow.description, context: { minShares: [sourceRow.minShares], recordMonths: [3] },
+    const publicFacts = buildPublicBenefitFacts({ code, description: sourceRow.description, context: { minShares: [sourceRow.minShares], recordMonths: [month] },
       fetchedAt: data.sourceFetchedAt!, batchFetchedAt, official: data.official });
     const values = { description: sourceRow.description, publicFacts: JSON.stringify(publicFacts), shortSummary: update.shortSummary, estimatedValue: null, estimateValueSource: null };
     const target = expected.benefits.find(row => row.id === current[i].id)!;
@@ -50,7 +54,7 @@ export function planMusashinoSourceAdoption(db: YutaiFullImportDb, pre: MonthSco
   });
   const equivalent = changes.every(change => Object.entries(change.values).every(([key, value]) => current.find(row => row.id === change.id)![key] === value));
   const snapshot = snapshotStockPreimages(inputs, [stockId]).get(stockId);
-  assert(snapshot !== undefined && snapshot.parent.code === "8336" && snapshot.benefits.length === 3, "musashino_recompute_scope_changed");
+  assert(snapshot !== undefined && snapshot.parent.code === code && snapshot.benefits.length === ids.length, "musashino_recompute_scope_changed");
   const project = (row: Record<string, string | number | null> | null, shape: object | null) => shape === null ? row : row === null ? null : Object.fromEntries(Object.keys(shape).map(key => [key, row[key]]));
   assert(isDeepStrictEqual(current.map(row => project(row, snapshot.benefits[0])), snapshot.benefits) &&
     isDeepStrictEqual(project(pre.financial, snapshot.financial), snapshot.financial) &&
@@ -63,7 +67,10 @@ export function planMusashinoSourceAdoption(db: YutaiFullImportDb, pre: MonthSco
   if (equivalent) {
     return { batch: null, expected: pre, clock: undefined, yieldPlan, updatedRows: 0 };
   }
-  assert(current.every((row, i) => digest(String(row.description)) === oldHashes[i] && row.shortSummary === null && row.estimatedValue === null && row.estimateValueSource === null), "musashino_original_three_sources_changed");
+  const originalHashes = note ? ["b689b61ef9d3d573625a92cf429a17ec10e5520bce32e87929cf4036681bf612", "84c97aabda01c7054f9f4548f342ecbdb053757a2c55454957587439bef1e85d"] : oldHashes;
+  assert(current.every((row, i) => digest(String(row.description)) === originalHashes[i] &&
+    (note && i === 0 ? typeof row.shortSummary === "string" && digest(row.shortSummary) === "3bc4d332cb0fd46f5330cedaea789935eb54cc90093ba6252f450eb67a389a0b" : row.shortSummary === null) &&
+    row.estimatedValue === null && row.estimateValueSource === null), "musashino_original_three_sources_changed");
   const statements: D1BatchStatement[] = [buildStockPreflightStatement(snapshot), fullCas(pre)];
   for (const change of changes) {
     statements.push(...toD1BatchStatements([db.update(yutaiBenefits).set({ ...change.values, publicFacts: change.publicFacts, updatedAt: new Date(executionSecond * 1000) })
@@ -71,8 +78,8 @@ export function planMusashinoSourceAdoption(db: YutaiFullImportDb, pre: MonthSco
     { sql: "SELECT json(CASE WHEN changes() = 1 THEN 'null' ELSE '' END)", params: [] });
   }
   statements.push(fullCas(expected));
-  const batch: StockBatch = { stockId, key: `musashino-source-adoption:${stockId}`, statements };
-  return { batch, expected, clock: undefined, yieldPlan, updatedRows: 3 };
+  const batch: StockBatch = { stockId, key: `${note ? "note" : "musashino"}-source-adoption:${stockId}`, statements };
+  return { batch, expected, clock: undefined, yieldPlan, updatedRows: ids.length };
 }
 
 /** 初回追加後の実採番IDだけを回収し、他の全列は計画どおりか照合する。 */

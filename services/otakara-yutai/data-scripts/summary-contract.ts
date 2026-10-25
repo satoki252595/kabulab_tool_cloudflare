@@ -23,6 +23,7 @@
 
 import { createHash } from "node:crypto";
 import { compileMusashinoOfficialLiteral } from "./musashino-source.js";
+import { compileNoteOfficialLiteral } from "./note-source.js";
 import { HEADED_MARK, splitHeadedDescription } from "./estimated-value-guard.js";
 import { compileAnnualGiftHistoryLiteral, compileBankDepositChoiceLiteral, compileBankHoldingHistoryLiteral, compileDepartmentHoldingLiteral, compileEqualAllocationHoldingLiteral, compileHoldingGiftChoiceLiteral, compileHoldingPointCarryLiteral, compileHotelHoldingLiteral, compileMealTicketSplitLiteral, compilePointExchangeLiteral, compilePremiumClubCarryLiteral, compileRegistryTierLiteral, compileSkiTicketBundleLiteral, compileVenueAdmissionLiteral } from "./holding-structure.js";
 
@@ -32,7 +33,7 @@ import { compileAnnualGiftHistoryLiteral, compileBankDepositChoiceLiteral, compi
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-10-26.8";
+export const SUMMARY_CONTRACT_VERSION = "2026-10-26.9";
 
 /** 比較時だけ同じ月期間の表記を揃え、数値・比較条件・保存文面は変えない。 */
 function normalizeMonthPeriods(text: string): string {
@@ -137,6 +138,11 @@ export function isSummaryNumbersGrounded(
       context.recordMonths.every(value => registryTier.recordMonths.includes(value)) &&
       new Set(context.recordMonths).size === context.recordMonths.length &&
       context.recordDates?.length === context.minShares.length && context.recordDates.every(value => value === null);
+  const note = compileNoteOfficialLiteral(description);
+  if (note !== null || normalized.startsWith("note公式:")) return note !== null && normalized === note.shortSummary.normalize("NFKC") &&
+    context.minShares.length === 1 && context.minShares[0] === note.minShares &&
+    context.recordMonths.length === 1 && context.recordMonths[0] === 11 &&
+    context.recordDates?.length === 1 && context.recordDates[0] === null;
   const holdingGift = compileHoldingGiftChoiceLiteral(description);
   // 翌年条件・全選択肢を完全句へ束縛し、既存1000株tierへ転用しない。
   if (holdingGift !== null || normalized.startsWith("2026年10月末の優待:")) return holdingGift !== null && normalized === holdingGift &&

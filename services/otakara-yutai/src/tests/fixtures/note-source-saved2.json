@@ -1,0 +1,45 @@
+{
+  "sourceType": "saved_official_faq_pdf_and_immutable_provider_record",
+  "privateFixtureDir": "tmp/yutai-note-source-proof-v1",
+  "officialPhysicalArchiveStatus": "NOT_ARCHIVED_PENDING",
+  "files": [
+    {
+      "path": "SAVED-SOURCE-PACKET.private.json",
+      "sha256": "2fbef8e531474d18af94edacde367cd7c1a51f821336904b6ea8012894d472ec",
+      "bytes": 385621
+    },
+    {
+      "path": "SAVED-ROWS.private.json",
+      "sha256": "9855bc9ea462e661094e5efbc5289ea958300176922592ad7ef73e43feef0eb9",
+      "bytes": 1687
+    }
+  ],
+  "expectedRows": [
+    {
+      "minShares": 100,
+      "recordMonth": 11,
+      "recordDate": null,
+      "descriptionSha256": "93485d24fa4a630083500a269930187b580a20b72a1c46ea42e569edd7bbe261"
+    },
+    {
+      "minShares": 200,
+      "recordMonth": 11,
+      "recordDate": null,
+      "descriptionSha256": "cd8742e3c42473b5d02959a2c57a81db19a523e627a430b19cf08d86b18ffee1"
+    }
+  ],
+  "canonical": [
+    {
+      "minShares": 100,
+      "summarySha256": "9c0616f51edad2e71ba31f57e879f28de7dc625f0d9c7a88fc36e1414516a896",
+      "summaryCharacters": 216,
+      "estimatedValue": null
+    },
+    {
+      "minShares": 200,
+      "summarySha256": "a25ec21d3d61eb302c5e7068b5d9c61386b93e07a80c38b7f1eec72bdcda58c1",
+      "summaryCharacters": 210,
+      "estimatedValue": null
+    }
+  ]
+}
