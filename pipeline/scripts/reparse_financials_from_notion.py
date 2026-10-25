@@ -6,6 +6,8 @@ import argparse
 import hashlib
 import io
 import json
+import math
+import os
 import re
 import time
 import zipfile
@@ -31,8 +33,9 @@ from jp_stock_pipeline.convert import xbrl_to_csv as convert_module
 from jp_stock_pipeline.licensing import LicenseTag, strictness_rank, stricter_tag_sql
 from jp_stock_pipeline.models import DataQuality, FinancialSummaryRecord, Provenance, Source
 from jp_stock_pipeline.notion import schema as S
-from jp_stock_pipeline.notion.client import NotionClient
+from jp_stock_pipeline.notion.client import NotionClient, _require_read_list_envelope
 from jp_stock_pipeline.notion.upsert import (
+    _FIN_FIELD_TO_PROP,
     financial_overwrite_allowed,
     financial_summary_filter,
     financial_summary_matches_page,
@@ -150,13 +153,14 @@ def reparse_record(
     return new, {**details, "raw_datatype": datatype}
 
 
-def _from_tidy(old, tidy, digest, raw_url):
+def _from_tidy(old, tidy, digest, raw_url, diagnostics=None):
     new = tidy_to_financial_record(
         tidy,
         old.code,
         old.provenance,
         disclosure_type=derive_disclosure_type(tidy) or old.disclosure_type,
         disclosed_at=old.disclosed_at,
+        diagnostics=diagnostics,
     )
     reference = old.disclosed_at.date() if old.disclosed_at else old.provenance.data_date
     if new is None or new.consolidated is None or reference is None:
@@ -177,16 +181,14 @@ def _from_tidy(old, tidy, digest, raw_url):
     }
 
 
-def _cached_item(item: dict, cache_dir: Path) -> dict:
-    """検証済みjournalの原本を再使用する。欠損時にHTTPで埋めない。"""
+def _local_original_item(item: dict, content: bytes, diagnostics=None) -> dict:
+    """cachedと限定診断の同じconverter入口。原本不足をHTTPで補わない。"""
     old = _record_from_dict(item["old"])
     digest = item["raw_sha256"]
     if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
         raise ValueError(f"{old.code}: 原本cache SHA256が不正です")
-    cached = cache_dir / f"{digest}.zip"
-    if not cached.exists() or cached.stat().st_size > MAX_RAW_BYTES:
+    if not content or len(content) > MAX_RAW_BYTES:
         raise ValueError(f"{old.code}: 原本cache欠損/64MiB上限超過")
-    content = cached.read_bytes()
     if hashlib.sha256(content).hexdigest() != digest:
         raise ValueError(f"{old.code}: 原本cache SHA256が一致しません")
     with zipfile.ZipFile(io.BytesIO(content)) as archive:
@@ -205,9 +207,172 @@ def _cached_item(item: dict, cache_dir: Path) -> dict:
     else:
         tidy = xbrl_zip_to_tidy(content, old.code, old.provenance.raw_page_id)
         datatype = "tdnet_xbrl" if old.provenance.source is Source.TDNET else "xbrl"
-    new, details = _from_tidy(old, tidy, digest, item["raw_url"])
+    new, details = _from_tidy(old, tidy, digest, item["raw_url"], diagnostics=diagnostics)
     return {"page_id": item["page_id"], "old": item["old"], "new": _record_dict(new),
             "raw_datatype": datatype, **details}
+
+
+def _cached_item(item: dict, cache_dir: Path) -> dict:
+    """検証済みjournalの原本を再使用する。欠損時にHTTPで埋めない。"""
+    digest = item["raw_sha256"]
+    if not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest):
+        raise ValueError("原本cache SHA256が不正です")
+    cached = cache_dir / f"{digest}.zip"
+    if not cached.exists() or cached.stat().st_size > MAX_RAW_BYTES:
+        raise ValueError("原本cache欠損/64MiB上限超過")
+    return _local_original_item(item, cached.read_bytes())
+
+
+def _pinned_json(path: Path, digest: str, max_bytes=8 * 1024 * 1024):
+    if not re.fullmatch(r"[a-f0-9]{64}", digest) or path.stat().st_size > max_bytes:
+        raise ValueError("限定入力のSHA/サイズが不正です")
+    content = path.read_bytes()
+    if hashlib.sha256(content).hexdigest() != digest:
+        raise ValueError("限定入力SHAが一致しません")
+    return json.loads(content)
+
+
+def _source_original(page, old, sources, raw_database_id):
+    """exact relation→保存⑤snapshot→同SHAローカル全原本。通信・別原本探索なし。"""
+    raw_id = old.provenance.raw_page_id
+    matches = [s for s in sources if s["raw_page_id"].replace("-", "") == raw_id.replace("-", "")]
+    if not matches:
+        raise FileNotFoundError("exact原本のlocal mapがありません")
+    if len(matches) != 1:
+        raise ValueError("原本local mapが非一意です")
+    source = matches[0]
+    raw = _pinned_json(Path(source["snapshot_file"]), source["snapshot_sha256"])
+    if (raw["id"].replace("-", "") != raw_id.replace("-", "")
+            or raw.get("archived") is not False or raw.get("in_trash") is not False
+            or raw["parent"].get("type") != "database_id"
+            or raw["parent"]["database_id"].replace("-", "") != raw_database_id.replace("-", "")):
+        raise ValueError("原本snapshotのID/親/activeが不一致です")
+    props = raw["properties"]
+    if (props[S.PROP_SOURCE]["select"]["name"] != old.provenance.source.value
+            or props[S.PROP_LICENSE_TAG]["select"]["name"] != old.provenance.license_tag.value
+            or _text(props, S.RAW_PROP_SCOPE) != old.code
+            or props[S.PROP_DATA_DATE]["date"]["start"] != old.provenance.data_date.isoformat()):
+        raise ValueError("財務と原本のsource/主体/日付/licenseが不一致です")
+    digest, size = _text(props, S.RAW_PROP_SHA256), props[S.RAW_PROP_SIZE]["number"]
+    datatype = _text(props, S.RAW_PROP_DATATYPE)
+    if (not re.fullmatch(r"[a-f0-9]{64}", digest) or source["original_sha256"] != digest
+            or type(size) is not int or not 0 < size <= MAX_RAW_BYTES
+            or not ((old.provenance.source is Source.EDINET and datatype in ("csv", "xbrl"))
+                    or (old.provenance.source is Source.TDNET and datatype == "tdnet_xbrl"))):
+        raise ValueError("原本のSHA/size/source形式が不正です")
+    name = _text(props, S.RAW_PROP_FILENAME, "title")
+    files = [f for f in props[S.RAW_PROP_FILES]["files"] if f["name"] == name]
+    if len(files) != 1 or files[0]["type"] != "file":
+        raise ValueError("原本snapshotの物理添付が非一意です")
+    original = Path(source["original_file"])
+    if not original.is_file():
+        raise FileNotFoundError("exact原本のlocal fileがありません")
+    if original.stat().st_size != size:
+        raise ValueError("原本全sizeが一致しません")
+    content = original.read_bytes()
+    if hashlib.sha256(content).hexdigest() != digest:
+        raise ValueError("原本全SHAが一致しません")
+    relation = page["properties"][S.PROP_RAW_RELATION]
+    if relation.get("has_more") is not False:
+        raise ValueError("財務原本relationが未完/不明です")
+    return content, digest, datatype, props[S.RAW_PROP_URL]["url"]
+
+
+def diagnose_capture(capture_path: Path, capture_sha: str, source_map_path: Path,
+                     source_map_sha: str, journal: Path, max_rows: int):
+    """財務専用ROの固定pageだけを解析する。旧全量journal/Notion/上流/業務writeなし。"""
+    capture = _pinned_json(capture_path, capture_sha)
+    source_map = _pinned_json(source_map_path, source_map_sha)
+    if (capture.get("kind") != "financial-null-capture-v1" or capture.get("version") != 1
+            or source_map.get("version") != 1 or not isinstance(source_map.get("sources"), list)
+            or not isinstance(max_rows, int) or max_rows < 1):
+        raise ValueError("財務限定capture/source mapの契約が不正です")
+    pages = capture["pages"]
+    if not isinstance(pages, list) or sum(p["rowCount"] for p in pages) > max_rows:
+        raise ValueError("限定財務行の上限を超えます")
+    sources = source_map["sources"]
+    if len({s["raw_page_id"].replace("-", "") for s in sources}) != len(sources):
+        raise ValueError("原本local mapが非一意です")
+    seen, checked, held = set(), 0, 0
+    journal.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(journal, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as output:
+        for saved in pages:
+            file = (capture_path.parent / saved["file"]).resolve()
+            if not file.is_relative_to(capture_path.parent.resolve()):
+                raise ValueError("capture pageが固定directory外です")
+            response = _pinned_json(file, saved["sha256"])
+            rows, has_more, cursor = _require_read_list_envelope(response, op="financial_diagnostic")
+            if (len(rows) != saved["rowCount"] or has_more != saved["hasMore"]
+                    or cursor != saved["nextCursor"]):
+                raise ValueError("capture page envelopeが一致しません")
+            for page in rows:
+                if checked >= max_rows or page["id"] in seen:
+                    raise ValueError("capture行数超過/同一page重複です")
+                checked += 1
+                seen.add(page["id"])
+                diagnostic = {}
+                result = {"page_id": page["id"], "parser_sha256": PARSER_SHA256,
+                          "capture_sha256": capture_sha, "diagnostics": diagnostic}
+                try:
+                    if (page.get("archived") is not False or page.get("in_trash") is not False
+                            or page["parent"].get("type") != "database_id"
+                            or page["parent"]["database_id"].replace("-", "") != capture["databaseId"].replace("-", "")):
+                        raise ValueError("財務snapshotの親/activeが不一致です")
+                    old = _page_record(page)
+                    if old.code != saved["code"] or old.provenance.data_date is None:
+                        raise ValueError("財務snapshotのcode/原本基準日が不明です")
+                    if any(v is not None and (type(v) not in (int, float) or not math.isfinite(v))
+                           for v in (getattr(old, field) for field in _FIN_FIELD_TO_PROP)):
+                        raise ValueError("財務snapshotの数値型が不明です")
+                    content, digest, datatype, raw_url = _source_original(
+                        page, old, sources, capture["rawDatabaseId"])
+                    item = {"page_id": page["id"], "old": _record_dict(old),
+                            "raw_sha256": digest, "raw_url": raw_url}
+                    reparsed = _local_original_item(item, content, diagnostics=diagnostic)
+                    if reparsed["raw_datatype"] != datatype:
+                        raise ValueError("原本snapshotとlocal全原本の形式が不一致です")
+                    new = _record_from_dict(reparsed["new"])
+                    if _financial_key(old) != _financial_key(new):
+                        raise ValueError("再解析の財務4キーが不一致です")
+                    cells = {}
+                    for field in _FIN_FIELD_TO_PROP:
+                        before, after = getattr(old, field), getattr(new, field)
+                        trace = diagnostic[field]
+                        if before is not None:
+                            category = "existing_value" if before == after else "HOLD"
+                        elif after is not None:
+                            category = "extraction_difference"
+                        elif trace["status"] == "not_applicable":
+                            category = "out_of_scope"
+                        elif trace["reason"] == "explicit_non_numeric_or_nil":
+                            category = "non_numeric"
+                        elif trace["status"] == "hold":
+                            category = "HOLD"
+                        else:
+                            category = "no_candidate_in_saved_scope"
+                        cells[field] = {"old": before, "new": after, "category": category,
+                                        "reason": trace["reason"]}
+                    cell_hold = any(cell["category"] == "HOLD" for cell in cells.values())
+                    held += cell_hold
+                    result.update(status="HOLD" if cell_hold else "diagnosed",
+                                  raw_sha256=digest, raw_datatype=datatype,
+                                  cells=cells, official_non_disclosure_proven=False)
+                except FileNotFoundError:
+                    held += 1
+                    result.update(status="HOLD", reason="local_original_missing")
+                except (ValueError, KeyError, TypeError, zipfile.BadZipFile):
+                    held += 1
+                    result.update(status="HOLD", reason="row_source_or_key_unqualified")
+                output.write(_json(result) + "\n")
+                output.flush()
+        summary = {"status": "bounded_diagnostic_finished", "checked": checked, "held": held,
+                   "capture_status": capture["status"], "all_history_classified": False,
+                   "api_requests": 0, "business_writes": 0, "model_calls": 0}
+        output.write(_json({"summary": summary}) + "\n")
+        output.flush()
+        os.fsync(output.fileno())
+    print(_json(summary), flush=True)
 
 
 def reparse_cached(source_journal: Path, journal: Path, cache_dir: Path):
@@ -762,6 +927,11 @@ if __name__ == "__main__":
     parser.add_argument("--journal", type=Path, required=True)
     parser.add_argument("--cache-dir", type=Path, default=Path("/tmp/kabulab-financial-raw-cache"))
     parser.add_argument("--reparse-cached-from", type=Path, help="検証済み原本cacheを再解析（API呼出なし）")
+    parser.add_argument("--diagnose-capture", type=Path, help="財務専用ROの限定captureをlocal原本で診断（API0）")
+    parser.add_argument("--capture-sha256")
+    parser.add_argument("--source-map", type=Path)
+    parser.add_argument("--source-map-sha256")
+    parser.add_argument("--max-rows", type=int)
     parser.add_argument(
         "--apply-journal", action="store_true", help="監査済みjournalをNotion③だけへ反映"
     )
@@ -772,11 +942,21 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if args.limit is not None and args.limit <= 0:
         parser.error("--limit は正数が必要です")
-    if sum(bool(mode) for mode in (args.apply_journal, args.sync_d1, args.reparse_cached_from)) > 1:
+    if sum(bool(mode) for mode in (args.apply_journal, args.sync_d1, args.reparse_cached_from,
+                                  args.diagnose_capture)) > 1:
         parser.error("Notion修復とD1同期は再読成功の記録を確認して別々に実行してください")
     if args.apply_workers != 1 and not args.apply_journal:
         parser.error("--apply-workers は --apply-journal と同時に指定してください")
-    if args.reparse_cached_from:
+    if args.diagnose_capture:
+        if (not all((args.capture_sha256, args.source_map, args.source_map_sha256, args.max_rows))
+                or not 1 <= args.max_rows <= 10_000
+                or any((args.source, args.code, args.future_after, args.limit))):
+            parser.error("限定診断はcapture/source mapのSHAと1〜10000のmax-rowsが必要。探索引数は不可")
+        diagnose_capture(args.diagnose_capture, args.capture_sha256, args.source_map,
+                         args.source_map_sha256, args.journal, args.max_rows)
+    elif any((args.capture_sha256, args.source_map, args.source_map_sha256, args.max_rows)):
+        parser.error("診断用引数は --diagnose-capture と同時に指定してください")
+    elif args.reparse_cached_from:
         reparse_cached(args.reparse_cached_from, args.journal, args.cache_dir)
     elif args.sync_d1:
         if args.receipts is None:

@@ -222,7 +222,54 @@ def test_actual_narrative_qualification_rejects_malformed_inputs(failure):
         conflicting = tidy.loc[block].copy()
         conflicting["value"] = conflicting["value"].str.replace("2.6％", "3.6％")
         tidy = pd.concat([tidy, conflicting], ignore_index=True)
-    assert direct_net_profit_roa(tidy, date(2026, 3, 31), "本決算", "連結") is None
+    diagnostic = {}
+    assert direct_net_profit_roa(
+        tidy, date(2026, 3, 31), "本決算", "連結", diagnostic=diagnostic
+    ) is None
+    expected = {
+        "period": ("hold", "native_period_mismatch_or_missing"),
+        "interim": ("hold", "native_annual_period_unqualified"),
+        "native-scope": ("hold", "native_consolidation_mismatch_or_missing"),
+        "segment-dimension": ("hold", "mda_block_not_unique_or_missing"),
+        "segment-text": ("null", "no_qualified_direct_value"),
+        "prior-context": ("hold", "mda_block_not_unique_or_missing"),
+        "other-section": ("hold", "mda_block_not_unique_or_missing"),
+        "ordinary-profit": ("null", "no_qualified_direct_value"),
+        "target": ("null", "no_qualified_direct_value"),
+        "incomplete": ("null", "no_qualified_direct_value"),
+        "conflicting-value": ("hold", "mda_block_not_unique_or_missing"),
+    }
+    status, reason = expected[failure]
+    assert diagnostic == {"status": status, "reason": reason}
+
+
+def test_actual_roa_diagnostic_preserves_value_and_separates_contract_scope():
+    tidy = saved_tidy(CASES[4])
+    before = tidy.copy(deep=True)
+    diagnostic = {}
+    assert direct_net_profit_roa(tidy, date(2026, 3, 31), "本決算", "連結") == 2.6
+    assert direct_net_profit_roa(
+        tidy, date(2026, 3, 31), "本決算", "連結", diagnostic=diagnostic
+    ) == 2.6
+    assert diagnostic == {"status": "value", "reason": "single_qualified_direct_value"}
+    pd.testing.assert_frame_equal(tidy, before)
+    diagnostic = {}
+    assert direct_net_profit_roa(
+        tidy, date(2026, 3, 31), "2Q", "連結", diagnostic=diagnostic
+    ) is None
+    assert diagnostic == {"status": "not_applicable", "reason": "roa_annual_only"}
+    # 原数値は同じまま、対象外と明示できる別利益定義だけを変更する構造的拒否。
+    block = tidy.element.eq(_BLOCK)
+    tidy.loc[block, "value"] = tidy.loc[block, "value"].str.replace(
+        "総資産当期純利益率", "総資産経常利益率", regex=False
+    )
+    diagnostic = {}
+    assert direct_net_profit_roa(
+        tidy, date(2026, 3, 31), "本決算", "連結", diagnostic=diagnostic
+    ) is None
+    assert diagnostic == {
+        "status": "not_applicable", "reason": "ordinary_income_roa_outside_definition"
+    }
 
 
 @pytest.mark.parametrize("modifier", ["営業ROA", "営業 ROA"])
@@ -240,7 +287,12 @@ def test_other_roa_definition_does_not_inherit_prior_net_profit_definition(modif
 
 
 def test_absent_source_remains_unavailable():
+    diagnostic = {}
     assert (
-        direct_net_profit_roa(pd.DataFrame(columns=TIDY_COLUMNS), date(2026, 3, 31), "本決算", None)
+        direct_net_profit_roa(
+            pd.DataFrame(columns=TIDY_COLUMNS), date(2026, 3, 31), "本決算", None,
+            diagnostic=diagnostic,
+        )
         is None
     )
+    assert diagnostic == {"status": "hold", "reason": "empty_tidy"}
