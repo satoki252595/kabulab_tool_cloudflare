@@ -38,7 +38,7 @@ nix develop --offline --no-write-lock-file --command env -u NODE_PATH pnpm bizta
 
 runtimeのHEAD・acceptedRevision・main包含・clean・env権限・Nix依存をpreflightで確認する。受入済みruntimeを勝手にpull/resetせず、変更時はCI確認と未完状態保全を先に行う。実行ログはprivateな既存stateへ保存し、本文・判断入力・秘密値をメールやGitへ貼らない。
 
-優待要約の現main契約は`2026-10-25.1`です。上記pin済みruntimeは旧契約・既存protocolのままで、今回の更新は遡及しません。新契約の実行は別途runtime受入後に現在行からtaskを選定し直し、旧版結果は取り込まず保全します。初期移行・owner・pending・共有baselineの更新/解除を伴いません。
+優待要約の現main契約は`2026-10-25.1`です。上記pin済みruntimeは旧契約・既存protocolのままで、今回の更新は遡及しません。Macで新契約を実行する場合は別途runtime受入後に現在行からtaskを選定し直し、旧版結果は取り込まず保全します。Linux日次の新契約適用はMac runtimeの受入を前提にしません。初期移行・owner・pending・共有baselineの更新/解除を伴いません。
 
 ## 月次案内メールの原稿
 
