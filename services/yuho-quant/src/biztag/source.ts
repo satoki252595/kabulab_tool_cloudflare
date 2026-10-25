@@ -17,6 +17,7 @@
  */
 import assert from "node:assert/strict";
 import { notionEnv } from "../../../../src/shared/notion-archive/env.js";
+import { notionRequest } from "../../../../src/shared/notion-archive/client.js";
 import { readVerifiedDocText } from "../services/text-backup.js";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
@@ -28,6 +29,14 @@ import { yuhoDocuments } from "../db/schema.js";
 import { reportedLatestSelectionHold, REPORTED_DOCUMENT_HOLD_REASON } from "../services/edinet/reported-changes.js";
 import { assertBiztagDate } from "../env.js";
 import { todayJst } from "./date-jst.js";
+import { normalizeSupplementText, type SupplementRow } from "../../../../src/shared/notion-archive/stock-supplement.js";
+import { sha256Hex } from "../../../../src/shared/sha256.js";
+import { readSavedEdinetZip } from "../services/edinet/archive.js";
+import { edinetArchiveNativeMetadata } from "../services/edinet/archive-metadata.js";
+import { parseEdinetCsvZip } from "../services/edinet/csv.js";
+import { extractTextSections, TEXT_SECTIONS } from "../services/edinet/text-sections.js";
+import { parseSubmitDateTime, secCodeToTicker } from "../services/edinet/types.js";
+import { displayName, hasUsableText, rowTextSyncReceipt } from "./plan.js";
 
 export interface LatestDoc {
   stockCode: string;
@@ -289,6 +298,92 @@ export class BiztagTextQualificationError extends Error {
     super("保存本文の所属/7メタを資格確認できません。旧値を保持してHOLD", { cause });
     this.name = "BiztagTextQualificationError";
   }
+}
+
+const companyDocumentColumns = { id: yuhoDocuments.id, stockId: yuhoDocuments.stockId, edinetCode: yuhoDocuments.edinetCode,
+  filerName: yuhoDocuments.filerName, docId: yuhoDocuments.docId, docTypeCode: yuhoDocuments.docTypeCode, periodStart: yuhoDocuments.periodStart,
+  periodEnd: yuhoDocuments.periodEnd, submittedAt: yuhoDocuments.submittedAt, notionDocPageId: yuhoDocuments.notionDocPageId, textParseStatus: yuhoDocuments.textParseStatus };
+type CompanyDocument = Pick<typeof yuhoDocuments.$inferSelect, keyof typeof companyDocumentColumns>;
+
+/** 本文監査と商号refreshが共有する、type5物理読取後のnative全項目照合。 */
+export function qualifyBiztagArchiveIdentity(latest: LatestDoc, document: CompanyDocument,
+  source: Pick<Awaited<ReturnType<typeof readSavedEdinetZip>>, "metadata">) {
+  assert(hasUsableText(latest.doc) && latest.reportedHoldReason === undefined, "latest_body_unqualified");
+  const metadata = edinetArchiveNativeMetadata(source.metadata);
+  assert(document.docId === latest.doc.docId && document.periodEnd === latest.doc.periodEnd && document.docTypeCode === latest.doc.docTypeCode &&
+    document.notionDocPageId === latest.doc.notionDocPageId && document.textParseStatus === "ok" && document.submittedAt.toISOString() === latest.doc.submittedAt, "document_changed");
+  assert(metadata.docID === document.docId && metadata.edinetDocType === 5 && metadata.edinetCode === document.edinetCode &&
+    typeof metadata.secCode === "string" && secCodeToTicker(metadata.secCode) === latest.stockCode && metadata.periodEnd === document.periodEnd &&
+    metadata.periodStart === document.periodStart && metadata.docTypeCode === document.docTypeCode && metadata.filerName === document.filerName &&
+    typeof metadata.submitDateTime === "string" && parseSubmitDateTime(metadata.submitDateTime).getTime() === document.submittedAt.getTime(), "source_identity_incomplete_or_mismatch");
+}
+export function qualifyBiztagArchiveSource(latest: LatestDoc, document: CompanyDocument,
+  source: Awaited<ReturnType<typeof readSavedEdinetZip>>) {
+  qualifyBiztagArchiveIdentity(latest, document, source);
+  const rows = parseEdinetCsvZip(source.bytes), sections = extractTextSections(rows);
+  assert(sections.length > 0, "source_39_empty"); return { rows, sections };
+}
+
+/** 商号差の候補だけ旧新docを索引読取。同一tickerだけで別issuer/旧本文を採用しない。 */
+export async function readQualifiedCompanyNameRefresh(db: BiztagSourceDb, latest: LatestDoc, row: SupplementRow,
+  masterPageId: string | null) {
+  try {
+    const id = (value: string) => { assert(/^(?:[a-f0-9]{32}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/i.test(value)); return value.replaceAll("-", "").toLowerCase(); };
+    assert(latest.doc !== null && latest.reportedHoldReason === undefined && row.stockCode === latest.stockCode &&
+      row.companyName.trim() !== "" && latest.companyName.trim() !== "" && row.docId !== null && /^S[0-9A-Z]{7}$/.test(row.docId));
+    assert(masterPageId !== null && row.masterPageIds?.length === 1 && id(row.masterPageIds[0]) === id(masterPageId));
+    const master = await notionRequest<{ object: string; id: string; archived: boolean; in_trash: boolean;
+      parent: { type: string; database_id: string }; properties: Record<string, { type: string; has_more?: boolean;
+        rich_text?: Array<{ type: string; plain_text: string; text: { content: string } }>;
+        title?: Array<{ type: string; plain_text: string; text: { content: string } }> }> }>("GET", `/pages/${masterPageId}`);
+    assert(master.object === "page" && id(master.id) === id(masterPageId) && master.archived === false && master.in_trash === false &&
+      master.parent.type === "database_id" && id(master.parent.database_id) === id(notionEnv.NOTION_DB_STOCK_MASTER()));
+    const codeProperty = master.properties["銘柄コード"], codeParts = codeProperty?.type === "rich_text" ? codeProperty.rich_text : codeProperty?.type === "title" ? codeProperty.title : undefined;
+    assert(codeProperty?.has_more !== true && Array.isArray(codeParts) && codeParts.every(part => part.type === "text" && part.plain_text === part.text?.content) &&
+      codeParts.map(part => part.plain_text).join("") === latest.stockCode);
+    const receipt = rowTextSyncReceipt(row);
+    assert(receipt !== null && receipt.docId === row.docId);
+    const ids = [...new Set([row.docId, latest.doc.docId])];
+    const records = await db.select({ document: companyDocumentColumns, companyName: stocks.name, sector33: stocks.sector33,
+      reportedHold: reportedLatestSelectionHold(yuhoDocuments.docId,yuhoDocuments.stockId,yuhoDocuments.periodEnd,yuhoDocuments.submittedAt).as("reported_hold") })
+      .from(yuhoDocuments).innerJoin(stocks, eq(yuhoDocuments.stockId, stocks.id))
+      .where(and(activeEquityCondition(), eq(stocks.code, latest.stockCode), inArray(yuhoDocuments.docId, ids))).limit(3);
+    assert(records.length === ids.length && new Set(records.map(value => value.document.docId)).size === ids.length);
+    const current = records.find(value => value.document.docId === latest.doc!.docId)!, old = records.find(value => value.document.docId === row.docId)!;
+    assert(current && old && records.every(value => value.reportedHold === 0 && value.companyName === latest.companyName && value.sector33 === latest.sector33));
+    assert(current.document.stockId === old.document.stockId && current.document.edinetCode === old.document.edinetCode &&
+      /^E\d{5}$/.test(old.document.edinetCode) && displayName(row.companyName) === displayName(old.document.filerName));
+    assert(row.docType === (old.document.docTypeCode === "120" ? "有報" : "訂正有報") && row.periodEnd === old.document.periodEnd &&
+      row.submittedAt !== null && Date.parse(row.submittedAt) === old.document.submittedAt.getTime() && row.sector33 === latest.sector33 &&
+      receipt.textPageId === old.document.notionDocPageId);
+    const verified = new Map<string, Awaited<ReturnType<typeof readVerifiedDocText>>>();
+    for (const record of records) {
+      const document = record.document;
+      assert(document.docTypeCode === "120" || document.docTypeCode === "130");
+      const saved = await readSavedEdinetZip(document.docId, 5); assert(saved.originalManifest === "known");
+      const selected: LatestDoc = { ...latest, doc: { docId: document.docId, docTypeCode: document.docTypeCode, periodEnd: document.periodEnd,
+        submittedAt: document.submittedAt.toISOString(), notionDocPageId: document.notionDocPageId, textParseStatus: document.textParseStatus } };
+      const source = qualifyBiztagArchiveSource(selected, document, saved);
+      const body = await readVerifiedDocText({ dbId: notionEnv.NOTION_YUHO_TEXT_DB_ID(), rowPageId: document.notionDocPageId!,
+        stockCode: latest.stockCode, docId: document.docId, d1DocumentId: document.id, fiscalYearEnd: document.periodEnd, textParseStatus: "ok",
+        sectionCount: source.sections.length, charCount: source.sections.reduce((n, section) => n + [...section.text].length, 0) });
+      assert(JSON.stringify(body.map(section => [section.sectionKey, section.itemName, section.text])) ===
+        JSON.stringify(source.sections.map(section => [section.sectionKey, section.itemName, section.text]))); verified.set(document.docId, body);
+    }
+    const sections = verified.get(row.docId)!;
+    const rawTexts = Object.fromEntries(TEXT_SECTIONS.map(section => [section.title, null as string | null]));
+    const seen = new Set<string>();
+    for (const section of sections) {
+      const definition = TEXT_SECTIONS.find(value => value.key === section.sectionKey);
+      assert(definition && !seen.has(section.sectionKey)); seen.add(section.sectionKey); rawTexts[definition.title] = section.text;
+    }
+    const normalized = (value: string | null) => normalizeSupplementText(value) || null;
+    assert(TEXT_SECTIONS.every(({ title }) => typeof row.texts[title] === "string" && normalized(row.texts[title]) === normalized(rawTexts[title])));
+    assert(receipt.textsSha256 === await sha256Hex(JSON.stringify(TEXT_SECTIONS.map(({ title }) => [title, rawTexts[title]]))));
+    if (receipt.notionTextsSha256 !== undefined) assert(receipt.notionTextsSha256 === await sha256Hex(JSON.stringify(TEXT_SECTIONS.map(({ title }) => [title, normalized(rawTexts[title])]))));
+    await assertLatestDocCurrent(db, latest.stockCode, latest.doc, { companyName: latest.companyName, sector33: latest.sector33 });
+    return verified.get(latest.doc.docId)!;
+  } catch (cause) { throw new BiztagTextQualificationError(cause); }
 }
 
 /** 選択済みの1docだけを索引で読み、D1主体とNotion所属/全7メタを同時に資格化する。 */

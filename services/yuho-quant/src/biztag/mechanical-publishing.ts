@@ -13,7 +13,7 @@ import { NotionConfigError } from "../../../../src/shared/notion-archive/env.js"
 import { sha256Hex } from "../../../../src/shared/sha256.js";
 import * as schema from "../db/schema.js";
 import { TEXT_SECTIONS } from "../services/edinet/text-sections.js";
-import { assertLatestDocCurrent, loadLatestDocs, readQualifiedBiztagDocText, type BiztagSourceDb, type LatestDoc } from "./source.js";
+import { assertLatestDocCurrent, loadLatestDocs, readQualifiedBiztagDocText, readQualifiedCompanyNameRefresh, type BiztagSourceDb, type LatestDoc } from "./source.js";
 import { displayName, hasUsableText, readInputReceipt, rowTextSyncReceipt } from "./plan.js";
 import { savedRowGuard, textColumnsOf, textReceipt } from "./process.js";
 import { PREFILTER_SECTIONS } from "./prefilter.js";
@@ -107,7 +107,8 @@ export async function runMechanicalPublishing(options: { limit: number; budgetMs
       outcome.outcome = "held";
       const row = rows.find(value => value.stockCode === item.stockCode) ?? null;
       if (item.reportedHoldReason !== undefined) { held.push({ stockCode: item.stockCode, reason: item.reportedHoldReason }); done.add(item.stockCode); continue; }
-      if (row !== null && (row.companyName.trim() !== "" && displayName(row.companyName) !== displayName(item.companyName) ||
+      const refreshCompanyName = row !== null && row.companyName.trim() !== "" && displayName(row.companyName) !== displayName(item.companyName);
+      if (row !== null && (refreshCompanyName && !hasUsableText(item.doc) ||
           row.docId === item.doc?.docId && (row.sector33 !== null && item.sector33 !== null && row.sector33 !== item.sector33 ||
           row.docType !== null && row.docType !== docTypeLabelOf(item.doc!.docTypeCode) || row.periodEnd !== null && row.periodEnd !== item.doc!.periodEnd ||
           row.submittedAt !== null && Date.parse(row.submittedAt) !== Date.parse(item.doc!.submittedAt)))) {
@@ -142,7 +143,9 @@ export async function runMechanicalPublishing(options: { limit: number; budgetMs
           const full = row === null ? null : await publishingReadOnly(() => readSupplementRowFully(row.pageId, supplement.dbId, TEXT_SECTIONS.map(s => s.title), active));
           if (full !== null) assert(full.stockCode === item.stockCode && JSON.stringify(savedRowGuard(full)) === JSON.stringify(savedRowGuard(row!)), "補足メタ/判定が限定plan後に変更されています");
           // 旧receiptだけではsource所属を証明できない。unchanged候補も同じ資格readerを1回通す。
-          const sections = await publishingReadOnly(() => readQualifiedBiztagDocText(db, item.stockCode, item.doc!));
+          const sections = await publishingReadOnly(() => refreshCompanyName
+            ? readQualifiedCompanyNameRefresh(db, item, full!, masterId)
+            : readQualifiedBiztagDocText(db, item.stockCode, item.doc!));
           active(); const input = await mechanicalTextInput(item, full, sections, masterId);
           const observed = rowTextSyncReceipt({ textSyncReceipt: input.textSyncReceipt, judgeInput: null });
           if (observed !== null) outcome.sourceReceipt = { textsSha256: observed.textsSha256, notionTextsSha256: observed.notionTextsSha256 };

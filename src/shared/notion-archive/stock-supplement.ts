@@ -351,6 +351,8 @@ export interface SupplementRow {
   uncertain: string | null;
   evidenceText: string | null;
   masterLinked: boolean;
+  /** 完全なrelation読取だけ。未読/省略を単一の主体証明へ読み替えない。 */
+  masterPageIds?: string[];
   /** 要求した開示テキスト列だけ (呼び出し側が `opts.textColumns` で指定した分) */
   texts: Record<string, string>;
 }
@@ -441,6 +443,9 @@ function parseSupplementRow(page: NotionPage, textColumns: string[]): Supplement
     uncertain: readRich(p[SUPPLEMENT_PROPS.uncertain]) || null,
     evidenceText: readRich(p[SUPPLEMENT_PROPS.evidenceText]) || null,
     masterLinked: (p[SUPPLEMENT_PROPS.master]?.relation ?? []).length > 0,
+    ...(p[SUPPLEMENT_PROPS.master]?.type === "relation" && p[SUPPLEMENT_PROPS.master]?.has_more !== true &&
+      Array.isArray(p[SUPPLEMENT_PROPS.master]?.relation) && p[SUPPLEMENT_PROPS.master].relation!.every(value => typeof value.id === "string")
+      ? { masterPageIds: p[SUPPLEMENT_PROPS.master].relation!.map(value => value.id) } : {}),
     texts,
   };
 }

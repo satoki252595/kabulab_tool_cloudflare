@@ -54,10 +54,10 @@ import { evaluateGolden, goldenItemKey, loadGoldenSet, type GoldenMetrics } from
 import type { BtThresholds } from "./judge.js";
 import { MAX_RETRY_ATTEMPTS, planWork, textVerificationCodes, type WorkItem, type InputReceipt } from "./plan.js";
 import { vocabularyHash } from "./vocabulary/hash.js";
-import { processStock, type ProcessDeps, type TextObservation } from "./process.js";
+import { processStock, savedRowGuard, type ProcessDeps, type TextObservation } from "./process.js";
 import { isPrefilterSection, type PrefilterSectionKey } from "./prefilter.js";
 import { buildReviewPacket, refreshReviewPacketLedger } from "./review.js";
-import { assertLatestDocCurrent, loadLatestDocs, loadNewStockEligibility, readQualifiedBiztagDocText, BiztagTextQualificationError, type BiztagSourceDb } from "./source.js";
+import { assertLatestDocCurrent, loadLatestDocs, loadNewStockEligibility, readQualifiedBiztagDocText, readQualifiedCompanyNameRefresh, BiztagTextQualificationError, type BiztagSourceDb } from "./source.js";
 import type { Vocabulary } from "./vocabulary/schema.js";
 import { TEXT_SECTIONS } from "../services/edinet/text-sections.js";
 
@@ -447,6 +447,16 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     readSupplementRowFully: pageId => readSupplementRowFully(pageId, supplementDbId, TEXT_SECTIONS.map(s => s.title), () => {
       if (Date.now() - start >= opts.budgetMs) throw new Error("現在39検査の新規読取期限を超過。未検査を残して停止");
     }),
+    qualifyCompanyNameRefresh: async item => {
+      if (item.row === null) throw new BiztagTextQualificationError();
+      await loadMaster();
+      const full = await readSupplementRowFully(item.row.pageId, supplementDbId, TEXT_SECTIONS.map(s => s.title), () => {
+        if (Date.now() - start >= opts.budgetMs) throw new BiztagTextQualificationError();
+      });
+      if (JSON.stringify(savedRowGuard(full)) !== JSON.stringify(savedRowGuard(item.row))) throw new BiztagTextQualificationError();
+      await readQualifiedCompanyNameRefresh(db, item, full, masterIndex!.index.get(item.stockCode) ?? null);
+      return full;
+    },
     assertLatestDocCurrent: (code, doc, metadata) => metadata === undefined ? assertLatestDocCurrent(db, code, doc) : assertLatestDocCurrent(db, code, doc, metadata),
     createSupplementRow: opts.dryRun ? async () => "dry-run"
       : (input, evidence) => createSupplementRow(supplementDbId, input, evidence, publicationJournal),

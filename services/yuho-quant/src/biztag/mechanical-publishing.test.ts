@@ -5,15 +5,15 @@ import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SupplementRow } from "../../../../src/shared/notion-archive/stock-supplement.js";
 import { loadStockMasterIndex } from "../../../../src/shared/notion-archive/index.js";
-import { SHARED_WRITER_KEY, withSharedPublishingWriter, type PublishingStore } from "../../../../scripts/mechanical-publishing/shared-writer.js";
+import { SHARED_WRITER_KEY, withSharedPublishingWriter, PublishingReadOnlyError, type PublishingStore } from "../../../../scripts/mechanical-publishing/shared-writer.js";
 import { mechanicalSelection, mechanicalTextInput, publishingCursor, runMechanicalPublishing } from "./mechanical-publishing.js";
 import { planWork, withInputReceipt, withTextSyncReceipt } from "./plan.js";
 import { TEXT_SECTIONS } from "../services/edinet/text-sections.js";
 import { BiztagTextQualificationError, type LatestDoc } from "./source.js";
 
-const io = vi.hoisted(() => ({ latest: vi.fn(), rows: vi.fn(), full: vi.fn(), source: vi.fn(), qualified: vi.fn(), replace: vi.fn(), create: vi.fn() }));
+const io = vi.hoisted(() => ({ latest: vi.fn(), rows: vi.fn(), full: vi.fn(), source: vi.fn(), qualified: vi.fn(), renamed: vi.fn(), replace: vi.fn(), create: vi.fn() }));
 vi.mock("../../../../src/shared/db/d1-http-client.js", () => ({ createD1HttpDb: () => ({}) }));
-vi.mock("./source.js", async original => ({ ...await original<typeof import("./source.js")>(), loadLatestDocs: io.latest, assertLatestDocCurrent: vi.fn(), readQualifiedBiztagDocText: io.qualified }));
+vi.mock("./source.js", async original => ({ ...await original<typeof import("./source.js")>(), loadLatestDocs: io.latest, assertLatestDocCurrent: vi.fn(), readQualifiedBiztagDocText: io.qualified, readQualifiedCompanyNameRefresh: io.renamed }));
 vi.mock("../../../../src/shared/notion-archive/index.js", async original => ({ ...await original<typeof import("../../../../src/shared/notion-archive/index.js")>(),
   ensureSupplementDb: vi.fn(async () => ({ dbId: "protocol-db", propertyIds: {} })), loadSupplementRows: io.rows,
   loadStockMasterIndex: vi.fn(async () => ({ index: new Map([["6103", "protocol-master"]]), duplicates: new Set() })),
@@ -46,6 +46,7 @@ beforeEach(() => {
   vi.clearAllMocks(); vi.stubGlobal("fetch", vi.fn(() => { throw new Error("network forbidden"); }));
   io.latest.mockResolvedValue([latest]); io.rows.mockResolvedValue([row()]); io.full.mockResolvedValue(row()); io.source.mockResolvedValue(sections);
   io.qualified.mockImplementation(async (_db, _code, doc) => io.source(doc.notionDocPageId, true));
+  io.renamed.mockResolvedValue(sections);
   io.replace.mockResolvedValue(undefined); io.create.mockResolvedValue("protocol-new");
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
@@ -84,6 +85,7 @@ it("finite full target verification qualifies source even when unchanged, and re
   expect(JSON.stringify(unchanged)).not.toContain(saved.evidenceText);
   expect(unchanged.latestDocs[0]).not.toHaveProperty("companyName");
   expect(io.full).toHaveBeenCalledTimes(1); expect(io.qualified).toHaveBeenCalledTimes(1); expect(io.source).toHaveBeenCalledTimes(1);
+  expect(io.renamed).not.toHaveBeenCalled();
   io.full.mockResolvedValue({ ...saved, texts: { ...saved.texts, "事業の内容": "" } });
   const repaired = await run();
   expect(repaired).toMatchObject({ synced: 1, modelCalls: 0, outcomes: [{ stockCode: "6103", outcome: "synced", holds: [] }] });
@@ -101,6 +103,27 @@ it("reported-source HOLD and empty source cannot clear old body/tag", async () =
     outcomes: [{ stockCode: "6103", outcome: "held", sourceReceipt: null, holds: ["reported-state qualification HOLD"] }] });
   expect(io.source).not.toHaveBeenCalled(); expect(io.replace).not.toHaveBeenCalled();
   await expect(mechanicalTextInput(latest, row(), [], null)).rejects.toThrow("旧本文を消しません");
+});
+it("a display-name difference uses the shared issuer qualifier before normal journal/CAS, preserving old semantic input", async () => {
+  const saved = { ...row(), companyName: "旧表示名（protocol control）" };
+  io.rows.mockResolvedValue([saved]); io.full.mockResolvedValue(saved);
+  const result = await withSharedPublishingWriter(() => runMechanicalPublishing({ codes: [latest.stockCode], limit: 1, budgetMs: 60_000 }), store());
+  expect(result).toMatchObject({ synced: 1, modelCalls: 0 });
+  expect(io.renamed).toHaveBeenCalledExactlyOnceWith(expect.anything(), latest, saved, "protocol-master");
+  expect(io.qualified).not.toHaveBeenCalled();
+  const [, evidence, input, expected, beforeWrite, journal] = io.replace.mock.calls[0];
+  expect(evidence).toBeUndefined(); expect(input.companyName).toBe(latest.companyName);
+  expect(expected["銘柄名"]).toBeDefined(); expect(expected["事業の内容"]).toBeDefined();
+  expect(typeof beforeWrite).toBe("function"); expect(journal).toBeDefined();
+  for (const key of ["upstream", "tagDoc", "tagStatus", "judgeInput", "evidenceText"]) expect(input).not.toHaveProperty(key);
+});
+it("unproved rename stops before any replacement and never falls back to the ordinary body reader", async () => {
+  const saved = { ...row(), companyName: "旧表示名（protocol control）" };
+  io.rows.mockResolvedValue([saved]); io.full.mockResolvedValue(saved);
+  io.renamed.mockRejectedValueOnce(new BiztagTextQualificationError());
+  await expect(withSharedPublishingWriter(() => runMechanicalPublishing({ codes: [latest.stockCode], limit: 1, budgetMs: 60_000 }), store()))
+    .rejects.toBeInstanceOf(PublishingReadOnlyError);
+  expect(io.qualified).not.toHaveBeenCalled(); expect(io.replace).not.toHaveBeenCalled(); expect(io.create).not.toHaveBeenCalled();
 });
 it("invalid cursor never silently resets its source window", () => {
   expect(() => publishingCursor('{"version":1,"afterCode":null,"changedAt":"invalid","changedDoc":""}', Date.now())).toThrow();

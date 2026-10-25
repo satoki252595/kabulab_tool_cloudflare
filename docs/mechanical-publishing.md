@@ -28,6 +28,8 @@
 
 通常の本文readerは選択済み1docのD1主体/doc/FY/pointer/状態/idを照会し、共通`readVerifiedDocText`でNotion所属・全7メタ・strict全文を確認する。consumerだけ実全文からsection数/codepoint数を算出し、producerの独立した件数/原文照合は維持する。旧メタ欠落や不同を補作せずHOLDとし、原本ZIPは取り直さない。旧receiptだけではsource所属を保証できないため、unchanged候補もこの読取資格を通し、今回の原39/Notion表現SHAと旧同期receipt・現在targetが全て一致する時だけ業務書込をしない。同doc・同文字数の本文変更も再同期する。
 
+非空の商号差は同一主体の証明と表示名の更新を分ける。候補だけ一意な現マスタrelation先と所属/codeを再読し、コード先限定の旧新D1文書でstockId・EDINET主体を照合、各文書の保存type5原本/native全項目・strict本文と旧39列/同期receiptを資格化する。旧docと最新docが違う年度更新も同じ条件で扱い、証明不能ならHOLDする。同名の通常処理は追加原本GETを行わず、商号同期は原文の旧提出者名・旧タグ/判定入力を変えず、既存物理PRE・fresh CAS・完全POSTを通す。
+
 全ての通常Mac writer、Linux本文/優待、月次優待原文取込は、既存`R2_BUCKET_RAW`の`mechanical-publishing/v1/writer.json`を同じETagの単発条件付きPUTで取得する。raw sourceを取得するだけの期間はこのownerを保持しない。新しいCloudflare resource/依存ライブラリはない。[R2のS3互換API](https://developers.cloudflare.com/r2/api/s3/api/)を既存helperから使う。
 
 - ownerにTTLはない。別host、期限超過、fresh runnerで未閉鎖状態を解除しない。

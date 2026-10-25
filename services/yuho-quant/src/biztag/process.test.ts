@@ -145,6 +145,25 @@ function jevAnswering(answers: Record<string, number>): JevClient {
 }
 
 describe("processStock", () => {
+  it("name refresh requires the shared qualification hook and carries full old-body/relation CAS into the normal writer", async () => {
+    const doc = docOf(), row = rowOf({ docId: doc.docId, companyName: "旧表示名（protocol control）", masterPageIds: ["master-page-1"],
+      texts: { "事業の内容": OKUMA_BUSINESS_TEXT }, tagStatus: "判定済", judgeInput: "保存済み判定入力" });
+    const item = itemOf({ kind: "sync_metadata", row, refreshCompanyName: true });
+    const missing = makeDeps();
+    await expect(processStock(item, missing.deps)).rejects.toThrow("商号変更の主体資格");
+    expect(missing.updated).toHaveLength(0);
+    const qualify = vi.fn(async () => row), current = vi.fn(async () => {});
+    const commit = vi.fn<ProcessDeps["replaceEvidenceBlock"]>(async (_page, _block, _input, _expected, guard) => { await guard(); });
+    const { deps } = makeDeps({ qualifyCompanyNameRefresh: qualify, assertLatestDocCurrent: current, replaceEvidenceBlock: commit });
+    expect(await processStock(item, deps)).toMatchObject({ outcome: "updated", metadataRepaired: true });
+    expect(qualify).toHaveBeenCalledExactlyOnceWith(item);
+    expect(commit.mock.calls[0][2]).toMatchObject({ companyName: item.companyName });
+    const expected = commit.mock.calls[0][3];
+    expect(expected["銘柄マスタ"]).toEqual({ relation: [{ id: "master-page-1" }] });
+    expect(expected["事業の内容"]).toBeDefined();
+    expect(current).toHaveBeenCalledWith(item.stockCode, doc, { companyName: item.companyName, sector33: item.sector33 });
+    for (const key of ["judgeInput", "tagDoc", "tagStatus", "upstream", "evidenceText"]) expect(commit.mock.calls[0][2]).not.toHaveProperty(key);
+  });
   it.each([
     { probability: 0.1, tagged: false, uncertain: false },
     { probability: 0.5, tagged: false, uncertain: true },
