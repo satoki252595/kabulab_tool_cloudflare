@@ -6,6 +6,8 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { sharedEnv } from "../../src/shared/env.js";
+import { notionEnv } from "../../src/shared/notion-archive/env.js";
+import { setNotionMaxRps } from "../../src/shared/notion-archive/client.js";
 import { nativeJobExecutionWindow, installScheduledDeadline } from "../../src/shared/scheduled-admission.js";
 import { parseStockCode } from "../../src/shared/jpx/stock-code.js";
 import { runMechanicalPublishing } from "../../services/yuho-quant/src/biztag/mechanical-publishing.js";
@@ -52,6 +54,16 @@ export async function main(argv = process.argv.slice(2)) {
     assert.equal(head, launchEnv.eventSha()); execFileSync("git", ["diff", "--quiet", "HEAD", "--"], { stdio: "ignore" });
   }
   const window = mechanicalPublishingWindow(options.budgetMs, Date.now(), sharedEnv.BATCH_JOB_STARTED_AT(), launchEnv.eventName() !== undefined);
+  // 設定不足で共有ownerを残さない。getterと既存pacing検査だけで、取得/ensureはしない。
+  for (const read of [sharedEnv.CLOUDFLARE_API_TOKEN, sharedEnv.CLOUDFLARE_ACCOUNT_ID, sharedEnv.D1_DATABASE_ID,
+    sharedEnv.R2_ACCOUNT_ID, sharedEnv.R2_ACCESS_KEY_ID, sharedEnv.R2_SECRET_ACCESS_KEY, sharedEnv.R2_BUCKET_RAW,
+    notionEnv.NOTION_TOKEN, notionEnv.NOTION_ARCHIVE_PAGE_ID]) read();
+  if (options.target === "supplement") {
+    notionEnv.NOTION_DB_STOCK_MASTER(); notionEnv.NOTION_YUHO_TEXT_DB_ID();
+    if (notionEnv.NOTION_STOCK_SUPPLEMENT_DB_ID() === undefined) notionEnv.NOTION_STOCK_INFO_PAGE_ID();
+  }
+  const rps = notionEnv.NOTION_MAX_RPS();
+  if (rps !== undefined) setNotionMaxRps(rps);
   const restore = installScheduledDeadline(window.deadline);
   try {
     const store = publishingStore(window.deadline);
