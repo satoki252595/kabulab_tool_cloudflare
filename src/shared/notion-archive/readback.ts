@@ -13,6 +13,7 @@ import { sha256HexBytes } from "../sha256.js";
 import { recordIrPdfReadback } from "./ir-pdf-timing.js";
 import { listPageFiles } from "./page-file.js";
 import { downloadArchivedFile } from "./archived-download.js";
+import { currentScheduledDeadline } from "../scheduled-admission.js";
 
 export interface ArchivedFileInput {
   filename: string;
@@ -25,6 +26,8 @@ export async function verifyArchivedAttachments(
   label: string,
   propertyName: string = "Files"
 ): Promise<void> {
+  const deadline = currentScheduledDeadline();
+  deadline?.assertActive();
   const fail = (why: string): never => {
     throw new Error(`${label}の readback 照合に失敗したため HOLD: ${why}`);
   };
@@ -40,14 +43,16 @@ export async function verifyArchivedAttachments(
     if (got.kind !== "file") fail(`「${f.filename}」が Notion-hosted 添付ではありません`);
     const readStarted = performance.now();
     try {
-      const bytes = await downloadArchivedFile(got, label, { maxBytes: f.bytes.length });
+      const bytes = await downloadArchivedFile(got, label, { maxBytes: f.bytes.length, expectedBytes: f.bytes.length });
       if (bytes.length !== f.bytes.length) {
         fail(`「${f.filename}」のバイト長 ${bytes.length} ≠ ${f.bytes.length}`);
       }
+      deadline?.assertActive();
       const [gotSha, wantSha] = await Promise.all([
         sha256HexBytes(Uint8Array.from(bytes)),
         sha256HexBytes(Uint8Array.from(f.bytes)),
       ]);
+      deadline?.assertActive();
       if (gotSha !== wantSha) fail(`「${f.filename}」の SHA256 不一致`);
     } finally {
       recordIrPdfReadback(performance.now() - readStarted);

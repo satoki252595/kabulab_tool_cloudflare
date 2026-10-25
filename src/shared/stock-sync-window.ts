@@ -1,5 +1,5 @@
 /** 通常株式同期のUTC対象日・開始窓・書込期限。元の実時計を変更しない。 */
-import { ScheduledSourceDeadlineError, scheduledExecutionWindow } from "./scheduled-admission.js";
+import { ScheduledSourceDeadlineError, installScheduledDeadline, scheduledExecutionWindow } from "./scheduled-admission.js";
 export function stockSyncRunDate(startedAt: number): string {
   return new Date(startedAt).toISOString().split("T")[0];
 }
@@ -66,14 +66,5 @@ export function installStockSyncDeadline(targetDate: string, options: { schedule
     assertStockSyncDeadline(targetDate, Date.now(), scheduled);
     if (Date.now() >= deadline) throw new Error("株式jobの原本閉鎖期限です（未完・再送なし）");
   };
-  assertActive();
-  const nativeFetch = globalThis.fetch;
-  const signal = AbortSignal.timeout(deadline - Date.now());
-  const guarded: typeof fetch = (input, init) => {
-    assertActive();
-    const original = init?.signal !== undefined ? init.signal : input instanceof Request ? input.signal : undefined;
-    return nativeFetch(input, { ...init, signal: original ? AbortSignal.any([original, signal]) : signal });
-  };
-  globalThis.fetch = guarded;
-  return () => { if (globalThis.fetch === guarded) globalThis.fetch = nativeFetch; };
+  return installScheduledDeadline(deadline, assertActive);
 }

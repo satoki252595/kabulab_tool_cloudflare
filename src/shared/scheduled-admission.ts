@@ -55,21 +55,36 @@ export function nativeJobExecutionWindow(nowMs: number, jobStartedAt: string | u
     nowMs, jobStartedAt, timeoutMinutes, closureMinutes);
 }
 
+interface InstalledDeadline {
+  readonly deadline: number;
+  readonly signal: AbortSignal;
+  assertActive(): void;
+}
+let installedDeadline: InstalledDeadline | undefined;
+
+/** fetchの外側に監査wrapperがあっても、body読取へ同じhard期限を渡す。 */
+export function currentScheduledDeadline(): InstalledDeadline | undefined { return installedDeadline; }
+
 /** 開始済み通信にも絶対期限を届ける。unknownを成功・再送可能へ変換しない。 */
 export function installScheduledDeadline(deadline: number, assertAllowed?: () => void): () => void {
+  const previous = installedDeadline;
   const assertActive = () => {
+    previous?.assertActive();
     assertAllowed?.();
     if (!Number.isFinite(deadline) || Date.now() >= deadline) throw new Error("定時処理の原本閉鎖期限です（未完・再送なし）");
   };
   assertActive();
-  const nativeFetch = globalThis.fetch, signal = AbortSignal.timeout(deadline - Date.now());
+  const nativeFetch = globalThis.fetch, ownSignal = AbortSignal.timeout(Math.max(0, deadline - Date.now()));
+  const signal = previous === undefined ? ownSignal : AbortSignal.any([previous.signal, ownSignal]);
   const guarded: typeof fetch = (input, init) => {
     assertActive();
     const original = init?.signal !== undefined ? init.signal : input instanceof Request ? input.signal : undefined;
     return nativeFetch(input, { ...init, signal: original ? AbortSignal.any([original, signal]) : signal });
   };
+  installedDeadline = { deadline: previous === undefined ? deadline : Math.min(previous.deadline, deadline), signal,
+    assertActive: () => { assertActive(); signal.throwIfAborted(); } };
   globalThis.fetch = guarded;
-  return () => { if (globalThis.fetch === guarded) globalThis.fetch = nativeFetch; };
+  return () => { if (globalThis.fetch === guarded) { globalThis.fetch = nativeFetch; installedDeadline = previous; } };
 }
 
 /** 信用残の平日17:00受付と17:30新規IO。Workerからingest-marginをimportしない。 */

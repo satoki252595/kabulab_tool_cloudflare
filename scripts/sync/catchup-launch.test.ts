@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { assertCatchupCodeLease, assertCatchupInvocation, installCatchupDeadline } from "./catchup-launch.js";
 import { CATCHUP_JOIN_CUTOFF_TIME, CATCHUP_COMPLETION_CUTOFF_TIME } from "../../src/scheduler/stock.js";
+import { currentScheduledDeadline } from "../../src/shared/scheduled-admission.js";
 
 const date = "2026-10-14";
 const now = Date.parse(`${date}T10:00:10Z`);
@@ -29,6 +30,7 @@ it("絶対締切は元signal/bodyを保持し期限後の全attemptをnative送�
   vi.stubGlobal("fetch", native);
   const restore = installCatchupDeadline(now + 1000);
   try {
+    expect(currentScheduledDeadline()?.deadline).toBe(now + 1000);
     const original = new AbortController();
     const response = await fetch("https://api.notion.com/v1/pages", { method: "POST", body: "physical-original", signal: original.signal });
     expect(await response.text()).toBe("preserved");
@@ -48,6 +50,7 @@ it("絶対締切は元signal/bodyを保持し期限後の全attemptをnative送�
     for (const method of ["GET", "POST", "PATCH", "DELETE"]) await expect(fetch("https://api.notion.com/v1/pages", { method })).rejects.toThrow("絶対締切");
     expect(native).toHaveBeenCalledTimes(count);
   } finally { restore(); }
+  expect(currentScheduledDeadline()).toBeUndefined();
 });
 
 it("待機中fetchへ絶対signalを届け、native再送しない", async () => {

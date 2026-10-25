@@ -4,6 +4,15 @@ import { downloadArchivedFile } from "./archived-download.js";
 const file = { name: "bounded-source.zip", url: "https://file.notion.so/bounded-source.zip" };
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
+function fakeTimeouts() {
+  vi.useFakeTimers();
+  return vi.spyOn(AbortSignal, "timeout").mockImplementation(ms => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new DOMException("bounded timeout", "TimeoutError")), ms);
+    return controller.signal;
+  });
+}
+
 describe("保存Notion原本のbounded download", () => {
   it("Content-Length欠測でもstreamを上限内で読み、宣言サイズのある完全bodyも同値", async () => {
     const bytes = Uint8Array.from([1, 2, 3]);
@@ -54,6 +63,82 @@ describe("保存Notion原本のbounded download", () => {
     }
     await expect(downloadArchivedFile(file, "bounded", { maxBytes: -1 })).rejects.toThrow("予算");
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("正確長は安全整数/上限と整合する時だけ使い、欠測headerでも実長を必須にする", async () => {
+    const get = vi.spyOn(globalThis, "fetch");
+    for (const expectedBytes of [-1, 1.5, NaN, Number.MAX_SAFE_INTEGER + 1, 4]) {
+      await expect(downloadArchivedFile(file, "exact", { maxBytes: 3, expectedBytes })).rejects.toThrow("正確なバイト長");
+    }
+    await expect(downloadArchivedFile(file, "exact", { expectedBytes: 1 })).rejects.toThrow("正確なバイト長");
+    expect(get).not.toHaveBeenCalled();
+    get.mockResolvedValueOnce(new Response(Uint8Array.from([1, 2]))).mockResolvedValueOnce(new Response(Uint8Array.from([1, 2, 3])));
+    await expect(downloadArchivedFile(file, "exact", { maxBytes: 3, expectedBytes: 3 })).rejects.toThrow("実バイト長");
+    await expect(downloadArchivedFile(file, "exact", { maxBytes: 3, expectedBytes: 3 })).resolves.toEqual(Uint8Array.from([1, 2, 3]));
+  });
+
+  it("readとcancelがsignal非協調でも親期限で停止し、partial計数/listener解除/後続read0を保つ", async () => {
+    fakeTimeouts();
+    const parent = new AbortController(), reason = new Error("parent deadline");
+    let lateRead!: (result: ReadableStreamReadResult<Uint8Array>) => void;
+    const read = vi.fn().mockResolvedValueOnce({ done: false, value: Uint8Array.from([1]) })
+      .mockImplementationOnce(() => new Promise(resolve => { lateRead = resolve; }));
+    const cancel = vi.fn(() => new Promise<void>(() => {})), releaseLock = vi.fn();
+    const add = vi.spyOn(AbortSignal.prototype, "addEventListener"), remove = vi.spyOn(AbortSignal.prototype, "removeEventListener");
+    const events: Array<{ phase: string; receivedBytes: number }> = [];
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true, status: 200, headers: new Headers(),
+      body: { getReader: () => ({ read, cancel, releaseLock }) } } as unknown as Response);
+    const check = expect(downloadArchivedFile(file, "noncooperative", { maxBytes: 3, signal: parent.signal, onAttempt: e => events.push(e) })).rejects.toBe(reason);
+    await vi.advanceTimersByTimeAsync(0); expect(read).toHaveBeenCalledTimes(2);
+    parent.abort(reason); await check;
+    expect(cancel).toHaveBeenCalledOnce(); expect(releaseLock).toHaveBeenCalledOnce();
+    expect(events.at(-1)).toMatchObject({ phase: "transport-error", receivedBytes: 1 });
+    for (const [type, listener] of add.mock.calls) expect(remove.mock.calls.some(call => call[0] === type && call[1] === listener)).toBe(true);
+    lateRead({ done: false, value: Uint8Array.from([2]) }); await vi.advanceTimersByTimeAsync(0);
+    expect(read).toHaveBeenCalledTimes(2); expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("headers待機のsignal非協調fetchも親期限で終了し、遅い応答はcancelして本文を読まない", async () => {
+    fakeTimeouts();
+    const parent = new AbortController(), reason = new Error("parent deadline");
+    let lateResponse!: (response: Response) => void;
+    const get = vi.spyOn(globalThis, "fetch").mockImplementation(() => new Promise(resolve => { lateResponse = resolve; }));
+    const check = expect(downloadArchivedFile(file, "late-headers", { maxBytes: 3, signal: parent.signal })).rejects.toBe(reason);
+    await vi.advanceTimersByTimeAsync(0); parent.abort(reason); await check;
+    const response = new Response(Uint8Array.from([1, 2, 3])), cancel = vi.spyOn(response.body!, "cancel"), reader = vi.spyOn(response.body!, "getReader");
+    lateResponse(response); await vi.advanceTimersByTimeAsync(0);
+    expect(cancel).toHaveBeenCalledOnce(); expect(reader).not.toHaveBeenCalled(); expect(get).toHaveBeenCalledOnce();
+  });
+
+  it.each([undefined, 3, 97_897_450, 512 * 1024 * 1024])("上限とは別の正確長=%sからだけ時間枠を求め、最大300秒に収める", async expectedBytes => {
+    const timeouts = fakeTimeouts(), parent = new AbortController();
+    vi.spyOn(globalThis, "fetch").mockImplementation(() => new Promise(() => {}));
+    const check = expect(downloadArchivedFile(file, "size-budget", { maxBytes: 512 * 1024 * 1024, expectedBytes, signal: parent.signal })).rejects.toThrow("parent");
+    await vi.advanceTimersByTimeAsync(0);
+    const attempt = expectedBytes === undefined ? 45_000 : Math.min(300_000, Math.max(45_000, Math.ceil(expectedBytes / (512 * 1024) * 1000)));
+    expect(timeouts.mock.calls.map(call => call[0])).toEqual([Math.min(300_000, Math.max(90_000, attempt * 2)), attempt]);
+    parent.abort(new Error("parent")); await check;
+  });
+
+  it("既知98MBの153秒は自分の枠内でも親160秒で止まり、再GETせずcancelする", async () => {
+    fakeTimeouts();
+    const cancel = vi.fn(() => new Promise<void>(() => {}));
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(new ReadableStream<Uint8Array>({ cancel })));
+    const check = expect(downloadArchivedFile(file, "large", { maxBytes: 97_897_450, expectedBytes: 97_897_450,
+      signal: AbortSignal.timeout(160_000) })).rejects.toMatchObject({ name: "TimeoutError" });
+    await vi.advanceTimersByTimeAsync(153_000); expect(cancel).not.toHaveBeenCalled(); expect(fetch).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(7_000); await check;
+    expect(cancel).toHaveBeenCalledOnce(); expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("timer発火前でもread/complete observer後の実時計が期限なら成功を返さない", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const start = Date.now();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(Uint8Array.from([1])));
+    await expect(downloadArchivedFile(file, "late-complete", { maxBytes: 1, onAttempt: event => {
+      if (event.phase === "complete") vi.setSystemTime(start + 90_000);
+    } })).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(fetch).toHaveBeenCalledOnce();
   });
 
   it("保存Aの例外型/本文に明示transport codeを注入し、同じGETの有限再読取を計数する", async () => {
@@ -150,7 +235,7 @@ describe("保存Notion原本のbounded download", () => {
     expect(get).toHaveBeenCalledOnce();
   });
 
-  it("保存V6と同じ200/body0待ちは各45秒で中断し、全体90秒で2GETを終える", async () => {
+  it("200/body0でread/cancelが非協調でも各45秒・全体90秒で2GETを終える", async () => {
     const realTimeout = AbortSignal.timeout;
     vi.useFakeTimers();
     vi.spyOn(AbortSignal, "timeout").mockImplementation(milliseconds => {
@@ -158,13 +243,13 @@ describe("保存Notion原本のbounded download", () => {
       setTimeout(() => controller.abort(new DOMException("bounded timeout", "TimeoutError")), milliseconds);
       return controller.signal;
     });
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => new Response(new ReadableStream({ start(stream) {
-      init!.signal!.addEventListener("abort", () => stream.error(init!.signal!.reason));
-    } })));
+    const cancel = vi.fn(() => new Promise<void>(() => {}));
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(new ReadableStream({ cancel })));
     const pending = downloadArchivedFile(file, "saved-V6", { maxBytes: 33775 });
     const check = expect(pending).rejects.toMatchObject({ name: "TimeoutError" });
     await vi.advanceTimersByTimeAsync(45_000); expect(fetch).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(45_000); await check; expect(fetch).toHaveBeenCalledTimes(2);
+    expect(cancel).toHaveBeenCalledTimes(2);
     expect(realTimeout).toBeTypeOf("function");
   });
 });
