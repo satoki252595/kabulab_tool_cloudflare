@@ -35,7 +35,7 @@ import { NotionConfigError, notionEnv } from "./env.js";
 import { NotionFileTooLargeError, uploadFile } from "./file-upload.js";
 import { verifyArchivedAttachments } from "./readback.js";
 import { listPageFiles } from "./page-file.js";
-import { jpxPdfUrl, officialPdfId, type ArchivedPdfProvenance } from "../../../services/ir-catalog/src/services/official-pdf.js";
+import { jpxPdfUrl, matchesKnownOfficialPdf, officialPdfId, type ArchivedPdfProvenance } from "../../../services/ir-catalog/src/services/official-pdf.js";
 import { sha256HexBytes } from "../sha256.js";
 import { ScheduledSourceDeadlineError } from "../scheduled-admission.js";
 import {
@@ -767,6 +767,11 @@ async function fetchIrPdf(
         headers: { "User-Agent": "kabulab-ir-catalog/1.0 (+https://kabulab-cf.satoki252595.workers.dev/ir-catalog/)" },
       });
       observedUrl = res.url || url;
+      if (!matchesKnownOfficialPdf(documentUrl, observedUrl)) {
+        await res.body?.cancel();
+        console.warn(`[ir-pdf] ${baseName} code=source_identity_mismatch`);
+        return "unavailable";
+      }
       if (res.ok && (attempt === 0 || observedUrl === url)) {
         const bytes = new Uint8Array(await res.arrayBuffer());
         if (bytes.length > 5 && PDF_HEADER.every((b, i) => bytes[i] === b)) {
@@ -786,6 +791,8 @@ async function fetchIrPdf(
         console.warn(`[ir-pdf] ${baseName} source=${attempt === 0 ? "catalog" : "jpx"} status=${res.status}`);
       }
     } catch {
+      // Cancellation/read failure must not derive a mirror from a conflicting redirect.
+      if (!matchesKnownOfficialPdf(documentUrl, observedUrl)) return "unavailable";
       transient = true;
       console.warn(`[ir-pdf] ${baseName} source=${attempt === 0 ? "catalog" : "jpx"} code=network_or_read_failure`);
     }

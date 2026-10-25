@@ -4,6 +4,7 @@ import { NotionConfigError } from "./env.js";
 import { queryUniqueRow } from "./archive.js";
 import { NotionFileTooLargeError, uploadFile } from "./file-upload.js";
 import { verifyArchivedAttachments } from "./readback.js";
+import actual from "../../../services/ir-catalog/src/tests/fixtures/tdnet-1279652-identity.actual.json";
 
 vi.mock("./client.js", async (original) => ({ ...await original<typeof import("./client.js")>(), notionRequest: vi.fn() }));
 vi.mock("./env.js", async (original) => ({ ...await original<typeof import("./env.js")>(), notionEnv: { NOTION_ARCHIVE_PAGE_ID: () => "a".repeat(32) } }));
@@ -32,6 +33,32 @@ describe("適時開示の未知送信は次行の取得を停止", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("%PDF-test", { headers: { "content-type": "application/pdf" } })));
   });
   afterEach(() => vi.unstubAllGlobals());
+
+  it.each([
+    ["https://release.tdnet.info/inbs/140120260810517386.pdf", 200, false],
+    ["https://release.tdnet.info/inbs/140120260810517386.pdf", 404, false],
+    [actual.separateReplacement.url, 200, false],
+    ["https://release.tdnet.info/inbs/140120260810517386.pdf", 200, true],
+  ] as const)("既知原本から別filename/翌日差替へredirectしたPDFは添付・D1確定しない (%s/%s/cancelUnknown=%s)", async (resolved, status, cancelUnknown) => {
+    const redirected = Object.defineProperty(new Response("%PDF-contract-fixture-only", {status}), "url", {value: resolved});
+    if (cancelUnknown) vi.spyOn(redirected.body!, "cancel").mockRejectedValueOnce(new Error("cancellation failed"));
+    const buffered = vi.spyOn(redirected, "arrayBuffer");
+    vi.stubGlobal("fetch", vi.fn(async () => redirected));
+    const persisted = vi.fn();
+    const classified = vi.fn();
+    const {upsertDisclosuresByStock} = await import("./dataset.js");
+    const result = await upsertDisclosuresByStock({service: "test", tagOptions: [],
+      rows: [{...row, key: actual.disclosure.tdnetId, documentUrl: actual.disclosure.documentUrl,
+        pubdate: actual.disclosure.pubdate}], onPagePersisted: persisted, onPdfClassified: classified});
+    expect(result.skippedNoFile).toBe(1);
+    expect(result.created).toBe(0);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(buffered).not.toHaveBeenCalled();
+    expect(uploadFile).not.toHaveBeenCalled();
+    expect(verifyArchivedAttachments).not.toHaveBeenCalled();
+    expect(persisted).not.toHaveBeenCalled();
+    expect(classified).not.toHaveBeenCalled();
+  });
 
   it.each(["resolve", "upload", "page", "config", "resolve_generic", "upload_generic", "page_generic", "readback"])("%s の UNKNOWN/config は rowErrors に変換せず即伝播", async (phase) => {
     const failure = phase === "config" ? new NotionConfigError("invalid schema") : phase.endsWith("_generic") ? new Error("unknown transport failure") : new NotionUnknownResultError("result unknown");

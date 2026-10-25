@@ -3,7 +3,8 @@ import { createDb } from "../db/client.js";
 import { listPageFiles } from "../../../../src/shared/notion-archive/index.js";
 import { notionRequest } from "../../../../src/shared/notion-archive/client.js";
 import { pagesRoute } from "../routes/pages.js";
-import { downloadPdf, IR_PDF_LIMIT, jpxPdfUrl, officialPdfId } from "../services/official-pdf.js";
+import { downloadPdf, fetchOfficialPdf, IR_PDF_LIMIT, jpxPdfUrl, officialPdfId } from "../services/official-pdf.js";
+import actual from "./fixtures/tdnet-1279652-identity.actual.json";
 
 vi.mock("../db/client.js", () => ({ createDb: vi.fn() }));
 vi.mock("../../../../src/shared/notion-archive/index.js", () => ({ listPageFiles: vi.fn() }));
@@ -33,6 +34,25 @@ describe("same-disclosure PDF source and unavailable provenance", () => {
     vi.mocked(notionRequest).mockReset().mockResolvedValue({ properties: {} });
   });
   afterEach(() => vi.unstubAllGlobals());
+
+  it.each([tdnet, actual.separateReplacement.url])("既知の9/8原本から別filename/9/9差替へredirectしても採用・別JPX取得しない (%s)", async resolved => {
+    const redirected = response(resolved, 200, body);
+    const buffered = vi.spyOn(redirected, "arrayBuffer");
+    const fetcher = vi.fn(async () => redirected);
+    vi.stubGlobal("fetch", fetcher);
+    expect(await fetchOfficialPdf(actual.disclosure.documentUrl, actual.disclosure.companyCode, 1000)).toEqual({
+      status: "unavailable", attempts: [{source: "catalog", code: "source_identity_mismatch", httpStatus: undefined}],
+    });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(buffered).not.toHaveBeenCalled();
+  });
+
+  it("実9/8公式filenameの同一mirrorは従来どおり取得できる", async () => {
+    const same = jpxPdfUrl(actual.disclosure.companyCode, actual.disclosure.documentUrl)!;
+    vi.stubGlobal("fetch", vi.fn(async () => response(same, 200, body)));
+    expect(await fetchOfficialPdf(actual.disclosure.documentUrl, actual.disclosure.companyCode, 1000))
+      .toMatchObject({status: "available", source: "catalog", resolvedUrl: same});
+  });
 
   it("uses the observed official filename at the same issuer and retains catalog failure", async () => {
     const fetcher = vi.fn().mockResolvedValueOnce(response(tdnet, 404)).mockResolvedValueOnce(response(jpx, 200, body));

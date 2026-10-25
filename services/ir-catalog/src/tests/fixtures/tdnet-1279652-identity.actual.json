@@ -1,0 +1,17 @@
+{
+  "description": "Public identity projection from the saved 2026-10-25 readonly D1 result. This is not a PDF, original HTTP catalog payload, or proof of original PDF availability. The next-day replacement remains a separate source.",
+  "sourcePath": "tmp/feature-audit-20261025/top3-live-readonly-v1/tdnet-mapped.private.json",
+  "sourceSha256": "ccec01b301872c0c18738431e896f83a37e214537321f3c465a93169bd690b13",
+  "disclosure": {
+    "tdnetId": "1279652",
+    "companyCode": "14470",
+    "pubdate": "2026-09-08T06:30:00.000Z",
+    "documentUrl": "https://webapi.yanoshin.jp/rd.php?https://www.release.tdnet.info/inbs/140120260907532654.pdf"
+  },
+  "separateReplacement": {
+    "sourcePath": "tmp/feature-audit-20261013/official/saaf-replacement-20260909.pdf.receipt.json",
+    "sourceSha256": "522bf4f55c1661993982b669a2af25c83c22c299301df9ed7ac397ffa9b48625",
+    "url": "https://ssl4.eir-parts.net/doc/1447/tdnet/2882796/00.pdf",
+    "pdfSha256": "08f8f81bf50ea701896ba0bc3c539fb32e73eace0b0026c248955846ec6b2746"
+  }
+}
