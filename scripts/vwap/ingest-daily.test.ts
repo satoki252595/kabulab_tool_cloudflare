@@ -274,7 +274,7 @@ describe("daily source前の同日確定済み再開", () => {
         });
         mockR2Put.mockImplementation(async (key) => { order.push(`put:${key}`); });
         await main();
-        expect(referenceMock.mock.calls).toEqual([["200.1"], ["200.1", "vwap-daily-session-1"]]);
+        expect(referenceMock.mock.calls).toEqual([["200.1", undefined, expect.any(Function)], ["200.1", "vwap-daily-session-1", expect.any(Function)]]);
         expect(order.indexOf("archive:A.T")).toBeLessThan(order.indexOf("put:daily/A.json"));
         expect(order.indexOf("put:daily/A.json")).toBeLessThan(order.indexOf("reference:vwap-daily-session-1"));
         const saved = assertSavedDailyShape(mockR2Put.mock.calls[0][1], "daily/A.json", "A");
@@ -538,7 +538,7 @@ describe("ingest-daily main flow", () => {
     mockLoadCodes.mockResolvedValue(["A"]); mockR2Get.mockResolvedValue(null);
     mockFetchDaily.mockResolvedValue({ bars: [BAR_A], splits: [], proof: FAKE_PROOF });
     await main();
-    expect(loadArchivedDailySessionReference).toHaveBeenCalledExactlyOnceWith(D_TODAY);
+    expect(loadArchivedDailySessionReference).toHaveBeenCalledExactlyOnceWith(D_TODAY, undefined);
     expect(fetchDailySessionReference).not.toHaveBeenCalled();
     expect(recordedBody().dailySession).toEqual({ selection: { kind: "archived-jp-leg", date: D_TODAY }, reference, custody });
     expect(recordedMetadata().dailySession).toEqual(recordedBody().dailySession);
@@ -921,10 +921,12 @@ describe("通常定時VWAPの日足source前開始/終了窓", () => {
     expect(vi.mocked(publishDailyPriceSnapshot).mock.calls[0][0].complete).toBe(false);
     expect(process.exitCode).toBe(2);
   });
-  it("benchmark/個別sourceへ新規取得guard、registryへ閉鎖guardを渡す", async () => {
+  it.each([false, true])("手動/定時(%s)のbenchmark/個別sourceへ新規取得guard、R2/registryへ閉鎖guardを渡す", async scheduled => {
     vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date(COMPLETED_AT));
     vi.stubEnv("GITHUB_RUN_ID", "101"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
-    process.argv.push("--scheduled-date=2026-10-02", "--scheduled-at=2026-10-02T08:00:00.000Z"); mockLoadCodes.mockResolvedValue(["7203"]);
+    vi.stubEnv("BATCH_JOB_STARTED_AT", COMPLETED_AT);
+    if (scheduled) process.argv.push("--scheduled-date=2026-10-02", "--scheduled-at=2026-10-02T08:00:00.000Z");
+    mockLoadCodes.mockResolvedValue(["7203"]);
     rawHook.body = completionRaw("7203.T");
     mockFetchDaily.mockResolvedValue(await parseDailyChart("7203.T", "10y", rawHook.body, COMPLETED_AT));
     mockR2Get.mockResolvedValue(null);
@@ -934,7 +936,18 @@ describe("通常定時VWAPの日足source前開始/終了窓", () => {
     expect(mockFetchDaily.mock.calls[0][2].beforeRequest).toBe(guard);
     expect(vi.mocked(publishDailyPriceSnapshot).mock.calls[0][0].beforeMutation).toBeTypeOf("function");
     expect(vi.mocked(publishDailyPriceSnapshot).mock.calls[0][0].beforeMutation).not.toBe(guard);
+    const io = mockR2Get.mock.calls[0][1];
+    expect(io?.abortSignal).toBeInstanceOf(AbortSignal); expect(io?.beforeAttempt).toBeTypeOf("function");
+    expect(mockR2Put.mock.calls[0][4]).toBe(io);
+    expect(vi.mocked(publishDailyPriceSnapshot).mock.calls[0][0].ioOptions).toBe(io);
     expect(process.exitCode).toBe(0); expect(mockR2Put).toHaveBeenCalledTimes(1);
+  });
+  it("手動dailyも元jobのsource予算が無ければ母集団・benchmark前に停止する", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(Date.parse(COMPLETED_AT) + 345 * 60_000);
+    vi.stubEnv("BATCH_JOB_STARTED_AT", COMPLETED_AT);
+    await expect(main()).rejects.toThrow("新規取得期限");
+    expect(mockLoadCodes).not.toHaveBeenCalled(); expect(fetchDailySessionReference).not.toHaveBeenCalled();
+    expect(mockFetchDaily).not.toHaveBeenCalled(); expect(mockR2Get).not.toHaveBeenCalled(); expect(mockR2Put).not.toHaveBeenCalled();
   });
   it("registryの非更新read中に完了期限を越えても成功出口へ進まない", async () => {
     vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-10-14T08:00:00.000Z"));

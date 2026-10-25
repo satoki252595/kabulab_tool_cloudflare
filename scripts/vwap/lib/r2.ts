@@ -71,7 +71,7 @@ export interface PricePutReadback {
  * 読取不明では元unknownを保持し、過去runのunknownをこの入口で解除しない。
  */
 export async function confirmUnknownPricePut(error: unknown, key: string, body: string,
-  metadata: Record<string, string> | undefined, assertActive: () => void): Promise<PricePutReadback> {
+  metadata: Record<string, string> | undefined, assertActive: () => void, opts?: Pick<R2ReadOptions, "abortSignal">): Promise<PricePutReadback> {
   if (!(error instanceof R2PutUnknownError) || LOCAL_OUT !== undefined || !/^(?:daily|intra)\/[^/]+\.json$/.test(key)) throw error;
   const expected = Buffer.from(body, "utf8");
   // S3のcustom metadataなしは、応答のundefined/空bagを同じ空集合へ正規化する。
@@ -80,8 +80,9 @@ export async function confirmUnknownPricePut(error: unknown, key: string, body: 
   try {
     assertActive();
     if (expected.length === 0) throw error;
+    const timeout = AbortSignal.timeout(30_000);
     const current = await r2GetBytesVersion(key, sharedEnv.R2_BUCKET(), { singleAttempt: true,
-      maxBytes: expected.length, abortSignal: AbortSignal.timeout(30_000), beforeAttempt: assertActive });
+      maxBytes: expected.length, abortSignal: opts?.abortSignal === undefined ? timeout : AbortSignal.any([timeout, opts.abortSignal]), beforeAttempt: assertActive });
     assertActive();
     if (current === null || !expected.equals(current.body) || current.contentType !== "application/json" ||
         canonicalMetadata(current.metadata) !== canonicalMetadata(metadata)) throw error;
@@ -273,8 +274,8 @@ function isExplicitRejection(code: string, status: number | "none"): boolean {
  * observedVersion は同じ object の GET で得た不透明 ETag。明示 NoSuchKey
  * の null は IfNoneMatch:* で作成する。取得後の競合は 412 で停止する。
  */
-export async function r2Put(key: string, body: string, observedVersion: string | null, metadata?: Record<string, string>): Promise<void> {
-  return r2PutBytes(key, new TextEncoder().encode(body), observedVersion, LOCAL_OUT ? undefined : sharedEnv.R2_BUCKET(), "application/json", metadata);
+export async function r2Put(key: string, body: string, observedVersion: string | null, metadata?: Record<string, string>, opts?: Pick<R2ReadOptions, "abortSignal" | "beforeAttempt">): Promise<void> {
+  return r2PutBytes(key, new TextEncoder().encode(body), observedVersion, LOCAL_OUT ? undefined : sharedEnv.R2_BUCKET(), "application/json", metadata, opts);
 }
 
 /** 原本バイナリも同じ単発/CAS契約で保存する。bucketはcallerが明示する。 */

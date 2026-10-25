@@ -24,6 +24,16 @@ beforeEach(() => {
   });
 });
 describe("通常全量だけの価格snapshot activation", () => {
+  it("native guard/signalをactivationの全新規IOへ渡し、既知ACK後の完了receiptだけ別に閉じる", async () => {
+    const ioOptions = { beforeAttempt: vi.fn(), abortSignal: new AbortController().signal };
+    expect(await publishDailyPriceSnapshot({ ...args, ioOptions })).toEqual({ status: "activated" });
+    const reads = vi.mocked(r2GetVersion).mock.calls;
+    for (const call of reads.slice(0, -1)) expect(call[1]).toMatchObject(ioOptions);
+    expect(reads.at(-1)?.[1]).not.toHaveProperty("abortSignal");
+    for (const call of vi.mocked(r2Put).mock.calls.slice(0, -1)) expect(call[4]).toBe(ioOptions);
+    expect(vi.mocked(r2Put).mock.calls.at(-1)?.[4]).toBeUndefined();
+    expect(JSON.parse(store.get("ops/holdings-price/activation.json")!.body).phase).toBe("complete");
+  });
   it.each([1, 2, 3])("通常snapshotの第%i新規PUT直前guard拒否は以後の送信0・既ACK不変", async (rejected) => {
     let calls = 0;
     const stopped = new Error("completion window expired");

@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { r2GetVersion, r2Put } from "./r2.js";
+import { r2GetVersion, r2Put, type R2ReadOptions } from "./r2.js";
 import { priceActiveSchema, priceSnapshotSchema, PRICE_ACTIVE_KEY, type PriceReference, type PriceSnapshot } from "../../../src/shared/holdings/price-registry.js";
 import type { IngestCodeOutcome } from "./ingest-guard.js";
 import { resolveLatestHoldingsCodeList } from "../../sync/holdings-code-list.js";
@@ -13,13 +13,14 @@ const stateSchema = z.object({ version: z.literal(1), phase: z.enum(["inflight",
   snapshotId: z.string(), registryKey: z.string(), registrySha256: z.string().regex(/^[a-f0-9]{64}$/),
   beforeActiveSha256: z.string().regex(/^[a-f0-9]{64}$/), at: z.string().datetime(),
 }).strict();
-const get = (key: string, maxBytes: number) => r2GetVersion(key, { singleAttempt: true, maxBytes });
+const get = (key: string, maxBytes: number, ioOptions?: Pick<R2ReadOptions, "abortSignal" | "beforeAttempt">) =>
+  r2GetVersion(key, { singleAttempt: true, maxBytes, ...ioOptions });
 
-async function readActive() {
-  const state = await get(ACTIVATION_KEY, 4096);
+async function readActive(ioOptions?: Pick<R2ReadOptions, "abortSignal" | "beforeAttempt">) {
+  const state = await get(ACTIVATION_KEY, 4096, ioOptions);
   const receipt = state === null ? null : stateSchema.parse(JSON.parse(state.body));
   if (receipt !== null) assert.equal(receipt.phase, "complete", "価格snapshotの前回activationが結果未確定です。再送せず照合してください");
-  const active = await get(PRICE_ACTIVE_KEY, 4096);
+  const active = await get(PRICE_ACTIVE_KEY, 4096, ioOptions);
   if (receipt !== null) assert.ok(active, "価格snapshotの完了receiptとactiveが一致しません");
   if (active === null) return { state, active, snapshot: null };
   const pointer = priceActiveSchema.parse(JSON.parse(active.body));
@@ -27,7 +28,7 @@ async function readActive() {
     assert.equal(receipt.snapshotId, pointer.snapshotId); assert.equal(receipt.registryKey, pointer.registryKey);
     assert.equal(receipt.registrySha256, pointer.registrySha256); assert.equal(receipt.at, pointer.activatedAt);
   }
-  const registry = await get(pointer.registryKey, 8 * 1024 * 1024);
+  const registry = await get(pointer.registryKey, 8 * 1024 * 1024, ioOptions);
   assert.ok(registry && hash(registry.body) === pointer.registrySha256, "価格snapshotの全文SHAが不一致です");
   const snapshot = priceSnapshotSchema.parse(JSON.parse(registry.body));
   assert.equal(snapshot.snapshotId, pointer.snapshotId);
@@ -75,6 +76,7 @@ export async function publishDailyPriceSnapshot(args: {
   codes: readonly string[]; references: ReadonlyMap<string, PriceReference>; complete: boolean;
   outcomes?: Readonly<Record<string, IngestCodeOutcome>>;
   beforeMutation?: () => void;
+  ioOptions?: Pick<R2ReadOptions, "abortSignal" | "beforeAttempt">;
 }): Promise<{ status: "activated" | "unchanged" } | { status: "held"; reason: string }> {
   if (!args.complete || JSON.stringify([...args.codes].sort()) !== JSON.stringify([...args.universe].sort())) {
     return { status: "held", reason: "通常全母集団の受入が未完了です。旧価格snapshotを維持します" };
@@ -90,7 +92,7 @@ export async function publishDailyPriceSnapshot(args: {
     return { status: "held", reason: "資格済日足の物理原本参照がありません。旧価格snapshotを維持します" };
   }
   const coverage = outcomes === undefined ? undefined : { outcomes: Object.fromEntries([...args.codes].sort().map(code => [code, outcomes[code].status === "written" || outcomes[code].status === "skipped" ? "accepted" : outcomes[code].status])) };
-  const before = await readActive();
+  const before = await readActive(args.ioOptions);
   if (before.active === null || before.snapshot === null) return { status: "held", reason: "初期snapshotのfresh物理受入・有効化が未実施です" };
   assert.ok(args.sessionDate >= before.snapshot.sessionDate, "価格snapshotの対象sessionが後退しています");
   const codeList = await resolveLatestHoldingsCodeList(before.snapshot.codeList, args.finishedAt);
@@ -102,22 +104,22 @@ export async function publishDailyPriceSnapshot(args: {
   const evidence = (s: PriceSnapshot) => JSON.stringify({ sessionDate: s.sessionDate, codeList: s.codeList, members: s.members, ...(s.coverage === undefined ? {} : { coverage: s.coverage }) });
   if (evidence(snapshot) === evidence(before.snapshot)) return { status: "unchanged" };
   const body = JSON.stringify(snapshot), digest = hash(body), registryKey = `ops/holdings-price/snapshot-${args.runId}-${digest}.json`;
-  const existing = await get(registryKey, 8 * 1024 * 1024);
+  const existing = await get(registryKey, 8 * 1024 * 1024, args.ioOptions);
   if (existing !== null) assert.equal(existing.body, body, "価格registryの既存bytesが一致しません。上書きしません");
-  else { args.beforeMutation?.(); await r2Put(registryKey, body, null); const actual = await get(registryKey, 8 * 1024 * 1024); assert.equal(actual?.body, body); }
+  else { args.beforeMutation?.(); await r2Put(registryKey, body, null, undefined, args.ioOptions); const actual = await get(registryKey, 8 * 1024 * 1024, args.ioOptions); assert.equal(actual?.body, body); }
   const state = { version: 1 as const, phase: "inflight" as const, snapshotId: args.runId, registryKey,
     registrySha256: digest, beforeActiveSha256: hash(before.active.body), at: args.finishedAt };
   const intentBody = JSON.stringify(state);
   args.beforeMutation?.();
-  await r2Put(ACTIVATION_KEY, intentBody, before.state?.etag ?? null);
-  const intent = await get(ACTIVATION_KEY, 4096); assert.ok(intent); assert.equal(intent.body, intentBody);
+  await r2Put(ACTIVATION_KEY, intentBody, before.state?.etag ?? null, undefined, args.ioOptions);
+  const intent = await get(ACTIVATION_KEY, 4096, args.ioOptions); assert.ok(intent); assert.equal(intent.body, intentBody);
   const active = priceActiveSchema.parse({ version: 1, snapshotId: args.runId, registryKey, registrySha256: digest, activatedAt: args.finishedAt });
   const activeBody = JSON.stringify(active);
   args.beforeMutation?.();
-  await r2Put(PRICE_ACTIVE_KEY, activeBody, before.active.etag);
-  const activated = await get(PRICE_ACTIVE_KEY, 4096); assert.equal(activated?.body, activeBody);
+  await r2Put(PRICE_ACTIVE_KEY, activeBody, before.active.etag, undefined, args.ioOptions);
+  const activated = await get(PRICE_ACTIVE_KEY, 4096, args.ioOptions); assert.equal(activated?.body, activeBody);
   const completedBody = JSON.stringify({ ...state, phase: "complete" });
-  // activeは既知ACK＋全文readback済み。期限後も受領記録を閉じ、CLIが最後に期限失敗を出す。
+  // activeは既知ACK＋全文readback済み。native終了前の5分枠で受領記録だけ閉じ、CLIの期限失敗を保持する。
   await r2Put(ACTIVATION_KEY, completedBody, intent.etag);
   assert.equal((await get(ACTIVATION_KEY, 4096))?.body, completedBody);
   return { status: "activated" };

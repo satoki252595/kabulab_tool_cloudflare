@@ -64,9 +64,11 @@ def observe_job_clock(read_page, run_id, attempt, job, runner, *, monotonic=time
     deadline = monotonic() + 30
     for observation in range(1, 4):
         if observation > 1:
-            if deadline - monotonic() <= 2:
+            remaining = deadline - monotonic()
+            if remaining <= 2:
                 raise JobClockError("observation_timeout")
-            sleep(2)
+            # 残る待機と最終GETへ配分し、即応答でも概ね0/10/20秒で観測する。
+            sleep(remaining / (5 - observation))
         remaining = deadline - monotonic()
         if remaining <= 0:
             raise JobClockError("observation_timeout")

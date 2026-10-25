@@ -47,6 +47,14 @@ describe("unknown価格PUTの正のPOST状態照合だけを許可する", () =>
     Body: Readable.from([Buffer.from(body)]), $metadata: { httpStatusCode: 200 }, ...overrides });
   const unknown = () => new R2PutUnknownError("daily/3513.json", "InternalError", 500, svcError("InternalError", 500));
 
+  it("native閉鎖済みのunknown確認はGETせず、元unknownを保持する", async () => {
+    const controller = new AbortController(); controller.abort();
+    const error = unknown(), send = vi.spyOn(S3Client.prototype, "send");
+    await expect(confirmUnknownPricePut(error, "daily/3513.json", body, metadata, () => {}, { abortSignal: controller.signal }))
+      .rejects.toBe(error);
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it("PUT500→全bytes/metadata一致のGET1回だけで閉鎖し、ACK不明をproofへ保持する", async () => {
     const error = svcError("InternalError", 500), send = vi.spyOn(S3Client.prototype, "send")
       .mockRejectedValueOnce(error).mockImplementationOnce(async () => native());
@@ -147,6 +155,17 @@ it.each([undefined, 1000])("bounded metadata reads reject unknown/oversized leng
 });
 
 describe("r2Put contract (1 attempt, no retry)", () => {
+  it("JSON wrapperもcallerのnative guard/signalをSDKへ渡し、期限切れなら送信0", async () => {
+    const controller = new AbortController(), beforeAttempt = vi.fn();
+    const send = vi.spyOn(S3Client.prototype, "send").mockImplementationOnce(async () => okPut());
+    const options = { abortSignal: controller.signal, beforeAttempt };
+    await r2Put("daily/7203.json", "{}", null, undefined, options);
+    expect(beforeAttempt).toHaveBeenCalledTimes(1); expect(send).toHaveBeenCalledTimes(1);
+    const signal = (send.mock.calls[0][1] as { abortSignal: AbortSignal }).abortSignal;
+    controller.abort(); expect(signal.aborted).toBe(true);
+    await expect(r2Put("daily/7203.json", "{}", null, undefined, options)).rejects.toThrow();
+    expect(send).toHaveBeenCalledTimes(1);
+  });
   it("bounded transport abort stops a mutation without replay", async () => {
     const controller = new AbortController();
     const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);

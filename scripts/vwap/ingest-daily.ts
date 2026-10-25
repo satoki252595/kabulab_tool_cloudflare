@@ -49,9 +49,8 @@ export async function main() {
     jobStartedAt: sharedEnv.BATCH_JOB_STARTED_AT() });
   const restore = schedule.installDeadline();
   try {
-  const fetchReference = (stage?: string) => schedule.admission === null
-    ? stage === undefined ? fetchDailySessionReference(runId) : fetchDailySessionReference(runId, stage)
-    : fetchDailySessionReference(runId, stage, schedule.assertSource);
+  schedule.assertSource();
+  const fetchReference = (stage?: string) => fetchDailySessionReference(runId, stage, schedule.assertSource);
   console.info(JSON.stringify({ dailySessionSource: sessionSource }));
   const { delayMs: DELAY } = sharedEnv.vwapKnobs();
   const universe = await loadCodes();
@@ -63,7 +62,8 @@ export async function main() {
   const CONC = 1; // Yahoo取得は環境変数によらず直列。実HTTP間隔は共有clientで制御。
   const TEN_Y_RANGE = tenYearRange(startedAt); // run 内一定の明示 10y range
   schedule.assertSource();
-  const archivedSession = sessionSource.kind === "archived-jp-leg" ? await loadArchivedDailySessionReference(sessionSource.date) : undefined;
+  const archivedSession = sessionSource.kind === "archived-jp-leg" ? await loadArchivedDailySessionReference(sessionSource.date,
+    schedule.ioOptions === undefined ? undefined : { ...schedule.ioOptions, maxBytes: 20 * 1024 * 1024 }) : undefined;
   let reference = archivedSession === undefined ? await fetchReference() : archivedSession.reference; // 原本照合済み独立session。
   let SOURCE_RANGE = tenYearRangeForDate(reference.date);
   let referenceGeneration = 0;
@@ -143,7 +143,7 @@ export async function main() {
         let observedVersion: string | null;
         let objectMetadata: Record<string, string> | undefined;
         try {
-          const current = await r2GetVersion(`daily/${code}.json`);
+          const current = await r2GetVersion(`daily/${code}.json`, schedule.ioOptions);
           existing = current === null ? null : current.body;
           observedVersion = current === null ? null : current.etag;
           objectMetadata = current?.metadata;
@@ -187,7 +187,7 @@ export async function main() {
         try {
           // 1 社 1 回の単発取得 (producer 側の chart retry なし。失敗は error/HOLD 計数へ)。
           ({ bars, splits, proof, corporateEvents } = await fetchDaily(`${code}.T`, "10y", {
-            ...(schedule.admission === null ? {} : { beforeRequest: schedule.assertSource }),
+            beforeRequest: schedule.assertSource,
             onRaw: (capture) => {
               sourceCapture = capture;
               captures.push({ api: "daily", attempt: 1, capture });
@@ -291,9 +291,9 @@ export async function main() {
             schedule.assertActive();
             const priceReference = referenceFromArchivedParts(archivedParts, proof);
             const metadata = priceMetadata(objectMetadata, priceReference);
-            putReadback = await r2Put(`daily/${code}.json`, postJson, observedVersion, metadata)
+            putReadback = await r2Put(`daily/${code}.json`, postJson, observedVersion, metadata, schedule.ioOptions)
               .then(() => undefined, error => {
-                const confirmation = confirmUnknownPricePut(error, `daily/${code}.json`, postJson, metadata, schedule.assertActive);
+                const confirmation = confirmUnknownPricePut(error, `daily/${code}.json`, postJson, metadata, schedule.assertActive, schedule.ioOptions);
                 // 他の開始済みPUTはsettleさせるが、全readbackが閉じるまで次を開始しない。
                 // 元confirmationのrejectは下の既存catchでunknownとして記録する。
                 putBarrier = Promise.all([putBarrier, confirmation]).then(() => {}, () => { fatal = true; });
@@ -388,7 +388,7 @@ export async function main() {
     schedule.assertActive();
     const priceSnapshot = await publishDailyPriceSnapshot({ runId, sessionDate: reference.date, finishedAt,
       universe, codes, references: priceReferences,
-      ...(schedule.admission === null ? {} : { beforeMutation: schedule.assertActive }),
+      beforeMutation: schedule.assertActive, ioOptions: schedule.ioOptions,
       outcomes: sortedOutcomes, complete: !aborted && !fatal && !sourceStopped && rateLimited === 0 });
     schedule.assertActive();
     console.info(JSON.stringify({ holdingPriceSnapshot: priceSnapshot }));
