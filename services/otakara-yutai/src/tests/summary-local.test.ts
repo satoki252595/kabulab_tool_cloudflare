@@ -22,7 +22,7 @@ import {
   selectFairBatch,
   type LocalDependencies,
 } from "../../data-scripts/summary-local.js";
-import { isSummaryNumbersGrounded, missingSummaryConditions, SUMMARY_CONTRACT_VERSION } from "../../data-scripts/summary-contract.js";
+import { isSummaryNumbersGrounded, missingSummaryConditions, SUMMARY_CONTRACT_VERSION, SUMMARY_MAX_CHARS } from "../../data-scripts/summary-contract.js";
 import { planCarry } from "../../data-scripts/yutai-full-import.js";
 import {
   parseTaskFile,
@@ -164,7 +164,7 @@ describe("local summary generation/import boundary", () => {
       // 実全文の掲載額slotだけを変更する対照。価格推計や受取額の認定はしない。
       const description = original.replace(lines[2], `${amount}円相当`), scopedRows = saved.rows.slice(0, 1).map(row => ({ ...row, description }));
       const scopedTasks = selectSummaryTasks(scopedRows), result = compileSimpleSummary(scopedTasks[0]);
-      expect(result !== null && result.estimatedValue === null && result.shortSummary.length <= 60).toBe(true);
+      expect(result !== null && result.estimatedValue === null && result.shortSummary.length <= SUMMARY_MAX_CHARS).toBe(true);
       expect(planSummaryImport({ tasks: scopedTasks, currentRows: scopedRows, resultsText: JSON.stringify(result) }).rejections).toEqual([]);
     }
     for (const amount of ["0", "-1", "1.5", "01", "1,00", "9007199254740992", "100000"]) {
@@ -212,7 +212,7 @@ describe("local summary generation/import boundary", () => {
     const plan = planSummaryImport({ tasks, currentRows: saved.rows, resultsText: results.map(result => JSON.stringify(result)).join("\n") });
     expect(plan.rejections).toEqual([]); expect(plan.updates).toHaveLength(3);
     expect(plan.updates.flatMap(update => update.ids)).toHaveLength(6);
-    for (const result of results) expect(result!.shortSummary.length).toBeLessThanOrEqual(60);
+    for (const result of results) expect(result!.shortSummary.length).toBeLessThanOrEqual(SUMMARY_MAX_CHARS);
 
     const original = tasks[0].description;
     for (const count of [1, 2, 4, 20, Number.MAX_SAFE_INTEGER]) {
@@ -222,7 +222,7 @@ describe("local summary generation/import boundary", () => {
       const scopedTasks = selectSummaryTasks(rows), result = compileSimpleSummary(scopedTasks[0]);
       expect(result !== null && result.estimatedValue === null).toBe(true);
       expect(result!.shortSummary.includes(`毎月${count}回`)).toBe(true);
-      expect(result!.shortSummary.length).toBeLessThanOrEqual(60);
+      expect(result!.shortSummary.length).toBeLessThanOrEqual(SUMMARY_MAX_CHARS);
       expect(planSummaryImport({ tasks: scopedTasks, currentRows: rows, resultsText: JSON.stringify(result) }).rejections).toEqual([]);
     }
     for (const description of [
@@ -473,7 +473,7 @@ describe("local summary generation/import boundary", () => {
     expect(rows()[0]).toMatchObject({ shortSummary: "QUOカード 3,000円分", estimatedValue: 3000 });
     const run = readdirSync(dir).find(name => name !== "progress.json")!;
     const pre = JSON.parse(gunzipSync(readFileSync(join(dir, run, "pre-import.json.gz"))).toString());
-    expect(pre).toMatchObject({ model: null, revision: null, protocol: "", deterministicRule: "simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v10" });
+    expect(pre).toMatchObject({ model: null, revision: null, protocol: "", deterministicRule: "simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v11" });
     expect(parseTaskFile(readFileSync(join(dir, run, "model-tasks.jsonl"), "utf8"))).toEqual([]);
   });
   it("全文1点選択はモデル0で通常PRE/原子取込/POSTへ通し、選択肢の掲載額を評価しない", async () => {
