@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { captureFinancials, projectFinancialPage, type FinancialCaptureOptions } from "./financial-null-capture.js";
+import { captureFinancials, parseFinancialCaptureArgs, projectFinancialPage, type FinancialCaptureOptions } from "./financial-null-capture.js";
 const saved = JSON.parse(readFileSync(new URL("./fixtures/financial-null-634a.json", import.meta.url), "utf8"));
 const sha = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 const folders: string[] = [];
@@ -17,6 +17,27 @@ async function options(extra: Partial<FinancialCaptureOptions> = {}) {
 function transport(response: unknown = saved.response) {
   return vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(String(input).includes("/query") ? response : saved.schema), { status: 200 }));
 }
+
+describe("financial capture CLI arguments", () => {
+  const argv = ["--codes=tmp/codes.json", `--codes-sha256=${sha('["634A"]')}`, "--offset=0",
+    "--max-codes=1", "--max-pages=1", "--max-http=2", `--deadline=${new Date().toISOString()}`,
+    "--out=tmp/capture", "--env-file=.env", "--python=pipeline/.venv/bin/python"];
+  it("accepts every required normal CLI argument, including the SHA256 name", () => {
+    const args = parseFinancialCaptureArgs(argv);
+    expect(args.size).toBe(10);
+    expect(args.get("codes-sha256")).toBe(sha('["634A"]'));
+    expect(args.get("max-http")).toBe("2");
+    expect(args.get("env-file")).toBe(".env");
+  });
+  it.each([
+    [...argv, "--codes=tmp/other-codes.json"],
+    [...argv, "--unknown=1"],
+    argv.filter(arg => !arg.startsWith("--codes-sha256=")),
+    argv.map(arg => arg.startsWith("--codes-sha256=") ? "--codes-sha256=" : arg),
+  ])("rejects duplicate, unknown, missing or empty arguments", (...args) => {
+    expect(() => parseFinancialCaptureArgs(args)).toThrow();
+  });
+});
 
 describe("financial-only bounded capture (unchanged captured 634A facts)", () => {
   it("retains exact 31 properties, bitmap, response SHA, natural partition end and private permissions", async () => {
