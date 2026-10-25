@@ -16,6 +16,16 @@ import { splitHeadedDescription } from "../../data-scripts/estimated-value-guard
 
 const privatePath = join(ROOT, "tmp/yutai-premium-club-proof-v1/saved4.private.json");
 const sha = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+function carryWithCurrentHeadings(row: BenefitRow, rows: readonly BenefitRow[]) {
+  const source = splitHeadedDescription(row.description);
+  if (source.heading === null) throw new Error("carry_fixture_heading_missing");
+  const key = carryKey(row.stockCode, source.body, row.minShares, row.recordMonth);
+  const siblings = rows.filter(r => r.stockCode === row.stockCode && splitHeadedDescription(r.description).body === source.body);
+  const groups = new Map([[row.stockCode, new Map([[source.body, {
+    minShares: siblings.map(r => r.minShares), recordMonths: siblings.map(r => r.recordMonth),
+  }]])]]);
+  return planCarry([{ ...row, code: row.stockCode }], new Map([[key, [source.heading]]]), groups).carried.get(key);
+}
 function fixture() {
   const bytes = readFileSync(privatePath);
   expect(sha(bytes)).toBe(saved.provenance.privateFixtureSha256);
@@ -131,8 +141,7 @@ it.skipIf(!existsSync(carryPrivatePath))("保存5群10行の繰越両条件を�
   });
   expect(selectSummaryTasks(after).length).toBe(0);
   for (const row of after) {
-    const key = carryKey(row.stockCode, splitHeadedDescription(row.description).body, row.minShares, row.recordMonth);
-    const carried = planCarry([{ ...row, code: row.stockCode }], new Map(), new Map()).carried.get(key);
+    const carried = carryWithCurrentHeadings(row, after);
     expect(carried !== undefined).toBe(true); expect(sha(carried!.shortSummary!)).toBe(sha(row.shortSummary));
   }
   const old = results.map(r => JSON.stringify({ ...r, contractVersion: "2026-10-25.5" })).join("\n");
@@ -215,8 +224,7 @@ it.skipIf(!existsSync(holdingCarryPrivatePath))("保存6群6行の両数量と�
   });
   expect(selectSummaryTasks(after).length).toBe(0);
   for (const row of after) {
-    const key = carryKey(row.stockCode, splitHeadedDescription(row.description).body, row.minShares, row.recordMonth);
-    const carried = planCarry([{ ...row, code: row.stockCode }], new Map(), new Map()).carried.get(key);
+    const carried = carryWithCurrentHeadings(row, after);
     expect(carried !== undefined).toBe(true); expect(sha(carried!.shortSummary!)).toBe(sha(row.shortSummary));
   }
   const old = results.map(r => JSON.stringify({ ...r, contractVersion: "2026-10-25.6" })).join("\n");
