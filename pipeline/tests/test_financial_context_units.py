@@ -84,6 +84,69 @@ def test_unknown_currency_is_not_assumed_to_be_yen():
     assert record.equity_ratio_pct is None
 
 
+@pytest.mark.parametrize("case", EDINET_CASES, ids=lambda case: case["file"])
+def test_optional_diagnostics_preserve_record_and_separate_all_19_destinations(case):
+    tidy = fixture_tidy(case)
+    before = tidy.copy(deep=True)
+    provenance = fixture_provenance(case)
+    original = tidy_to_financial_record(tidy, case["code"], provenance)
+    diagnostics = {}
+    observed = tidy_to_financial_record(
+        tidy, case["code"], provenance, diagnostics=diagnostics
+    )
+    assert observed == original
+    assert observed is not None
+    pd.testing.assert_frame_equal(tidy, before)
+    fields = {
+        "net_sales", "operating_income", "ordinary_income", "net_income",
+        "eps", "bps", "roe_pct", "roa_pct", "equity_ratio_pct",
+        "cf_operating", "cf_investing", "cf_financing", "dps_actual", "dps_forecast",
+        "forecast_net_sales", "forecast_operating_income", "forecast_ordinary_income",
+        "forecast_net_income", "forecast_eps",
+    }
+    assert len(fields) == 19
+    assert set(diagnostics) == fields | {"_record"}
+    for field in fields:
+        assert bool(diagnostics[field]["reason"])
+        assert (diagnostics[field]["status"] == "value") == (
+            getattr(observed, field) is not None
+        )
+    # 同じsrc候補を読む実績/予想でも、dst別のtraceを上書きしない。
+    for actual, forecast in (("eps", "forecast_eps"), ("dps_actual", "dps_forecast")):
+        assert diagnostics[actual] is not diagnostics[forecast]
+        assert diagnostics[actual]["forecast"] is False
+        assert diagnostics[forecast]["forecast"] is True
+
+
+def test_missing_units_and_conflicting_actual_values_have_distinct_hold_reasons():
+    case = EDINET_CASES[0]
+    tidy = fixture_tidy(case)
+    missing_units = tidy.copy(deep=True)
+    missing_units["unit"] = ""
+    diagnostics = {}
+    observed = tidy_to_financial_record(
+        missing_units, case["code"], fixture_provenance(case), diagnostics=diagnostics
+    )
+    assert observed is not None and observed.net_sales is None
+    assert diagnostics["net_sales"]["status"] == "hold"
+    assert diagnostics["net_sales"]["reason"] == "no_qualified_company_wide_unit"
+    assert diagnostics["net_sales"]["allowed_unit_rows"] == 0
+
+    # 既存の同原本fault injectionと同じく、原数値を変えず文脈の衝突だけを作る。
+    sales = tidy["element"].str.endswith(":NetSales")
+    tidy.loc[sales, "context_ref"] = "CurrentYTDDuration"
+    diagnostics = {}
+    observed = tidy_to_financial_record(
+        tidy, case["code"], fixture_provenance(case), diagnostics=diagnostics
+    )
+    assert observed is not None and observed.net_sales is None
+    assert diagnostics["net_sales"]["status"] == "hold"
+    assert diagnostics["net_sales"]["reason"] == "multiple_numeric_values"
+    assert {3_473_000_000, 4_422_000_000}.issubset(
+        diagnostics["net_sales"]["numeric_values"]
+    )
+
+
 def test_segment_dimension_is_rejected_even_when_context_id_looks_company_wide():
     case = CASES[0]
     tidy = fixture_tidy(case)
