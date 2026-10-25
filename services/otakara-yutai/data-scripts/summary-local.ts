@@ -487,6 +487,14 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
     currentRows: fresh,
   });
   writePrivate(join(runDir, "import-plan.json"), JSON.stringify(plan));
+  const noWrite = options.allowModel !== true && reviewed === undefined && plan.updates.length === 0;
+  const nextProgress = JSON.stringify({ cursor: tasks[tasks.length - 1].taskId });
+  if (noWrite) await publishingReadOnly(async () => {
+    const selected = (current: readonly BenefitRow[]) => current
+      .filter(row => tasks.some(task => task.taskId === benefitKey(row.stockCode, row.description)))
+      .sort((a, b) => a.id - b.id);
+    if (!isDeepStrictEqual(selected(rows), selected(fresh))) throw new Error("summary_no_write_input_changed");
+  });
   // One lossless file contains the exact tasks, model protocol, results, and both preimages.
   const plain = Buffer.from(
     JSON.stringify({
@@ -498,6 +506,8 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
         resultsText: reviewed.resultsText, tasksSha256: reviewed.tasksSha256, resultsSha256: reviewed.resultsSha256, reviewed: reviewed.reviewed } }),
       ...generated,
       plan,
+      ...(noWrite ? { noWrite: { tasksSHA256: sha(tasksText), resultsSHA256: sha(generated.resultsText),
+        cursorBefore: savedCursor, cursorNext: nextProgress } } : {}),
       selectedPre: reviewed === undefined ? rows.filter((r) => tasks.some((t) => t.taskId === benefitKey(r.stockCode, r.description))) : rows,
       freshPre: reviewed === undefined ? fresh.filter((r) => tasks.some((t) => t.taskId === benefitKey(r.stockCode, r.description))) : fresh,
     }),
@@ -506,7 +516,7 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
   if (!gunzipSync(bundle).equals(plain)) throw new Error("bundle_roundtrip");
   writePrivate(join(runDir, "pre-import.json.gz"), bundle);
   // Notion保管も結果不明になり得る。最初の外部書込みより前に再入を止める。
-  writePrivate(
+  if (!noWrite) writePrivate(
     pendingWrite,
     JSON.stringify({
       clock,
@@ -514,9 +524,9 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
       run: runDir.split("/").at(-1),
     }),
   );
-  const publication = writer === undefined ? undefined : await writer.reserve("yutai-summary",
+  const publication = noWrite || writer === undefined ? undefined : await writer.reserve("yutai-summary",
     { clock, tasksSHA256: sha(tasksText), deterministicRule: DETERMINISTIC_SUMMARY_RULE, ...generation }, plain.toString("utf8"));
-  await deps.archive(bundle, clock, "pre", generation); // No D1 mutation if physical/archive/readback fails.
+  if (!noWrite) await deps.archive(bundle, clock, "pre", generation); // No D1 mutation if physical/archive/readback fails.
   if (plan.updates.length > 0) {
     await deps.apply(fresh, plan);
   }
@@ -589,14 +599,13 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
   }
   if (publication !== undefined) await publication.complete({ preBundleSHA256: sha(bundle), postSHA256, report });
   if (reviewed === undefined) {
-    const nextProgress = JSON.stringify({ cursor: tasks[tasks.length - 1].taskId });
     if (writer !== undefined) await writer.writeCursor("yutai-summary", nextProgress);
     const nextCursor = join(state, `progress-${randomUUID()}.json`);
     writePrivate(nextCursor, nextProgress);
     renameSync(nextCursor, cursorPath);
   }
   writePrivate(join(runDir, "complete.json"), JSON.stringify(report));
-  unlinkSync(pendingWrite);
+  if (!noWrite) unlinkSync(pendingWrite);
   return report;
 }
 
