@@ -20,7 +20,7 @@
 
 最大50社の現在targetを完全GETし、実値の正規化SHAを照合する。選択済みの保存Notion原本は未変更候補でも所属/7メタ/strict全文を1回読む。未変更なら業務PATCHは0。変更・欠落だけ通常の物理PRE保管→旧値CAS→完全POST検証を通す。本文が未保管なら基本情報の欠落だけ補い、旧本文・タグを消さない。原本にもない節はNULLを維持し、非開示と断定しない。主体/同doc非空メタの矛盾、reported-state、master重複はHOLD。
 
-変更文書cursorは取得時刻＋docID、巡回cursorはコード順。初回は過去の原本を一括読込せず、最大50社ずつ確認する。変更が多い場合は変更を優先するため、全社が毎日更新される保証はない。summaryの`processed/unstarted/synced/unchanged/basicOnly/held`、優待の残件/保留を確認する。
+変更文書cursorはDB取込イベント時刻＋docID、巡回cursorはコード順。本文の全メタ/全文照合後にpointer/statusが完成した時だけ同じ原子batchでイベント時刻を更新し、同値再読戻し・索引のみの修復は保持する。DBの現在秒は次回選択まで保留し、選んだ変更文書優先順をDB読取後も維持する。初回は過去の原本を一括読込せず、最大50社ずつ確認する。変更が多い場合は変更を優先するため、全社が毎日更新される保証はない。summaryの`processed/unstarted/synced/unchanged/basicOnly/held`、優待の残件/保留を確認する。
 
 本文のstructured resultは選択code・取得済み最新docの参照・code別の同期/同値/基本情報のみ/HOLD/未着手と前後cursorを含む。relationのHOLDは本文同期と併記し、計算済み原39/Notion表現SHAも原文を載せず記録する。SHAは同期入力の根拠であり、HOLD時の適用成功を示さない。既存の私有stdout保存を使い、例外では完了resultを出さない。明示`--codes`はcursorを変更しない。これは選択範囲の証跡で、全母集団の分母・distinct巡回完了・全39項目の充足は示さない。過去の集計だけの窓へ遡ってcode別結果を補作しない。
 

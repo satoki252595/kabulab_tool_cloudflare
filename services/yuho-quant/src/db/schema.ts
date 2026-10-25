@@ -138,6 +138,7 @@ export const yuhoDocuments = sqliteTable(
      * D1→Notion の追跡はこの ID で行う。未保管は NULL。
      */
     notionDocPageId: text("notion_doc_page_id"),
+    /** DB取込イベント。初回INSERTと、全文照合済み本文のpointer/status完成時に更新。同値再読戻しは保持。 */
     ingestedAt: integer("ingested_at", { mode: "timestamp" })
       .default(sql`(unixepoch())`)
       .notNull(),

@@ -35,6 +35,8 @@ import {
   buildMissingDocStatements,
   dedupeOrders,
 } from "../../data-scripts/lib/missing-backfill.js";
+import { mechanicalSelection } from "../biztag/mechanical-publishing.js";
+import { parseEdinetCsvZip } from "../services/edinet/csv.js";
 import { parseOrderHtml } from "../services/edinet/order-parser.js";
 import {
   parseOverseasHtml,
@@ -155,6 +157,55 @@ describe("text-sections: 通常選定 (ok+pointer-NULL 再開)", () => {
       sqlite.close();
     }
   });
+});
+
+it("saved6963 pointer/status readiness advances the DB event clock; readback NOOP and index-only repair keep it", async () => {
+  const saved = JSON.parse(readFileSync(join(FX, "ingest-csv-reingest-6963/saved-business.json"), "utf8")) as {
+    item: { stockId: number; documentId: number }; d1: Snapshot;
+  };
+  const sqlite = openActualSnapshot(ROOT, saved.d1), original = saved.d1.yuho_documents[0];
+  let second = Number(original.ingested_at) + 10; sqlite.function("unixepoch", () => second);
+  const buildDb = drizzleProxy(async () => { throw new Error("builder must only build SQL"); }) as unknown as Database;
+  const sections = extractTextSections(parseEdinetCsvZip(readFileSync(join(FX, "ingest-csv-reingest-6963/S100YF41-csv.zip"))));
+  const target = { id: saved.item.documentId, stockId: saved.item.stockId, docId: String(original.doc_id),
+    periodEnd: String(original.period_end), filerName: String(original.filer_name) };
+  const pointer = String(original.notion_doc_page_id), document = () => sqlite.prepare("SELECT * FROM yuho_documents WHERE id=?").get(target.id)!;
+  const readDb = drizzleProxy(async (sql, params) => ({ rows: sqlite.prepare(sql).all(...params as never[]).map(Object.values) }));
+  const heldCursor = { version: 1 as const, afterCode: null, changedAt: new Date(Number(original.ingested_at) * 1000).toISOString(), changedDoc: target.docId };
+  const apply = (verifiedPointer: string | undefined) => {
+    const statements = toD1BatchStatements(buildTextBackfillStatements(buildDb, target, "ok", sections, verifiedPointer));
+    expect(statements.every(statement => statement.params.length <= 100)).toBe(true);
+    sqlite.exec("BEGIN");
+    try { for (const statement of statements) sqlite.prepare(statement.sql).run(...statement.params as never[]); sqlite.exec("COMMIT"); }
+    catch (error) { sqlite.exec("ROLLBACK"); throw error; }
+  };
+  try {
+    expect(sections).toHaveLength(37);
+    // Captured identity/source remain fixed; only the pre-archive pointer is deliberately missing.
+    sqlite.prepare("UPDATE yuho_documents SET notion_doc_page_id=NULL WHERE id=?").run(target.id);
+    apply(undefined); expect(document().ingested_at).toBe(original.ingested_at); expect(document().notion_doc_page_id).toBeNull();
+    expect((await mechanicalSelection(readDb, heldCursor, 1)).changed).toEqual([]);
+    apply(pointer); expect(document().ingested_at).toBe(second);
+    expect(document().notion_doc_page_id).toBe(pointer); expect(document().submitted_at).toBe(original.submitted_at);
+    expect((await mechanicalSelection(readDb, heldCursor, 1)).changed).toEqual([]);
+    const completedAt = second; second++;
+    expect((await mechanicalSelection(readDb, heldCursor, 1)).changed.map(item => item.docId)).toEqual([target.docId]);
+    apply(pointer); expect(document().ingested_at).toBe(completedAt);
+    sqlite.prepare("DELETE FROM yuho_text_sections WHERE document_id=? AND section_key=?").run(target.id, sections[0].sectionKey);
+    apply(pointer); expect(document().ingested_at).toBe(completedAt);
+    expect(sqlite.prepare("SELECT COUNT(*) AS n FROM yuho_text_sections WHERE document_id=?").get(target.id)?.n).toBe(37);
+    sqlite.prepare("UPDATE yuho_documents SET text_parse_status=NULL WHERE id=?").run(target.id);
+    apply(pointer); expect(document().ingested_at).toBe(second);
+    // Re-ready the saved document: the clock must advance before the later index INSERT fails.
+    second++;
+    sqlite.prepare("UPDATE yuho_documents SET text_parse_status=NULL WHERE id=?").run(target.id);
+    const before = readSnapshot(sqlite, saved.item.stockId);
+    sqlite.exec(`CREATE TRIGGER fail_ready BEFORE INSERT ON yuho_text_sections
+      WHEN (SELECT ingested_at FROM yuho_documents WHERE id=${target.id})=unixepoch()
+      BEGIN SELECT RAISE(ABORT,'ready fault after clock update'); END`);
+    expect(() => apply(pointer)).toThrow("ready fault after clock update");
+    expect(readSnapshot(sqlite, saved.item.stockId)).toEqual(before);
+  } finally { sqlite.close(); }
 });
 
 describe("text-sections: 解析失敗と旧本文の0節置換を保全停止", () => {

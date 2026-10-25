@@ -3,7 +3,7 @@
  * data-scripts/backfill-text-sections.ts (top-level await の CLI で import
  * できない) からテスト可能な純粋部を切り出したもの。振る舞いの正本はここ。
  */
-import { and, eq, inArray, isNull, or, type SQL } from "drizzle-orm";
+import { and, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import type { Database } from "../../src/db/client.js";
 import { textSections, yuhoDocuments } from "../../src/db/schema.js";
 import type { ExtractedSection } from "../../src/services/edinet/text-sections.js";
@@ -90,7 +90,12 @@ export function buildTextBackfillStatements(
     reportedDocumentAtomicGuard(db, target.docId),
     db
       .update(yuhoDocuments)
-      .set({ textParseStatus: status, ...(notionDocPageId === undefined ? {} : { notionDocPageId }) })
+      .set({ textParseStatus: status, ...(notionDocPageId === undefined ? {} : { notionDocPageId }),
+        // 全文照合済みpointer/statusの完成だけを通知。同値再読戻しや索引修復は再投入しない。
+        ...(status === "ok" && sections.length > 0 && notionDocPageId !== undefined && notionDocPageId.length > 0
+          ? { ingestedAt: sql`case when ${yuhoDocuments.textParseStatus} is not 'ok' or ${yuhoDocuments.notionDocPageId} is not ${notionDocPageId}
+              then unixepoch() else ${yuhoDocuments.ingestedAt} end` } : {}),
+      })
       .where(eq(yuhoDocuments.id, target.id)),
     db.delete(textSections).where(eq(textSections.documentId, target.id)),
     ...chunk(sectionRows, 8).map((part) =>
