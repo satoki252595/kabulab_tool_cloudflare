@@ -24,7 +24,7 @@ import { listPageFiles } from "../../../../../src/shared/notion-archive/page-fil
 import { downloadArchivedFile } from "../../../../../src/shared/notion-archive/archived-download.js";
 import { sha256HexBytes } from "../../../../../src/shared/sha256.js";
 import { notionRequest } from "../../../../../src/shared/notion-archive/client.js";
-import type { edinetArchiveMetadata } from "./archive-metadata.js";
+import { edinetArchiveNativeMetadata, type edinetArchiveMetadata } from "./archive-metadata.js";
 
 /** EDINET 書類取得種別 (1=XBRL ZIP / 5=CSV ZIP)。 */
 export type EdinetArchiveDocType = 1 | 5;
@@ -173,6 +173,8 @@ export async function readSavedEdinetZip(docID: string, type: EdinetArchiveDocTy
   if (!Array.isArray(parts) || parts.some(p => p.type !== "text" || typeof p.plain_text !== "string" || p.plain_text !== p.text?.content)) throw new SavedEdinetZipQualificationError("EDINET保存原本metadataが不完全です");
   const metadata = JSON.parse(parts.map(p => p.plain_text).join("")) as Record<string, unknown>;
   if (metadata.docID !== docID || metadata.edinetDocType !== type) throw new SavedEdinetZipQualificationError("EDINET保存原本の文書/typeが不一致です");
+  try { edinetArchiveNativeMetadata(metadata); }
+  catch { throw new SavedEdinetZipQualificationError("EDINET保存原本のnative metadataが不完全または矛盾しています"); }
   const files = await listPageFiles(page.id, "Files");
   if (files.length !== 1 || files[0].kind !== "file" || files[0].name !== edinetArchiveFilename(docID, type)) throw new SavedEdinetZipQualificationError("EDINET保存原本の物理添付が不一致です");
   const bytes = Buffer.from(await downloadArchivedFile(files[0], "EDINET情報修正の保存原本", { maxBytes: 20 * 1024 ** 2 }));
@@ -209,9 +211,10 @@ export async function readSavedEdinetZipReference(args: {
   };
   requireReference(page.properties.Key?.type === "title" && page.properties.Metadata?.type === "rich_text");
   const key = text(page.properties.Key.title), metadata = JSON.parse(text(page.properties.Metadata.rich_text)) as Record<string, unknown>;
+  const nativeMetadata = edinetArchiveNativeMetadata(metadata);
   requireReference((key === args.docID || key === edinetArchiveKey(args.docID, 1)) && metadata.docID === args.docID &&
     (metadata.edinetDocType === 1 || key === args.docID && metadata.edinetDocType === undefined) &&
-    Object.entries(args.nativeMetadata).every(([k, value]) => metadata[k] === value));
+    Object.entries(args.nativeMetadata).every(([k, value]) => nativeMetadata[k] === value));
   // legacy page can hold other attachments; qualify only the exact D1-bound type1, never claim custody of the others.
   const files = (await listPageFiles(page.id, "Files")).filter(file => file.name === edinetArchiveFilename(args.docID, 1));
   requireReference(files.length === 1 && files[0].kind === "file");

@@ -8,7 +8,7 @@ import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import { stocks } from "../../../src/shared/db/core-schema.js";
 import { recordEdinetZip, readSavedEdinetZip, SavedEdinetZipMissingError, custodyOf, edinetArchiveKey,
   type EdinetArchiveDocType } from "../src/services/edinet/archive.js";
-import { edinetArchiveMetadata } from "../src/services/edinet/archive-metadata.js";
+import { edinetArchiveMetadata, edinetArchiveNativeMetadata } from "../src/services/edinet/archive-metadata.js";
 import { listSnapshotSchema, readListSnapshot, type ListSnapshot } from "../src/services/edinet/list-snapshot.js";
 import { loadEdinetTickerMap } from "../src/services/edinet/identity.js";
 import { assertReportedDocumentUsable, reportedDocumentMetadata, reportedStandaloneHold } from "../src/services/edinet/reported-changes.js";
@@ -71,7 +71,8 @@ type NativeMetadata = ReturnType<typeof edinetArchiveMetadata>;
 type SavedZip = Awaited<ReturnType<typeof readSavedEdinetZip>>;
 function assertReusableZip(saved: SavedZip, native: NativeMetadata, type: EdinetArchiveDocType) {
   requireSource(saved.originalManifest === "known", "existing_archive_manifest_unqualified");
-  requireSource(saved.metadata.edinetDocType === type && Object.entries(native).every(([key, value]) => saved.metadata[key] === value),
+  const metadata = edinetArchiveNativeMetadata(saved.metadata);
+  requireSource(metadata.edinetDocType === type && Object.entries(native).every(([key, value]) => metadata[key] === value),
     "existing_archive_metadata_mismatch");
 }
 // Every physical archive failure stops the whole finite run, including ordinary type5/type1 and readback unknowns.

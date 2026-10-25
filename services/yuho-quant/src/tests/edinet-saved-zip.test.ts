@@ -30,6 +30,21 @@ beforeEach(() => {
   io.download.mockResolvedValue(bytes);
 });
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
+it("preserves wrapped raw metadata after normal physical verification; conflicts stop before file reads", async () => {
+  const primary = JSON.parse(readFileSync(new URL("./fixtures/information-edit-basis-3776/native-entry.json", import.meta.url), "utf8")).doc;
+  const raw = { docID: primary.docID, edinetDocType: 5, primary, originalPublisherClockVerified: "UNKNOWN" };
+  const actual = readFileSync(new URL("./fixtures/information-edit-basis-3776/current-type5.zip", import.meta.url));
+  io.row.mockResolvedValue(page(raw, `${primary.docID}:type5`));
+  io.files.mockResolvedValue([{ name: `${primary.docID}_csv.zip`, kind: "file", url: "offline-file-transport-control" }]);
+  io.download.mockResolvedValue(actual);
+  const saved = await readSavedEdinetZip(primary.docID, 5);
+  expect(saved.metadata).toEqual(raw); expect(saved.metadata.secCode).toBeUndefined();
+  expect(saved.originalManifest).toBe("unknown");
+  io.files.mockClear(); io.download.mockClear();
+  io.row.mockResolvedValue(page({ ...raw, secCode: null }, `${primary.docID}:type5`));
+  await expect(readSavedEdinetZip(primary.docID, 5)).rejects.toBeInstanceOf(SavedEdinetZipQualificationError);
+  expect(io.files).not.toHaveBeenCalled(); expect(io.download).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+});
 it("reads only the selected existing type5 physical bytes and retains absent-manifest unknown", async () => {
   expect(await readSavedEdinetZip("S100YF41", 5)).toMatchObject({ bytes, sha256: sha, originalManifest: "unknown" });
   expect(io.row.mock.calls[0][1]).toEqual({ property: "Key", title: { equals: key } });

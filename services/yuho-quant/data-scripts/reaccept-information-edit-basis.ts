@@ -19,7 +19,7 @@ import * as schema from "../src/db/schema.js";
 import type { Database } from "../src/db/client.js";
 import { informationEditMetadata, informationEditRowsGuard, isInformationEdit, readInformationEditState, verifyInformationEditData, type InformationEditState } from "../src/services/edinet/information-edit.js";
 import { readSavedEdinetZip, readSavedEdinetZipReference } from "../src/services/edinet/archive.js";
-import { edinetArchiveMetadata } from "../src/services/edinet/archive-metadata.js";
+import { edinetArchiveMetadata, edinetArchiveNativeMetadata } from "../src/services/edinet/archive-metadata.js";
 import { listSnapshotSchema, readListSnapshot, type ListSnapshot } from "../src/services/edinet/list-snapshot.js";
 import { edinetTickerIdentityGuard, loadEdinetTickerMap } from "../src/services/edinet/identity.js";
 import { edinetDocSchema, parseSubmitDateTime, secCodeToTicker, type EdinetDoc } from "../src/services/edinet/types.js";
@@ -144,7 +144,9 @@ async function materials(db: Database, options: ReturnType<typeof parseBasisArgu
   stop(); assert.equal((await loadEdinetTickerMap(db, [d.edinetCode])).get(d.edinetCode), c.state.stock[0].code, "issuer_map_changed");
   const native = edinetArchiveMetadata(doc, d.periodEnd);
   stop(); const csv = await readSavedEdinetZip(d.docId, 5); stop(); const current = await readSavedEdinetZip(d.docId, 1);
-  for (const zip of [csv, current]) { assert.equal(zip.originalManifest, "known", "typed_manifest_unqualified"); for (const [key, value] of Object.entries(native)) equal(zip.metadata[key], value); }
+  for (const zip of [csv, current]) { assert.equal(zip.originalManifest, "known", "typed_manifest_unqualified");
+    const metadata = edinetArchiveNativeMetadata(zip.metadata);
+    for (const [key, value] of Object.entries(native)) equal(metadata[key], value); }
   const omission = parseOverseasOmission(d.overseasOmissionJson, { docId: d.docId, edinetCode: d.edinetCode, periodEnd: d.periodEnd }); assert(omission);
   stop(); const old = await readSavedEdinetZipReference({ docID: d.docId, type: 1, pageId: omission.archivePageId, sha256: omission.zipSha256,
     originalManifest: omission.archiveManifest, nativeMetadata: native });
