@@ -24,6 +24,8 @@ nix develop --command pnpm audit:financial:null \
 
 通常の`reparse_financials_from_notion.py`の既定監査も、`--code`等で選択した財務行の一意な原本relationを直接GETし、同じ取得元・日付group内で重複取得を省く。同日の全市場の原本一覧は読まない。返却pageのID・正準⑤DB親・activeを検査してから既存のSHA照合・再解析へ渡し、取得数を`raw_page_gets`で報告する。監査は書込を行わず、journalの確認後に別途applyする。
 
+通常の`--sync-d1`は既存のコード別PRE読取を使い、同じ書込SQL内で対象キーと全34列が旧値に一致する行だけを更新する。未存在と観測したキーへの競合INSERTも上書きしない。追加APIはなく、新しい開示・書類ID・厳格なライセンスの保護と全列POSTを維持する。競合行が除外されてPOST不一致なら停止し、同じbatchの他行まで未反映とは扱わない。parser fingerprintが一致する既存の正規audit/Notion成功receiptは再利用できるが、診断journalは同期に使わない。
+
 `source-map.json`はversion1と`sources`配列を持つ。各要素には`raw_page_id`, `snapshot_file`, `snapshot_sha256`, `original_file`, `original_sha256`を明示する。snapshotはexact⑤pageの保存JSON、originalは同じfull SHAの全ZIP。期限付きURLの再取得や別原本探索は行わない。必要なmetadata/物理原本の有限読取は別の明示RO操作とし、根拠がなければHOLDのまま進める。
 
 ```sh

@@ -760,7 +760,22 @@ def apply_journal(journal: Path, receipts: Path | None = None, *, workers: int =
 
 def _repair_sql() -> str:
     # 監査済みの欠損もNULLで上書きする。通常取込と同じ正本完全置換。
-    values = ", ".join(f"json_extract(j.value, '$[{i}]')" for i in range(len(COLUMNS)))
+    values = ", ".join(f"json_extract(j.value, '$.new[{i}]')" for i in range(len(COLUMNS)))
+    key_match = " AND ".join(
+        f"f.{c} IS json_extract(j.value, '$.new[{COLUMNS.index(c)}]')"
+        for c in FINANCIALS_PK
+    )
+    old_match = " AND ".join(
+        f"f.{c} IS json_extract(j.value, '$.old[{i}]')" for i, c in enumerate(COLUMNS)
+    )
+    # 比較と書込を同じstatementへ束縛。未観測の競合insertも上書きしない。
+    unchanged = (
+        f"(json_type(j.value, '$.old') = 'null' AND NOT EXISTS "
+        f"(SELECT 1 FROM {TABLE} f WHERE {key_match})) OR "
+        f"(json_type(j.value, '$.old') = 'array' AND "
+        f"json_array_length(j.value, '$.old') = {len(COLUMNS)} AND EXISTS "
+        f"(SELECT 1 FROM {TABLE} f WHERE {key_match} AND {old_match}))"
+    )
     assignments = [f"{c} = excluded.{c}" for c in COLUMNS if c not in FINANCIALS_PK
                    and c not in ("doc_id", "license_tag")]
     assignments.append("doc_id = CASE WHEN excluded.doc_id IS NOT NULL THEN excluded.doc_id "
@@ -771,7 +786,9 @@ def _repair_sql() -> str:
         "excluded.license_tag", f"{TABLE}.license_tag"
     ))
     return (f"INSERT INTO {TABLE} ({', '.join(COLUMNS)}) SELECT {values} "
-            f"FROM json_each(?) AS j WHERE true ON CONFLICT ({', '.join(FINANCIALS_PK)}) "
+            f"FROM json_each(?) AS j WHERE json_type(j.value, '$.new') = 'array' AND "
+            f"json_array_length(j.value, '$.new') = {len(COLUMNS)} AND ({unchanged}) "
+            f"ON CONFLICT ({', '.join(FINANCIALS_PK)}) "
             f"DO UPDATE SET {', '.join(assignments)} WHERE "
             f"excluded.disclosed_at >= {TABLE}.disclosed_at OR {TABLE}.disclosed_at IS NULL")
 
@@ -855,8 +872,12 @@ def sync_d1(journal: Path, receipts: Path) -> None:
             raise ValueError("同じ原本の既存書類IDが一意ではありません")
         if ids:
             [row[COLUMNS.index("doc_id")]] = ids
-    for offset in range(0, len(rows), 100):
-        store.query(_repair_sql(), [_json(rows[offset:offset + 100])])
+    payload = []
+    for row in rows:
+        old = existing.get(tuple(row[COLUMNS.index(c)] for c in FINANCIALS_PK))
+        payload.append({"new": row, "old": [old[c] for c in COLUMNS] if old is not None else None})
+    for offset in range(0, len(payload), 100):
+        store.query(_repair_sql(), [_json(payload[offset:offset + 100])])
     saved = _d1_rows(store, codes)
     protected = 0
     for values in rows:
