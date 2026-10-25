@@ -11,8 +11,8 @@ import { planWork, withInputReceipt, withTextSyncReceipt } from "./plan.js";
 import { TEXT_SECTIONS } from "../services/edinet/text-sections.js";
 import { BiztagTextQualificationError, type LatestDoc } from "./source.js";
 
-const io = vi.hoisted(() => ({ latest: vi.fn(), rows: vi.fn(), full: vi.fn(), source: vi.fn(), qualified: vi.fn(), renamed: vi.fn(), replace: vi.fn(), create: vi.fn() }));
-vi.mock("../../../../src/shared/db/d1-http-client.js", () => ({ createD1HttpDb: () => ({}) }));
+const io = vi.hoisted(() => ({ db: vi.fn(), latest: vi.fn(), rows: vi.fn(), full: vi.fn(), source: vi.fn(), qualified: vi.fn(), renamed: vi.fn(), replace: vi.fn(), create: vi.fn() }));
+vi.mock("../../../../src/shared/db/d1-http-client.js", () => ({ createD1HttpDb: () => io.db() }));
 vi.mock("./source.js", async original => ({ ...await original<typeof import("./source.js")>(), loadLatestDocs: io.latest, assertLatestDocCurrent: vi.fn(), readQualifiedBiztagDocText: io.qualified, readQualifiedCompanyNameRefresh: io.renamed }));
 vi.mock("../../../../src/shared/notion-archive/index.js", async original => ({ ...await original<typeof import("../../../../src/shared/notion-archive/index.js")>(),
   ensureSupplementDb: vi.fn(async () => ({ dbId: "protocol-db", propertyIds: {} })), loadSupplementRows: io.rows,
@@ -43,7 +43,7 @@ function store(): PublishingStore {
   } };
 }
 beforeEach(() => {
-  vi.clearAllMocks(); vi.stubGlobal("fetch", vi.fn(() => { throw new Error("network forbidden"); }));
+  vi.clearAllMocks(); io.db.mockReturnValue({}); vi.stubGlobal("fetch", vi.fn(() => { throw new Error("network forbidden"); }));
   io.latest.mockResolvedValue([latest]); io.rows.mockResolvedValue([row()]); io.full.mockResolvedValue(row()); io.source.mockResolvedValue(sections);
   io.qualified.mockImplementation(async (_db, _code, doc) => io.source(doc.notionDocPageId, true));
   io.renamed.mockResolvedValue(sections);
@@ -141,6 +141,73 @@ it("changed-document and rotation selectors use real saved rows, bounded SQL out
     expect(sqls.every(sql => sql.includes("limit ?") && sql.includes('"is_active"') && sql.includes('"instrument_type"'))).toBe(true);
     expect(io.source).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
   } finally { sqlite.close(); }
+});
+
+it("DB current-second events wait before LIMIT, then preserve docId ties and a later completed lower docId", async () => {
+  const saved = JSON.parse(gunzipSync(readFileSync(new URL("./fixtures/latest-docs-saved50-20261017.json.gz", import.meta.url))).toString());
+  const core = saved.core.slice(0, 2), docs = core.map((stock: { id: number }) => saved.documents.find((doc: { stock_id: number }) => doc.stock_id === stock.id))
+    .sort((a: { doc_id: string }, b: { doc_id: string }) => a.doc_id.localeCompare(b.doc_id));
+  let second = Math.max(...docs.map((doc: { submitted_at: number }) => doc.submitted_at)) + 10;
+  const sqlite = new DatabaseSync(":memory:"); sqlite.function("unixepoch", () => second);
+  const sqls: string[] = [];
+  try {
+    sqlite.exec("CREATE TABLE core_stocks(id INTEGER,code TEXT,name TEXT,sector33 TEXT,is_active INTEGER,instrument_type TEXT); CREATE TABLE yuho_documents(doc_id TEXT,stock_id INTEGER,doc_type_code TEXT,ingested_at INTEGER);");
+    for (const stock of core) sqlite.prepare("INSERT INTO core_stocks VALUES(?,?,?,?,1,'equity')").run(stock.id, stock.code, stock.name, stock.sector33);
+    for (const doc of docs) sqlite.prepare("INSERT INTO yuho_documents VALUES(?,?,?,unixepoch())").run(doc.doc_id, doc.stock_id, doc.doc_type_code);
+    const db = drizzle(async (sql, params) => { sqls.push(sql); return { rows: sqlite.prepare(sql).all(...params as (string | number | null)[]).map(Object.values) }; });
+    const cursor = { version: 1 as const, afterCode: null, changedAt: new Date((second - 1) * 1000).toISOString(), changedDoc: "" };
+    expect((await mechanicalSelection(db, cursor, 1)).changed).toEqual([]);
+    expect(sqls[0]).toContain("unixepoch()");
+    second++;
+    const ready = await mechanicalSelection(db, cursor, 2);
+    expect(ready.changed.map(item => item.docId)).toEqual(docs.map((doc: { doc_id: string }) => doc.doc_id));
+    const tied = { ...cursor, changedAt: ready.changed[0].ingestedAt.toISOString(), changedDoc: docs[0].doc_id };
+    expect((await mechanicalSelection(db, tied, 2)).changed.map(item => item.docId)).toEqual([docs[1].doc_id]);
+    const closed = { ...tied, changedDoc: docs[1].doc_id };
+    // A concurrent archive completion can have a lower docId than the already closed tie.
+    sqlite.prepare("UPDATE yuho_documents SET ingested_at=unixepoch() WHERE doc_id=?").run(docs[0].doc_id);
+    expect((await mechanicalSelection(db, closed, 2)).changed).toEqual([]);
+    second++;
+    expect((await mechanicalSelection(db, closed, 2)).changed.map(item => item.docId)).toEqual([docs[0].doc_id]);
+    expect(fetch).not.toHaveBeenCalled();
+  } finally { sqlite.close(); }
+});
+
+it("saved changed code is processed before rotation despite reverse source order and the soft bound", async () => {
+  vi.useFakeTimers(); const start = Date.parse("2026-10-26T04:17:00.000Z"); vi.setSystemTime(start);
+  const saved = JSON.parse(gunzipSync(readFileSync(new URL("./fixtures/latest-docs-saved50-20261017.json.gz", import.meta.url))).toString());
+  const [rotating, changed] = saved.core.slice(0, 2), doc = saved.documents.find((d: { stock_id: number }) => d.stock_id === changed.id);
+  const sqlite = new DatabaseSync(":memory:");
+  sqlite.function("unixepoch", () => Math.floor(Date.now() / 1000));
+  try {
+    sqlite.exec("CREATE TABLE core_stocks(id INTEGER,code TEXT,name TEXT,sector33 TEXT,is_active INTEGER,instrument_type TEXT); CREATE TABLE yuho_documents(doc_id TEXT,stock_id INTEGER,doc_type_code TEXT,ingested_at INTEGER);");
+    for (const stock of [rotating, changed]) sqlite.prepare("INSERT INTO core_stocks VALUES(?,?,?,?,1,'equity')").run(stock.id, stock.code, stock.name, stock.sector33);
+    sqlite.prepare("INSERT INTO yuho_documents VALUES(?,?,?,?)").run(doc.doc_id, changed.id, doc.doc_type_code, (start - 1000) / 1000);
+    io.db.mockReturnValue(drizzle(async (sql, params) => ({ rows: sqlite.prepare(sql).all(...params as (string | number | null)[]).map(Object.values) })));
+    // The captured document's missing pointer is a deliberate pre-archive fault projection.
+    io.latest.mockResolvedValue([rotating, changed].map(stock => ({ stockCode: stock.code, companyName: stock.name, sector33: stock.sector33,
+      doc: stock === rotating ? null : { docId: doc.doc_id, docTypeCode: doc.doc_type_code, periodEnd: doc.period_end,
+        submittedAt: new Date(doc.submitted_at * 1000).toISOString(), notionDocPageId: null, textParseStatus: "ok" } })));
+    io.rows.mockResolvedValue([]);
+    vi.mocked(loadStockMasterIndex).mockResolvedValueOnce({ index: new Map([rotating, changed].map(stock => [stock.code, "protocol-master"])), duplicates: new Map() });
+    io.create.mockImplementationOnce(async () => { vi.setSystemTime(start + 60_001); return "protocol-new"; });
+    const memory = store(), cursor = { version: 1 as const, afterCode: null, changedAt: new Date(start - 2000).toISOString(), changedDoc: "" };
+    await memory.put("mechanical-publishing/v1/cursors/supplement-texts.json", JSON.stringify(cursor), null);
+    const result = await withSharedPublishingWriter(() => runMechanicalPublishing({ limit: 2, budgetMs: 60_000 }), memory);
+    expect(result).toMatchObject({ selectedCodes: [changed.code, rotating.code], processed: 1, basicOnly: 1, unstarted: 1,
+      outcomes: [{ stockCode: changed.code, outcome: "basic-only" }, { stockCode: rotating.code, outcome: "unstarted" }],
+      cursorAfter: { afterCode: null, changedDoc: doc.doc_id, changedAt: new Date(start - 1000).toISOString() } });
+    expect(io.create).toHaveBeenCalledTimes(1); expect(io.create.mock.calls[0][1].stockCode).toBe(changed.code);
+    expect(io.source).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+  } finally { sqlite.close(); }
+});
+
+it.each(["missing", "duplicate", "outside"] as const)("%s source membership stops before any body publication", async fault => {
+  io.latest.mockResolvedValue(fault === "missing" ? [] : fault === "duplicate" ? [latest, latest] : [{ ...latest, stockCode: "6104" }]);
+  const memory = store();
+  await expect(withSharedPublishingWriter(() => runMechanicalPublishing({ codes: ["6103"], limit: 1, budgetMs: 60_000 }), memory)).rejects.toBeInstanceOf(PublishingReadOnlyError);
+  expect(JSON.parse((await memory.get(SHARED_WRITER_KEY, 16384))!.body)).toMatchObject({ owner: null, pending: null });
+  expect(io.source).not.toHaveBeenCalled(); expect(io.replace).not.toHaveBeenCalled(); expect(io.create).not.toHaveBeenCalled();
 });
 
 it("one admitted body can close after soft; the next body never starts and both keep the exact hard bound", async () => {

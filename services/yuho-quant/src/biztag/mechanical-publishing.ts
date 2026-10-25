@@ -1,6 +1,6 @@
 /** Finite body/master publishing only. No vocabulary, thresholds, model or semantic tag writes. */
 import assert from "node:assert/strict";
-import { and, asc, eq, gt, inArray, or } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, lt, or, sql } from "drizzle-orm";
 import { stocks } from "../../../../src/shared/db/core-schema.js";
 import { activeEquityCondition } from "../../../../src/shared/db/active-equity.js";
 import { createD1HttpDb } from "../../../../src/shared/db/d1-http-client.js";
@@ -40,6 +40,7 @@ export async function mechanicalSelection(db: BiztagSourceDb, cursor: Publishing
   const changed = await db.select({ code: stocks.code, docId: schema.yuhoDocuments.docId, ingestedAt: schema.yuhoDocuments.ingestedAt })
     .from(schema.yuhoDocuments).innerJoin(stocks, eq(stocks.id, schema.yuhoDocuments.stockId))
     .where(and(activeEquityCondition(), inArray(schema.yuhoDocuments.docTypeCode, ["120", "130"]),
+      lt(schema.yuhoDocuments.ingestedAt, sql`(unixepoch())`),
       or(gt(schema.yuhoDocuments.ingestedAt, new Date(cursor.changedAt)), and(eq(schema.yuhoDocuments.ingestedAt, new Date(cursor.changedAt)), gt(schema.yuhoDocuments.docId, cursor.changedDoc)))))
     .orderBy(asc(schema.yuhoDocuments.ingestedAt), asc(schema.yuhoDocuments.docId)).limit(limit);
   const window = (after: string | null) => db.select({ code: stocks.code }).from(stocks)
@@ -91,7 +92,13 @@ export async function runMechanicalPublishing(options: { limit: number; budgetMs
   const cursor = publishingCursor(await writer.readCursor("supplement-texts"), start);
   const db = createD1HttpDb(schema) as unknown as BiztagSourceDb;
   const selection = options.codes ? { codes: options.codes, changed: [], rotating: [] } : await publishingReadOnly(() => mechanicalSelection(db, cursor, options.limit));
-  const latest = await publishingReadOnly(() => loadLatestDocs(db, selection.codes));
+  const latest = await publishingReadOnly(async () => {
+    const loaded = await loadLatestDocs(db, selection.codes), byCode = new Map(loaded.map(item => [item.stockCode, item]));
+    assert.equal(byCode.size, loaded.length, "本文同期の銘柄scopeが重複しています");
+    assert.equal(loaded.length, selection.codes.length, "本文同期の銘柄scopeが不足/範囲外です");
+    // DBの返却順に依存せず、変更文書優先と未着手cursorのprefixを保つ。
+    return selection.codes.map(code => { const item = byCode.get(code); assert(item, "本文同期の選択銘柄が未取得です"); return item; });
+  });
   const outcomes = new Map<string, PublishingOutcome>(selection.codes.map(stockCode =>
     [stockCode, { stockCode, outcome: "unstarted", sourceReceipt: null }]));
   const done = new Set<string>(), held: Array<{ stockCode: string; reason: string }> = [];
