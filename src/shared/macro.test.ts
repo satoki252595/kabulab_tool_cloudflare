@@ -17,7 +17,7 @@ describe("macro missing inputs and observed conditions", () => {
     if (judgment === "HOLD") {
       expect(result.reason).toContain("未取得");
       expect(result.reason).not.toContain("条件未達");
-      if (topixTurnoverRatio === null) expect(result.reason).toContain("TOPIX売買代金比率");
+      if (topixTurnoverRatio === null) expect(result.reason).toContain("東証プライム売買代金の20日平均比");
       if (futuresGap === null) expect(result.reason).toContain("先物ギャップ");
     }
   });
