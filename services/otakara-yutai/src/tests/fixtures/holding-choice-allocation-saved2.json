@@ -1,0 +1,55 @@
+{
+  "privateFixtureDir": "tmp/yutai-holding-choice-allocation-proof-v1",
+  "privateFixtureSha256": "895d1757a48c306c1f6642fe5a7a78eef213b7d16a9abbeb745ebd6eb76459db",
+  "sourceFullPostSha256": "587844ba39627944a5ca4a9d7d121130f5cd134b39ac15b00ff2b43e79c39376",
+  "historicalFixtureNotCurrentPendingCount": true,
+  "comparisonIds": [
+    61317,
+    64095,
+    64096
+  ],
+  "unchangedHeldIds": [
+    64093,
+    64094,
+    64097,
+    64098
+  ],
+  "groups": [
+    {
+      "stockCode": "2776",
+      "taskId": "a024cd79f0e2d155",
+      "ids": [
+        57455
+      ],
+      "sourceSha256": "d35926fa1ca5aac28e95da7bef2ea2684d4e54aa8fa0a81c956b24002265bb04",
+      "sourceCharacters": 589,
+      "recipients": [
+        {
+          "minShares": 1000,
+          "recordMonth": 1,
+          "recordDate": null
+        }
+      ],
+      "summarySha256": "48dc32bbd738f684d9bc6326a752e8f997eb7291c31da53d8cf5606c9a8033a6",
+      "summaryCharacters": 251
+    },
+    {
+      "stockCode": "7856",
+      "taskId": "0e08fbbfdf2fde14",
+      "ids": [
+        61316
+      ],
+      "sourceSha256": "f8bbc945eff462d9429e0fa49d2fed5fa6ba4d7d184498292a2ff68a0e0656d7",
+      "sourceCharacters": 481,
+      "recipients": [
+        {
+          "minShares": 100,
+          "recordMonth": 10,
+          "recordDate": null
+        }
+      ],
+      "summarySha256": "36ad0c31e76380e74972851176ce5ff2be5b8d827574f1b239ff843d8fb42ac6",
+      "summaryCharacters": 255
+    }
+  ]
+}

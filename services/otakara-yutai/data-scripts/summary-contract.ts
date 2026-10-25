@@ -24,7 +24,7 @@
 import { createHash } from "node:crypto";
 import { compileMusashinoOfficialLiteral } from "./musashino-source.js";
 import { HEADED_MARK, splitHeadedDescription } from "./estimated-value-guard.js";
-import { compileAnnualGiftHistoryLiteral, compileBankDepositChoiceLiteral, compileBankHoldingHistoryLiteral, compileDepartmentHoldingLiteral, compileHoldingPointCarryLiteral, compileHotelHoldingLiteral, compileMealTicketSplitLiteral, compilePointExchangeLiteral, compilePremiumClubCarryLiteral, compileSkiTicketBundleLiteral, compileVenueAdmissionLiteral } from "./holding-structure.js";
+import { compileAnnualGiftHistoryLiteral, compileBankDepositChoiceLiteral, compileBankHoldingHistoryLiteral, compileDepartmentHoldingLiteral, compileEqualAllocationHoldingLiteral, compileHoldingGiftChoiceLiteral, compileHoldingPointCarryLiteral, compileHotelHoldingLiteral, compileMealTicketSplitLiteral, compilePointExchangeLiteral, compilePremiumClubCarryLiteral, compileSkiTicketBundleLiteral, compileVenueAdmissionLiteral } from "./holding-structure.js";
 
 /**
  * 要約契約の版。タスクファイルと結果ファイルの各行に載り、取り込み時に
@@ -32,7 +32,7 @@ import { compileAnnualGiftHistoryLiteral, compileBankDepositChoiceLiteral, compi
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-10-26.6";
+export const SUMMARY_CONTRACT_VERSION = "2026-10-26.7";
 
 /** 比較時だけ同じ月期間の表記を揃え、数値・比較条件・保存文面は変えない。 */
 function normalizeMonthPeriods(text: string): string {
@@ -127,6 +127,18 @@ export function isSummaryNumbersGrounded(
   context: { minShares: readonly number[]; recordMonths: readonly number[]; recordDates?: readonly (string | null)[] },
 ): boolean {
   const normalized = shortSummary.normalize("NFKC").trim();
+  const holdingGift = compileHoldingGiftChoiceLiteral(description);
+  // 翌年条件・全選択肢を完全句へ束縛し、既存1000株tierへ転用しない。
+  if (holdingGift !== null || normalized.startsWith("2026年10月末の優待:")) return holdingGift !== null && normalized === holdingGift &&
+    context.minShares.length === 1 && context.minShares[0] === 100 &&
+    context.recordMonths.length === 1 && context.recordMonths[0] === 10 &&
+    context.recordDates?.length === 1 && context.recordDates[0] === null;
+  const equalAllocation = compileEqualAllocationHoldingLiteral(description);
+  // 均等割・初回別枠・実加算額2倍は一般の額/倍率へ降格させない。全文・完全句・実recipientだけ。
+  if (equalAllocation !== null || normalized.startsWith("QUOカードPay:基本枠")) return equalAllocation !== null && normalized === equalAllocation &&
+    context.minShares.length === 1 && context.minShares[0] === 1000 &&
+    context.recordMonths.length === 1 && context.recordMonths[0] === 1 &&
+    context.recordDates?.length === 1 && context.recordDates[0] === null;
   const mealTicket = compileMealTicketSplitLiteral(description);
   // 分割比率・歴史100株を現在tierへ転用しない。全文・完全句・実recipientだけ。
   if (mealTicket !== null || normalized.includes("分割前表示")) return mealTicket !== null && normalized === mealTicket.shortSummary &&
