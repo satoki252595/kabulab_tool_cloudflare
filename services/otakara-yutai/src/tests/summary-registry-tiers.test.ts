@@ -1,4 +1,4 @@
-/** 原本はprivate保存。実6群の通常バッチと、条件の改変・別tier転用を確認する。 */
+/** 原本はprivate保存。実14群の通常バッチと、条件の改変・別tier転用を確認する。 */
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -11,9 +11,9 @@ import { planSummaryImport } from "../../data-scripts/summary-import.js";
 import { companyValue, compileSimpleSummary, runLocalSummary } from "../../data-scripts/summary-local.js";
 import { selectSummaryTasks, type BenefitRow } from "../../data-scripts/summary-tasks.js";
 import { benefitRowsOf, carryKey, planCarry } from "../../data-scripts/yutai-full-import.js";
-import metadata from "./fixtures/registry-tiers-saved6.json";
+import metadata from "./fixtures/registry-tiers-saved14.json";
 
-const privatePath = join(ROOT, metadata.privateFixtureDir, "saved7.private.json");
+const privatePath = join(ROOT, metadata.privateFixtureDir, metadata.privateFixtureFile);
 const digest = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 function savedRows(): BenefitRow[] {
   const bytes = readFileSync(privatePath);
@@ -23,13 +23,13 @@ function savedRows(): BenefitRow[] {
 
 it("未知の移転条件・参考画像・観劇枠を一般の株数や金額へ降格しない", () => {
   expect(compileRegistryTierLiteral("")).toBeNull();
-  for (const summary of ["カタログ1点選択:3,000円相当", "OSK先着観劇券:30枚", "ASNOVA×monotomoiギフト:500株"])
+  for (const summary of ["カタログ1点選択:3,000円相当", "OSK先着観劇券:30枚", "ASNOVA×monotomoiギフト:500株", "三越伊勢丹カード:10%引"])
     expect(isSummaryNumbersGrounded("", summary, { minShares: [500], recordMonths: [3], recordDates: [null] })).toBe(false);
 });
 
-it.skipIf(!existsSync(privatePath))("保存6群8行を通常生成/取込/再取込/selector/carryで閉じ、モデルを起動しない", async () => {
+it.skipIf(!existsSync(privatePath))("保存14群24行を通常生成/取込/再取込/selector/carryで閉じ、モデルを起動しない", async () => {
   const rows = savedRows(), tasks = selectSummaryTasks(rows);
-  expect(rows.length).toBe(10); expect(tasks.length).toBe(6);
+  expect(rows.length).toBe(metadata.sourceRows); expect(tasks.length).toBe(metadata.groups.length);
   const results = tasks.map(task => {
     const result = compileSimpleSummary(task), expected = metadata.groups.find(group => group.taskId === task.taskId)!;
     if (result === null) throw new Error("registry_tier_compile_missing");
@@ -42,7 +42,7 @@ it.skipIf(!existsSync(privatePath))("保存6群8行を通常生成/取込/再取
   });
   const resultsText = results.map(result => JSON.stringify(result)).join("\n");
   const plan = planSummaryImport({ tasks, currentRows: rows, resultsText });
-  expect(plan.rejections).toEqual([]); expect(plan.updates.length).toBe(6);
+  expect(plan.rejections).toEqual([]); expect(plan.updates.length).toBe(metadata.groups.length);
   const ids = metadata.groups.flatMap(group => group.ids).sort((a, b) => a - b);
   expect(plan.updates.flatMap(update => update.ids).sort((a, b) => a - b)).toEqual(ids);
   expect(plan.valueChanges).toEqual({ toNull: 0, fromNull: 2, changed: 0 });
@@ -52,7 +52,7 @@ it.skipIf(!existsSync(privatePath))("保存6群8行を通常生成/取込/再取
   });
   expect(after.filter(row => !ids.includes(row.id))).toEqual(rows.filter(row => !ids.includes(row.id)));
   expect(selectSummaryTasks(after)).toEqual([]);
-  expect(planSummaryImport({ tasks, currentRows: after, resultsText })).toMatchObject({ updates: [], skippedEquivalent: 6 });
+  expect(planSummaryImport({ tasks, currentRows: after, resultsText })).toMatchObject({ updates: [], skippedEquivalent: metadata.groups.length });
   for (const row of after.filter(row => ids.includes(row.id))) {
     const source = splitHeadedDescription(row.description);
     if (source.heading === null) throw new Error("registry_tier_heading_missing");
@@ -75,7 +75,7 @@ it.skipIf(!existsSync(privatePath))("保存6群8行を通常生成/取込/再取
         return update === undefined ? row : { ...row, shortSummary: update.shortSummary, estimatedValue: update.estimatedValue, estimateValueSource: update.estimateValueSource, updatedAt: row.updatedAt + 1 };
       }); },
     });
-    expect(report).toMatchObject({ selected: 6, accepted: 6, rejected: 0, pendingAfter: 0, modelCalls: 0, deterministic: 6 });
+    expect(report).toMatchObject({ selected: metadata.groups.length, accepted: metadata.groups.length, rejected: 0, pendingAfter: 0, modelCalls: 0, deterministic: metadata.groups.length });
     expect(current.filter(row => !ids.includes(row.id))).toEqual(rows.filter(row => !ids.includes(row.id)));
   } finally { rmSync(stateDir, { recursive: true }); }
 });
