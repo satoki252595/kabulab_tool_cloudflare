@@ -1,0 +1,52 @@
+{
+  "provenance": {
+    "sourceFileSha256": "0c2abc68e28696dd2bcb8a92c925cc4fb25fad56b051af9b6fc715cd7646edfc",
+    "privateFixtureSha256": "38dd3d78ecc797dc352c4e050d8c61cc841b73010c49865724474ed7ad701902",
+    "normalizedTailSha256": "8ce124842d80b5bebefe95e9827396a93fa3cdbab2f314f425393a19354f5fe5",
+    "historicalFixtureNotCurrentPendingCount": true
+  },
+  "groups": [
+    {
+      "taskId": "c8f25fe7eda84ef2",
+      "stockCode": "7599",
+      "sourceSha256": "69ac5c0118737d65cd1a88446f4de450f0ded3b4fc6a5e3d38333f4ab8861f43",
+      "rowCount": 2,
+      "recipients": [
+        {
+          "minShares": 500,
+          "recordMonth": 2,
+          "recordDate": null
+        },
+        {
+          "minShares": 500,
+          "recordMonth": 8,
+          "recordDate": null
+        }
+      ],
+      "expectedSummarySha256": "fc54c44a376121e34952bb0bf6f7ac56e09a4c80e1b5f77044f09b4d48d43795",
+      "listedPerGrantYen": 13500,
+      "listedAnnualYen": 27000
+    },
+    {
+      "taskId": "3f5f5b55362363cc",
+      "stockCode": "7599",
+      "sourceSha256": "5ffca39997a371c13ffb9db96c13b99f04b809d8930bfbade382480e06232d19",
+      "rowCount": 2,
+      "recipients": [
+        {
+          "minShares": 1000,
+          "recordMonth": 2,
+          "recordDate": null
+        },
+        {
+          "minShares": 1000,
+          "recordMonth": 8,
+          "recordDate": null
+        }
+      ],
+      "expectedSummarySha256": "fcccb58362ea7a5ce01608e199ba9a45b6939f9036c2301371aecbb875991a0d",
+      "listedPerGrantYen": 30000,
+      "listedAnnualYen": 60000
+    }
+  ]
+}

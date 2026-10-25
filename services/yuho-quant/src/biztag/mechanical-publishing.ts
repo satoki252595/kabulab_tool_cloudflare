@@ -20,6 +20,11 @@ import { PREFILTER_SECTIONS } from "./prefilter.js";
 import { docTypeLabelOf } from "./doc-type.js";
 
 export interface PublishingCursor { version: 1; afterCode: string | null; changedAt: string; changedDoc: string }
+type PublishingOutcome = {
+  stockCode: string;
+  outcome: "synced" | "unchanged" | "basic-only" | "held" | "unstarted";
+  sourceReceipt: { textsSha256: string; notionTextsSha256?: string } | null;
+};
 export function publishingCursor(raw: string | null, now: number): PublishingCursor {
   if (raw === null) return { version: 1, afterCode: null, changedAt: new Date(Math.floor(now / 1000) * 1000).toISOString(), changedDoc: "" };
   const value: PublishingCursor = JSON.parse(raw);
@@ -87,6 +92,8 @@ export async function runMechanicalPublishing(options: { limit: number; budgetMs
   const db = createD1HttpDb(schema) as unknown as BiztagSourceDb;
   const selection = options.codes ? { codes: options.codes, changed: [], rotating: [] } : await publishingReadOnly(() => mechanicalSelection(db, cursor, options.limit));
   const latest = await publishingReadOnly(() => loadLatestDocs(db, selection.codes));
+  const outcomes = new Map<string, PublishingOutcome>(selection.codes.map(stockCode =>
+    [stockCode, { stockCode, outcome: "unstarted", sourceReceipt: null }]));
   const done = new Set<string>(), held: Array<{ stockCode: string; reason: string }> = [];
   let synced = 0, unchanged = 0, basicOnly = 0;
   if (latest.length > 0) {
@@ -96,6 +103,8 @@ export async function runMechanicalPublishing(options: { limit: number; budgetMs
     const master = await publishingReadOnly(() => loadStockMasterIndex(selection.codes));
     for (const item of latest) {
       if (Date.now() >= soft) break;
+      const outcome = outcomes.get(item.stockCode)!;
+      outcome.outcome = "held";
       const row = rows.find(value => value.stockCode === item.stockCode) ?? null;
       if (item.reportedHoldReason !== undefined) { held.push({ stockCode: item.stockCode, reason: item.reportedHoldReason }); done.add(item.stockCode); continue; }
       if (row !== null && (row.companyName.trim() !== "" && displayName(row.companyName) !== displayName(item.companyName) ||
@@ -116,10 +125,12 @@ export async function runMechanicalPublishing(options: { limit: number; budgetMs
           if (row === null) {
             await assertLatestDocCurrent(db, item.stockCode, item.doc, { companyName: item.companyName, sector33: item.sector33 });
             await createSupplementRow(supplement.dbId, { ...input, stockCode: item.stockCode, textStatus: "本文なし", tagStatus: "未判定" }, null, writer.supplementJournal()); basicOnly++;
+            outcome.outcome = "basic-only";
           } else if (Object.keys(input).length > 1) {
             await replaceEvidenceBlock(row.pageId, undefined, input, savedRowGuard(row), async () => {
               active(); await assertLatestDocCurrent(db, item.stockCode, item.doc, { companyName: item.companyName, sector33: item.sector33 });
             }, writer.supplementJournal()); basicOnly++;
+            outcome.outcome = "basic-only";
           }
           held.push({ stockCode: item.stockCode, reason: "最新有報の適格本文が未保管。基本メタ欠落だけを補い旧本文/タグを保持" });
         } else {
@@ -134,17 +145,18 @@ export async function runMechanicalPublishing(options: { limit: number; budgetMs
           const sections = await publishingReadOnly(() => readQualifiedBiztagDocText(db, item.stockCode, item.doc!));
           active(); const input = await mechanicalTextInput(item, full, sections, masterId);
           const observed = rowTextSyncReceipt({ textSyncReceipt: input.textSyncReceipt, judgeInput: null });
+          if (observed !== null) outcome.sourceReceipt = { textsSha256: observed.textsSha256, notionTextsSha256: observed.notionTextsSha256 };
           if (current && full !== null && full.textSyncReceipt !== undefined && full.textSyncReceipt !== null &&
               full.textInputSha256 === input.textInputSha256 && full.tagInputSha256 === input.tagInputSha256 &&
               observed !== null && observed.textsSha256 === prior!.textsSha256 &&
               observed.notionTextsSha256 === prior!.notionTextsSha256 && full.masterLinked && full.companyName === item.companyName && full.sector33 === item.sector33 &&
               await sha256Hex(JSON.stringify(TEXT_SECTIONS.map(({ title }) => [title, normalizeSupplementText(full.texts[title]) || null]))) === prior!.notionTextsSha256) {
-            unchanged++; done.add(item.stockCode); continue;
+            unchanged++; outcome.outcome = "unchanged"; done.add(item.stockCode); continue;
           }
           const beforeWrite = async () => { active(); await assertLatestDocCurrent(db, item.stockCode, item.doc, { companyName: item.companyName, sector33: item.sector33 }); };
           if (full === null) { await beforeWrite(); await createSupplementRow(supplement.dbId, input, null, writer.supplementJournal()); }
           else await replaceEvidenceBlock(full.pageId, undefined, input, { ...savedRowGuard(full), ...buildSupplementProperties({ texts: full.texts }) }, beforeWrite, writer.supplementJournal());
-          synced++;
+          synced++; outcome.outcome = "synced";
         }
         done.add(item.stockCode);
       } catch (error) {
@@ -154,12 +166,18 @@ export async function runMechanicalPublishing(options: { limit: number; budgetMs
       }
     }
   }
+  const next = { ...cursor };
   if (!options.codes) {
-    const next = { ...cursor };
     for (const item of selection.changed) { if (!done.has(item.code)) break; next.changedAt = item.ingestedAt.toISOString(); next.changedDoc = item.docId; }
     for (const item of selection.rotating) { if (!done.has(item.code)) break; next.afterCode = item.code; }
     await writer.writeCursor("supplement-texts", JSON.stringify(next) + "\n");
   }
   return { selected: selection.codes.length, processed: done.size, unstarted: selection.codes.length - done.size, synced, unchanged, basicOnly, held,
+    selectedCodes: selection.codes,
+    latestDocs: latest.map(({ stockCode, doc, reportedHoldReason }) => ({ stockCode, reportedHoldReason,
+      doc: doc === null ? null : { docId: doc.docId, docTypeCode: doc.docTypeCode, periodEnd: doc.periodEnd,
+        submittedAt: doc.submittedAt, notionDocPageId: doc.notionDocPageId, textParseStatus: doc.textParseStatus } })),
+    outcomes: [...outcomes.values()].map(outcome => ({ ...outcome, holds: held.filter(item => item.stockCode === outcome.stockCode).map(item => item.reason) })),
+    cursorBefore: cursor, cursorAfter: next,
     modelCalls: 0, wholeSupplementComplete: false, notion: notionStats() };
 }

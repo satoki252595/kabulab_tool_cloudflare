@@ -22,6 +22,8 @@
 
 変更文書cursorは取得時刻＋docID、巡回cursorはコード順。初回は過去の原本を一括読込せず、最大50社ずつ確認する。変更が多い場合は変更を優先するため、全社が毎日更新される保証はない。summaryの`processed/unstarted/synced/unchanged/basicOnly/held`、優待の残件/保留を確認する。
 
+本文のstructured resultは選択code・取得済み最新docの参照・code別の同期/同値/基本情報のみ/HOLD/未着手と前後cursorを含む。relationのHOLDは本文同期と併記し、計算済み原39/Notion表現SHAも原文を載せず記録する。SHAは同期入力の根拠であり、HOLD時の適用成功を示さない。既存の私有stdout保存を使い、例外では完了resultを出さない。明示`--codes`はcursorを変更しない。これは選択範囲の証跡で、全母集団の分母・distinct巡回完了・全39項目の充足は示さない。過去の集計だけの窓へ遡ってcode別結果を補作しない。
+
 ## MacとLinuxの共有書込保護
 
 通常の本文readerは選択済み1docのD1主体/doc/FY/pointer/状態/idを照会し、共通`readVerifiedDocText`でNotion所属・全7メタ・strict全文を確認する。consumerだけ実全文からsection数/codepoint数を算出し、producerの独立した件数/原文照合は維持する。旧メタ欠落や不同を補作せずHOLDとし、原本ZIPは取り直さない。旧receiptだけではsource所属を保証できないため、unchanged候補もこの読取資格を通し、今回の原39/Notion表現SHAと旧同期receipt・現在targetが全て一致する時だけ業務書込をしない。同doc・同文字数の本文変更も再同期する。
