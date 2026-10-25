@@ -31,7 +31,7 @@ import {
 import { semifEnv } from "../../../src/shared/semif/env.js";
 import { z } from "../../../src/shared/zod-mini.js";
 import { parseBenefitChoiceStructure } from "./choice-structure.js";
-import { compileVenueAdmissionLiteral, parseBenefitHoldingStructure } from "./holding-structure.js";
+import { compilePointExchangeLiteral, compileVenueAdmissionLiteral, parseBenefitHoldingStructure } from "./holding-structure.js";
 import { parseBenefitRecordTierStructure } from "./record-tier-structure.js";
 import { benefitKey } from "./benefit-key.js";
 import { loadBenefitRows, openOtakaraD1 } from "./benefit-rows.js";
@@ -125,10 +125,17 @@ export function companyValue(task: SummaryTask): {
   return evaluateCompanyValue(task.description, context);
 }
 
-export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-one-of-holding-record-tier-shipping-and-admission-v6";
+export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v7";
 
 /** 対応する種類＋額面・全文1点選択・全文対応の期間/名簿条件を定型化する。未対応条件を削らない。 */
 export function compileSimpleSummary(task: SummaryTask): SummaryResult | null {
+  const pointExchange = compilePointExchangeLiteral(task.description);
+  if (pointExchange !== null) {
+    const amount = companyValue(task);
+    if (amount.reason !== "qualified_company_per_grant" || amount.value !== pointExchange.listedYen) return null;
+    return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion,
+      shortSummary: pointExchange.shortSummary, estimatedValue: amount.value });
+  }
   const admission = compileVenueAdmissionLiteral(task.description);
   if (admission !== null) {
     const amount = companyValue(task);

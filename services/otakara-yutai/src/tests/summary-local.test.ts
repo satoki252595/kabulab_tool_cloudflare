@@ -33,8 +33,12 @@ import {
 import { planSummaryImport, type ImportPlan } from "../../data-scripts/summary-import.js";
 import shippingSaved from "./fixtures/shipping-saved3.json";
 import admissionSaved from "./fixtures/admission-saved3.json";
+import pointExchangeSaved from "./fixtures/point-exchange-saved3.json";
 
 const shippingPrivatePath = join(ROOT, "tmp/yutai-shipping-proof-v1/saved3.private.json");
+const pointExchangePrivatePath = join(ROOT, "tmp/yutai-point-exchange-proof-v1/saved3.private.json");
+const pointExchangeDescription = (amount: number) =>
+  "【種別：\"電子ギフト\"】\n" + amount.toLocaleString("en-US") + "円相当\n※電子ギフトは1ポイント1円相当の各種電子マネーやポイントと交換することが可能です。\n■贈呈時期\n基準日から3カ月以内";
 const admissionPrivatePath = join(ROOT, "tmp/yutai-admission-proof-v1/saved3.private.json");
 const admissionDescription = (first: number, second: number) =>
   `【種別："温浴施設「テルマー湯」優待券"】\n新宿店 ${first}枚\n六本木・西麻布店 ${second}枚\n※1枚につき1名が入場できる。\n※土日、祝日および特定日は\n\u3000利用できない。`;
@@ -134,6 +138,91 @@ function dependencies(initial: BenefitRow[]): {
 }
 
 describe("local summary generation/import boundary", () => {
+  it.each(pointExchangeSaved.groups)("電子ギフトの掲載額・換算・両交換先・贈呈期限を全callerで保つ: $taskId", group => {
+    // 全文文法の対照入力。元の表記・全bytes/SHAは保存実原文の私有回帰で照合する。
+    const description = pointExchangeDescription(group.expectedValue);
+    const recipient = group.recipients[0];
+    const currentRows = [row(1, { description, stockCode: group.stockCode, ...recipient })];
+    const tasks = selectSummaryTasks(currentRows), result = compileSimpleSummary(tasks[0]);
+    expect(result).toMatchObject({ shortSummary: group.expectedSummary, estimatedValue: group.expectedValue,
+      contractVersion: SUMMARY_CONTRACT_VERSION });
+    expect(companyValue(tasks[0])).toEqual({ value: group.expectedValue, reason: "qualified_company_per_grant" });
+    expect(isSummaryNumbersGrounded(description, group.expectedSummary, {
+      minShares: [recipient.minShares], recordMonths: [recipient.recordMonth],
+    })).toBe(true);
+    const plan = planSummaryImport({ tasks, currentRows, resultsText: JSON.stringify(result) });
+    expect(plan.rejections).toEqual([]); expect(plan.updates).toHaveLength(1);
+    expect(selectSummaryTasks([{ ...currentRows[0], shortSummary: group.expectedSummary,
+      estimatedValue: group.expectedValue, estimateValueSource: "company" }])).toEqual([]);
+    const carry = planCarry([{ code: group.stockCode, description, ...recipient, shortSummary: group.expectedSummary,
+      estimatedValue: group.expectedValue, estimateValueSource: "company" }], new Map(), new Map());
+    expect([...carry.carried.values()]).toEqual([{ shortSummary: group.expectedSummary,
+      estimatedValue: group.expectedValue, estimateValueSource: "company" }]);
+    expect(carry.nulledKeys.size).toBe(0);
+  });
+  it("電子ギフト全文の改変と、換算・交換先・期限を落とす要約を拒否する", () => {
+    const description = pointExchangeDescription(10000), summary = pointExchangeSaved.groups[0].expectedSummary;
+    const currentRows = [row(1, { description })], tasks = selectSummaryTasks(currentRows);
+    for (const changed of [description + "\n別条件あり", description + "\n1年以上保有", description + "\n抽選",
+      description + "\n申込必要", description + "\n2回", description + "\n別途1,000円分",
+      description.replace("電子ギフト", "商品券"), description.split("\n").slice(1).join("\n"),
+      description.replace("10,000円", "0円"), description.replace("10,000円", "10,00円"),
+      description.replace("10,000円", "9,007,199,254,740,992円"), description.replace("1ポイント", "2ポイント"),
+      description.replace("電子マネー", "ギフト"), description.replace("ポイントと交換", "ギフトと交換"),
+      description.replace("基準日", "確定日"), description.replace("3カ月", "6カ月"),
+      description.split("\n").slice(0, -1).join("\n")]) {
+      expect(changed).not.toBe(description);
+      expect(compileSimpleSummary(selectSummaryTasks([row(1, { description: changed })])[0])).toBeNull();
+    }
+    for (const changed of [summary.replace("10,000円", "20,000円"), summary.replace("1ポイント", "2ポイント"),
+      summary.replace("1円相当", "2円相当"), summary.replace("1円相当", "1円"),
+      summary.replace("電子マネー・ポイント", "電子マネー"), summary.replace("電子マネー・ポイント", "ギフト・電子マネー"),
+      summary.replace("基準日", "確定日"), summary.replace("3か月以内", "3か月以降"),
+      summary.replace("、基準日から3か月以内贈呈", ""), summary.replace("贈呈", "利用可"), summary + "・1回追加"]) {
+      expect(changed).not.toBe(summary);
+      const result = { taskId: tasks[0].taskId, contractVersion: SUMMARY_CONTRACT_VERSION,
+        shortSummary: changed, estimatedValue: 10000 };
+      expect(isSummaryNumbersGrounded(description, changed, { minShares: [100], recordMonths: [3] })).toBe(false);
+      expect(planSummaryImport({ tasks, currentRows, resultsText: JSON.stringify(result) }).updates).toEqual([]);
+      expect(selectSummaryTasks([{ ...currentRows[0], shortSummary: changed }])[0].reason).toBe("rework");
+      const carry = planCarry([{ code: currentRows[0].stockCode, description, minShares: 100, recordMonth: 3, recordDate: null,
+        shortSummary: changed, estimatedValue: 10000, estimateValueSource: "company" }], new Map(), new Map());
+      expect([...carry.carried.values()][0].shortSummary).toBeNull();
+    }
+    // 既存取込契約は明示nullを認める。機械compilerは資格済み掲載額を出す。
+    expect(planSummaryImport({ tasks, currentRows, resultsText: JSON.stringify({ taskId: tasks[0].taskId,
+      contractVersion: SUMMARY_CONTRACT_VERSION, shortSummary: summary, estimatedValue: null }) }).updates).toHaveLength(1);
+    for (const estimatedValue of [0, 20000]) {
+      const result = { taskId: tasks[0].taskId, contractVersion: SUMMARY_CONTRACT_VERSION, shortSummary: summary, estimatedValue };
+      expect(planSummaryImport({ tasks, currentRows, resultsText: JSON.stringify(result) }).updates).toEqual([]);
+    }
+  });
+  it.skipIf(!existsSync(pointExchangePrivatePath))("保存実7360の3原文を新版taskから通常PRE/取込/全POSTへモデル0で通す", async () => {
+    const bytes = readFileSync(pointExchangePrivatePath);
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe(pointExchangeSaved.provenance.privateFixtureSha256);
+    const saved = JSON.parse(bytes.toString()) as { tasks: SummaryTask[]; rows: BenefitRow[] }, tasks = selectSummaryTasks(saved.rows);
+    expect(tasks).toHaveLength(3);
+    expect(saved.tasks.every(task => task.contractVersion === pointExchangeSaved.provenance.originalContractVersion)).toBe(true);
+    expect(tasks.every(task => task.contractVersion === SUMMARY_CONTRACT_VERSION)).toBe(true);
+    const withoutVersion = ({ contractVersion: _version, ...task }: SummaryTask) => task;
+    expect(tasks.map(withoutVersion)).toEqual(saved.tasks.map(withoutVersion));
+    const oldResults = saved.tasks.map(task => ({ ...compileSimpleSummary(task)!, contractVersion: task.contractVersion }));
+    expect(planSummaryImport({ tasks, currentRows: saved.rows, resultsText: oldResults.map(result => JSON.stringify(result)).join("\n") }).rejections
+      .map(rejection => rejection.reason)).toEqual(["contract_version", "contract_version", "contract_version"]);
+    for (const task of tasks) {
+      const group = pointExchangeSaved.groups.find(item => item.taskId === task.taskId)!;
+      expect(createHash("sha256").update(task.description).digest("hex")).toBe(group.sourceSha256);
+      expect(task.recipients).toEqual(group.recipients);
+    }
+    const { deps, events, rows } = dependencies(saved.rows);
+    expect(await runLocalSummary({ stateDir: state(), limit: 60 }, deps)).toMatchObject({ selected: 3, accepted: 3,
+      deterministic: 3, pendingAfter: 0, modelCalls: 0, modelResidents: 0 });
+    expect(deps.generate).not.toHaveBeenCalled(); expect(events).toEqual(["archive-pre", "apply", "archive-post"]);
+    for (const task of tasks) {
+      const result = rows().find(item => item.description === task.description)!, group = pointExchangeSaved.groups.find(item => item.taskId === task.taskId)!;
+      expect(result).toMatchObject({ shortSummary: group.expectedSummary, estimatedValue: group.expectedValue, estimateValueSource: "company" });
+    }
+  });
   it.each(admissionSaved.groups)("保存2施設形式の施設名・各枚数・人数・利用制限を全callerで保つ: $taskId", group => {
     const description = admissionDescription(group.quantities[0], group.quantities[1]);
     expect(createHash("sha256").update(description).digest("hex")).toBe(group.sourceSha256);
@@ -278,7 +367,7 @@ describe("local summary generation/import boundary", () => {
     expect(rows()[0]).toMatchObject({ shortSummary: "QUOカード 3,000円分", estimatedValue: 3000 });
     const run = readdirSync(dir).find(name => name !== "progress.json")!;
     const pre = JSON.parse(gunzipSync(readFileSync(join(dir, run, "pre-import.json.gz"))).toString());
-    expect(pre).toMatchObject({ model: null, revision: null, protocol: "", deterministicRule: "simple-face-value-one-of-holding-record-tier-shipping-and-admission-v6" });
+    expect(pre).toMatchObject({ model: null, revision: null, protocol: "", deterministicRule: "simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v7" });
     expect(parseTaskFile(readFileSync(join(dir, run, "model-tasks.jsonl"), "utf8"))).toEqual([]);
   });
   it("全文1点選択はモデル0で通常PRE/原子取込/POSTへ通し、選択肢の掲載額を評価しない", async () => {
