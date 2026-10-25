@@ -31,7 +31,7 @@ import {
 import { semifEnv } from "../../../src/shared/semif/env.js";
 import { z } from "../../../src/shared/zod-mini.js";
 import { parseBenefitChoiceStructure } from "./choice-structure.js";
-import { parseBenefitHoldingStructure } from "./holding-structure.js";
+import { compileVenueAdmissionLiteral, parseBenefitHoldingStructure } from "./holding-structure.js";
 import { parseBenefitRecordTierStructure } from "./record-tier-structure.js";
 import { benefitKey } from "./benefit-key.js";
 import { loadBenefitRows, openOtakaraD1 } from "./benefit-rows.js";
@@ -125,10 +125,17 @@ export function companyValue(task: SummaryTask): {
   return evaluateCompanyValue(task.description, context);
 }
 
-export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-one-of-holding-record-tier-and-shipping-v5";
+export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-one-of-holding-record-tier-shipping-and-admission-v6";
 
 /** 対応する種類＋額面・全文1点選択・全文対応の期間/名簿条件を定型化する。未対応条件を削らない。 */
 export function compileSimpleSummary(task: SummaryTask): SummaryResult | null {
+  const admission = compileVenueAdmissionLiteral(task.description);
+  if (admission !== null) {
+    const amount = companyValue(task);
+    if (amount.value !== null || amount.reason !== "no_source_yen_amount") return null;
+    return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion,
+      shortSummary: admission, estimatedValue: null });
+  }
   const choice = parseBenefitChoiceStructure(task.description);
   if (choice.status === "literal_parsed") return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion,
     shortSummary: "優待を1点選択", estimatedValue: null });
