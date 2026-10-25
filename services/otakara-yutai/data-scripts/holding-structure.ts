@@ -58,6 +58,17 @@ export function compileDepartmentHoldingLiteral(description: string): string | n
   return `大丸松坂屋10%引(一部除外/現金・指定カード等)、上限3年未満${below}万/3年以上${above}万円。3年判定:毎年2月末、2・8月末同一株主番号100株以上7回以上連続記載、8月末新規半額、大丸松坂屋等有料文化催事/パルコアートスペース入場無料`;
 }
 
+/** 掲載各回額・年額と終了時期を持つ既知全文だけ。歴史的保有定義を現在tierへ転用しない。 */
+export function compileAnnualGiftHistoryLiteral(description: string): { shortSummary: string; listedYen: number } | null {
+  const source = splitHeadedDescription(description);
+  if (source.malformed || source.heading?.normalize("NFKC").trim() !== "デジタルギフト(長期保有者向け)※2027年8末限り") return null;
+  const match = /^【1年以上保有】\n([1-9][0-9]{0,2}(?:,[0-9]{3})+|[1-9][0-9]*)円相当\(年間 ([1-9][0-9]{0,2}(?:,[0-9]{3})+|[1-9][0-9]*)円相当\)\n([\s\S]+)$/u.exec(source.body.normalize("NFKC").trim());
+  if (match === null || createHash("sha256").update(match[3]).digest("hex") !== "8ce124842d80b5bebefe95e9827396a93fa3cdbab2f314f425393a19354f5fe5") return null;
+  const listedYen = Number(match[1].replaceAll(",", "")), annual = Number(match[2].replaceAll(",", ""));
+  if (![listedYen, annual].every(value => Number.isSafeInteger(value) && value > 0) || annual !== listedYen * 2) return null;
+  return { listedYen, shortSummary: `デジタルギフト${listedYen}円相当(年${annual}円相当)、継続条件:1年以上・2月末/8月末同一株主番号100株以上3回以上連続記載、交換先選択、各基準日から3か月以内贈呈、現制度2027年8月末限り` };
+}
+
 /** 保存全文にある単一期間と掲載額・枚数の対応だけを読む。本人の適用条件は未確認。 */
 export function parseBenefitHoldingStructure(description: string): BenefitHoldingStructure | null {
   const source = splitHeadedDescription(description);

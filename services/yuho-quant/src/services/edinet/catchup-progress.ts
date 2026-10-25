@@ -60,7 +60,7 @@ export async function progressQueue(db: Database, scope: string, today: string):
   const pending = await db.select().from(table).where(and(eq(table.scope, scope),
     eq(table.finished, true), eq(table.sealed, true), ne(table.pendingIds, "[]"),
     or(isNull(table.pendingCheckedDate), lt(table.pendingCheckedDate, today))))
-    .orderBy(asc(table.date)).limit(10);
+    .orderBy(asc(table.pendingCheckedDate), asc(table.date)).limit(10);
   return [...active, ...pending.filter((r) => !active.some((a) => a.date === r.date))];
 }
 

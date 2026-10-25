@@ -3,12 +3,15 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { ROOT } from "../../../../src/shared/db/tests/source-scan.js";
-import { headedDescription, splitHeadedDescription } from "../../data-scripts/estimated-value-guard.js";
-import { isSummaryNumbersGrounded, SUMMARY_CONTRACT_VERSION } from "../../data-scripts/summary-contract.js";
+import { headedDescription, splitHeadedDescription, trustedCompanyYieldValue } from "../../data-scripts/estimated-value-guard.js";
+import { checkSummary, isSummaryNumbersGrounded, SUMMARY_CONTRACT_VERSION } from "../../data-scripts/summary-contract.js";
 import { planSummaryImport, type SummaryResult } from "../../data-scripts/summary-import.js";
 import { selectSummaryTasks, type BenefitRow, type SummaryTask } from "../../data-scripts/summary-tasks.js";
 import { carryKey, planCarry } from "../../data-scripts/yutai-full-import.js";
 import { extractBenefitRegistryStructure } from "../../data-scripts/registry-structure.js";
+import { companyValue, compileSimpleSummary } from "../../data-scripts/summary-local.js";
+import { compileAnnualGiftHistoryLiteral } from "../../data-scripts/holding-structure.js";
+import annualGiftSaved from "./fixtures/annual-gift-history-saved2.json";
 
 const context = { minShares: [300], recordMonths: [12] };
 const privatePath = join(ROOT, "tmp/yutai-holding-definition-scope-proof-v1/saved2932.private.json");
@@ -92,4 +95,103 @@ it.skipIf(!existsSync(privatePath))("空context・定義閾値未満・非定義
     expect(isSummaryNumbersGrounded(task.description, summary, { ...context, recordMonths })).toBe(false);
   expect(isSummaryNumbersGrounded(task.description, summary, { minShares: [100], recordMonths: [6, 12] })).toBe(true);
   expect(isSummaryNumbersGrounded(task.description, summary, { minShares: [300, 500], recordMonths: [12] })).toBe(true);
+});
+
+const annualGiftPrivatePath = join(ROOT, "tmp/yutai-annual-gift-history-proof-v1/saved2-v3.private.json");
+it("未資格の終了付きデジタルギフトを歴史100株一致だけで許可しない", () => {
+  // 不完全な合成入力。実原文段落は私有黒箱回帰だけで照合する。
+  const source = headedDescription("合成デジタルギフト", "1年以上保有、100株以上3回以上記載、1000円相当");
+  expect(compileAnnualGiftHistoryLiteral(source)).toBeNull();
+  expect(isSummaryNumbersGrounded(source, "デジタルギフト1000円相当、継続条件:1年以上・2月末/8月末同一株主番号100株以上3回以上連続記録、現制度2027年8月末限り", { minShares: [100], recordMonths: [2] })).toBe(false);
+});
+
+it.skipIf(!existsSync(annualGiftPrivatePath))("保存2群4行の各回/年額と終了・歴史定義を全経路で保持し、未知の改変を拒否する", () => {
+  const bytes = readFileSync(annualGiftPrivatePath);
+  expect(digest(bytes)).toBe(annualGiftSaved.provenance.privateFixtureSha256);
+  const source = JSON.parse(bytes.toString()) as { rows: BenefitRow[]; expectedResults: SummaryResult[] };
+  const tasks = selectSummaryTasks(source.rows);
+  expect(tasks.length).toBe(2); expect(source.rows.length).toBe(4);
+  const results = tasks.map(task => {
+    const metadata = annualGiftSaved.groups.find(g => g.taskId === task.taskId);
+    expect(digest(task.description)).toBe(metadata?.sourceSha256);
+    expect(companyValue(task).reason).toBe("qualified_company_per_grant");
+    const result = compileSimpleSummary(task);
+    if (result === null) throw new Error("annual_gift_expected_result_missing");
+    expect(digest(result.shortSummary)).toBe(metadata?.expectedSummarySha256);
+    expect(result.shortSummary.length).toBe(98); expect(checkSummary(result.shortSummary)).toEqual([]);
+    expect(result.estimatedValue).toBe(metadata?.listedPerGrantYen);
+    const context = { minShares: task.recipients.map(r => r.minShares), recordMonths: task.recipients.map(r => r.recordMonth) };
+    // scopeを持たない従来の100株contextは一般照合のまま。実tierの代替には使わない。
+    const ordinary = result.shortSummary.replace("継続条件:1年以上・", "1年以上保有:");
+    expect(isSummaryNumbersGrounded(task.description, ordinary, { ...context, minShares: [100] })).toBe(true);
+    expect(isSummaryNumbersGrounded(task.description, ordinary, context)).toBe(false);
+    const lines = task.description.split("\n");
+    const changed = [task.description + "\n追加条件", task.description.replaceAll("2027年", "2028年"),
+      task.description.replace("8月末限り", "9月末限り"), task.description.replace("3カ月以内", "6カ月以内"),
+      task.description.replace("100 株以上", "500 株以上"), task.description.replace("3 回以上", "3 回"),
+      task.description.replace("同一株主番号", "別の株主番号"), task.description.replace("PayPay", "別の交換先"),
+      task.description.replace("1年以上保有", "2年以上保有")];
+    for (let line = 1; line < lines.length; line++) if (lines[line] !== "") changed.push(lines.filter((_, i) => i !== line).join("\n"));
+    for (const description of changed) {
+      expect(description !== task.description).toBe(true);
+      expect(compileSimpleSummary({ ...task, description }) === null).toBe(true);
+      expect(isSummaryNumbersGrounded(description, result.shortSummary, context)).toBe(false);
+      expect(isSummaryNumbersGrounded(description, result.shortSummary, { ...context, minShares: [100] })).toBe(false);
+    }
+    for (const value of ["0", "-1", "1.5", "01,000", "1e4", "9007199254740992"]) {
+      const description = lines.map((line, index) => index === 2 ? `${value}円相当（年間\u300027,000円相当）` : line).join("\n");
+      expect(compileSimpleSummary({ ...task, description }) === null).toBe(true);
+    }
+    expect(compileSimpleSummary({ ...task, description: lines.map((line, i) => i === 2 ? "100円相当（年間\u3000201円相当）" : line).join("\n") }) === null).toBe(true);
+    for (const minShares of [[], [99], [100, 99], [100.5], [Number.MAX_SAFE_INTEGER + 1]])
+      expect(isSummaryNumbersGrounded(task.description, result.shortSummary, { ...context, minShares })).toBe(false);
+    for (const recordMonths of [[], [0], [9], [2, 9], [2.5]])
+      expect(isSummaryNumbersGrounded(task.description, result.shortSummary, { ...context, recordMonths })).toBe(false);
+    expect(compileSimpleSummary({ ...task, recipients: [{ minShares: 500, recordMonth: 9, recordDate: null }] })).toBeNull();
+    expect(compileSimpleSummary({ ...task, recipients: [{ minShares: 500, recordMonth: 2, recordDate: "2026-02-28" }] })).toBeNull();
+    for (const summary of [result.shortSummary.replace("3回以上", "3回"), result.shortSummary.replace("13500", "13501"),
+      result.shortSummary.replace("27000", "27001"), result.shortSummary.replace("100株", "500株"), result.shortSummary.replace("2027年", "2028年"),
+      result.shortSummary.replace("継続条件:", "継続条件="), result.shortSummary.replace("1年以上・", "1年以上:")]) {
+      if (summary === result.shortSummary) continue;
+      expect(isSummaryNumbersGrounded(task.description, summary, context)).toBe(false);
+    }
+    return result;
+  });
+  const plan = planSummaryImport({ tasks, currentRows: source.rows, resultsText: results.map(r => JSON.stringify(r)).join("\n") });
+  expect(plan.rejections.map(r => r.reason)).toEqual([]); expect(plan.updates.length).toBe(2);
+  expect(plan.updates.flatMap(u => u.ids).length).toBe(4);
+  expect(plan.valueChanges).toEqual({ toNull: 0, fromNull: 4, changed: 0 });
+  for (const result of results) {
+    const annual = annualGiftSaved.groups.find(g => g.taskId === result.taskId)!.listedAnnualYen;
+    const rejected = planSummaryImport({ tasks, currentRows: source.rows, resultsText: JSON.stringify({ ...result, estimatedValue: annual }) });
+    expect(rejected.updates.length).toBe(0); expect(rejected.rejections.map(r => r.reason)).toEqual(["value_ungrounded"]);
+  }
+  const stale = source.rows.map(row => ({ ...row, minShares: row.minShares + 1 }));
+  expect(planSummaryImport({ tasks, currentRows: stale, resultsText: results.map(r => JSON.stringify(r)).join("\n") }).rejections.map(r => r.reason)).toEqual(["stale", "stale"]);
+  const changedSource = source.rows.map(row => ({ ...row, description: `${row.description}\n追加条件` }));
+  expect(planSummaryImport({ tasks, currentRows: changedSource, resultsText: results.map(r => JSON.stringify(r)).join("\n") }).rejections.map(r => r.reason)).toEqual(["stale", "stale"]);
+  const after = source.rows.map(row => {
+    const update = plan.updates.find(u => u.ids.includes(row.id));
+    if (update === undefined) throw new Error("annual_gift_update_missing");
+    return { ...row, shortSummary: update.shortSummary, estimatedValue: update.estimatedValue, estimateValueSource: update.estimateValueSource };
+  });
+  expect(selectSummaryTasks(after).length).toBe(0);
+  for (const row of after) {
+    const split = splitHeadedDescription(row.description);
+    if (split.heading === null) throw new Error("annual_gift_heading_missing");
+    const key = carryKey(row.stockCode, split.body, row.minShares, row.recordMonth);
+    const siblings = after.filter(r => r.description === row.description);
+    const groups = new Map([[row.stockCode, new Map([[split.body, { minShares: siblings.map(r => r.minShares), recordMonths: siblings.map(r => r.recordMonth) }]])]]);
+    const carry = (headings: string[]) => planCarry([{ ...row, code: row.stockCode }], new Map([[key, headings]]), groups).carried.get(key);
+    expect(digest(carry([split.heading])!.shortSummary!)).toBe(digest(row.shortSummary));
+    expect(carry([split.heading])?.estimatedValue).toBe(row.estimatedValue);
+    expect(carry([split.heading])?.estimateValueSource).toBe("company");
+    const context = { minShares: siblings.map(r => r.minShares), recordMonths: siblings.map(r => r.recordMonth) };
+    expect(trustedCompanyYieldValue(row, context)).toBe(row.estimatedValue);
+    expect(trustedCompanyYieldValue({ ...row, estimateValueSource: "web" }, context)).toBeNull();
+    for (const headings of [["別のギフト"], [split.heading, "別のギフト"], ["別のギフト", split.heading], []])
+      expect(carry(headings)?.shortSummary).toBeNull();
+  }
+  const old = results.map(r => JSON.stringify({ ...r, contractVersion: "2026-10-25.8" })).join("\n");
+  expect(planSummaryImport({ tasks, currentRows: source.rows, resultsText: old }).rejections.map(r => r.reason)).toEqual(["contract_version", "contract_version"]);
 });
