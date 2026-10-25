@@ -141,6 +141,26 @@ afterEach(() => {
 });
 
 describe("通常定時VWAPの5分足は同run受付と終了窓を継承", () => {
+  it("手動intraも同jobの残source予算で止まり、取得済原本とPUTを閉じて未完2を返す", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); const start = Date.parse("2026-10-14T08:00:00.000Z");
+    vi.setSystemTime(start + 344 * 60_000); vi.stubEnv("BATCH_JOB_STARTED_AT", new Date(start).toISOString());
+    mockLoadCodes.mockResolvedValue(["7203", "6758"]); mockR2Get.mockResolvedValue(null);
+    mockFetch5m.mockImplementationOnce(async () => { vi.setSystemTime(start + 345 * 60_000); return []; });
+    await main();
+    expect(mockFetch5m).toHaveBeenCalledTimes(1); expect(mockRawArchive).toHaveBeenCalledTimes(1);
+    expect(mockR2Put).toHaveBeenCalledTimes(1); expect(mockRecord).toHaveBeenCalledTimes(1);
+    const io = mockR2Get.mock.calls[0][1]; expect(io?.abortSignal).toBeInstanceOf(AbortSignal);
+    expect(mockR2Put.mock.calls[0][4]).toBe(io);
+    expect(recordedBody()).toMatchObject({ aborted: true, outcomes: { "7203": { status: "written" }, "6758": { status: "notStarted" } } });
+    expect(process.exitCode).toBe(2);
+  });
+  it("daily後の手動intraは元jobのsource予算を再初期化せず取得前に停止する", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); const start = Date.parse("2026-10-14T08:00:00.000Z");
+    vi.setSystemTime(start + 345 * 60_000); vi.stubEnv("BATCH_JOB_STARTED_AT", new Date(start).toISOString());
+    await expect(main()).rejects.toThrow("新規取得期限");
+    expect(mockLoadCodes).not.toHaveBeenCalled(); expect(mockFetch5m).not.toHaveBeenCalled();
+    expect(mockR2Get).not.toHaveBeenCalled(); expect(mockR2Put).not.toHaveBeenCalled();
+  });
   it("source期限は次GETだけを止め、直前の取得物の原本/PUTを閉じても未完2を維持する", async () => {
     vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime("2026-10-14T08:00:00.000Z");
     vi.stubEnv("GITHUB_RUN_ID", "101"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");

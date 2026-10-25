@@ -91,6 +91,7 @@ describe("main (検証 → 原本保管 → 実体確認 → R2 PUT の順序)",
     vi.resetModules();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     vi.useRealTimers();
   });
 
@@ -209,6 +210,18 @@ describe("main (検証 → 原本保管 → 実体確認 → R2 PUT の順序)",
     const result=await runMain({argv:[`--scheduled-date=${date}`]});
     expect(result.rejected).toBeInstanceOf(Error);expect(result.fetchDailyMargin).not.toHaveBeenCalled();
     expect(result.recordPrimaryData).not.toHaveBeenCalled();expect(result.r2Put).not.toHaveBeenCalled();
+  });
+  it.each(["source", "archive"])("all末尾の手動marginも元jobの%s期限を守る", async phase => {
+    vi.useFakeTimers({ toFake: ["Date"] }); const start = Date.parse("2026-10-22T08:00:00.000Z");
+    vi.stubEnv("BATCH_JOB_STARTED_AT", new Date(start).toISOString());
+    vi.setSystemTime(start + (phase === "source" ? 345 : 344) * 60_000);
+    const result = await runMain({ archiveImpl: async () => {
+      vi.setSystemTime(start + 355 * 60_000); return { pageId: "p1", fileTooLarge: false };
+    } });
+    expect(result.rejected).toBeInstanceOf(Error); expect(result.r2Put).not.toHaveBeenCalled();
+    if (phase === "source") {
+      expect(result.fetchDailyMargin).not.toHaveBeenCalled(); expect(result.recordPrimaryData).not.toHaveBeenCalled();
+    } else { expect(result.recordPrimaryData).toHaveBeenCalledTimes(1); expect(fetch).not.toHaveBeenCalled(); }
   });
 
   it("保管待機中に17:30へ達したら次の添付HTTP/R2 PUTを送らず、既存原本日付を変えない", async () => {

@@ -14,14 +14,29 @@ import {
 import { validateDailyMarginSnapshot } from "../../services/vwap-analysis/lib/margin-daily.js";
 import { r2GetVersion, r2Put } from "./lib/r2.js";
 import { sanitizeLogText } from "./lib/ingest-guard.js";
-import { parseScheduledAt, scheduledMarginWindow } from "../../src/shared/scheduled-admission.js";
+import { installScheduledDeadline, nativeJobExecutionWindow, parseScheduledAt, scheduledMarginWindow, ScheduledSourceDeadlineError } from "../../src/shared/scheduled-admission.js";
+import { sharedEnv } from "../../src/shared/env.js";
 
 export { scheduledMarginWindow };
 
 function marginDeadline(argv: readonly string[]) {
   const args = argv.filter(arg => arg.startsWith("--scheduled-date="));
   if (args.length > 1) throw new Error("信用残の予定日が重複しています");
-  if (args.length === 0) return { assertActive() {}, assertSource() {}, restore() {}, readOptions: undefined };
+  if (args.length === 0) {
+    const budget = nativeJobExecutionWindow(Date.now(), sharedEnv.BATCH_JOB_STARTED_AT(), 360, 10);
+    const assertActive = () => {
+      if (budget !== undefined && Date.now() >= budget.deadline) throw new Error("信用残のnative原本閉鎖期限です（未完）");
+    };
+    const assertSource = () => {
+      assertActive();
+      if (budget !== undefined && Date.now() >= budget.sourceDeadline)
+        throw new ScheduledSourceDeadlineError("信用残の新規取得予算がありません（原本閉鎖へ移行）");
+    };
+    assertSource();
+    return { assertActive, assertSource, restore: budget === undefined ? () => {} : installScheduledDeadline(budget.deadline),
+      readOptions: budget === undefined ? undefined : { singleAttempt: true, beforeAttempt: assertActive,
+        abortSignal: AbortSignal.timeout(budget.deadline - Date.now()) } };
+  }
   if (parseDateArg(argv) !== undefined) throw new Error("定時信用残で手動基準日は指定できません");
   const atArgs = argv.filter(arg => arg.startsWith("--scheduled-at="));
   if (atArgs.length !== 1) throw new Error("scheduled_atが無いかUTC時刻として不正です");
@@ -173,6 +188,7 @@ export async function main(): Promise<void> {
   const snapshotVersion = await r2GetVersion(snapshotKey, guard.readOptions);
   const existingSnapshot = snapshotVersion === null ? null : snapshotVersion.body;
   const { putSnapshot, putDates } = planDailyMarginPuts(existingSnapshot, snapshotJson, saved, merged);
+  guard.assertActive();
   if (!putSnapshot && !putDates) {
     console.info(
       `margin daily ingest: basis=${basis} 同値再入のため PUT0 (rows=${data.snapshot.rows.length} page=${archived.pageId})`
@@ -181,7 +197,7 @@ export async function main(): Promise<void> {
   }
   if (putSnapshot) {
     guard.assertActive();
-    await r2Put(snapshotKey, snapshotJson, snapshotVersion === null ? null : snapshotVersion.etag);
+    await r2Put(snapshotKey, snapshotJson, snapshotVersion === null ? null : snapshotVersion.etag, undefined, guard.readOptions);
     guard.assertActive();
     const readbackVersion = await r2GetVersion(snapshotKey, guard.readOptions);
     const readback = readbackVersion === null ? null : readbackVersion.body;
@@ -192,7 +208,7 @@ export async function main(): Promise<void> {
   if (putDates) {
     const datesJson = JSON.stringify(merged);
     guard.assertActive();
-    await r2Put("margin/dates.json", datesJson, datesVersion === null ? null : datesVersion.etag);
+    await r2Put("margin/dates.json", datesJson, datesVersion === null ? null : datesVersion.etag, undefined, guard.readOptions);
     guard.assertActive();
     const datesReadbackVersion = await r2GetVersion("margin/dates.json", guard.readOptions);
     const datesReadback = datesReadbackVersion === null ? null : datesReadbackVersion.body;
@@ -200,6 +216,7 @@ export async function main(): Promise<void> {
       throw new Error("margin dates.json readback 不一致");
     }
   }
+  guard.assertActive();
   console.info(
     `margin daily ingest: basis=${basis} pub=${data.snapshot.publicationDate} rows=${data.snapshot.rows.length} page=${archived.pageId}`
   );
