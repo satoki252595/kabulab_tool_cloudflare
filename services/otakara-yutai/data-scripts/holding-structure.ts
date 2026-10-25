@@ -5,6 +5,15 @@ import { splitHeadedDescription } from "./estimated-value-guard.js";
 /** 保存全文だけ。現在tierと名簿・移転前株数・参考画像・観劇枠・買物限度を区別する。 */
 export function compileRegistryTierLiteral(description: string) {
   const hash = createHash("sha256").update(description).digest("hex");
+  const selection = [
+    { hash: "8a6854002054abdfb7520f6589cf72b4701a12ad84a51012828133b2c22d5ebb", minShares: 100, ticketsBefore: 5, ticketsAfter: 5, pointsBefore: "3%", pointsAfter: "4%", riceKg: 1, valueReason: "no_source_yen_amount" },
+    { hash: "235ca983af7c5606e2e0af05151f1aecd0fc4712859011874d8b9d851c47c262", minShares: 500, ticketsBefore: 10, ticketsAfter: 20, pointsBefore: "5%", pointsAfter: "5%", riceKg: 1, valueReason: "no_source_yen_amount" },
+    { hash: "d6a9cc99d94adffc343706d9cad30e4974de8ce387696ce055d4dcc762006069", minShares: 1000, ticketsBefore: 10, ticketsAfter: 20, pointsBefore: "5%", pointsAfter: "5%＋2,000pt", riceKg: 2, valueReason: "choice" },
+    { hash: "57fa668e1d3d69c37d609c58059241922b8eef0df307eeb57a692c21a916a873", minShares: 3000, ticketsBefore: 10, ticketsAfter: 20, pointsBefore: "7%", pointsAfter: "7%＋2,000pt", riceKg: 2, valueReason: "choice" },
+    { hash: "2c66f0a714aa61e8e243224f16bd413d9724e9585e2bd85ae30575811b35ca13", minShares: 5000, ticketsBefore: 10, ticketsAfter: 20, pointsBefore: "7%", pointsAfter: "7%＋2,000pt", riceKg: 5, valueReason: "choice" },
+  ].find(source => source.hash === hash);
+  if (selection !== undefined) return { ...selection, stockCode: "8242", recordMonths: [3, 9], listedYen: null,
+    shortSummary: `阪急阪神選択:保有3年未満→3年以上でA${selection.ticketsBefore}→${selection.ticketsAfter}枚＋阪急キッチンエール新規入会券、B Sポイント${selection.pointsBefore}→${selection.pointsAfter}(食品スーパーのみ利用可)、C米${selection.riceKg}kg。条件:過去3年の3/9月末全基準日100株以上・同一株主番号継続。A:阪急/阪神百貨店10%引(食品/飲食5%)、指定スーパー5%引、カルネ/フルーツギャザリング10%引、両百貨店有料文化催事1枚2名無料。B:阪急オアシス/イズミヤ/関西スーパー/デイリーカナート/はやし/まるとく市場/イズミヤSC内アイ・クローゼット、ネット関西スーパー除外` };
   const card = [
     { hash: "edd78c862677b3f3e90d1a9b1643e78b0b2ffabd040229f8f8ae98cff368a64e", minShares: 100, limitManYen: 15 },
     { hash: "bc3adf5d878b2aad14fa9a895325d68c42b96a396f88e429618571196bb36941", minShares: 200, limitManYen: 30 },
