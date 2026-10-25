@@ -1,0 +1,58 @@
+{
+  "provenance": {
+    "source": "saved-current-pending-d1-response",
+    "observedAt": "2026-10-25T01:43:23.584Z",
+    "responseSha256": "2ff8b88b3e053a6d064349139105e839986c682784ab7d6a5ecfb8ab56c408ac",
+    "finishSha256": "05068597732e5eb592137e17316749360677c5fe73ac515573d22dcb1a333c9e",
+    "originalTaskFileSha256": "08065bf4c93c515d452a00838eca738ee1bed06e3362eaa804a03e048f606a9a",
+    "originalContractVersion": "2026-10-25.1",
+    "taskScope": 3,
+    "observedPendingScope": 141,
+    "wholeCurrentPendingScopeVerified": false,
+    "privateFixtureSha256": "eacee37a37a981d0b8312fbc53082e404b4d4469f7f7035ebd2ae1c8ffacbe2a"
+  },
+  "groups": [
+    {
+      "taskId": "221c61ac28887355",
+      "stockCode": "7360",
+      "sourceSha256": "fecf21f550259ad7ac2c5dab04c4383ffaff216e15a88695bb0a59f1d8139dda",
+      "recipients": [
+        {
+          "minShares": 300,
+          "recordMonth": 11,
+          "recordDate": null
+        }
+      ],
+      "expectedValue": 10000,
+      "expectedSummary": "電子ギフト 10,000円相当(1ポイント1円相当、電子マネー・ポイント交換、基準日から3か月以内贈呈)"
+    },
+    {
+      "taskId": "62ba1a696d1a2767",
+      "stockCode": "7360",
+      "sourceSha256": "33fac93b19b36118703fb3d0653aca3ecb645283ffb812784e5ace04b8d9b8c4",
+      "recipients": [
+        {
+          "minShares": 500,
+          "recordMonth": 11,
+          "recordDate": null
+        }
+      ],
+      "expectedValue": 20000,
+      "expectedSummary": "電子ギフト 20,000円相当(1ポイント1円相当、電子マネー・ポイント交換、基準日から3か月以内贈呈)"
+    },
+    {
+      "taskId": "d48d9527099d11b8",
+      "stockCode": "7360",
+      "sourceSha256": "5be5fe0191500033ee572ed9c43cbd64e50bf2635d113cc9ad87b3c54dc5015b",
+      "recipients": [
+        {
+          "minShares": 1000,
+          "recordMonth": 11,
+          "recordDate": null
+        }
+      ],
+      "expectedValue": 50000,
+      "expectedSummary": "電子ギフト 50,000円相当(1ポイント1円相当、電子マネー・ポイント交換、基準日から3か月以内贈呈)"
+    }
+  ]
+}

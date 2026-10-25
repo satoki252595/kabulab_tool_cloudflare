@@ -13,6 +13,17 @@ export function compileVenueAdmissionLiteral(description: string): string | null
   return `テルマー湯優待券:新宿店${counts[0]}枚、六本木・西麻布店${counts[1]}枚(1枚1名、土日祝・特定日利用不可)`;
 }
 
+/** 掲載全文が一致する電子ギフトだけ。掲載額・換算・交換先・贈呈期限を保持する。 */
+export function compilePointExchangeLiteral(description: string): { shortSummary: string; listedYen: number } | null {
+  const source = splitHeadedDescription(description);
+  if (source.malformed || source.heading?.normalize("NFKC").trim() !== "電子ギフト") return null;
+  const match = /^([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)円相当\n※電子ギフトは1ポイント1円相当の各種電子マネーやポイントと交換することが可能です。\n■贈呈時期\n基準日から3カ月以内$/u.exec(source.body.normalize("NFKC").trim());
+  if (match === null) return null;
+  const listedYen = Number(match[1].replaceAll(",", ""));
+  if (!Number.isSafeInteger(listedYen) || listedYen <= 0) return null;
+  return { shortSummary: `電子ギフト ${listedYen.toLocaleString("en-US")}円相当(1ポイント1円相当、電子マネー・ポイント交換、基準日から3か月以内贈呈)`, listedYen };
+}
+
 /** 保存全文にある単一期間と掲載額・枚数の対応だけを読む。本人の適用条件は未確認。 */
 export function parseBenefitHoldingStructure(description: string): BenefitHoldingStructure | null {
   const source = splitHeadedDescription(description);

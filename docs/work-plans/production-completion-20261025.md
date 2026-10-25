@@ -10,12 +10,12 @@
 | Notionの保存結果不明 | 非冪等書込の529等を再送せず、runnerと文書callerでも成功化・次文書続行しない | #563をmain `2fa25380`へ反映、CI・CF・SSH確認済み。読取529と明示拒否429は別契約のまま |
 | 33業種更新の先行条件 | 株価・RSI失敗でも独立した原典取得を実行。取消・対象外の停止と通信枠を維持 | #562をmain `a90df635`へ反映、CI・CF・SSH確認済み。native境界は#560で同じ元job時計へ束縛。自然定期での更新成功はコード受入と分ける |
 | Yahoo等の源欠測 | 保存原応答からNULL・0・項目欠測・通信障害を区別し、根拠なく無取引と断定しない | 結果区分の#561に加え、認証/crumb/価格API/共有停止の段階診断#564をmain `dee57443`へ配備・SSH反映済み。各欠測の原因確定・最新対象日の充足とは別 |
-| 財務NULL・本文空欄・歴史relation | 保存原典との対応を機械分類し、原典に値がある取りこぼしだけ修復。非公表を数値で埋めない | #566/#567の有限読取と#575/#577の原本修復を反映。固定3文書の現在原本を資格確認し、3776は#578後の通常strictでHOLD0。固定5社の時点別結果は下記。全市場の分類は未検収で、旧6,251セル・35,158セル・relation1,649行を現在残数にしない |
+| 財務NULL・本文空欄・歴史relation | 保存原典との対応を機械分類し、原典に値がある取りこぼしだけ修復。非公表を数値で埋めない | #566/#567の有限読取と#575/#577の原本修復を反映。固定5社に続き、現在code集合から別50社の本文1,950セルを通常CLIで照合した。結果は下記。全市場の分類は未検収で、旧6,251セル・35,158セル・relation1,649行を現在残数にしない |
 | 株価・VWAP・IR原本 | 必要対象日の保存物と通常producerの実行を照合し、原典不足を別値で埋めない | 株式10/23未更新38件の原応答は35件全NULL・技術障害3件。VWAP固定3513/2198は日足[40144871284](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40144871284)・5分足[40145161209](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40145161209)で10/23まで補完し、summary物理全bytes・4POST全文SHAと通常資格を受入。旧PUT不明・全市場snapshot保留は維持し、全5分間隔の完全性へ広げない。TDnet1279652は単一再開を1回実施し、元URL/同一文書JPXとも404。対象D1全列/本文は不変、原本未取得HOLD。無取引や世界中の原本消失とは断定しない |
 | 保有明細・権利処理 | 主体・株式種類・価格日・株数日・分割/併合/増資等の根拠と計算basisを資格化 | 明示不該当の分類は#561で配備済み。現在の開始可否と同世代HOLDの観測は下記。全保有価格・全権利種別の資格成立は未完 |
 | マクロ・個別スクリーニング | 元仕様と同じ指標・対象・期間を使い、未取得を通過にしない | プライム売買代金比率、個別④需給・⑤将来カタリストは既存の未接続。#572で手動案内を元仕様へ修正済み。自動判定の完成扱いや、新条件の推定実装はしない。定義は下記 |
 | 内部API・MCP | 既存の有効な認証情報で代表的な読取を本番通し確認 | 旧認証3ケース＋新REST7ケース/77行、MCP3ケースの段階受入済み。公開読取も5ケースPASS。全API・全データ充足の保証へ広げない。私有証跡は下記 |
-| 本番受入・文書 | PR/CI/main/CF配備とSSH revisionを照合し、必要な有限補完を実行。設定と自然時刻の成功を区別 | #586までPR CI・CF100%・SSHを確認。main CIのテスト内タイマー競合は下記。財務634Aの通常CLI受入と優待の有限本番適用は下記。初回Actionsの部分結果、次の自然定期、月次メール/実モデルを全件成功へ読み替えない |
+| 本番受入・文書 | PR/CI/main/CF配備とSSH revisionを照合し、必要な有限補完を実行。設定と自然時刻の成功を区別 | #587のPR/main CI成功・同mainのCF100%・SSHを確認。main CIのテスト内タイマー競合は#587で解消。財務634Aの通常CLI受入と優待の有限本番適用は下記。初回Actionsの部分結果、次の自然定期、月次メール/実モデルを全件成功へ読み替えない |
 
 取得元の停止・非公表・原本消失は取得成功としない。理由付きHOLDを実装しても、その値自体の取得完了には数えない。旧件数と固定集合の完了を現在の全市場の残数へ読み替えない。
 
@@ -43,8 +43,9 @@
 | [#585](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/585) 財務CLIの必須SHA引数を修正 | `07b82532` | [PR 40149308878](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40149308878) | version `6656d185-ce5a-4763-94fe-d479d9a5311a`・100%、SSH同SHA。通常captureとoffline診断を受入 |
 | [#584](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/584) SSH手動株式CLIの通信期限 | `d4a2a5c1` | [40150303623](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40150303623) | version `a15c48b9-8526-441f-a9f7-6019ac38bed1`・100%、SSH同SHA |
 | [#586](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/586) 2施設券の機械要約 | `6c9b6218` | [PR 40150454142](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40150454142) | version `b726c63e-25d8-4048-a4ff-922fccb11ae5`・100%、SSH同SHA。3521の3群/3行を本番適用 |
+| [#587](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/587) 未対応銘柄指定の拒否・テスト競合修正 | `034bbd1c` | [40152192772](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40152192772) | version `6612c0b3-5c20-4211-ada7-46d0ca592304`・100%、SSH同SHA |
 
-mainの[40150836132](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40150836132)はPython成功・Nodeの1テスト失敗だった。`daily-mode.test.ts`がHTTP側signalの停止後、別タイマーのR2 signalも停止済みと即断する競合を通信0で再現した。同じR2 assertionを有限の`vi.waitFor`で待つ修正とし、製品の期限・停止guardは変更しない。失敗runを成功へ読み替えず、修正後のCIを別に受け入れる。
+mainの[40150836132](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40150836132)はPython成功・Nodeの1テスト失敗だった。`daily-mode.test.ts`がHTTP側signalの停止後、別タイマーのR2 signalも停止済みと即断する競合を通信0で再現した。同じR2 assertionを有限の`vi.waitFor`で待つ修正とし、製品の期限・停止guardは変更していない。失敗runを成功へ読み替えず、#587のPR/main CI成功を別に受け入れた。
 
 Python共通CLIは`master_sync`だけが銘柄限定に対応する。未対応9ジョブの`--codes`/省略形/空指定を引数解析で拒否し、設定・DB・原本取得へ進ませない。無指定の通常定期処理とmasterの厳格なコード検証は維持する。
 
@@ -68,6 +69,8 @@ canonicalのClef journal検査は978ディレクトリ、accepted977/rejected1�
 | 上記の時点が異なる5社の合成 | 一致187・同CSVに対象要素なし8。5社同時再測定や全市場の充足率ではない。原本CSVの要素なしをPDF全体で非開示とは扱わない |
 
 私有report SHA: scope4 `11774995d7d2c438e43e8f526bdf906a90a01b87226fd39b54c83c8b5dced1da`、scope5 `e4fc47d20c5a70ddaceff3e78c7536fbd305443e2a112cd3678b43ca0735fd45`、scope6 `da657860602933c38675940f86eab9674bd0f47156b855e5ed66a38ceb36ed31`。
+
+11:09 JSTに別50社の本文39項目をSSHの通常`audit:supplement:texts`で照合した。現在のcode-only 1SELECTで得た有効普通株3,686社から元固定5社を除く先頭50社を固定し、文書を先読みしていない。50社全て観測、未観測/未着手/実行停止0、1,950セルは一致487・同CSV要素なし20・原本/主体資格不足1,443。空欄75セルのうち55は資格不足のため理由未確定、残20は同CSVに対象要素なし。原本資格が成立した範囲では抽出差による空欄0だった。313 HTTP、write/源API/model0。exit1は資格不足を含む結果で、全社成功や非開示の証明にしない。SSH私有`tmp/supplement-next50-readonly-20261025-v1/report.json` SHA `cec8ff9ba9432efcaff86337360636a460d429baf23ddc8b330d0dcf2353df68`、cohort SHA `9b239f96c00896ed22c33e095e522f408ed77565dd1b94dc96091e45fdf86580`。
 
 3776は現旧type1 ZIPの43/43 member bytes、全facts、本文37節・索引が同値だった。#578の通常CLIで派生metadata4列だけを物理PRE/CAS/POST付き訂正し、別の通常strict再資格化で観測2件を解決、HOLD0・進捗revision18・予約閉鎖・財務/本文不変を確認した。旧receiptと現progressの不一致は最初のplanがSTOPし、現在の保存原本receiptを資格化してから実行した。比較条件を緩めていない。私有受入`tmp/feature-audit-20261025/edinet3776-production-acceptance/`の`completed.json` SHA `db84bc403eace11378b7ad91697dafef9ffab05ff1cd4c67c5adea307b57938d`、`FINISHED.json` SHA `01c8b31dda13eadf72aa7577236da85c194ae4b9a99dde901c374ce07f1991cd`。
 
