@@ -49,7 +49,7 @@ function source(docs: EdinetDoc[]) {
   vi.mocked(readListSnapshot).mockResolvedValue({ metadata: { status: "200", message: "OK", resultset: { count: docs.length } }, results: docs });
 }
 beforeEach(() => {
-  vi.clearAllMocks(); vi.stubGlobal("fetch", vi.fn(() => { throw new Error("offline transport only"); }));
+  vi.resetAllMocks(); vi.stubGlobal("fetch", vi.fn(() => { throw new Error("offline transport only"); }));
   dir = mkdtempSync(join(tmpdir(), "edinet-zip-repair-test-"));
   const path = join(dir, "source-receipt.json"), bytes = JSON.stringify(snapshot);
   writeFileSync(path, bytes, { mode: 0o600 });
@@ -89,6 +89,54 @@ function stored(type: 1 | 5) {
   return { pageId: snapshot.pageId, bytes, sha256: createHash("sha256").update(bytes).digest("hex"),
     metadata: { ...edinetArchiveMetadata(native, "2026-03-31"), edinetDocType: type }, originalManifest: "known" as const };
 }
+function csvOnlyOptions() {
+  return zipRepairArguments([`--doc=${options.docIds.join(",")}`, `--source-snapshot=${options.sourceSnapshot}`,
+    `--source-snapshot-sha256=${options.sourceSnapshotSha256}`, "--type=5"]);
+}
+it("explicit CSV-only repairs the requested physical type without reading or claiming XBRL", async () => {
+  const before = readSnapshot(sqlite, saved.item.stockId);
+  expect(await repairZipArchives(csvOnlyOptions())).toEqual({ recorded: 1, skipped_existing: 0, reused_existing_types: 0, not_applicable_types: 0, edinet_not_found: 0 });
+  expect(readListSnapshot).toHaveBeenCalledExactlyOnceWith(snapshot);
+  expect(readSavedEdinetZip).toHaveBeenCalledExactlyOnceWith(native.docID, 5);
+  expect(downloadDocument).toHaveBeenCalledExactlyOnceWith(native.docID, 5);
+  expect(recordEdinetZip).toHaveBeenCalledTimes(1);
+  const call = vi.mocked(recordEdinetZip).mock.calls[0][0];
+  expect(call.type).toBe(5); expect(call.zip).toEqual(csv); expect(call.force).toBe(false);
+  expect(call.metadata).toMatchObject({ ...edinetArchiveMetadata(native, "2026-03-31"), sourceListSnapshot: snapshot });
+  expect(Object.hasOwn(call.metadata, "xbrlUnavailable")).toBe(false);
+  expect(readSnapshot(sqlite, saved.item.stockId)).toEqual(before); expect(fetch).not.toHaveBeenCalled();
+});
+it("CSV-only reuses qualified CSV and does not count an unrequested XBRL non-provision", async () => {
+  const existing = stored(5);
+  vi.mocked(readSavedEdinetZip).mockResolvedValue({ ...existing, metadata: { ...existing.metadata, xbrlUnavailable: true } });
+  expect(await repairZipArchives(csvOnlyOptions())).toEqual({ recorded: 0, skipped_existing: 1, reused_existing_types: 1, not_applicable_types: 0, edinet_not_found: 0 });
+  expect(readSavedEdinetZip).toHaveBeenCalledExactlyOnceWith(native.docID, 5);
+  expect(downloadDocument).not.toHaveBeenCalled(); expect(recordEdinetZip).not.toHaveBeenCalled();
+});
+it("CSV-only requalifies a late existing CSV without inventing an XBRL marker", async () => {
+  vi.mocked(readSavedEdinetZip).mockRejectedValueOnce(new SavedEdinetZipMissingError("declared key0")).mockResolvedValueOnce(stored(5));
+  vi.mocked(recordEdinetZip).mockResolvedValueOnce({ pageId: snapshot.pageId, outcome: "skipped_existing", fileTooLarge: false, manifestMatch: "unknown" });
+  expect(await repairZipArchives(csvOnlyOptions())).toEqual({ recorded: 0, skipped_existing: 1, reused_existing_types: 1, not_applicable_types: 0, edinet_not_found: 0 });
+  expect(vi.mocked(readSavedEdinetZip).mock.calls.map(([, type]) => type)).toEqual([5, 5]);
+  expect(downloadDocument).toHaveBeenCalledExactlyOnceWith(native.docID, 5);
+  expect(Object.hasOwn(vi.mocked(recordEdinetZip).mock.calls[0][0].metadata, "xbrlUnavailable")).toBe(false);
+});
+it.each(["native8", "manifest", "qualification", "unknown"] as const)("CSV-only preserves requested-source %s STOP", async fault => {
+  const existing = stored(5);
+  vi.mocked(readSavedEdinetZip).mockImplementation(async () => {
+    if (fault === "qualification") throw new SavedEdinetZipQualificationError("declared typed qualification fault");
+    if (fault === "unknown") throw new NotionUnknownResultError("declared saved archive unknown");
+    return fault === "manifest" ? { ...existing, originalManifest: "unknown" } : { ...existing, metadata: { ...existing.metadata, secCode: "26830" } };
+  });
+  await expect(repairZipArchives(csvOnlyOptions())).rejects.toThrow();
+  expect(downloadDocument).not.toHaveBeenCalled(); expect(recordEdinetZip).not.toHaveBeenCalled();
+});
+it.each([{ csvFlag: "0" }, { withdrawalStatus: "1" }, { docInfoEditStatus: "1" }, { disclosureStatus: "1" }, { formCode: "07A000" }])(
+  "CSV-only still rejects absent native provision or unqualified form/status: %j", async change => {
+    source([{ ...native, ...change }]);
+    await expect(repairZipArchives(csvOnlyOptions())).rejects.toThrow("source_state_unqualified");
+    expect(readSavedEdinetZip).not.toHaveBeenCalled(); expect(downloadDocument).not.toHaveBeenCalled(); expect(recordEdinetZip).not.toHaveBeenCalled();
+  });
 it("a qualified stored type1 is reused and only missing type5 is obtained and recorded", async () => {
   const raw = stored(1);
   vi.mocked(readSavedEdinetZip).mockImplementation(async (_docID, type) => {
@@ -177,7 +225,7 @@ it("preserves native metadata on CSV closure after a known type1 source failure"
   expect(recordEdinetZip).toHaveBeenCalledTimes(1);
   expect(vi.mocked(recordEdinetZip).mock.calls[0][0].metadata).toMatchObject({ ...edinetArchiveMetadata(native, "2026-03-31"), ingestPhase: "partial-source" });
 });
-it.each(["type5", "type1", "partial", "saved-read"] as const)("an archive unknown at %s never proceeds to the next document", async phase => {
+it.each(["type5", "type1", "partial", "saved-read", "csv-only"] as const)("an archive unknown at %s never proceeds to the next document", async phase => {
   // Clone metadata only as a declared two-document transport control, not an actual second filing.
   const second = { ...native, docID: "S100YF42", seqNumber: 2 };
   const row = saved.d1.yuho_documents[0];
@@ -192,15 +240,24 @@ it.each(["type5", "type1", "partial", "saved-read"] as const)("an archive unknow
     if (id === second.docID && type === 1) throw unknown;
     throw new SavedEdinetZipMissingError("declared exact key0 transport");
   });
-  const error = await repairZipArchives({ ...options, docIds: [native.docID, second.docID] }).then(() => null, error => error);
+  const error = await repairZipArchives({ ...(phase === "csv-only" ? csvOnlyOptions() : options), docIds: [native.docID, second.docID] }).then(() => null, error => error);
   if (phase === "saved-read") {
     expect(error).toBe(unknown); expect(downloadDocument).not.toHaveBeenCalled(); expect(recordEdinetZip).not.toHaveBeenCalled(); return;
   }
   expect(error).toBeInstanceOf(EdinetDocumentArchiveError); expect(error.cause).toBe(unknown);
   expect(vi.mocked(downloadDocument).mock.calls.every(([id]) => id === native.docID)).toBe(true);
   expect(recordEdinetZip).toHaveBeenCalledTimes(phase === "type1" ? 2 : 1);
+  if (phase === "csv-only") {
+    expect(vi.mocked(downloadDocument).mock.calls).toEqual([[native.docID, 5]]);
+    expect(vi.mocked(readSavedEdinetZip).mock.calls.map(([, type]) => type)).toEqual([5, 5]);
+  }
 });
 it("requires a finite explicit source receipt and refuses force-overwrite", () => {
   for (const args of [[], ["--doc=S100YF41"], ["--doc=S100YF41,S100YF41"], ["--force"]])
     expect(() => zipRepairArguments(args)).toThrow("arguments_invalid");
+});
+it.each(["--type=1", "--type=1,5", "--type=both", "--type=", "--type=5 --type=5"])("rejects unsupported type selection before any source: %s", type => {
+  const args = [`--doc=${native.docID}`, `--source-snapshot=${options.sourceSnapshot}`, `--source-snapshot-sha256=${options.sourceSnapshotSha256}`, ...type.split(" ")];
+  expect(() => zipRepairArguments(args)).toThrow("arguments_invalid");
+  expect(readListSnapshot).not.toHaveBeenCalled(); expect(createD1HttpDb).not.toHaveBeenCalled(); expect(downloadDocument).not.toHaveBeenCalled();
 });
