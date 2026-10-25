@@ -25,6 +25,8 @@ import { currentPublishingWriter, publishingReadOnly, withSharedPublishingWriter
 import { parseStockCode } from "../../../src/shared/jpx/stock-code.js";
 import { createD1HttpBatchSender } from "../../../src/shared/db/d1-http-client.js";
 import { recordPrimaryData, verifyArchivedAttachments } from "../../../src/shared/notion-archive/index.js";
+import { notionEnv } from "../../../src/shared/notion-archive/env.js";
+import { setNotionMaxRps } from "../../../src/shared/notion-archive/client.js";
 import {
   SEMIF_HF_MODEL,
   SEMIF_HF_REVISION,
@@ -171,7 +173,7 @@ export function companyValue(task: SummaryTask): {
   return evaluateCompanyValue(task.description, context);
 }
 
-export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v8";
+export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v9";
 
 /** 対応する種類＋額面・全文1点選択・全文対応の期間/名簿条件を定型化する。未対応条件を削らない。 */
 export function compileSimpleSummary(task: SummaryTask): SummaryResult | null {
@@ -216,6 +218,17 @@ export function compileSimpleSummary(task: SummaryTask): SummaryResult | null {
     const count = Number(points[1].replaceAll(",", "")), amount = companyValue(task);
     if (!Number.isSafeInteger(count) || amount.value !== null || amount.reason !== "approx") return null;
     const shortSummary = `${count}ポイント(WEB商品選択・寄付・WILLsCoin交換、翌年12月末同番号継続記録2回以上で繰越1回のみ)`;
+    if (checkSummary(shortSummary).length > 0) return null;
+    return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion, shortSummary, estimatedValue: null });
+  }
+  // 保有・名簿・選択・贈呈時期の残全文を固定し、掲載額を受取額へ認定しない。
+  if (source.heading?.normalize("NFKC").trim() === "株主優待商品(長期保有者向け)") {
+    const catalog = /^【1年以上保有株主】\n([1-9][0-9]{0,2}(?:,[0-9]{3})+|[1-9][0-9]*)円相当\n([\s\S]+)$/u.exec(body);
+    if (catalog === null || sha(catalog[2]) !== "7e419099cc02ad5e0b5630ad03ea918d0efb0b621b731167e34a792e59d743e4") return null;
+    const count = Number(catalog[1].replaceAll(",", "")), amount = companyValue(task);
+    if (!Number.isSafeInteger(count) || amount.value !== null || amount.reason !== "choice" ||
+      task.recipients.some(recipient => recipient.recordMonth !== 12 || recipient.recordDate !== null)) return null;
+    const shortSummary = `1年以上保有・毎年12月末同一株主番号継続記録、${count.toLocaleString("en-US")}円相当商品/寄付をカタログ/WEBで1点選択(2月下旬贈呈)`;
     if (checkSummary(shortSummary).length > 0) return null;
     return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion, shortSummary, estimatedValue: null });
   }
@@ -667,16 +680,28 @@ export function dependencies(): LocalDependencies {
   };
 }
 
+/** CLI入口。保存入力の資格後、通信しない設定検査を共有owner取得より先に済ませる。 */
+export async function main(argv = process.argv.slice(2)) {
+  const options = parseLocalArgs(argv);
+  readReviewedInput(options); // Invalid saved input must not acquire remote ownership or construct DB dependencies.
+  let run: () => Promise<LocalReport>;
+  if (options.reviewedInput !== undefined) {
+    const deps = dependencies(); // D1の型付き設定とquery builder構築だけ。SELECTはrun内で行う。
+    notionEnv.NOTION_TOKEN(); notionEnv.NOTION_ARCHIVE_PAGE_ID();
+    const rps = notionEnv.NOTION_MAX_RPS();
+    if (rps !== undefined) setNotionMaxRps(rps);
+    run = () => runLocalSummary(options, deps);
+  } else {
+    // Mac通常入口はwithBiztagWriterのcanonical .envロード後に依存を構築する。
+    run = () => runLocalSummary(options, dependencies());
+  }
+  const report = await (options.reviewedInput === undefined ? withBiztagWriter(run) : withSharedPublishingWriter(run));
+  console.info(`[yutai:summary:local] ${JSON.stringify(report)}`);
+  if (report.rejected > 0) process.exitCode = 1;
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const execute = async () => {
-    const options = parseLocalArgs(process.argv.slice(2));
-    readReviewedInput(options); // Invalid saved input must not acquire remote ownership or construct DB dependencies.
-    const run = () => runLocalSummary(options, dependencies());
-    const report = await (options.reviewedInput === undefined ? withBiztagWriter(run) : withSharedPublishingWriter(run));
-    console.info(`[yutai:summary:local] ${JSON.stringify(report)}`);
-    if (report.rejected > 0) process.exitCode = 1;
-  };
-  execute().catch(() => {
+  main().catch(() => {
     // Shared exceptions may contain company text/private paths; keep terminal logs aggregate-only.
     console.error("[yutai:summary:local] STOP。私有証跡を確認してください。再試行しません。");
     process.exitCode = 1;
