@@ -6,7 +6,7 @@
 |---|---|---|
 | 定時起動・実時間の締切 | 未来予定を拒否し、許容遅配・source停止・原本保存・native timeout・receiptの順序が全入口で一致 | #560と機械publisher追補#568、元job時計の有限再資格#570、SSH手動株式CLIの翌06時通信停止#584をCI・main配備・SSHへ反映済み。10/23 MWF/VWAPは17:15〜17:25 JSTの遅配が旧受付外となった。#560の予定時刻基準による根本修正後の自然定期実績は別受入 |
 | 本文39項目・基本情報の補足同期 | Linuxの通常定期処理がモデル・語彙判定に依存せず差分同期し、旧タグ根拠と最新本文を区別 | 起動前設定検査とSSH必須設定を受入後、通常50件中27件を同期、HOLD0・未着手23・実行時モデル0。normal CLI exit1の既知部分完了。直後の外側POST確認はTimeoutErrorで停止したが、別の明示単発3GETで共有owner/pending閉鎖とcursor進捗を受入。個別27文書の独立再照合や全社完了とはしない |
-| 優待の機械要約 | 既存compiler・検証・原子的publisherをLinuxから呼び、未解析は保留。Macの成否を先行条件にしない | 保存レビュー13群/13行に続き、契約`.5`で4群/6行を通常反映。4661も余剰1行だけ是正し保持14行・原本/物理PREPOST・owner閉鎖を確認。18:34の未完95群/147行/39銘柄は追加反映前の実測で、現在数を差引推算しない。未対応形式と意味判断が残る |
+| 優待の機械要約 | 既存compiler・検証・原子的publisherをLinuxから呼び、未解析は保留。Macの成否を先行条件にしない | 保存レビュー13群/13行に続き、契約`.5`で4群/6行を通常反映。4661も余剰1行だけ是正し保持14行・原本/物理PREPOST・owner閉鎖を確認。19:37の単一SELECT全7,728行で未完91群/140行/37銘柄を実測。未対応形式と意味判断が残る |
 | Notionの保存結果不明 | 非冪等書込の529等を再送せず、runnerと文書callerでも成功化・次文書続行しない | #563をmain `2fa25380`へ反映、CI・CF・SSH確認済み。読取529と明示拒否429は別契約のまま |
 | 33業種更新の先行条件 | 株価・RSI失敗でも独立した原典取得を実行。取消・対象外の停止と通信枠を維持 | #562をmain `a90df635`へ反映、CI・CF・SSH確認済み。native境界は#560で同じ元job時計へ束縛。自然定期での更新成功はコード受入と分ける |
 | Yahoo等の源欠測 | 保存原応答からNULL・0・項目欠測・通信障害を区別し、根拠なく無取引と断定しない | 結果区分の#561に加え、認証/crumb/価格API/共有停止の段階診断#564をmain `dee57443`へ配備・SSH反映済み。各欠測の原因確定・最新対象日の充足とは別 |
@@ -167,6 +167,8 @@ Primeの既存接続原典から、同一定義の当日実代金と20日平均�
 19:17 JSTに契約`.5`の保存レビュー4群/6行をmain `6268941e`の通常publisherで反映した。対象3銘柄の全9行POST・入力全SHA・cursor不変・baseline保持・owner/pending nullを受入、runtimeモデル/新規上流取得0。私有`yutai-reviewed-next4-contract5-prep-v1`のFS受入SHA `4e58cbaf6cd354e0093fc986875c6b14ecab40cbeddfb794d67442b98f135248`。18:34の95群から現在数を差し引き推算しない。
 
 19:25 JSTに4661の通常保存原本修復がexit0で完了した。97,897,450 bytesの原本を通常共有経路で資格確認し、余剰1行（id59354）のみ削除、保持14行の全列・ID・時計と親行は不変。通常yield/score再計算後も実差分0。物理PRE/POSTと共有owner/pending閉鎖、両cursor/baseline不変を確認した。旧失敗・入力・Macを保全し、上流取得/モデル/再送0。私有`yutai4661-month-scope-after-download-fix-prep-v1/ACCEPTED.private.json` SHA `581c7ba3171010c170362e63f680ff62d89065b14f1d49c81d70dcda6cbdf8c3`。
+
+19:37:36 JSTの新しい単一SELECT全7,728行を通常selector・契約`.5`で再計数し、未完91群/140行/37銘柄、全てmissingを実測した。HTTP1/試行1・D1 read28,520行・write0、Notion/R2/上流/モデル0。18:34の95群からの差引ではない。私有`yutai-pending-post-reviewed4-monthscope-contract5-count-plan-v1`のFINISHED SHA `8c751af946093b217fb3dfa922240798a95fb0b9d49574c8233e4d6e5194c307`、FS受入SHA `5991db7574cc001f115c2ee5897e9f797384546c491f97d471bc21263575abdd`。
 
 財務7911/8566は既存relationで指定された不足15原本だけを追加取得し、旧2原本と併せた固定17行を通常offline診断した。323セルは既存一致171・保存scope候補なし137・明示対象外11・ROA抽出差候補4、HOLD0。4候補は未反映で、137を公式非開示とは認定しない。原本15件1,012,334 bytes、新29GET＋保全済み旧metadata1GET＝30GET、上流再取得/再試行/業務書込/モデル0。私有`tmp/financial-historical15-exact-originals-prep-20261025-v1/accepted-production-continuation-v1/FS-ACCEPTANCE.private.json` SHA `03489ff29573dfcab809e8a4c5db356fc6685e741e987a7bd0afb862403293c4`。
 
