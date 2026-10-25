@@ -105,5 +105,7 @@ services/ir-catalog/
 pnpm ir:backfill -- --from=YYYY-MM --to=YYYY-MM  # 全履歴 (冪等・再開可能)
 pnpm ingest:ir-tdnet                            # 手動キャッチアップ (通常は catchup.yml)
 pnpm ingest:ir-tdnet --resume-from=YYYY-MM-DD --resume-to=YYYY-MM-DD # 保存D1から二次保管のみ再開（両端を含む）
+# 単一再開は上記日付に --resume-tdnet-id=<ID> --deadline-at=<1時間以内のUTC ISO時刻・ミリ秒付きZ> を両方付ける。
+# 保存行が一意でない・期限切れ・既知の元公式PDF名とredirect先が異なる場合は原本を代用しない。
 pnpm test / pnpm typecheck / pnpm lint
 ```
