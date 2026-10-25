@@ -1,0 +1,69 @@
+{
+  "sourceType": "captured_official_html_pdf_and_saved_provider",
+  "privateFixtureDir": "tmp/yutai-musashino-source-proof-v1",
+  "officialPhysicalArchiveStatus": "NOT_ARCHIVED_PENDING",
+  "historicalFullPOSTSha256": "190c66310fe3cf165796b8df4893cefd21169ccd7a9eeef7124f06472d15156e",
+  "currentFullPOSTSha256": "3b990a56acd1dd629aa962a1645574c626a0db93ca97f2d6d85d975afd6d7e26",
+  "files": [
+    {
+      "path": "CORRECTED-8336.private.json",
+      "sha256": "43daaed660a6ea662b39deaa05f6ae8b1c21a3dacdf89008aa35f5fab9cee9d5",
+      "bytes": 9349
+    },
+    {
+      "path": "OFFICIAL-CAPTURE.private.json",
+      "sha256": "3c3da36f01d1bd025329bb474c7dd050ca85d86f73788212759fceb8753996d6",
+      "bytes": 993
+    },
+    {
+      "path": "PROVIDER-8336-RAW.private.json",
+      "sha256": "d2c43ac3adab28c774285639927963fb4b519312243249e94795d0c9e6bf698b",
+      "bytes": 227208
+    },
+    {
+      "path": "SAVED-ROWS.private.json",
+      "sha256": "f6e9d133fc9ba8b313841e5dfc04f58e5dc30a898cab9712dae1aa8f2d928f8b",
+      "bytes": 3511
+    },
+    {
+      "path": "official-8336-pdftext.private.txt",
+      "sha256": "f717bccfd3f10364cfe831baf8d20c8a8640fc76b0d061175f1dcd4cd79e85b2",
+      "bytes": 3169
+    },
+    {
+      "path": "official-8336.html",
+      "sha256": "39b321ffc131704f1329740bc8d929ef9348d69d98c1ff38d3e18a5e9da3c53a",
+      "bytes": 54059
+    },
+    {
+      "path": "official-8336.pdf",
+      "sha256": "61ce48d586a3b4a86eca2588f72d4cb2b25ce76244a9c88188c59dd616aa2af6",
+      "bytes": 244421
+    },
+    {
+      "path": "SAVED-SOURCE-PACKET.private.json",
+      "sha256": "a8f7b1d4ae22ac1e54bae2cc71bd522393daf1ef222229a422575cc9ddf46cfc",
+      "bytes": 624804
+    }
+  ],
+  "expectedRows": [
+    {
+      "minShares": 200,
+      "recordMonth": 3,
+      "recordDate": null,
+      "descriptionSha256": "49a2446d3ba8b1ed79f725ef10af91c809554c3d275eabc4c62e0fe70d307fac"
+    },
+    {
+      "minShares": 600,
+      "recordMonth": 3,
+      "recordDate": null,
+      "descriptionSha256": "71e76bc764de416ba635979493dbba0fbf76f19f64e3a6072f4c24bd236a3ac2"
+    },
+    {
+      "minShares": 2000,
+      "recordMonth": 3,
+      "recordDate": null,
+      "descriptionSha256": "5e91dd8a2163b4ba66bbd4ddff8862fbc0b767139aef6ee93125daf007411d11"
+    }
+  ]
+}

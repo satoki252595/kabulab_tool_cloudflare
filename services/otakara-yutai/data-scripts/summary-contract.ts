@@ -22,6 +22,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { compileMusashinoOfficialLiteral } from "./musashino-source.js";
 import { HEADED_MARK, splitHeadedDescription } from "./estimated-value-guard.js";
 import { compileAnnualGiftHistoryLiteral, compileBankDepositChoiceLiteral, compileBankHoldingHistoryLiteral, compileDepartmentHoldingLiteral, compileHoldingPointCarryLiteral, compileHotelHoldingLiteral, compilePointExchangeLiteral, compilePremiumClubCarryLiteral, compileSkiTicketBundleLiteral, compileVenueAdmissionLiteral } from "./holding-structure.js";
 
@@ -130,6 +131,12 @@ export function isSummaryNumbersGrounded(
   // ステップは回数ではない。預金上限・優遇と歴史的名簿条件を完全句へ束縛する。
   if (bankDeposit !== null || normalized.includes("ひまわりポイントサービス")) return bankDeposit !== null && normalized === bankDeposit.shortSummary &&
     context.minShares.length === 1 && context.minShares[0] === bankDeposit.minShares &&
+    context.recordMonths.length === 1 && context.recordMonths[0] === 3 &&
+    context.recordDates?.length === 1 && context.recordDates[0] === null;
+  const musashino = compileMusashinoOfficialLiteral(description);
+  // 公式採用後の全文3型・完全句・単一現在tierだけ。200株の歴史条件をtierへ転用しない。
+  if (musashino !== null || normalized.startsWith("武蔵野銀行公式:")) return musashino !== null && normalized === musashino.shortSummary.normalize("NFKC") &&
+    context.minShares.length === 1 && context.minShares[0] === musashino.minShares &&
     context.recordMonths.length === 1 && context.recordMonths[0] === 3 &&
     context.recordDates?.length === 1 && context.recordDates[0] === null;
   const skiTickets = compileSkiTicketBundleLiteral(description);

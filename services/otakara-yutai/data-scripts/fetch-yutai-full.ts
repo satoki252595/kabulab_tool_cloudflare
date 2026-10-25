@@ -12,6 +12,7 @@ import { log } from "../../../src/shared/log.js";
 import * as schema from "../src/db/schema.js";
 import {
   importYutaiFull,
+  benefitRowsOf,
   explicitRowRecordMonth,
   type BenefitDetail,
   type StockYutaiData,
@@ -37,6 +38,10 @@ import { assertNotCommittable } from "./private-path.js";
 import { applyAtomicBatches } from "./atomic-apply.js";
 import { fetchYieldInputs } from "./recompute-yields.js";
 import { assertMonthScopePost, assertMonthScopeRowsEqual, loadMonthScopePreimage, planSavedMonthScope, qualifySavedMonthScopeArchive, readMonthScopePreimage, readSavedMonthScopePage, readMonthScopeRawBytes } from "./saved-month-scope.js";
+import { adoptMusashinoOfficialSource, MUSASHINO_LISTING_URL, MUSASHINO_OFFICIAL_URL, MUSASHINO_NOTICE_URL } from "./musashino-source.js";
+import { extractPdfText } from "../../ir-catalog/src/services/pdf-sentiment/extract-text.js";
+import { z } from "../../../src/shared/zod-mini.js";
+import { planMusashinoSourceAdoption } from "./musashino-repair.js";
 
 // Schema は src/db/schema.ts に集約済み (D1/SQLite 版 — ADR-0001)。
 // 銘柄マスタ stocks は core_stocks の再 export、yutai_genres / yutai_benefits は
@@ -47,23 +52,56 @@ type RawPage = {
   byteLength: number; bodyBase64: string;
 };
 type CapturePage = (page: RawPage) => void;
+type SavedMusashinoPage = { page: RawPage; path: string; filename: string; contentType: string };
 
-async function fetchPage(url: string, onRaw?: CapturePage, beforeRequest?: () => void): Promise<string> {
+function saveMusashinoPage(page: RawPage, runId: string, dir: string): SavedMusashinoPage {
+  const contentType = page.contentType === null ? "application/octet-stream" : page.contentType.split(";")[0].trim().toLowerCase();
+  const suffix = page.url === MUSASHINO_LISTING_URL ? "provider" : page.url === MUSASHINO_OFFICIAL_URL ? "official" : "notice";
+  const filename = `yutai-official-8336-${runId}-${suffix}.${contentType === "text/html" ? "html" : contentType === "application/pdf" ? "pdf" : "bin"}`;
+  const saved = writeSummaryLocal({ key: `yutai-official-8336-${runId}`, files: [{ filename, bytes: Buffer.from(page.bodyBase64, "base64"), contentType }] }, dir);
+  if (!saved.ok) throw new Error("musashino_source_local_save_failed");
+  return { page, path: saved.path, filename, contentType };
+}
+
+async function fetchRawPage(url: string, onRaw?: CapturePage, beforeRequest?: () => void, limit?: { bytes: number; contentType: string }): Promise<RawPage> {
   beforeRequest?.();
   const res = await fetch(url, {
     signal: AbortSignal.timeout(20_000),
+    ...(limit === undefined ? {} : { redirect: "error" as const }),
     headers: {
       "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      "Accept": "text/html,application/xhtml+xml",
+      "Accept": limit === undefined ? "text/html,application/xhtml+xml" : limit.contentType,
       "Accept-Language": "ja,en;q=0.9",
     },
   });
-  const bytes = Buffer.from(await res.arrayBuffer());
-  onRaw?.({ url, receivedAt: new Date().toISOString(), status: res.status,
+  let bytes: Buffer;
+  if (limit === undefined) bytes = Buffer.from(await res.arrayBuffer());
+  else {
+    const reader = res.body?.getReader();
+    if (reader === undefined) throw new Error("official_response_body_missing");
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      size += next.value.byteLength;
+      if (size > limit.bytes) { await reader.cancel(); throw new Error("official_response_too_large"); }
+      chunks.push(next.value);
+    }
+    bytes = Buffer.concat(chunks, size);
+  }
+  const page = { url, receivedAt: new Date().toISOString(), status: res.status,
     contentType: res.headers.get("content-type"), byteLength: bytes.length,
-    bodyBase64: bytes.toString("base64") });
+    bodyBase64: bytes.toString("base64") };
+  onRaw?.(page);
   if (!res.ok) throw new Error(`HTTP ${res.status}: ${url}`);
-  return bytes.toString("utf-8");
+  if (limit !== undefined && page.contentType?.split(";")[0].trim().toLowerCase() !== limit.contentType) throw new Error("official_response_type_changed");
+  return page;
+}
+
+async function fetchPage(url: string, onRaw?: CapturePage, beforeRequest?: () => void): Promise<string> {
+  const page = await fetchRawPage(url, onRaw, beforeRequest);
+  return Buffer.from(page.bodyBase64, "base64").toString("utf-8");
 }
 
 /** 部分取得も物理保管する。保管・全バイト照合に失敗したらD1取込へ進まない。 */
@@ -98,6 +136,26 @@ export async function archiveRawFile(path: string, runId: string, source: string
   }
   await verifyArchivedAttachments(archived.pageId, files, "優待取得原本");
   return { pageId: archived.pageId, files };
+}
+
+/** 8336の両原本と元提供元を実体保管し、新本文の対応を同じmanifestへ束縛する。 */
+async function archiveMusashinoSources(pages: readonly SavedMusashinoPage[], runId: string, data: StockYutaiData | undefined, providerArchive: { key: string; sha256: string }): Promise<{ pageId: string } | undefined> {
+  if (!pages.some(({ page }) => page.url === MUSASHINO_OFFICIAL_URL || page.url === MUSASHINO_NOTICE_URL)) return;
+  const sources = await Promise.all(pages.map(async ({ page, path, filename, contentType }) => {
+    const bytes = Uint8Array.from(readFileSync(path));
+    const sha256 = await sha256HexBytes(bytes);
+    if (sha256 !== await sha256HexBytes(Buffer.from(page.bodyBase64, "base64"))) throw new Error("musashino_local_source_changed");
+    return { file: { filename, bytes, contentType }, response: { url: page.url, receivedAt: page.receivedAt, status: page.status, contentType: page.contentType, byteLength: page.byteLength, sha256, filename } };
+  }));
+  const files = sources.map(source => source.file);
+  const rows = data === undefined ? [] : await Promise.all(benefitRowsOf(data).rows.map(async row => ({ minShares: row.minShares, recordMonth: row.recordMonth, recordDate: null, descriptionSha256: await sha256HexBytes(Buffer.from(row.description)) })));
+  const archived = await recordPrimaryData({ service: "otakara-yutai", key: `yutai-official-8336-${runId}`,
+    source: "8336 explicit official HTML/PDF adoption with original provider provenance", fetchedAt: pages[pages.length - 1].page.receivedAt,
+    metadata: { runId, providerArchive, responses: sources.map(source => source.response),
+      adoption: data === undefined ? "unresolved" : "full_source_qualified", official: data === undefined ? null : data.official, rows }, files, force: false });
+  if (archived.outcome !== "recorded" || archived.fileTooLarge) throw new Error("musashino_official_archive_unconfirmed");
+  await verifyArchivedAttachments(archived.pageId, files, "8336公式原本と提供元");
+  return { pageId: archived.pageId };
 }
 
 /** 検索結果と明示ページ送りだけを読む。推薦欄・欠落したページ送りは採用しない。 */
@@ -206,21 +264,28 @@ export type StockDetailResult =
   | { status: "unknown"; code: string; reason: string };
 
 export async function fetchStockDetail(code: string, onRaw?: CapturePage, beforeRequest?: () => void): Promise<StockDetailResult> {
-  let html: string;
   let sourceFetchedAt: string | undefined;
   try {
-    html = await fetchPage(`https://minkabu.jp/stock/${code}/yutai`, page => {
+    const html = await fetchPage(`https://minkabu.jp/stock/${code}/yutai`, page => {
       sourceFetchedAt = page.receivedAt;
       onRaw?.(page);
     }, beforeRequest);
+    const result = parseStockDetail(code, html);
+    if (result.status !== "ok") return result;
+    result.data.sourceFetchedAt = sourceFetchedAt;
+    if (code !== "8336") return result;
+    // 明示公式採用。取得・全文資格に失敗したら旧提供元へ戻さずUNKNOWNにする。
+    const official = await fetchRawPage(MUSASHINO_OFFICIAL_URL, onRaw, beforeRequest, { bytes: 256 * 1024, contentType: "text/html" });
+    const notice = await fetchRawPage(MUSASHINO_NOTICE_URL, onRaw, beforeRequest, { bytes: 2 * 1024 * 1024, contentType: "application/pdf" });
+    const pdf = Uint8Array.from(Buffer.from(notice.bodyBase64, "base64"));
+    const pdfText = await extractPdfText(pdf);
+    if (pdfText === null) throw new Error("musashino_official_pdf_unreadable");
+    return { status: "ok", data: adoptMusashinoOfficialSource(result.data, new TextDecoder("utf-8", { fatal: true }).decode(Buffer.from(official.bodyBase64, "base64")), pdf, pdfText, notice.receivedAt) };
   } catch (e) {
     if (e instanceof ScheduledSourceDeadlineError) throw e;
     const reason = `fetch: ${e instanceof Error ? e.message : String(e)}`.slice(0, 160);
     return { status: "unknown", code, reason };
   }
-  const result = parseStockDetail(code, html);
-  if (result.status === "ok") result.data.sourceFetchedAt = sourceFetchedAt;
-  return result;
 }
 
 /**
@@ -408,6 +473,7 @@ export function parseStockDetail(code: string, html: string): StockDetailResult 
 
 // ===== Main =====
 export async function main(argv: readonly string[] = []) {
+  if (argv.includes("--adopt-musashino-source")) return adoptSavedMusashinoSource(argv);
   if (argv.length > 0) return repairSavedMonthScope(argv);
   const window = nativeJobExecutionWindow(Date.now(), sharedEnv.BATCH_JOB_STARTED_AT(), 360, 10);
   const assertSource = () => {
@@ -429,7 +495,14 @@ export async function main(argv: readonly string[] = []) {
   let pages = 0;
   let rawBytes = 0;
   let lastClock: string | null = null;
+  let musashinoData: StockYutaiData | undefined;
+  const musashinoPages: SavedMusashinoPage[] = [];
   const capture: CapturePage = (page) => {
+    if ([MUSASHINO_LISTING_URL, MUSASHINO_OFFICIAL_URL, MUSASHINO_NOTICE_URL].includes(page.url)) {
+      musashinoPages.push(saveMusashinoPage(page, runId, dir));
+      // 公式原本は別の実体添付へ送る。既存provider gzipの形式・保管契約を変えない。
+      if (page.url !== MUSASHINO_LISTING_URL) return;
+    }
     // 次GETより先に全bytesをdurable保存。全量base64をRAMへ保持しない。
     writeFileSync(fd, JSON.stringify(page) + "\n");
     fsyncSync(fd);
@@ -444,7 +517,11 @@ export async function main(argv: readonly string[] = []) {
     const codes = await collectAllStockCodes((page) => fetchPage(`https://minkabu.jp/yutai/search?order=&page=${page}`, capture, assertSource));
     log.info(`\n✅ ${codes.length}銘柄のコードを収集\n`);
     log.info("📊 Phase 2: 各銘柄の詳細データを取得中...");
-    allData = await collectStockDetails(codes, (code) => fetchStockDetail(code, capture, assertSource));
+    allData = await collectStockDetails(codes, async (code) => {
+      const result = await fetchStockDetail(code, capture, assertSource);
+      if (code === "8336" && result.status === "ok") musashinoData = result.data;
+      return result;
+    });
   } finally {
     closeSync(fd);
     // UNKNOWNでも取得済み原本を残す。成功時もD1更新より先に保管・照合する。
@@ -455,12 +532,114 @@ export async function main(argv: readonly string[] = []) {
         await pipeline(createReadStream(path), createGzip(), createWriteStream(gzipPath, { fd: gzipFd, autoClose: false }));
         fsyncSync(gzipFd);
       } finally { closeSync(gzipFd); }
-      await archiveRawFile(gzipPath, runId, "minkabu search/detail response bytes (gzip lossless)", pages, rawBytes, lastClock);
+      const raw = await archiveRawFile(gzipPath, runId, "minkabu search/detail response bytes (gzip lossless)", pages, rawBytes, lastClock);
+      await archiveMusashinoSources(musashinoPages, runId, musashinoData, { key: `yutai-source-${runId}`, sha256: await sha256HexBytes(raw.files[0].bytes) });
     }
   }
   if (lastClock === null) throw new Error("優待原本の実取得時計が無いためSTOP");
   await importCollectedYutaiData(allData, runId, lastClock);
   } finally { restore?.(); }
+}
+
+// ponytail: 2026-10-21保存providerの現存3行修復専用。別cohortは通常collectorで再資格化する。
+const MusashinoSavedPacket = z.strictObject({
+  version: z.literal(1),
+  providerArchiveKey: z.literal("yutai-source-local-411af4c3"),
+  providerArchiveSha256: z.literal("0e9167f08f4a7c74a081b97db90b25eb87e265ac88a9c8ab4a17cede470053a4"),
+  providerBatchFetchedAt: z.literal("2026-10-21T16:56:22.538Z"),
+  pages: z.array(z.strictObject({ url: z.string(), receivedAt: z.string(), status: z.literal(200), contentType: z.string(),
+    byteLength: z.number().check(z.int(), z.positive()), bodyBase64: z.string() })).check(z.minLength(3), z.maxLength(3)),
+});
+
+/** 固定private原本だけを再解析する。上流GETやNotionアクセスは行わない。 */
+export async function readSavedMusashinoSource(path: string, sha256: string) {
+  const bytes = readMonthScopeRawBytes(path, sha256);
+  if (bytes.length > 4 * 1024 * 1024) throw new Error("musashino_saved_packet_too_large");
+  const packet = MusashinoSavedPacket.parse(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
+  const urls = [MUSASHINO_LISTING_URL, MUSASHINO_OFFICIAL_URL, MUSASHINO_NOTICE_URL];
+  for (const [i, page] of packet.pages.entries()) {
+    const body = Buffer.from(page.bodyBase64, "base64"), clock = new Date(page.receivedAt);
+    if (page.url !== urls[i] || body.length !== page.byteLength || body.toString("base64") !== page.bodyBase64 ||
+        !Number.isFinite(clock.getTime()) || clock.toISOString() !== page.receivedAt ||
+        page.contentType.split(";")[0].trim().toLowerCase() !== (i === 2 ? "application/pdf" : "text/html")) throw new Error("musashino_saved_response_invalid");
+  }
+  if (packet.pages[0].receivedAt !== "2026-10-21T16:47:17.281Z" ||
+      await sha256HexBytes(Buffer.from(packet.pages[0].bodyBase64, "base64")) !== "be11f714fba48c731c1959d910ef6921afd7e04d16ae1f40ed5354463a6cbccc") throw new Error("musashino_saved_provider_changed");
+  const decoded = (page: RawPage) => new TextDecoder("utf-8", { fatal: true }).decode(Buffer.from(page.bodyBase64, "base64"));
+  const provider = parseStockDetail("8336", decoded(packet.pages[0]));
+  if (provider.status !== "ok") throw new Error("musashino_saved_provider_unreadable");
+  provider.data.sourceFetchedAt = packet.pages[0].receivedAt;
+  const pdf = Uint8Array.from(Buffer.from(packet.pages[2].bodyBase64, "base64")), pdfText = await extractPdfText(pdf);
+  if (pdfText === null) throw new Error("musashino_saved_notice_unreadable");
+  return { packet, data: adoptMusashinoOfficialSource(provider.data, decoded(packet.pages[1]), pdf, pdfText, packet.pages[2].receivedAt) };
+}
+
+/** 8336の全3行にだけ使う固定入力mode。既存state/unknownを別実行へ持ち越さない。 */
+export function parseMusashinoAdoptionArgs(argv: readonly string[]) {
+  const { values, tokens } = parseArgs({ args: [...argv], strict: true, allowPositionals: false, tokens: true, options: {
+    "adopt-musashino-source": { type: "boolean" }, "saved-source": { type: "string" }, "saved-source-sha256": { type: "string" },
+    "expected-pre": { type: "string" }, "expected-pre-sha256": { type: "string" }, "state-dir": { type: "string" },
+  } });
+  const seen = new Set<string>();
+  for (const token of tokens) if (token.kind === "option") { if (seen.has(token.name)) throw new Error("musashino_duplicate_option"); seen.add(token.name); }
+  if (values["adopt-musashino-source"] !== true || !values["saved-source"] || !values["expected-pre"] || !values["state-dir"] ||
+      !values["saved-source-sha256"] || !/^[a-f0-9]{64}$/.test(values["saved-source-sha256"]) ||
+      !values["expected-pre-sha256"] || !/^[a-f0-9]{64}$/.test(values["expected-pre-sha256"])) throw new Error("musashino_fixed_inputs_required");
+  return { path: values["saved-source"], sha256: values["saved-source-sha256"], expectedPre: values["expected-pre"], preSha256: values["expected-pre-sha256"], state: resolve(values["state-dir"]) };
+}
+
+async function adoptSavedMusashinoSource(argv: readonly string[]): Promise<void> {
+  const options = parseMusashinoAdoptionArgs(argv), started = Date.now(), native = nativeJobExecutionWindow(started, sharedEnv.BATCH_JOB_STARTED_AT(), 360, 10);
+  const deadline = Math.min(started + 15 * 60_000, native === undefined ? Infinity : native.deadline);
+  const sourceDeadline = Math.min(started + 10 * 60_000, native === undefined ? Infinity : native.sourceDeadline);
+  const assertActive = () => { if (Date.now() >= deadline) throw new Error("musashino_adoption_deadline"); };
+  const assertSource = () => { assertActive(); if (Date.now() >= sourceDeadline) throw new Error("musashino_adoption_source_deadline"); };
+  assertSource();
+  if (existsSync(options.state)) throw new Error("musashino_adoption_state_already_started");
+  const pre = readMonthScopePreimage(options.expectedPre, options.preSha256), source = await readSavedMusashinoSource(options.path, options.sha256);
+  assertSource();
+  for (const getter of [sharedEnv.R2_ACCOUNT_ID, sharedEnv.R2_ACCESS_KEY_ID, sharedEnv.R2_SECRET_ACCESS_KEY, sharedEnv.R2_BUCKET_RAW,
+    notionEnv.NOTION_TOKEN, notionEnv.NOTION_ARCHIVE_PAGE_ID]) getter();
+  const rps = notionEnv.NOTION_MAX_RPS(); if (rps !== undefined) setNotionMaxRps(rps);
+  assertNotCommittable(join(options.state, "INTENT.private.json"));
+  mkdirSync(options.state, { mode: 0o700 }); syncParent(options.state);
+  const st = lstatSync(options.state);
+  if (realpathSync(options.state) !== options.state || !st.isDirectory() || st.isSymbolicLink() || st.uid !== process.getuid?.() || (st.mode & 0o777) !== 0o700) throw new Error("musashino_private_state_required");
+  const save = (name: string, value: unknown) => { const path = join(options.state, name); writeFileSync(path, JSON.stringify(value) + "\n", { mode: 0o600, flag: "wx", flush: true }); syncParent(path); };
+  save("INTENT.private.json", { version: 1, code: "8336", ...options, startedAt: new Date(started).toISOString(), deadline: new Date(deadline).toISOString() });
+  const restore = installScheduledDeadline(deadline);
+  try {
+    const db = createD1HttpDb(schema), runId = resolveRunId();
+    await withSharedPublishingWriter(async () => {
+      const writer = currentPublishingWriter(); if (writer === undefined) throw new Error("musashino_adoption_writer_missing");
+      const plan = await publishingReadOnly(async () => {
+        assertSource(); const current = await loadMonthScopePreimage(db, "8336"); assertMonthScopeRowsEqual(pre, current);
+        return planMusashinoSourceAdoption(db, pre, source.data, source.packet.providerBatchFetchedAt, await fetchYieldInputs(db, [Number(pre.parent.id)]));
+      });
+      save("PRE.private.json", pre); save("PLAN.private.json", plan);
+      if (plan.batch === null) { save("FINISHED.private.json", { code: "8336", updatedRows: 0, SQL: 0, sourceArchiveThisRun: false }); return; }
+      const publication = await writer.reserve("yutai-source-import", { kind: "musashino-source-adoption-v1", sourceSha256: options.sha256, preSha256: options.preSha256 }, JSON.stringify({ options, source, pre, plan }));
+      const pages = source.packet.pages.map(page => saveMusashinoPage(page, runId, join(options.state, "sources")));
+      assertSource();
+      const original = await archiveMusashinoSources(pages, runId, source.data, { key: source.packet.providerArchiveKey, sha256: source.packet.providerArchiveSha256 });
+      if (original === undefined) throw new Error("musashino_official_archive_missing");
+      const archive = async (phase: "pre" | "post", rows: unknown) => {
+        const bytes = Buffer.from(JSON.stringify(rows));
+        const saved = await archivePages([{ url: `D1:stock 8336 source adoption ${phase}`, receivedAt: new Date().toISOString(), status: null,
+          contentType: "application/json", byteLength: bytes.length, bodyBase64: bytes.toString("base64") }], `${runId}-musashino-${phase}`, `D1 complete four-table 8336 source adoption ${phase}`);
+        if (saved === undefined) throw new Error("musashino_snapshot_archive_missing");
+        return { saved, bytes };
+      };
+      const before = await archive("pre", pre);
+      assertSource(); await applyAtomicBatches(createD1HttpBatchSender(), [plan.batch]);
+      assertActive(); const post = await publishingReadOnly(() => loadMonthScopePreimage(db, "8336"));
+      assertMonthScopePost(plan, post); save("POST.private.json", post);
+      const after = await archive("post", post);
+      assertActive(); await publication.complete({ sourceArchivePageId: original.pageId, preArchivePageId: before.saved.pageId, postArchivePageId: after.saved.pageId,
+        observedPostSha256: await sha256HexBytes(after.bytes), observedPostRows: 3, updatedRows: 3, sourceSha256: options.sha256 });
+      save("FINISHED.private.json", { code: "8336", updatedRows: 3, sourceRequests: 0, modelCalls: 0 });
+    }, publishingStore(deadline));
+  } finally { restore(); }
 }
 
 /** 明示saved modeだけを受け付ける。単一銘柄を全量/廃止判定へ渡さない。 */
