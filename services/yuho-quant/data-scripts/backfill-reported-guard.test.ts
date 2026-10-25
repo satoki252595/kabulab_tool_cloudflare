@@ -47,7 +47,7 @@ beforeEach(() => { vi.resetModules(); vi.resetAllMocks(); vi.stubGlobal("fetch",
 afterEach(() => { process.argv = argv; process.exitCode = exitCode; vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 it.each(["overseas", "text"].flatMap(mode => ["reported_withdrawal", "reported_status_unqualified"].flatMap(state =>
-  ["before-download", "before-batch"].map(phase => ({ mode, state, phase })))))("legacy $mode preserves all old facts/text/pointer when $state arrives $phase", async ({ mode, state, phase }) => {
+  ["before-download", "before-batch"].map(phase => ({ mode, state, phase })))))("$mode entry preserves all old facts/text/pointer when $state arrives $phase", async ({ mode, state, phase }) => {
   const sqlite = openActualSnapshot(root, fixture.d1);
   try {
     io.db = drizzle(async (query, params, method) => {
@@ -70,10 +70,12 @@ it.each(["overseas", "text"].flatMap(mode => ["reported_withdrawal", "reported_s
     if (phase === "before-download") hold();
     process.argv = [argv[0], "backfill-control.ts", "--force", "--limit=1"];
     const run = mode === "overseas" ? import("./backfill-overseas.js") : import("./backfill-text-sections.js");
-    if (mode === "overseas") await expect(run).rejects.toThrow();
+    if (mode === "overseas") await expect(run).rejects.toThrow("overseas_saved_cohort_required");
     else { await run; expect(process.exitCode).toBe(1); }
-    expect(io.download).toHaveBeenCalledTimes(phase === "before-download" ? 0 : 1);
-    expect(io.batch).toHaveBeenCalledTimes(phase === "before-download" ? 0 : 1);
+    // 廃止した海外取得入口は、並行状態の到着段階によらず通信・書込前に拒否する。
+    const calls = mode === "overseas" || phase === "before-download" ? 0 : 1;
+    expect(io.download).toHaveBeenCalledTimes(calls);
+    expect(io.batch).toHaveBeenCalledTimes(calls);
     expect(io.retire).not.toHaveBeenCalled();
     expect(readSnapshot(sqlite, fixture.item.stockId)).toEqual(before);
     expect(fetch).not.toHaveBeenCalled();

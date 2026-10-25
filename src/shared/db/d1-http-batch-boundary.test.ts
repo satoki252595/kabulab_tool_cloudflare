@@ -13,9 +13,9 @@
  *      明示 sender + 入口 preflight + upsert 内包の単一 batch になったため、
  *      静的ガードも「sender 指定の存在」へ畳んだ (指定忘れは実行時にも
  *      preflight が書込前に止める二重化)。
- *   4. backfill-overseas の D1 書込は全て d1HttpBatch 経由で、逐次の
- *      `await db.update/insert/delete` は無いこと (UPDATE 後に落ちると
- *      status だけ埋まる同根因。ビルダの構築自体は await 無しなので可)。
+ *   4. backfill-overseas は既存 saved engine のみへ委譲し、その D1 書込は
+ *      createD1HttpBatchSender の単一 batch 経由であること。逐次の
+ *      `await db.update/insert/delete` は禁止する。
  *   5. backfill-text-sections / backfill-missing-docs の DELETE・INSERT は
  *      全て d1HttpBatch 経由で、逐次の `await db.delete/insert` は無いこと。
  *      Notion 確定後のポインタ単行 UPDATE (別境界) だけは await 書込として
@@ -142,18 +142,18 @@ describe("createD1HttpDb の batch 境界", () => {
     ).toEqual([]);
   });
 
-  it("backfill-overseas の D1 書込は全て d1HttpBatch 経由 (逐次 await 書込なし)", () => {
+  it("backfill-overseas は saved engine の単一 D1 batch へ委譲する (逐次 await 書込なし)", () => {
     const path = join(ROOT, "services/yuho-quant/data-scripts/backfill-overseas.ts");
     const src = stripComments(readFileSync(path, "utf-8"));
-    // await 付きの直接書込だけを違反とする。toD1BatchStatements へ渡す
-    // ビルダ構築 (await 無し) は正規の形なので拾わない。
-    const sequential = src.match(/await\s+db\s*\.\s*(update|insert|delete|batch)\s*\(/g);
-    expect(
-      sequential ?? [],
-      "backfill-overseas は 1 文書ぶんを d1HttpBatch の単一 batch で送る。" +
-        " 逐次 await 書込は status だけ埋まる同根因になるため禁止"
-    ).toEqual([]);
-    expect(src).toMatch(/await\s+d1HttpBatch\s*\(\s*toD1BatchStatements\s*\(/);
+    expect(src).toMatch(/await\s+runSavedOverseas\s*\(\s*options\s*,\s*process\.cwd\(\)/);
+    expect(src).not.toMatch(/createD1HttpDb\s*\(/);
+    const saved = stripComments(readFileSync(join(ROOT,
+      "services/yuho-quant/data-scripts/lib/saved-overseas-backfill.ts"), "utf-8"));
+    for (const code of [src, saved]) {
+      expect(code.match(/await\s+db\s*\.\s*(update|insert|delete|batch)\s*\(/g) ?? []).toEqual([]);
+    }
+    expect(saved).toMatch(/await\s+io\.batch\s*\(\s*built\.statements\s*\)/);
+    expect(saved).toMatch(/await\s+createD1HttpBatchSender\(\)\(statements\)/);
   });
 
   it("backfill-text-sections / backfill-missing-docs の DELETE・INSERT は d1HttpBatch 経由", () => {

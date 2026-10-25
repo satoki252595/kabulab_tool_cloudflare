@@ -10,7 +10,7 @@
 - 一度共有化した `buildAtomicWithCommonProjection` は、全6表の全旧列・件数・双方向集合CASをDMLの前に置く。通常の海外保存列と0030 omission serializer、通常 `rebuildYuhoGrowthProjection`、共通D1 atomic senderを使う。受注・本文・他文書の数値は保持する。
 - physical full PREが成功してから各社を1batchで適用し、同値は書換えない。全6表・原本・本文のPOSTとphysical full POSTまで検証する。別 `inspect` は読み取りだけで全6表・原本文・原本・両物理ファイルを再確認する。
 
-通常ダウンロードmodeは従来の明示入口として残る。saved modeへ `--force` / `--offset` / ordinary `--limit` を混ぜると源取得前に停止する。旧16列のclosed44 helperはこの新経路に使わない。追加の原本API取得・モデル・依存・DDLは0。Node 22の標準SQLiteを使い、ローカルは既存flake/lockのNix、通常Actionsは既存Node 22で動く。
+2026-10-25以降、旧ダウンロードmodeは廃止し、`backfill:overseas`は本書のsaved引数を必須とする。旧`audit:overseas`も通信前に拒否し、読取監査は同じsaved modeの`prepare`または`inspect`を使う。saved modeへ `--force` / `--offset` / ordinary `--limit` を混ぜると源取得前に停止する。新規原本が必要な場合は[通常の有限原本復旧](../edinet-archive-repair.md)を別操作で行い、欠測を暗黙取得や期末代替で埋めない。旧16列のclosed44 helperはこの新経路に使わない。追加の原本API取得・モデル・依存・DDLは0。Node 22の標準SQLiteを使い、ローカルは既存flake/lockのNix、通常Actionsは既存Node 22で動く。
 
 ## 有限実行と再開
 
