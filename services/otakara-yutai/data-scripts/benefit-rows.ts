@@ -8,7 +8,8 @@
 import "dotenv/config";
 import { assertRecordDate } from "../src/record-date.js";
 import { activeEquityCondition } from "../../../src/shared/db/active-equity.js";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
+import { parseStockCode } from "../../../src/shared/jpx/stock-code.js";
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import * as schema from "../src/db/schema.js";
 import { stocks, yutaiBenefits } from "../src/db/schema.js";
@@ -24,7 +25,11 @@ export function openOtakaraD1(): OtakaraD1 {
 export async function loadBenefitRows(
   db: OtakaraD1,
   scope: "all" | "active-equity" = "all",
+  codes?: readonly string[],
 ): Promise<BenefitRow[]> {
+  if (codes !== undefined && (scope !== "active-equity" || codes.length === 0 || codes.length > 60 ||
+    new Set(codes).size !== codes.length || codes.some(code => parseStockCode(code) !== code)))
+    throw new Error("invalid_summary_code_scope");
   const query = db
     .select({
       id: yutaiBenefits.id,
@@ -42,7 +47,8 @@ export async function loadBenefitRows(
     })
     .from(yutaiBenefits)
     .innerJoin(stocks, eq(yutaiBenefits.stockId, stocks.id));
-  const rows = scope === "active-equity" ? await query.where(activeEquityCondition()) : await query;
+  const rows = scope === "active-equity" ? await query.where(codes === undefined ? activeEquityCondition()
+    : and(activeEquityCondition(), inArray(stocks.code, [...codes]))) : await query;
   return rows.map((r) => {
     assertRecordDate(r.recordDate);
     return { ...r, updatedAt: Math.floor(r.updatedAt.getTime() / 1000) };

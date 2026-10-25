@@ -1,12 +1,14 @@
 /** 合成入力・メモリR2境界のみ。モデル、業務API、実DBへ接続しない。 */
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SHARED_WRITER_KEY, type PublishingStore } from "../../../../scripts/mechanical-publishing/shared-writer.js";
+import { ROOT } from "../../../../src/shared/db/tests/source-scan.js";
+import { SHARED_WRITER_KEY, withSharedPublishingWriter, type PublishingStore } from "../../../../scripts/mechanical-publishing/shared-writer.js";
 import { runMechanicalSummary } from "../../data-scripts/summary-mechanical.js";
-import { type LocalDependencies } from "../../data-scripts/summary-local.js";
+import { parseLocalArgs, readReviewedInput, runLocalSummary, type LocalDependencies, type LocalOptions } from "../../data-scripts/summary-local.js";
 import { type ImportPlan } from "../../data-scripts/summary-import.js";
 import { selectSummaryTasks, type BenefitRow } from "../../data-scripts/summary-tasks.js";
 
@@ -49,7 +51,7 @@ function dependencies(initial: BenefitRow[], events: string[]) {
       rows = rows.map(before => {
         const update = plan.updates.find(item => item.ids.includes(before.id));
         return update === undefined ? before : { ...before, shortSummary: update.shortSummary,
-          estimatedValue: update.estimatedValue, estimateValueSource: update.estimateValueSource, updatedAt: 2 };
+          estimatedValue: update.estimatedValue, estimateValueSource: update.estimateValueSource, updatedAt: before.updatedAt + 1 };
       });
     }),
   };
@@ -59,7 +61,8 @@ function dependencies(initial: BenefitRow[], events: string[]) {
 describe("Linux mechanical summary / shared writer", () => {
   it("モデル許可・不正limitをdeps生成やR2取得より前に拒否する", async () => {
     const { store } = storeFixture(); const create = vi.fn(() => dependencies([], []).deps);
-    for (const options of [{ limit: 60, allowModel: true }, { limit: 61 }, { limit: 0 }])
+    for (const options of [{ limit: 60, allowModel: true }, { limit: 61 }, { limit: 0 },
+      { limit: 1, reviewedInput: { tasks: "unread", tasksSha256: "a".repeat(64), results: "unread", resultsSha256: "b".repeat(64) } }])
       await expect(runMechanicalSummary({ stateDir: state(), ...options }, create, store)).rejects.toThrow();
     expect(create).not.toHaveBeenCalled(); expect(store.get).not.toHaveBeenCalled(); expect(store.put).not.toHaveBeenCalled();
   });
@@ -129,6 +132,94 @@ describe("Linux mechanical summary / shared writer", () => {
     const create = vi.fn(() => deps);
     await expect(runMechanicalSummary({ stateDir: state(), limit: 60 }, create, memory.store)).rejects.toThrow("未閉鎖");
     expect(create).not.toHaveBeenCalled(); expect(deps.generate).not.toHaveBeenCalled();
+  });
+});
+
+function reviewedOptions(initial: BenefitRow[], summary = "QUOカード3,000円分"): LocalOptions {
+  const dir = realpathSync(state()), tasks = selectSummaryTasks(initial).slice(0, 1);
+  const tasksText = JSON.stringify(tasks[0]) + "\n", resultsText = JSON.stringify({ taskId: tasks[0].taskId,
+    contractVersion: tasks[0].contractVersion, shortSummary: summary, estimatedValue: 3000 }) + "\n";
+  const tasksPath = join(dir, "tasks.jsonl"), resultsPath = join(dir, "results.jsonl");
+  writeFileSync(tasksPath, tasksText, { mode: 0o600 }); writeFileSync(resultsPath, resultsText, { mode: 0o600 });
+  return { stateDir: state(), limit: 1, reviewedInput: { tasks: tasksPath, results: resultsPath,
+    tasksSha256: createHash("sha256").update(tasksText).digest("hex"), resultsSha256: createHash("sha256").update(resultsText).digest("hex") } };
+}
+
+describe("explicit reviewed results / same normal publisher", () => {
+  const actual = join(ROOT, "tmp/yutai-reviewed-proof-v1");
+  it.skipIf(!existsSync(join(actual, "TASKS.private.jsonl")))("保存実7502の手動結果を変更せず通常PRE/CAS/POSTへ通す（CIは私有fixture不在skip）", async () => {
+    const tasks = join(actual, "TASKS.private.jsonl"), results = join(actual, "RESULTS.private.jsonl");
+    const initial = JSON.parse(readFileSync(join(actual, "SAVED-ROWS.private.json"), "utf8")) as BenefitRow[];
+    const options: LocalOptions = { stateDir: state(), limit: 1, reviewedInput: { tasks, results,
+      tasksSha256: "cf0dc29b88652de80be97dc901122ce43b7d50f2195654234f967e1baf01c83a",
+      resultsSha256: "a09a5416da7b1397c54c7061346003b257a0d24d9de414579dd5be3e267a2f2d" } };
+    expect(createHash("sha256").update(readFileSync(join(actual, "SAVED-ROWS.private.json"))).digest("hex"))
+      .toBe("a14280a14f1d465ae6fd5a5d2bb499aa8bb9c15afc252493d7d4f53f9c592cbb");
+    const memory = storeFixture(), { deps, rows } = dependencies(initial, []);
+    expect(await withSharedPublishingWriter(() => runLocalSummary(options, deps), memory.store))
+      .toMatchObject({ accepted: 1, rejected: 0, reviewed: 1, modelCalls: 0, deterministic: 0 });
+    expect(rows()[0].shortSummary).toBe(JSON.parse(readFileSync(results, "utf8")).shortSummary);
+    expect(deps.generate).not.toHaveBeenCalled(); expect(memory.current()).toMatchObject({ owner: null, pending: null });
+  });
+  it("ファイル4指定・SHA・私有通常file・契約を検証し、モデルと混ぜない", () => {
+    const options = reviewedOptions([row(1)]), files = options.reviewedInput!;
+    const args = ["--state-dir", options.stateDir, "--limit=1", "--reviewed-tasks", files.tasks,
+      "--reviewed-tasks-sha256", files.tasksSha256, "--reviewed-results", files.results, "--reviewed-results-sha256", files.resultsSha256];
+    expect(readReviewedInput(parseLocalArgs(args))?.reviewed).toBe(1);
+    expect(() => parseLocalArgs([...args, "--allow-model"])).toThrow();
+    expect(() => parseLocalArgs(args.slice(0, -2))).toThrow();
+    expect(() => readReviewedInput({ ...options, reviewedInput: { ...files, resultsSha256: "0".repeat(64) } })).toThrow("sha_mismatch");
+    chmodSync(files.results, 0o644); expect(() => readReviewedInput(options)).toThrow("file_unqualified"); chmodSync(files.results, 0o600);
+    const link = join(state(), "linked-results"); symlinkSync(files.results, link);
+    expect(() => readReviewedInput({ ...options, reviewedInput: { ...files, results: link } })).toThrow("file_unqualified");
+    const result = JSON.parse(readFileSync(files.results, "utf8")); result.contractVersion = "2026-10-25.1";
+    const old = JSON.stringify(result); writeFileSync(files.results, old);
+    expect(() => readReviewedInput({ ...options, reviewedInput: { ...files,
+      resultsSha256: createHash("sha256").update(old).digest("hex") } })).toThrow("results_unqualified");
+  });
+  it("provided結果をcompilerで置換せず、同issuer全tier PRE/POSTとcursor不変を保つ", async () => {
+    const initial = [row(1), { ...row(2, "図書カード 1,000円分"), stockCode: "9001", stockId: 1 }];
+    const options = reviewedOptions(initial), memory = storeFixture(), { deps, rows } = dependencies(initial, memory.events);
+    writeFileSync(join(options.stateDir, "progress.json"), "untouched", { mode: 0o600 });
+    memory.values.set(cursorKey, { body: "untouched", etag: "cursor" });
+    const archive = deps.archive;
+    deps.archive = vi.fn(async (...args: Parameters<LocalDependencies["archive"]>) => {
+      const bundle = JSON.parse(gunzipSync(args[0]).toString());
+      if (args[2] === "pre") {
+        expect(bundle).not.toHaveProperty("protocol"); expect(bundle).not.toHaveProperty("model");
+        expect(bundle.reviewedInput).toMatchObject({ reviewed: 1, tasksSha256: options.reviewedInput!.tasksSha256,
+          resultsSha256: options.reviewedInput!.resultsSha256 });
+        expect(bundle.reviewedInput.resultsText).toBe(readFileSync(options.reviewedInput!.results, "utf8"));
+        expect(bundle.selectedPre).toHaveLength(2); expect(bundle.freshPre).toHaveLength(2);
+      }
+      await archive(...args);
+    });
+    const report = await withSharedPublishingWriter(() => runLocalSummary(options, deps), memory.store);
+    expect(report).toMatchObject({ accepted: 1, reviewed: 1, deterministic: 0, modelCalls: 0, modelResidents: 0 });
+    expect(rows()[0].shortSummary).toBe("QUOカード3,000円分"); expect(rows()[1]).toEqual(initial[1]);
+    expect(deps.generate).not.toHaveBeenCalled(); expect(deps.loadRows).toHaveBeenCalledTimes(3);
+    for (const call of vi.mocked(deps.loadRows).mock.calls) expect(call).toEqual([["9001"]]);
+    expect(memory.current()).toMatchObject({ owner: null, pending: null });
+    expect(memory.store.get).not.toHaveBeenCalledWith(cursorKey, expect.anything());
+    expect(memory.events).not.toContain(`put:${cursorKey}`);
+    expect(readFileSync(join(options.stateDir, "progress.json"), "utf8")).toBe("untouched");
+  });
+  it.each(["inactive", "recipient", "fresh-count"] as const)("%sはempty成功や別対象へ読み替えない", async kind => {
+    const initial = [row(1)], options = reviewedOptions(initial), memory = storeFixture(), { deps } = dependencies(initial, []);
+    if (kind === "inactive") deps.loadRows = vi.fn(async () => []);
+    if (kind === "recipient") deps.loadRows = vi.fn(async () => [{ ...initial[0], minShares: 200 }]);
+    if (kind === "fresh-count") { let reads = 0; deps.loadRows = vi.fn(async () => ++reads === 1 ? initial : [...initial, { ...initial[0], id: 2 }]); }
+    await expect(withSharedPublishingWriter(() => runLocalSummary(options, deps), memory.store)).rejects.toThrow("publishing_read_only_failed");
+    expect(deps.archive).not.toHaveBeenCalled(); expect(deps.apply).not.toHaveBeenCalled(); expect(deps.generate).not.toHaveBeenCalled();
+    expect(memory.current()).toMatchObject({ owner: null, pending: null });
+  });
+  it("unknownは共有owner/pendingを保持し、新state-dirで再送できない", async () => {
+    const initial = [row(1)], options = reviewedOptions(initial), memory = storeFixture(), { deps } = dependencies(initial, []);
+    deps.apply = vi.fn(async () => { throw new Error("unknown_apply"); });
+    await expect(withSharedPublishingWriter(() => runLocalSummary(options, deps), memory.store)).rejects.toThrow("unknown_apply");
+    expect(memory.current().pending.kind).toBe("yutai-summary"); expect(memory.current().owner).not.toBeNull();
+    const next = vi.fn(() => runLocalSummary({ ...options, stateDir: state() }, deps));
+    await expect(withSharedPublishingWriter(next, memory.store)).rejects.toThrow("未閉鎖"); expect(next).not.toHaveBeenCalled();
   });
 });
 
