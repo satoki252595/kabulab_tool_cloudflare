@@ -25,7 +25,7 @@ function requireSource(condition: unknown, code: string): asserts condition {
 export function zipRepairArguments(args: string[]) {
   const values = new Map<string, string>();
   for (const arg of args) {
-    const match = /^--(doc|source-snapshot|source-snapshot-sha256)=(.+)$/.exec(arg);
+    const match = /^--(doc|source-snapshot|source-snapshot-sha256|type)=(.+)$/.exec(arg);
     requireSource(match && !values.has(match[1]), "arguments_invalid");
     values.set(match[1], match[2]);
   }
@@ -34,7 +34,8 @@ export function zipRepairArguments(args: string[]) {
   requireSource(docIds && docIds.length > 0 && docIds.length <= 5 && new Set(docIds).size === docIds.length &&
     docIds.every(id => /^S[0-9A-Z]{7}$/.test(id)) && sourceSnapshot && sourceSnapshotSha256 &&
     /^[a-f0-9]{64}$/.test(sourceSnapshotSha256), "arguments_invalid");
-  return { docIds, sourceSnapshot, sourceSnapshotSha256 };
+  requireSource(!values.has("type") || values.get("type") === "5", "arguments_invalid");
+  return { docIds, sourceSnapshot, sourceSnapshotSha256, type: values.has("type") ? 5 as const : undefined };
 }
 function readReceipt(path: string, expectedSha256: string): ListSnapshot {
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -92,6 +93,8 @@ async function archive(input: Parameters<typeof recordEdinetZip>[0], native: Nat
 }
 
 export async function repairZipArchives(options: ReturnType<typeof zipRepairArguments>) {
+  requireSource(options.type === undefined || options.type === 5, "arguments_invalid");
+  const csvOnly = options.type === 5;
   const snapshot = readReceipt(options.sourceSnapshot, options.sourceSnapshotSha256);
   requireSource(snapshot.qualified && snapshot.httpStatus === 200, "snapshot_unqualified");
   const list = await readListSnapshot(snapshot);
@@ -113,11 +116,11 @@ export async function repairZipArchives(options: ReturnType<typeof zipRepairArgu
     await assertReportedDocumentUsable(db, docId);
     qualified.push({ doc: candidates[0], metadata });
   }
-  // Validate every existing type of every selected document before the first SOURCE request.
+  // Validate every requested type of every selected document before the first SOURCE request.
   const stored = new Map<string, Map<EdinetArchiveDocType, SavedZip>>();
   for (const { doc, metadata } of qualified) {
     const zips = new Map<EdinetArchiveDocType, SavedZip>(), native = edinetArchiveMetadata(doc, metadata.periodEnd);
-    for (const type of [5, 1] as const) {
+    for (const type of csvOnly ? [5] as const : [5, 1] as const) {
       let saved: SavedZip;
       try { saved = await readSavedEdinetZip(doc.docID, type); }
       catch (error) { if (error instanceof SavedEdinetZipMissingError) continue; throw error; }
@@ -134,8 +137,8 @@ export async function repairZipArchives(options: ReturnType<typeof zipRepairArgu
     const custody = custodyOf(new Map([...zips].map(([type, saved]) => [edinetArchiveKey(doc.docID, type),
       { fileCount: 1, metadata: saved.metadata }])), doc.docID);
     tally.reused_existing_types += zips.size;
-    if (custody.t1 === "not-applicable") tally.not_applicable_types += 1;
-    if (custody.t5 === "complete" && custody.t1 !== "missing") { tally.skipped_existing += 1; continue; }
+    if (!csvOnly && custody.t1 === "not-applicable") tally.not_applicable_types += 1;
+    if (custody.t5 === "complete" && (csvOnly || custody.t1 !== "missing")) { tally.skipped_existing += 1; continue; }
     const native = edinetArchiveMetadata(doc, metadata.periodEnd);
     let csvZip: Awaited<ReturnType<typeof downloadDocument>> | undefined = zips.get(5)?.bytes;
     if (csvZip === undefined) {
@@ -149,7 +152,7 @@ export async function repairZipArchives(options: ReturnType<typeof zipRepairArgu
     let xbrlZip: Awaited<ReturnType<typeof downloadDocument>> | null = null;
     let xbrlFetchedAt: string | null = null;
     let xbrlUnavailable = custody.t1 === "not-applicable";
-    if (custody.t1 === "missing") {
+    if (!csvOnly && custody.t1 === "missing") {
       try { xbrlZip = await downloadDocument(doc.docID, 1); xbrlFetchedAt = new Date().toISOString(); }
       catch (error) {
         if (!(error instanceof EdinetNotFoundError)) {
@@ -164,14 +167,15 @@ export async function repairZipArchives(options: ReturnType<typeof zipRepairArgu
         xbrlUnavailable = true;
       }
     }
-    const completeMetadata = { ...metadata, xbrlUnavailable };
+    // CSV-only does not observe XBRL availability or manufacture its completion/non-provision marker.
+    const completeMetadata = csvOnly ? metadata : { ...metadata, xbrlUnavailable };
     let recorded = false;
     if (custody.t5 === "missing") {
       const r5 = await archive({ service: "yuho-quant", docID: doc.docID, type: 5, zip: csvZip,
         source: `EDINET API v2 /documents/${doc.docID}?type=5`, fetchedAt: csvFetchedAt, metadata: completeMetadata, force: false }, native);
       recorded = r5.outcome === "recorded";
       if (r5.outcome === "skipped_existing") tally.reused_existing_types += 1;
-      if (xbrlUnavailable) tally.not_applicable_types += 1;
+      if (!csvOnly && xbrlUnavailable) tally.not_applicable_types += 1;
     }
     if (xbrlZip !== null) {
       requireSource(xbrlFetchedAt !== null, "xbrl_clock_missing");
