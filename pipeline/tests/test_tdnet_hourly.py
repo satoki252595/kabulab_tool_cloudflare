@@ -124,6 +124,8 @@ def test_empty_items_require_closed_custody_and_do_not_hide_unparsed_items(
     ctx = _ctx(str(tmp_path))
     ctx.args = argparse.Namespace(date=date(2026, 9, 11), limit=None)
     monkeypatch.setattr(mod, "_collect", lambda *a: [(artifact, [], {})])
+    # このテストは保管境界。上流が生きていることは別テストで見る。
+    monkeypatch.setattr(mod, "probe_yanoshin_newest", lambda *a, **k: datetime.now(JST))
     def read_map(*a, **kw):
         if items == []:
             pytest.fail("検証済み空一覧後の全件map読取")

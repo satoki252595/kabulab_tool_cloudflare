@@ -74,8 +74,12 @@ def _wire(monkeypatch, store: _FakeStore, *modules) -> None:
     monkeypatch.setattr(runner, "connect_local_store", lambda *a, **k: None)
     # 判定の本体テストは一覧を注入する。main() はネットワークへ出さない。
     # raising=False: 関数が無い版では属性を足すだけで、main() はそれを呼ばない。
+    def _fresh_tdnet_listings(now: datetime):
+        # 空配列は上流停止。無関係な SLO テストは、欠測窓に入らない生きた pubdate を渡す。
+        return ([ops_check.TdnetListItem("yanoshin-live", None, now)], 0)
+
     monkeypatch.setattr(
-        ops_check, "fetch_tdnet_window_listings", lambda now: ([], 0), raising=False
+        ops_check, "fetch_tdnet_window_listings", _fresh_tdnet_listings, raising=False
     )
     # 容量観測は database API を叩くので小さな値で差し替える (個別テストで上書き可)。
     # 入れないと probe のテストが本物の HTTP を出す。

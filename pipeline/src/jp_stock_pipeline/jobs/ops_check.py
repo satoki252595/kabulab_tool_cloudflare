@@ -29,6 +29,10 @@ from datetime import UTC, date, datetime, timedelta
 from ..cloud_store import slo
 from ..cloud_store.d1 import D1Error, D1Store
 from ..collectors.tdnet_yanoshin import BASE_URL
+from ..collectors.yanoshin_upstream import (
+    format_yanoshin_upstream_log,
+    judge_yanoshin_upstream,
+)
 from ..contracts.stock_code import source_code_to_ticker
 from ..http import FetchError, fetch
 from ..models import JST
@@ -503,6 +507,8 @@ def fetch_tdnet_window_listings(now: datetime) -> tuple[list[TdnetListItem], int
             raise FetchError(f"TDnet一覧が JSON でない: {ymd}") from exc
         if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
             raise FetchError(f"TDnet一覧の items が配列でない: {ymd}")
+        # 1 日の items:[] は構造として妥当（休場日は 0 件が正常）。
+        # 窓全体の最新 pubdate はループの後で判定し、欠測 0 件の成功にはしない。
         raw_items = payload["items"]
         if len(raw_items) >= _TDNET_LIST_DAY_LIMIT:
             raise FetchError(
@@ -515,6 +521,9 @@ def fetch_tdnet_window_listings(now: datetime) -> tuple[list[TdnetListItem], int
                 continue
             items.append(parsed)
         day += timedelta(days=1)
+    newest = max((item.disclosed_at for item in items), default=None)
+    judgement = judge_yanoshin_upstream(newest, now_jst)
+    logger.info("%s", format_yanoshin_upstream_log(judgement))
     return items, unreadable
 
 
@@ -577,6 +586,15 @@ def _check_ir_universe_gap(
     gaps = universe_listing_gaps(listed, universe, existing, now=moment)
     if not gaps:
         if unreadable == 0:
+            newest = max((item.disclosed_at for item in listed), default=None)
+            judgement = judge_yanoshin_upstream(newest, moment)
+            line = format_yanoshin_upstream_log(judgement)
+            logger.info("%s", line)
+            if judgement.judgement == "upstream_stopped":
+                problems.append(
+                    f"{_IR_UNIVERSE_GAP_INCIDENT} upstream stopped / cannot judge: {line}"
+                )
+                return
             logger.info(
                 "適時開示の D1 行: 公開から %d〜%d 日で一覧にあり母集団内の欠測は 0 件",
                 IR_UNIVERSE_GAP_MIN_AGE_DAYS,
