@@ -704,7 +704,8 @@ export type HoldingPriceSourceLoader = (holdings: readonly Shareholding[], budge
 >;
 
 export type PublishHoldingsResult = (
-  | { status: "published"; parsed: number; created: number; updated: number; unchanged: number; unavailable?: number; pending?: boolean }
+  | { status: "published"; parsed: number; created: number; updated: number; unchanged: number; unavailable?: number; pending?: boolean;
+      windowUnavailableReasons?: Array<{ reason: string; rows: number }> }
   | { status: "held"; parsed: number; reason: string; usedRows?: number; pending?: boolean;
       reasonCode?: "explicit_not_applicable"; notApplicable?: ShareholdingsNotApplicable }) & { issuedSharesObservation?: IssuedShareObservation };
 
@@ -968,6 +969,7 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
   const migrationPosts: HoldingPage[] = [];
   const result = { status: "published" as const, parsed: selected.length, created: 0, updated: 0, unchanged: 0 };
   let unavailableInWindow = 0;
+  const unavailableReasons = new Map<string, number>();
   for (const [index, { holding, valuation, properties }] of ready.entries()) {
     const choice: { existing: HoldingPage | null; migrateLegacy: boolean } = resolved.selected[index];
     const existing: HoldingPage | null = choice.existing, migrateLegacy = choice.migrateLegacy;
@@ -986,7 +988,10 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
       assert.equal(existing?.properties["原本照合済"]?.checkbox, true, "価格phaseで原本未確定行の作成/更新はしません");
       assertPriceStatus(existing!.properties, schema);
     }
-    if (pricePhase && valuation.status !== "qualified" && existing?.properties["価格照合済"]?.checkbox !== true) unavailableInWindow++;
+    if (pricePhase && valuation.status !== "qualified" && existing?.properties["価格照合済"]?.checkbox !== true) {
+      unavailableInWindow++;
+      unavailableReasons.set(valuation.reason, (unavailableReasons.get(valuation.reason) || 0) + 1);
+    }
     if (existing?.properties["原本照合済"]?.checkbox === true) {
       // 期末株数/原本の照合済み行へ価格根拠だけを加える。既存の確定価格は、
       // 新しい価格原本未指定を理由にNULLへ消さない。原本側の差分はSTOP。
@@ -1064,7 +1069,7 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
       pending ? `価格${nextHoldingOffset}/${parsed.holdings.length}明細の読戻し済み。次windowへ再開待ち` :
         unavailable > 0 ? `${unavailable}明細は指定保存原本で価格資格未成立。各行の欠測理由を参照` : "全明細の価格資格・他props保持を読戻し済み",
       true, pricePhase.info.nextHoldingOffset);
-    return { ...result, unavailable, pending };
+    return { ...result, unavailable, pending, windowUnavailableReasons: [...unavailableReasons].map(([reason, rows]) => ({ reason, rows })) };
   }
   return result;
 }
@@ -1454,21 +1459,23 @@ async function recordRecoveryInfo(archivePageId: string, info: RecoveryInfo, sta
 }
 
 /** 新世代がある完了HOLDだけ。全原表PREを保管し、同一snapshotのHOLDは繰り返さない。 */
-async function reopenHeldPricePasses(args: { sourceDb: ReportedSourceDb; dbId: string; snapshotId: string; budget: HoldingPriceBudget; shouldStop: () => boolean }): Promise<HoldingPage[]> {
-  const result: HoldingPage[] = [];
-  let cursor: string | undefined, sourceAttempts = 0;
-  // ponytail: 同世代除外の最大300 metadata候補/5 source試行。母集団が増えたら通常queryのcursorを別途運用する。
-  for (let pageIndex = 0; pageIndex < 3 && sourceAttempts < 5 && !args.shouldStop(); pageIndex++) {
+async function reopenHeldPricePasses(args: { sourceDb: ReportedSourceDb; dbId: string; snapshotId: string; budget: HoldingPriceBudget; shouldStop: () => boolean }) {
+  const result = { pages: [] as HoldingPage[], metadataCandidates: 0, readOnlyHeld: 0 };
+  let cursor: string | undefined;
+  // ponytail: 最大300候補/5再資格。300件超の不適格先頭群には別途cursor運用が必要。
+  for (let pageIndex = 0; pageIndex < 3 && result.pages.length < 5 && !args.shouldStop(); pageIndex++) {
     const listed = await notionRequest<{ results: HoldingPage[]; has_more: boolean; next_cursor: string | null }>("POST", `/databases/${args.dbId}/query`, {
       filter: { and: [{ property: "保有価格状態", select: { equals: "要確認" } },
+        { property: "保有明細状態", select: { equals: "明細原本照合済" } },
         { property: "保有価格再開情報", rich_text: { contains: '"snapshotId":' } },
         { property: "保有価格再開情報", rich_text: { does_not_contain: JSON.stringify("snapshotId") + ":" + JSON.stringify(args.snapshotId) } }] },
-      sorts: [{ timestamp: "created_time", direction: "ascending" }], page_size: 100, ...(cursor === undefined ? {} : { start_cursor: cursor }) }, { singleAttempt: true });
+      sorts: [{ timestamp: "last_edited_time", direction: "ascending" }], page_size: 100, ...(cursor === undefined ? {} : { start_cursor: cursor }) }, { singleAttempt: true });
     assert(Array.isArray(listed.results) && listed.results.length <= 100); assert.equal(typeof listed.has_more, "boolean");
     if (listed.has_more) assert(typeof listed.next_cursor === "string" && listed.next_cursor.length > 0 && listed.next_cursor !== cursor);
     else assert.equal(listed.next_cursor, null);
     for (const page of listed.results) {
-      if (sourceAttempts === 5 || args.shouldStop()) break;
+      if (result.pages.length === 5 || args.shouldStop()) break;
+      result.metadataCandidates++;
       const info = JSON.parse(richValue(page.properties["保有価格再開情報"])) as RecoveryInfo;
       if (page.properties["保有明細状態"]?.select?.name !== "明細原本照合済" || info.snapshotId === undefined || info.snapshotId === args.snapshotId ||
         info.nextHoldingOffset !== info.parsed || !(info.unavailableRows! > 0)) continue;
@@ -1479,12 +1486,11 @@ async function reopenHeldPricePasses(args: { sourceDb: ReportedSourceDb; dbId: s
       assert(Number.isSafeInteger(info.unavailableRows) && info.unavailableRows! <= info.parsed);
       assert.match(info.snapshotId, /^[A-Za-z0-9][A-Za-z0-9_.-]{0,40}$/); assert.match(args.snapshotId, /^[A-Za-z0-9][A-Za-z0-9_.-]{0,40}$/);
       assertPreviousPricePass(info);
-      sourceAttempts++;
       try { await assertReportedDocumentUsable(args.sourceDb, info.source.docId); }
-      catch (error) { if (error instanceof ReportedDocumentHoldError) continue; throw error; }
+      catch (error) { if (error instanceof ReportedDocumentHoldError) { result.readOnlyHeld++; continue; } throw error; }
       if (args.shouldStop()) break;
       const saved = await readSavedHoldingsZip(info.source, args.budget);
-      if (saved.status === "held") { if (saved.reasonCode === "budget_exhausted") return result; continue; }
+      if (saved.status === "held") { if (saved.reasonCode === "budget_exhausted") return result; result.readOnlyHeld++; continue; }
       assert.equal(saved.archivePageId.replaceAll("-", ""), page.id.replaceAll("-", "")); assert.equal(saved.sha256, info.zipSha256); assert.equal(saved.bytes.length, info.zipBytes);
       const parsed = parseShareholdingsData(saved.bytes, info.source);
       assert.equal(parsed.status, "ok"); assert.equal(parsed.holderScope, "filer_only"); assert.equal(parsed.holdings.length, info.parsed);
@@ -1505,11 +1511,29 @@ async function reopenHeldPricePasses(args: { sourceDb: ReportedSourceDb; dbId: s
       assert.equal(archived.fileTooLarge, false); assert(archived.manifestMatch === "written" || archived.manifestMatch === "same");
       await verifyArchivedAttachments(archived.pageId, [{ filename: file.filename, bytes }], "保有価格再資格PRE");
       next.previousPricePass.pre = { ...file, pageId: archived.pageId };
-      result.push(await recordRecoveryInfo(page.id, next, "再開待ち", "新しい保存価格の全原表PREを保管済み。確定済み価格を保持し未資格行だけ再開", true, 0));
+      result.pages.push(await recordRecoveryInfo(page.id, next, "再開待ち", "新しい保存価格の全原表PREを保管済み。確定済み価格を保持し未資格行だけ再開", true, 0));
     }
     if (!listed.has_more) break; cursor = listed.next_cursor!;
   }
   return result;
+}
+
+export interface HoldingPriceResumeResult {
+  usedRows: number; resumed: number;
+  /** 互換counter: 初回の要確認sampleと今回windowのHOLD。DB全体の未解決件数ではない。 */
+  held: number;
+  /** 選択済みqueue/windowの残り。falseでも全保有価格の資格成立を示さない。 */
+  pending: boolean;
+  review: {
+    scope: "initial-attention-sample-and-selected-window";
+    attentionHasMore: boolean;
+    attentionSample: Array<{ archivePageId: string; source: ShareholdingsSource; recordedSnapshotId?: string; reason: string }>;
+    queueSize: number; queueHasMore: boolean; queuedSourcePageIds: string[];
+    requalification?: { metadataCandidates: number; readOnlyHeld: number; requalifiedSources: number };
+    sources: Array<{ archivePageId: string; source: ShareholdingsSource } & (
+      { status: "held"; reason: string; pending: boolean } |
+      { status: "published"; snapshotId: string; unavailableRows: number; pending: boolean; windowUnavailableReasons: Array<{ reason: string; rows: number }> })>;
+  };
 }
 
 /** 原本完了とは独立。保存ZIP・限定snapshotだけで価格列を追記し、未知は再送しない。 */
@@ -1517,27 +1541,40 @@ export async function resumePendingShareholdingsPrices(args: {
   sourceDb: ReportedSourceDb;
   maxRows: number; shouldStop: () => boolean; loadSources: HoldingPriceSourceLoader;
   budget: HoldingPriceBudget;
-}): Promise<{ usedRows: number; resumed: number; held: number; pending: boolean }> {
+}): Promise<HoldingPriceResumeResult> {
   assert.ok(Number.isSafeInteger(args.maxRows) && args.maxRows >= 0 && args.maxRows <= 100);
   assert.ok(Number.isSafeInteger(args.budget.remainingChunks) && args.budget.remainingChunks >= 0 && args.budget.remainingChunks <= 116);
   assert.ok(Number.isSafeInteger(args.budget.remainingBytes) && args.budget.remainingBytes >= 0 && args.budget.remainingBytes <= 256 * 1024 * 1024);
   const dbId = await recoveryDatabase();
-  const query = (status: string, size: number) => notionRequest<{ results: HoldingPage[]; has_more: boolean; next_cursor: string | null }>(
-    "POST", `/databases/${dbId}/query`, { filter: { property: "保有価格状態", select: { equals: status } },
-      sorts: [{ timestamp: "created_time", direction: "ascending" }], page_size: size });
+  const query = async (status: string, size: number) => {
+    const listed = await notionRequest<{ results: HoldingPage[]; has_more: boolean; next_cursor: string | null }>(
+      "POST", `/databases/${dbId}/query`, { filter: { property: "保有価格状態", select: { equals: status } },
+        sorts: [{ timestamp: "created_time", direction: "ascending" }], page_size: size });
+    assert(listed.results.length <= size, "保有価格queue応答が要求page_sizeを超えています");
+    return listed;
+  };
   const unknown = await query("実行中（結果未確定）", 1);
   assert.equal(unknown.results.length, 0, "保有価格に結果未確定があります。原本完了は保持し、自動再送せず読取照合してください");
   const queue = await query("再開待ち", 6), attention = await query("要確認", 1);
   // Older injected loaders remain first-pass only; the normal Node factory owns this read-only capability.
   const snapshotReader = (args.loadSources as HoldingPriceSourceLoader & { currentSnapshotId?: () => Promise<string | null> }).currentSnapshotId;
+  let requalification: HoldingPriceResumeResult["review"]["requalification"];
   if (queue.results.length === 0 && attention.results.length > 0 && args.maxRows > 0 && !args.shouldStop() && snapshotReader) {
     const snapshotId = await snapshotReader();
     if (snapshotId !== null) {
-      queue.results = await reopenHeldPricePasses({ sourceDb: args.sourceDb, dbId, snapshotId, budget: args.budget, shouldStop: args.shouldStop });
+      const reopened = await reopenHeldPricePasses({ sourceDb: args.sourceDb, dbId, snapshotId, budget: args.budget, shouldStop: args.shouldStop });
+      queue.results = reopened.pages;
+      requalification = { metadataCandidates: reopened.metadataCandidates, readOnlyHeld: reopened.readOnlyHeld, requalifiedSources: reopened.pages.length };
       if (queue.results.length === 5) queue.has_more = true; // Conservative boundary; do not call other old HOLDs complete.
     }
   }
-  const result = { usedRows: 0, resumed: 0, held: attention.results.filter(page => !queue.results.some(next => next.id === page.id)).length, pending: queue.has_more || queue.results.length > 5 };
+  const result: HoldingPriceResumeResult = { usedRows: 0, resumed: 0, held: attention.results.filter(page => !queue.results.some(next => next.id === page.id)).length,
+    pending: queue.has_more || queue.results.length > 5,
+    review: { scope: "initial-attention-sample-and-selected-window", attentionHasMore: attention.has_more,
+      attentionSample: attention.results.map(page => { const info = JSON.parse(richValue(page.properties["保有価格再開情報"])) as RecoveryInfo;
+        return { archivePageId: page.id, source: info.source, ...(info.snapshotId === undefined ? {} : { recordedSnapshotId: info.snapshotId }), reason: richValue(page.properties["保有価格理由"]) }; }),
+      queueSize: queue.results.length, queueHasMore: queue.has_more, queuedSourcePageIds: queue.results.map(page => page.id),
+      ...(requalification === undefined ? {} : { requalification }), sources: [] } };
   for (const page of queue.results.slice(0, 5)) {
     if (args.shouldStop() || result.usedRows === args.maxRows) { result.pending = true; break; }
     assert.equal(page.archived, false); assert.equal(page.in_trash, false);
@@ -1560,7 +1597,9 @@ export async function resumePendingShareholdingsPrices(args: {
     // 既知の状態HOLDは価格のunknown markerより前に分離する。queueや旧値は変更しない。
     try { await assertReportedDocumentUsable(args.sourceDb, info.source.docId); }
     catch (error) {
-      if (error instanceof ReportedDocumentHoldError) { result.held++; continue; }
+      if (error instanceof ReportedDocumentHoldError) {
+        result.held++; result.review.sources.push({ archivePageId: page.id, source: info.source, status: "held", reason: error.message, pending: false }); continue;
+      }
       throw error;
     }
     let saved: Awaited<ReturnType<typeof readSavedHoldingsZip>>;
@@ -1570,7 +1609,8 @@ export async function resumePendingShareholdingsPrices(args: {
       if (saved.status === "held") {
         const retry = saved.reasonCode === "budget_exhausted";
         await recordRecoveryInfo(page.id, info, retry ? "再開待ち" : "要確認", saved.reason, true, undefined, undefined, true);
-        if (retry) result.pending = true; else result.held++; continue;
+        if (retry) result.pending = true; else result.held++;
+        result.review.sources.push({ archivePageId: page.id, source: info.source, status: "held", reason: saved.reason, pending: retry }); continue;
       }
       assert.equal(saved.archivePageId.replaceAll("-", ""), page.id.replaceAll("-", ""));
       assert.equal(saved.sha256, info.zipSha256); assert.equal(saved.bytes.length, info.zipBytes);
@@ -1592,6 +1632,8 @@ export async function resumePendingShareholdingsPrices(args: {
         const retry = sources.status !== "held" || sources.reasonCode === "budget_exhausted";
         await recordRecoveryInfo(page.id, info, retry ? "再開待ち" : "要確認", sources.status === "held" ? sources.reason : "価格phaseの実時間予算を使い切りました", true, undefined, undefined, true);
         if (retry) result.pending = true; else result.held++;
+        result.review.sources.push({ archivePageId: page.id, source: info.source, status: "held",
+          reason: sources.status === "held" ? sources.reason : "価格phaseの実時間予算を使い切りました", pending: retry });
         continue;
       }
       assert.ok(sources.snapshotId.trim() && sources.evidenceScope.trim());
@@ -1602,9 +1644,14 @@ export async function resumePendingShareholdingsPrices(args: {
     assert.equal(saved.status, "ready"); assert.equal(sources.status, "ready");
     const outcome = await publishHoldings({ sourceDb: args.sourceDb, source: info.source, ownerName: info.ownerName, zip: saved.bytes,
       archivePageId: page.id, maxRows: args.maxRows - result.usedRows, valuationSources: sources }, { snapshotId: sources.snapshotId, info });
-    if (outcome.status === "published") { result.usedRows += outcome.parsed; result.resumed++; if (outcome.pending) result.pending = true; else if (outcome.unavailable! > 0) result.held++; }
-    else if (outcome.pending) result.pending = true;
-    else result.held++;
+    if (outcome.status === "published") {
+      assert(Number.isSafeInteger(outcome.unavailable) && outcome.unavailable! >= 0 && Array.isArray(outcome.windowUnavailableReasons));
+      result.usedRows += outcome.parsed; result.resumed++; if (outcome.pending) result.pending = true; else if (outcome.unavailable! > 0) result.held++;
+      result.review.sources.push({ archivePageId: page.id, source: info.source, status: "published", snapshotId: sources.snapshotId, unavailableRows: outcome.unavailable!, pending: outcome.pending === true, windowUnavailableReasons: outcome.windowUnavailableReasons });
+    } else {
+      if (outcome.pending) result.pending = true; else result.held++;
+      result.review.sources.push({ archivePageId: page.id, source: info.source, status: "held", reason: outcome.reason, pending: outcome.pending === true });
+    }
   }
   return result;
 }

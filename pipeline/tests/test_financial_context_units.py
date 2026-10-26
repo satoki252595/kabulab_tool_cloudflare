@@ -280,3 +280,87 @@ def test_cached_reparse_verifies_hash_without_any_notion_or_http_request(tmp_pat
     (tmp_path / f"{digest}.zip").unlink()
     with pytest.raises(ValueError, match="cache欠損"):
         reparse._cached_item(item, tmp_path)
+
+
+_IFRS_SUMMARY_FIELDS = {
+    "cf_operating": "CashFlowsFromUsedInOperatingActivitiesIFRSSummaryOfBusinessResults",
+    "cf_financing": "CashFlowsFromUsedInFinancingActivitiesIFRSSummaryOfBusinessResults",
+    "roe_pct": "RateOfReturnOnEquityIFRSSummaryOfBusinessResults",
+}
+
+
+def _ifrs_summary_case():
+    # S100YK0W の数値ファクトとDEIのみ。原本文段落をfixtureへ転載しない。
+    return json.loads((FIXTURES / "1375-ifrs-summary.source.json").read_text())
+
+
+def test_ifrs_summary_full_record_keeps_scope_and_does_not_substitute_pretax():
+    case = _ifrs_summary_case()
+    tidy = fixture_tidy(case)
+    before = tidy.copy(deep=True)
+    record = tidy_to_financial_record(tidy, case["code"], fixture_provenance(case))
+    assert record is not None
+    assert (record.fiscal_period_end, record.disclosure_type, record.consolidated,
+            record.accounting_standard) == (date(2026, 3, 31), "本決算", "連結", "IFRS")
+    assert record.cf_operating == 4_534_000_000
+    assert record.cf_financing == -2_406_000_000
+    assert record.roe_pct == pytest.approx(21.8)
+    assert record.ordinary_income is None
+    assert record.forecast_ordinary_income is None
+    pd.testing.assert_frame_equal(tidy, before)
+
+
+@pytest.mark.parametrize("field,element", _IFRS_SUMMARY_FIELDS.items())
+@pytest.mark.parametrize("fault", ["prior", "period", "parent", "segment", "unit", "conflict"])
+def test_ifrs_summary_rejects_wrong_scope_or_conflicting_values(field, element, fault):
+    case = _ifrs_summary_case()
+    tidy = fixture_tidy(case)
+    selected = tidy["element"].str.endswith(":" + element)
+    current = selected & (tidy["context_ref"] == "CurrentYearDuration")
+    assert current.sum() == 1
+    index = tidy.index[current][0]
+    if fault == "prior":
+        tidy.loc[index, "context_ref"] = "Prior1YearDuration"
+    elif fault == "period":
+        tidy.loc[index, "period_end"] = "2025-03-31"
+    elif fault == "parent":
+        tidy.loc[index, "consolidated"] = "単体"
+        tidy.loc[index, "context_ref"] = "CurrentYearDuration_NonConsolidatedMember"
+    elif fault == "segment":
+        tidy.loc[index, "context_ref"] = (
+            "CurrentYearDuration_jpcrp030000-asr_E00007-000MushroomBusinessReportableSegmentMember"
+        )
+    elif fault == "unit":
+        tidy.loc[selected, "unit"] = "JPY" if field == "roe_pct" else "USD"
+    else:
+        # 同原本の異なる過年度実額を当期contextへ誤投入するfault injection。
+        other = tidy.loc[selected & (tidy["value"] != tidy.loc[index, "value"])].iloc[0]
+        conflicting = tidy.loc[index].copy()
+        conflicting["value"] = other["value"]
+        tidy = pd.concat([tidy, pd.DataFrame([conflicting])], ignore_index=True)
+    record = tidy_to_financial_record(tidy, case["code"], fixture_provenance(case))
+    assert record is not None
+    assert (record.fiscal_period_end, record.disclosure_type, record.consolidated) == (
+        date(2026, 3, 31), "本決算", "連結"
+    )
+    assert getattr(record, field) is None
+
+
+@pytest.mark.parametrize("element", ["ProfitBeforeTaxIFRS", "ProfitLossBeforeTaxIFRS"])
+def test_pretax_alias_is_not_ordinary_income_in_actual_or_forecast(element):
+    case = _ifrs_summary_case()
+    tidy = fixture_tidy(case)
+    pretax = tidy[(tidy["element"].str.endswith(":ProfitLossBeforeTaxIFRS")) &
+                  (tidy["context_ref"] == "CurrentYearDuration")].iloc[0].copy()
+    # 実4195000000円を旧税前alias/予想contextへ移す拒否用のfault injection。
+    pretax["element"] = "jpigp_cor:" + element
+    forecast = pretax.copy()
+    forecast["context_ref"] = "CurrentYearDuration_ForecastMember"
+    tidy = pd.concat([tidy, pd.DataFrame([pretax, forecast])], ignore_index=True)
+    record = tidy_to_financial_record(tidy, case["code"], fixture_provenance(case))
+    assert record is not None
+    assert record.ordinary_income is None
+    assert record.forecast_ordinary_income is None
+    assert record.cf_operating == 4_534_000_000
+    assert record.cf_financing == -2_406_000_000
+    assert record.roe_pct == pytest.approx(21.8)

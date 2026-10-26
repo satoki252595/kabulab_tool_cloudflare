@@ -168,7 +168,8 @@ describe("durable single-attempt Node holdings journal", () => {
 describe("normal price-only CLI window", () => {
   it("同じ共有DB/loaderと通常予算を一度だけ渡し、既知partialはjournal閉鎖後exit1にする", async () => {
     const native = vi.fn(async () => new Response("{}", { status: 200 })); vi.stubGlobal("fetch", native);
-    const partial = { usedRows: 42, resumed: 5, held: 1, pending: true };
+    const review = { scope: "initial-attention-sample-and-selected-window" as const, attentionHasMore: true, attentionSample: [], queueSize: 6, queueHasMore: false, queuedSourcePageIds: [], sources: [] };
+    const partial = { usedRows: 42, resumed: 5, held: 1, pending: true, review };
     vi.mocked(resumePendingShareholdingsPrices).mockImplementationOnce(async args => {
       expect(args.sourceDb).toBe(vi.mocked(createD1HttpDb).mock.results[0].value);
       expect(args.loadSources).toBe(vi.mocked(createHoldingPriceSourceLoader).mock.results[0].value);
@@ -183,7 +184,7 @@ describe("normal price-only CLI window", () => {
     expect(JSON.parse(fs.readFileSync(out, "utf8"))).toMatchObject({ mode: "resume-prices", result: partial, writes: 1, sourceRequests: 0 });
     expect(fs.existsSync(pending())).toBe(false); expect(fs.existsSync(`${out}.completed-write.json`)).toBe(true);
     expect(native).toHaveBeenCalledTimes(2);
-    vi.mocked(resumePendingShareholdingsPrices).mockResolvedValueOnce({ usedRows: 0, resumed: 0, held: 0, pending: false });
+    vi.mocked(resumePendingShareholdingsPrices).mockResolvedValueOnce({ usedRows: 0, resumed: 0, held: 0, pending: false, review: { ...review, attentionHasMore: false, queueSize: 0 } });
     expect(await resumeHoldingPrices(join(dir, "complete.json"))).toBe(0);
   });
   it("unknownは完成receipt無し・元pending維持、同outの再送を拒否する", async () => {
