@@ -694,6 +694,8 @@ function rawCapture(symbol: string, response: Response, bytes: Uint8Array, recei
 }
 
 export interface FetchChartOptions {
+  /** 実行開始前に選択したtransport。未指定は既存Worker/proxy経路。 */
+  transport?: YahooTransport;
   /** 同期guardをspacing待機/認証後を含む各native fetch直前に検査する。未指定は従来動作。 */
   beforeRequest?: () => void;
   /**
@@ -938,10 +940,11 @@ export async function fetchYahooChartRaw(
   range: string,
   interval: string,
   events = false,
-  beforeRequest?: () => void
+  beforeRequest?: () => void,
+  transport?: YahooTransport
 ): Promise<Response> {
   const url = yahooChartSourceUrl(symbol, range, interval, events);
-  return yahooFetch(url, beforeRequest);
+  return yahooFetch(url, beforeRequest, transport);
 }
 
 /** chart JSON の最小構造 (fetchBars5m / fetchDaily が読む範囲だけ)。 */
@@ -1162,7 +1165,7 @@ function assertQuoteArrays(
 // 全行 v=0 (妥当 OHLC) → 意図的 business 除外の結果 [] (no-trade 観測。
 // 休日推定・v0 行の保持はしない)。
 export async function fetchBars5m(symbol: string, range = "5d", options?: FetchChartOptions): Promise<Bar5m[]> {
-  const r = await fetchYahooChartRaw(symbol, range, "5m", false, options?.beforeRequest);
+  const r = await fetchYahooChartRaw(symbol, range, "5m", false, options?.beforeRequest, options?.transport);
   if (options?.onRaw) {
     const bytes = await readRawBytes(r, symbol);
     await options.onRaw(rawCapture(symbol, r, bytes, new Date().toISOString()));
@@ -1184,7 +1187,7 @@ export async function fetchBars5mWindow(
   url.searchParams.delete("range");
   url.searchParams.set("period1", String(period1));
   url.searchParams.set("period2", String(period2));
-  const response = await yahooFetch(url.toString(), options?.beforeRequest);
+  const response = await yahooFetch(url.toString(), options?.beforeRequest, options?.transport);
   if (options?.onRaw) {
     const bytes = await readRawBytes(response, symbol);
     await options.onRaw(rawCapture(symbol, response, bytes, new Date().toISOString()));
@@ -1296,7 +1299,7 @@ export async function fetchDaily(
   range = "10y",
   options?: FetchChartOptions
 ): Promise<DailyResult> {
-  const r = await fetchYahooChartRaw(symbol, range, "1d", true, options?.beforeRequest);
+  const r = await fetchYahooChartRaw(symbol, range, "1d", true, options?.beforeRequest, options?.transport);
   // body 受信完了で bytes 確定 + clock。onRaw 有無に関わらず取得する (proof のため)。
   const rawBytes = await readRawBytes(r, symbol);
   const observedAt = new Date().toISOString();

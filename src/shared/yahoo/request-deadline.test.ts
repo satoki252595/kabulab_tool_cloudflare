@@ -6,6 +6,31 @@ beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(10_000); vi.resetModules
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
 describe("request-local guardはnative発信直前、既開始本文は保持", () => {
+  it.each(["daily", "intra", "intra-window", "raw"])("明示%s transportはproxy設定を変えず原文・最終URL・guardを渡す", async kind => {
+    vi.stubEnv("YAHOO_PROXY_BASE", "https://proxy.test.invalid");
+    vi.stubEnv("CRON_SECRET", "test-only");
+    const native = vi.fn(); vi.stubGlobal("fetch", native);
+    const m = await import("./client.js"), beforeRequest = vi.fn(), onRaw = vi.fn();
+    const source = new Response("unchanged rate-limit source", { status: 503 });
+    Object.defineProperty(source, "url", { value: "https://query2.finance.yahoo.com/v8/finance/chart/7203.T?crumb=protocol-only" });
+    const transport = vi.fn(async (_url: string, before?: () => void) => { before?.(); return source; });
+    const options = { transport, beforeRequest, onRaw };
+    const operation = kind === "daily" ? m.fetchDaily("7203.T", "10y", options) :
+      kind === "intra" ? m.fetchBars5m("7203.T", "5d", options) :
+      kind === "intra-window" ? m.fetchBars5mWindow("7203.T", { period1: 1, period2: 9 }, options) :
+      m.fetchYahooChartRaw("7203.T", "5d", "5m", false, beforeRequest, transport);
+    if (kind === "raw") expect(await operation).toBe(source);
+    else {
+      await expect(operation).rejects.toMatchObject({ name: "YahooRateLimitError", status: 503 });
+      expect(new TextDecoder().decode(onRaw.mock.calls[0][0].bytes)).toBe("unchanged rate-limit source");
+      expect(onRaw.mock.calls[0][0].url).toBe("https://query2.finance.yahoo.com/v8/finance/chart/7203.T?crumb=[redacted]");
+    }
+    expect(transport).toHaveBeenCalledTimes(1); expect(transport.mock.calls[0][1]).toBe(beforeRequest);
+    expect(new URL(transport.mock.calls[0][0]).hostname).toBe("query1.finance.yahoo.com");
+    expect(beforeRequest).toHaveBeenCalledTimes(1); expect(native).not.toHaveBeenCalled();
+    expect(process.env.YAHOO_PROXY_BASE).toBe("https://proxy.test.invalid");
+  });
+
   it("producer待機なしでも認証・401再認証・再GETの実開始を各1秒離す", async () => {
     vi.stubEnv("YAHOO_PROXY_BASE", ""); vi.stubEnv("CRON_SECRET", "");
     const starts: number[] = [];

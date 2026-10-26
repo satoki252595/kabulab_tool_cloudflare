@@ -28,6 +28,14 @@ describe("通常VWAPのCF移管と既存Yahoo直列契約", () => {
     expect(yml).toContain('CONC: "1"');
     expect(yml).toContain("timeout-minutes: 360");
     expect(yml).toContain("uses: ./.github/actions/record-job-clock");
+    expect(yml).toContain("daily_args=(--yahoo-direct)");
+    expect(yml).toContain("intra_args=(--yahoo-direct)");
+    expect(yml).toContain("budget_args=(--yahoo-direct)");
+    expect(yml).toContain('pnpm ingest:vwap-intra --yahoo-direct "--scheduled-date=$SCHEDULED_DATE"');
+    for (const job of [yml.split("  ingest:\n")[1].split("  ingest-intra:\n")[0], yml.split("  ingest-intra:\n")[1].split("  scheduled-result:\n")[0]]) {
+      expect(job.indexOf("uses: ./.github/actions/record-job-clock")).toBeGreaterThan(0);
+      expect(job.indexOf("uses: ./.github/actions/record-job-clock")).toBeLessThan(job.indexOf("--yahoo-direct"));
+    }
     expect(yml).toContain('[ "$daily_rc" -ne 0 ] && [ "$daily_rc" -ne 1 ]');
   });
   it("定時だけdaily閉鎖artifactを同run/attemptの別Yahoo jobへ渡し、全0だけ最終成功", () => {

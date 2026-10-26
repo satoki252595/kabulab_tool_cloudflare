@@ -6,6 +6,7 @@ import { fetchDailySessionReference, qualifyDailySourceRange } from "./daily-ses
 import { buildRepairPost } from "./repair-daily.js";
 import { tenYearRangeForDate } from "../../../src/shared/vwap/proof.js";
 import { completedDailyFetch, hasCompletedDailyFetch, assertSavedDailyShape } from "./ingest-guard.js";
+import { YahooSharedCooldownError } from "../../../src/shared/yahoo/shared-cooldown.js";
 
 vi.mock("../../../src/shared/yahoo/client.js", async (original) => ({
   ...await original<typeof import("../../../src/shared/yahoo/client.js")>(), fetchChart: vi.fn(),
@@ -297,6 +298,14 @@ describe("witnessed daily rows without a new trade", () => {
 });
 
 describe("normal benchmark capture before stock ingestion", () => {
+  it("passes the selected transport/guard to the benchmark and archives a cooldown STOP without another source", async () => {
+    const transport = vi.fn(), beforeRequest = vi.fn(), stopped = new YahooSharedCooldownError();
+    vi.mocked(fetchChart).mockRejectedValueOnce(stopped);
+    await expect(fetchDailySessionReference("1.1", "vwap-daily-session", beforeRequest, transport)).rejects.toBe(stopped);
+    expect(fetchChart).toHaveBeenCalledExactlyOnceWith("^N225", "1mo", expect.objectContaining({ transport, beforeRequest }));
+    expect(archiveYahooRawBatch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ captures: [], missing: [expect.objectContaining({ symbol: "^N225" })] }));
+    expect(transport).not.toHaveBeenCalled();
+  });
   it("pre-open metadata retains the prior closed day selected by the existing source-only helper", async () => {
     const bytes = raw({ symbol: "^N225", range: "1mo",
       currentTradingPeriod: { regular: { start: NEXT_START, end: NEXT_END, timezone: "JST", gmtoffset: 32400 } } });

@@ -39,6 +39,17 @@ describe("explicit five-code intra recovery", () => {
     expect(proof.rawSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(new URL(proof.sourceUrl).searchParams.has("range")).toBe(false);
   });
+  it("accepts only one redacted auth crumb without changing raw bytes or final source identity", () => {
+    const original = capture(), direct = { ...original, url: original.url + "&crumb=[redacted]" };
+    expect(proveIntraRecoveryCapture(direct, window, "593A.T")).toEqual(proveIntraRecoveryCapture(original, window, "593A.T"));
+    expect(direct.url).toContain("crumb=[redacted]"); expect(direct.bytes).toBe(original.bytes);
+    for (const suffix of ["&crumb=not-redacted", "&crumb=", "&crumb=[redacted]&crumb=[redacted]", "&crumb=[redacted]&range=60d"]) {
+      expect(() => proveIntraRecoveryCapture({ ...original, url: original.url + suffix }, window, "593A.T")).toThrow();
+    }
+    for (const url of [direct.url.replace("query1.finance.yahoo.com", "redirect.test.invalid"), direct.url.replace("593A.T", "598A.T")]) {
+      expect(() => proveIntraRecoveryCapture({ ...original, url }, window, "593A.T")).toThrow();
+    }
+  });
   it("keeps fractional milliseconds in actual clocks while operator boundaries stay whole-second", () => {
     expect(resolveIntraRecoveryWindow({ ...args, now: "2026-10-13T19:43:00.123Z" })).toEqual(window);
     expect(proveIntraRecoveryCapture(capture(undefined, { receivedAt: "2026-10-13T19:43:00.987Z" }), window, "593A.T").observedAt).toBe("2026-10-13T19:43:00.987Z");

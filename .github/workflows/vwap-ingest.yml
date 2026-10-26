@@ -171,8 +171,8 @@ jobs:
           # (連続429/503 ABORT・R2 fatal unknown/rejected/GET fault・バッチ保管
           # 失敗・main 想定外) とその他の未完了/異常出口は intra を走らせず exit2 (「これ以上叩くな」
           # 契約と未保管成功なしを維持)。
-          daily_args=()
-          intra_args=()
+          daily_args=(--yahoo-direct)
+          intra_args=(--yahoo-direct)
           if [ "$TARGET" = "scheduled-daily-intra" ]; then
             daily_args+=("--scheduled-date=$SCHEDULED_DATE")
             daily_args+=("--scheduled-at=$SCHEDULED_AT")
@@ -228,7 +228,7 @@ jobs:
           INTRA_TO_EXCLUSIVE: ${{ github.event.inputs.intra_to_exclusive }}
           INTRA_MAX_START_SECONDS: ${{ inputs.intra_max_start_seconds }}
         run: |
-          budget_args=()
+          budget_args=(--yahoo-direct)
           if [ -n "$INTRA_MAX_START_SECONDS" ]; then budget_args+=("--max-start-seconds=$INTRA_MAX_START_SECONDS"); fi
           if [ -n "$INTRA_FROM" ] || [ -n "$INTRA_TO_EXCLUSIVE" ]; then
             pnpm ingest:vwap-intra "${budget_args[@]}" --codes="$INTRA_CODES" --from="$INTRA_FROM" --to-exclusive="$INTRA_TO_EXCLUSIVE"
@@ -301,7 +301,7 @@ jobs:
           SCHEDULED_DATE: ${{ inputs.scheduled_date }}
         run: |
           rc=0
-          pnpm ingest:vwap-intra "--scheduled-date=$SCHEDULED_DATE" || rc=$?
+          pnpm ingest:vwap-intra --yahoo-direct "--scheduled-date=$SCHEDULED_DATE" || rc=$?
           echo "intra_exit=${rc}" >> "$GITHUB_OUTPUT"
           exit "$rc"
       - name: summary を失敗時 artifact に残す

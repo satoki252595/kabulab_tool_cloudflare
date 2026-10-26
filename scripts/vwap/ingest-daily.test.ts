@@ -18,8 +18,11 @@ import { assertSavedDailyShape, buildIngestSummary, completedDailyFetch, hasComp
 import { fetchDailySessionReference, qualifyDailySourceRange, loadArchivedDailySessionReference } from "./lib/daily-session.js";
 import { referenceFromArchivedParts, readPriceReference, priceMetadata } from "../../src/shared/holdings/price-registry.js";
 import { publishDailyPriceSnapshot } from "./lib/holdings-price-registry.js";
+import { createStockYahooDirectTransport } from "../sync/yahoo-direct.js";
+import { YahooSharedCooldownError } from "../../src/shared/yahoo/shared-cooldown.js";
 
 const dailySource = vi.hoisted(() => vi.fn());
+vi.mock("../sync/yahoo-direct.js", () => ({ createStockYahooDirectTransport: vi.fn() }));
 const rawHook = vi.hoisted(() => ({ enabled: true, status: 200, size: 28, body: null as Uint8Array | null,
   replay: null as Map<string, YahooRawCapture> | null }));
 
@@ -176,6 +179,36 @@ const completedSaved = async (code: string) => {
   return assertSavedDailyShape(JSON.stringify({ code, updated: COMPLETED_AT, ...fresh, completedFetch }), `daily/${code}.json`, code);
 };
 
+describe("VWAP dailyの明示Actions direct", () => {
+  it.each([false, true])("direct=%sは同じtransportをsession/日足へ渡し、D1不明で後続source/PUTを停止する", async direct => {
+    const transport = vi.fn(); vi.mocked(createStockYahooDirectTransport).mockReturnValue(transport);
+    if (direct) {
+      process.argv.push("--yahoo-direct");
+      vi.stubEnv("GITHUB_RUN_ID", "101"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
+      vi.stubEnv("BATCH_JOB_STARTED_AT", new Date().toISOString());
+    }
+    rawHook.enabled = false; mockLoadCodes.mockResolvedValue(["A", "B"]); mockR2Get.mockResolvedValue(null);
+    mockFetchDaily.mockRejectedValueOnce(new YahooSharedCooldownError());
+    await main();
+    expect(createStockYahooDirectTransport).toHaveBeenCalledTimes(direct ? 1 : 0);
+    expect(fetchDailySessionReference).toHaveBeenCalledWith(expect.any(String), undefined, expect.any(Function), direct ? transport : undefined);
+    expect(mockFetchDaily).toHaveBeenCalledExactlyOnceWith("A.T", "10y", expect.objectContaining({ transport: direct ? transport : undefined, beforeRequest: expect.any(Function) }));
+    expect(mockRawArchive.mock.calls[0][0]).toMatchObject({ captures: [], missing: [expect.objectContaining({ symbol: "A.T" })] });
+    expect(mockR2Put).not.toHaveBeenCalled(); expect(process.exitCode).toBe(2);
+  });
+  it.each(["no-job-clock", "local", "duplicate", "value"])("不完全direct %sは母集団/transport/source前に拒否する", async mode => {
+    vi.stubEnv("GITHUB_RUN_ID", "101"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
+    vi.stubEnv("BATCH_JOB_STARTED_AT", new Date().toISOString());
+    process.argv.push(mode === "value" ? "--yahoo-direct=true" : "--yahoo-direct");
+    if (mode === "no-job-clock") vi.stubEnv("BATCH_JOB_STARTED_AT", "");
+    if (mode === "local") vi.stubEnv("GITHUB_RUN_ID", "");
+    if (mode === "duplicate") process.argv.push("--yahoo-direct");
+    await expect(main()).rejects.toThrow("Actions VWAP");
+    expect(mockLoadCodes).not.toHaveBeenCalled(); expect(createStockYahooDirectTransport).not.toHaveBeenCalled();
+    expect(fetchDailySessionReference).not.toHaveBeenCalled(); expect(mockFetchDaily).not.toHaveBeenCalled();
+  });
+});
+
 describe("daily source前の同日確定済み再開", () => {
   it("同じ条件付PUTへ原本参照だけをmetadata保存し、公開本文には追加しない", async () => {
     const actual = await vi.importActual<typeof import("../../src/shared/holdings/price-registry.js")>("../../src/shared/holdings/price-registry.js");
@@ -274,7 +307,7 @@ describe("daily source前の同日確定済み再開", () => {
         });
         mockR2Put.mockImplementation(async (key) => { order.push(`put:${key}`); });
         await main();
-        expect(referenceMock.mock.calls).toEqual([["200.1", undefined, expect.any(Function)], ["200.1", "vwap-daily-session-1", expect.any(Function)]]);
+        expect(referenceMock.mock.calls).toEqual([["200.1", undefined, expect.any(Function), undefined], ["200.1", "vwap-daily-session-1", expect.any(Function), undefined]]);
         expect(order.indexOf("archive:A.T")).toBeLessThan(order.indexOf("put:daily/A.json"));
         expect(order.indexOf("put:daily/A.json")).toBeLessThan(order.indexOf("reference:vwap-daily-session-1"));
         const saved = assertSavedDailyShape(mockR2Put.mock.calls[0][1], "daily/A.json", "A");

@@ -48,6 +48,10 @@ export function proveIntraRecoveryCapture(capture: YahooRawCapture, window: Intr
   validateWindow(window, capture.receivedAt);
   let url = new URL(capture.url);
   if (url.searchParams.has("u")) url = new URL(url.searchParams.get("u")!);
+  // 最終response URLは保持し、既存raw captureで秘匿済みの認証値だけproofから外す。
+  const crumbs = url.searchParams.getAll("crumb");
+  if (crumbs.length > 1 || (crumbs.length === 1 && crumbs[0] !== "[redacted]")) fail();
+  url.searchParams.delete("crumb");
   if (url.protocol !== "https:" || url.port !== "" || url.username || url.password || url.hash !== "" ||
       !["query1.finance.yahoo.com", "query2.finance.yahoo.com"].includes(url.hostname) ||
       decodeURIComponent(url.pathname) !== `/v8/finance/chart/${symbol}` ||
