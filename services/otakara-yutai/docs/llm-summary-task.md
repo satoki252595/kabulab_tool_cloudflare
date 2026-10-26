@@ -5,7 +5,7 @@
 タスクファイルがあれば作業できるように書いてあります。
 
 - 要約生成・書出し・取込は正常母集団（active かつ equity）の優待行を対象とする。母集団外の既存優待は全行退避に保持し、再生成・更新しない。
-- 契約の版: **`2026-10-26.11`**（`services/otakara-yutai/data-scripts/summary-contract.ts` の `SUMMARY_CONTRACT_VERSION`）
+- 契約の版: **`2026-10-26.12`**（`services/otakara-yutai/data-scripts/summary-contract.ts` の `SUMMARY_CONTRACT_VERSION`）
 
 武蔵野銀行8336の初回2026年9月30日は、通常3月とは別の実日付付き単発3段階です。固定公式全文3型・単一株数・9月・実日付`2026-09-30`だけを機械要約し、保有期間の定めなし・名簿条件、贈答/選択と共通預金/国内配送/分割条件を保持します。毎年9月へ変換せず、預金金利を換金せず全package額はNULL。現存3月訂正の受入後、専用の`--add-musashino-initial-event`で実日付付き3行を追加します。
 - 書き出し: `pnpm yutai:summary:export`（`--violations-only` で契約違反の既存要約だけ）
@@ -21,6 +21,8 @@
 
 5243 noteは元提供元と公式FAQ/PDFを保全して資格化した11月2全文だけを、100株/200株・11月・単発日なしの単一実recipientへ要約します。5月末は同一番号100株以上の3回連続記録に使う中間日で、優待月にしません。現在tierと初回の歴史日付を分け、2月中の招集通知同封予定、有料記事購入用ポイントと1ポイント=1円のサービス内レートを保持します。一般の金額guardは変えず両段階NULL、原本変更や条件不一致はHOLDです。
 
+3045カワサキは元提供元と公式案内HTML/PDFを別に保持した2全文を、100株/300株・2月/8月・単発日なしの各2実recipientへ要約します。変更前の額面と2027年2月28日基準からの拡充を分け、拡充後の半年2回/3年7回の同一番号名簿、既保有への遡及、ECとホテル両方、5月/11月同封予定、初回2027年5月中旬発送予定を保持します。PDF表の注1/注2と金額のセルを分離し、旧提供元の6月表記は新本文へ混ぜません。変更前表に保有期間の記載がないことは保有不要を意味せず、DTO v7で変更前の未確定と拡充後の期間を区別します。通常の金額guardと全recipient照合を維持してNULLとし、原本・時点・受取条件の不一致はHOLDします。
+
 三越伊勢丹3099のカードは、保存済み8全文と各株数・3月/9月の実recipientだけを機械要約します。9月の新規株主限定と限度半額、初回発行後の同一番号継続・3月末2年連続600株以上・当年発行分から限度2倍、各施設の割引・入場・駐車・指定ツアー等を保持します。買物限度や割引率を受取額に換算せずNULLを維持し、条件・全文の変更はHOLDします。
 
 エイチ・ツー・オー リテイリング8242の選択制5全文は、保有3年未満/以上ごとの券枚数・ポイント付与率/追加ポイント・米数量と、各特典・対象店・除外を定型要約へ保持します。A券のスーパーは指定店舗に限定した表現、Bポイントの対象店は別に列挙し、食品スーパーのみ利用可とネット関西スーパー除外を落としません。過去3年の3月末/9月末全基準日・同一番号100株以上を現在tierと分け、割引やポイントを金額換算しません。原文や条件の変更はHOLDします。
@@ -30,7 +32,7 @@
 単一保有期間は対応済みの見出し＋本文2文法だけを全文照合し、期間とクーポン掲載額または入場券枚数を対応させます。既存の資格済み1回額を保持し、枚数に価格を付けません。本人、株数段階、同株主番号・記録回数、複数期間、併用の確認は追加しません。有効な既存要約のskipと共有取込・値判定を維持します。
 
 
-2施設の優待券は、対応する施設名・各枚数・1枚1名・土日祝/特定日の利用不可を含む全文形式だけ機械処理します。数値照合では、この全文と完全な定型要約が同値の場合だけ「六本木・西麻布店」を固有名詞として扱います。金額掲載がないため推定額はnullです。現識別子は`simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v24`、契約は上記新版です。旧版結果の採用や受入済みMac runtimeの更新は行いません。
+2施設の優待券は、対応する施設名・各枚数・1枚1名・土日祝/特定日の利用不可を含む全文形式だけ機械処理します。数値照合では、この全文と完全な定型要約が同値の場合だけ「六本木・西麻布店」を固有名詞として扱います。金額掲載がないため推定額はnullです。現識別子は`simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v25`、契約は上記新版です。旧版結果の採用や受入済みMac runtimeの更新は行いません。
 
 電子ギフトは、単一掲載額・1ポイント1円相当・電子マネーとポイントへの交換・基準日から3か月以内の贈呈を含む対応済み全文形式だけ機械処理します。掲載額を換算や年額計算せず既存の1回額資格で照合し、要約にも換算・両交換先・贈呈期限を保持します。この全文形式の公開要約は共有定型と完全一致する場合だけ採用します。余分な注記や別形式は機械処理せずHOLDします。
 
@@ -276,7 +278,7 @@ nix develop --command pnpm yutai:summary:local --state-dir <私有state> --limit
 入力（1 行、読みやすく改行しています）:
 
 ```json
-{"taskId":"0123456789abcdef","contractVersion":"2026-10-26.11","reason":"missing","violations":[],
+{"taskId":"0123456789abcdef","contractVersion":"2026-10-26.12","reason":"missing","violations":[],
  "stockCode":"9990","stockName":"架空ホールディングス",
  "description":"【1年未満】架空ギフトカタログ 2,000円相当\n【1年以上】架空ギフトカタログ 5,000円相当\n■贈呈時期\n毎年7月下旬に発送予定\n※保有株式数の確認は3月末時点","rowCount":2,"recipients":[{"minShares":100,"recordMonth":3,"recordDate":null},{"minShares":100,"recordMonth":9,"recordDate":null}]}
 ```
@@ -284,7 +286,7 @@ nix develop --command pnpm yutai:summary:local --state-dir <私有state> --limit
 出力:
 
 ```json
-{"taskId":"0123456789abcdef","contractVersion":"2026-10-26.11","shortSummary":"保有期間に応じたカタログギフト","estimatedValue":null}
+{"taskId":"0123456789abcdef","contractVersion":"2026-10-26.12","shortSummary":"保有期間に応じたカタログギフト","estimatedValue":null}
 ```
 
 ### 例 2: 割引券（金額は null）
@@ -292,7 +294,7 @@ nix develop --command pnpm yutai:summary:local --state-dir <私有state> --limit
 入力の `description`: `架空レストラン全店で使えるお食事代20%割引券を2枚\n※1回の会計につき1枚まで`
 
 ```json
-{"taskId":"fedcba9876543210","contractVersion":"2026-10-26.11","shortSummary":"食事代 20%割引券 2枚","estimatedValue":null}
+{"taskId":"fedcba9876543210","contractVersion":"2026-10-26.12","shortSummary":"食事代 20%割引券 2枚","estimatedValue":null}
 ```
 
 ### 例 3: 複数の選択肢から 1 つ
@@ -300,7 +302,7 @@ nix develop --command pnpm yutai:summary:local --state-dir <私有state> --limit
 入力の `description`: `次のいずれか1点\n①架空農園のお米 5kg\n②架空製菓の焼き菓子セット\n③寄付（架空財団へ1,000円）`
 
 ```json
-{"taskId":"00ff00ff00ff00ff","contractVersion":"2026-10-26.11","shortSummary":"お米 5kg (3点から選択)","estimatedValue":null}
+{"taskId":"00ff00ff00ff00ff","contractVersion":"2026-10-26.12","shortSummary":"お米 5kg (3点から選択)","estimatedValue":null}
 ```
 
 （お米 5kg は掲載文に金額が無いので `null`。相場を見積もって入れると取り込みではじかれる。）
@@ -310,16 +312,16 @@ nix develop --command pnpm yutai:summary:local --state-dir <私有state> --limit
 入力の `violations`: `["annotation","prose"]`、`description`: `架空トラベルの宿泊優待券 10,000円券×2枚\n■有効期限\n翌年6月末まで`
 
 ```json
-{"taskId":"a1b2c3d4e5f60718","contractVersion":"2026-10-26.11","shortSummary":"宿泊優待券 10,000円×2枚","estimatedValue":20000}
+{"taskId":"a1b2c3d4e5f60718","contractVersion":"2026-10-26.12","shortSummary":"宿泊優待券 10,000円×2枚","estimatedValue":20000}
 ```
 
 ### はじかれる出力の例
 
 ```json
-{"taskId":"a1b2c3d4e5f60718","contractVersion":"2026-10-26.11","shortSummary":"宿泊券をご利用いただけます。","estimatedValue":20000}
-{"taskId":"a1b2c3d4e5f60718","contractVersion":"2026-10-26.11","shortSummary":"宿泊優待券 ※有効期限あり","estimatedValue":20000}
-{"taskId":"fedcba9876543210","contractVersion":"2026-10-26.11","shortSummary":"食事代 20%割引券 2枚","estimatedValue":2000}
-{"taskId":"0123456789abcdef","contractVersion":"2026-10-26.11","shortSummary":"カタログギフト 5,000円相当","estimatedValue":5000,"description":"…"}
+{"taskId":"a1b2c3d4e5f60718","contractVersion":"2026-10-26.12","shortSummary":"宿泊券をご利用いただけます。","estimatedValue":20000}
+{"taskId":"a1b2c3d4e5f60718","contractVersion":"2026-10-26.12","shortSummary":"宿泊優待券 ※有効期限あり","estimatedValue":20000}
+{"taskId":"fedcba9876543210","contractVersion":"2026-10-26.12","shortSummary":"食事代 20%割引券 2枚","estimatedValue":2000}
+{"taskId":"0123456789abcdef","contractVersion":"2026-10-26.12","shortSummary":"カタログギフト 5,000円相当","estimatedValue":5000,"description":"…"}
 ```
 
 1 行目は `prose`、2 行目は `annotation`、3 行目は割引を金額にしたので金額ガード、4 行目は余計なキーでスキーマ違反です。
