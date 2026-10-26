@@ -6,14 +6,19 @@ import {
   realpathSync,
   rmSync,
   chmodSync,
+  existsSync,
+  readdirSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import { gzipSync } from "node:zlib";
+import { gzipSync, gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { sharedEnv } from "../../../../src/shared/env.js";
+import { notionEnv } from "../../../../src/shared/notion-archive/env.js";
+import * as notionClient from "../../../../src/shared/notion-archive/client.js";
 import { guard } from "./saved-overseas-atomic.js";
 import { verifySavedHoldingsMetadata } from "../../../../src/shared/notion-archive/shareholdings.js";
 import { verifySavedHoldingsSource } from "../../src/services/edinet/shareholdings.js";
@@ -22,6 +27,9 @@ import {
   assertSavedSourcePageMetadata,
   assertSavedClaimsAvailable,
   reserveSavedClaims,
+  qualifySavedReadonlyResume,
+  installSavedNativeGuard,
+  runSavedOrders,
   runSavedOverseas,
   initialSavedSourceIds,
   parseSavedOverseasOptions,
@@ -68,12 +76,18 @@ describe("normal finite saved overseas entry", () => {
       maxHttp: 272,
       maxNotionRps: 0.4,
     });
+    expect(parseSavedOverseasOptions(args)?.ordersDocumentScope).toBeUndefined();
+    expect(parseSavedOverseasOptions([...args, "--saved-orders-document-scope=historical"])?.ordersDocumentScope).toBe("historical");
     for (const bad of [
       ["--saved-mode=apply"],
       ["--saved-cohort"],
       [...args, "--force"],
       [...args, "--offset=0"],
       [...args, "--max-http=1"],
+      [...args, "--saved-orders-document-scope=latest"],
+      [...args, "--resume-readonly-proof=/private/proof.json"],
+      [...args, "--resume-readonly-proof=/private/proof.json", "--resume-readonly-proof-sha256="+"a".repeat(64)],
+      [...args, "--saved-orders-document-scope="],
       args.filter((arg) => !arg.startsWith("--cohort-sha256=")),
       args.map((arg) =>
         arg === "--saved-mode=prepare" ? "--saved-mode=apply" : arg,
@@ -486,5 +500,153 @@ describe("normal finite saved overseas entry", () => {
       globalThis.fetch = native;
       rmSync(temp, { recursive: true, force: true });
     }
+  });
+});
+
+
+const readonlyProofDir = join(process.cwd(), "tmp/orders-readonly-resume-proof-v1");
+const sha256 = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
+const finiteOptions = (cohortPath: string, outDir: string) => ({
+  mode: "apply" as const, cohortPath, cohortSha256: sha256(readFileSync(cohortPath)), outDir,
+  afterCode: null, maxTargets: 20, maxSeconds: 900, maxNotionRps: 0.8,
+  maxHttp: 300, maxNotion: 200, maxD1: 50, maxResponseBytes: 32 * 1024 ** 2,
+  maxRequestBytes: 1024 ** 2, notAfter: new Date(Date.now() + 3600000).toISOString(),
+});
+function isolatedSavedEnv() {
+  // Protocol-only credentials never leave the intercepted native transport.
+  vi.spyOn(sharedEnv, "CLOUDFLARE_ACCOUNT_ID").mockReturnValue("0".repeat(32));
+  vi.spyOn(sharedEnv, "D1_DATABASE_ID").mockReturnValue(item.archivePageId);
+  vi.spyOn(sharedEnv, "CLOUDFLARE_API_TOKEN").mockReturnValue("test-only-not-sent");
+  vi.spyOn(notionEnv, "NOTION_TOKEN").mockReturnValue("test-only-not-sent");
+  vi.spyOn(notionEnv, "NOTION_YUHO_TEXT_DB_ID").mockReturnValue(item.archivePageId);
+  vi.spyOn(notionEnv, "NOTION_MAX_RPS").mockReturnValue(undefined);
+}
+
+describe("saved apply read-only admission", () => {
+  it("does not burn a permanent claim when fresh PRE fails after the reported-source check", async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "saved-late-claim-"))), stateDir = join(dir, "state");
+    mkdirSync(stateDir, { mode: 0o700 });
+    const cohortPath = join(dir, "cohort.json"), cohort = { version: 1, stateDir, items: [item] };
+    writeFileSync(cohortPath, JSON.stringify(cohort));
+    const options = finiteOptions(cohortPath, join(dir, "apply"));
+    const metadata = JSON.stringify({docID:item.docId,edinetCode:item.edinetCode,secCode:`${item.stockCode}0`,periodEnd:item.periodEnd});
+    const sourcePage={id:item.archivePageId,properties:{Metadata:{type:"rich_text",rich_text:[{type:"text",plain_text:metadata,text:{content:metadata}}]},"Fetched At":{date:{start:item.sourceFetchedAt}}}};
+    const capsulePath = join(dir, "PRE.gz"), capsule = gzipSync(JSON.stringify({version:1, cohortSha256:options.cohortSha256, qualified:[{item,sourcePage,archivePageId:item.archivePageId,zipSha256:item.zipSha256}]}));
+    writeFileSync(capsulePath, capsule);
+    const native = globalThis.fetch;
+    let requests = 0;
+    isolatedSavedEnv();
+    vi.spyOn(notionClient, "setNotionMaxRps").mockImplementation(() => {});
+    globalThis.fetch = async () => {
+      requests++;
+      if (requests > 1) throw new Error("declared fresh-schema failure, no external IO");
+      return Response.json({success:true,result:[{success:true,results:[],meta:{rows_read:0,rows_written:0,changed_db:false}}]});
+    };
+    try {
+      await expect(runSavedOverseas({...options,capsulePath,capsuleSha256:sha256(capsule)}, process.cwd())).rejects.toThrow();
+      expect(requests).toBe(2);
+      expect(readdirSync(stateDir).length).toBe(0);
+      expect(JSON.parse(readFileSync(join(options.outDir, "STOP.json"), "utf8")).phase).toBe("fresh PRE");
+    } finally { globalThis.fetch = native; vi.restoreAllMocks(); rmSync(dir,{recursive:true,force:true}); }
+  });
+
+  it("durably captures read429 then uses shared retry, honors singleAttempt, and never retries a mutation or D1 failure", async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "saved-read429-"))), cohortPath = join(dir, "cohort.json");
+    const cohort = {version:1 as const,stateDir:dir,items:[item]};
+    writeFileSync(cohortPath, JSON.stringify(cohort));
+    const native = globalThis.fetch;
+    isolatedSavedEnv();
+    let io: ReturnType<typeof installSavedNativeGuard> | undefined;
+    try {
+      let attempts = 0;
+      globalThis.fetch = async () => {
+        attempts++;
+        if (attempts === 1) return Response.json({object:"error",code:"rate_limited"},{status:429,headers:{"Retry-After":"0"}});
+        expect(existsSync(join(dir,"native-1-response.body"))).toBe(true);
+        expect(JSON.parse(readFileSync(join(dir,"native-1-response.json"),"utf8")).status).toBe(429);
+        return Response.json({object:"page",id:item.archivePageId});
+      };
+      io = installSavedNativeGuard(finiteOptions(cohortPath,dir),cohort,dir,null,"overseas");
+      await notionClient.notionRequest("GET",`/pages/${item.archivePageId}`);
+      expect(attempts).toBe(2); expect(io.counts.notion).toBe(2);
+      io.restore(); io = undefined;
+      for (const [index, mutation] of [false,true].entries()) {
+        const out = join(dir,`rejection-${index}`); mkdirSync(out,{mode:0o700}); attempts=0;
+        globalThis.fetch=async()=>{attempts++;return Response.json({object:"error",code:"rate_limited"},{status:429,headers:{"Retry-After":"0"}});};
+        io=installSavedNativeGuard(finiteOptions(cohortPath,out),cohort,out,null,"overseas");
+        await expect(notionClient.notionRequest(mutation?"PATCH":"GET",`/pages/${item.archivePageId}`,undefined,{singleAttempt:true})).rejects.toThrow();
+        expect(attempts).toBe(mutation?0:1); // Unarmed mutation fails before transport.
+        io.restore(); io=undefined;
+      }
+      const out=join(dir,"d1-rejection");mkdirSync(out,{mode:0o700});attempts=0;
+      globalThis.fetch=async()=>{attempts++;return Response.json({success:false},{status:429});};
+      io=installSavedNativeGuard(finiteOptions(cohortPath,out),cohort,out,null,"overseas");
+      const q=savedReadQueries(cohort)[0];
+      await expect(fetch(`https://api.cloudflare.com/client/v4/accounts/${"0".repeat(32)}/d1/database/${item.archivePageId}/query`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(q)})).rejects.toThrow();
+      expect(attempts).toBe(1);
+    } finally { io?.restore(); globalThis.fetch=native; vi.restoreAllMocks(); rmSync(dir,{recursive:true,force:true}); }
+  });
+
+  it.skipIf(!existsSync(join(readonlyProofDir,"FILES.private.json")))("directly verifies the actual39 read pairs and11 claims, rejects incomplete/unknown/wrong bindings, and burns resume once before HTTP", async () => {
+    const dir=realpathSync(mkdtempSync(join(tmpdir(),"saved-actual39-")));
+    let failure: string | undefined;
+    const native=globalThis.fetch;
+    try {
+      const bindingBytes=readFileSync(join(readonlyProofDir,"APPLY-STOP-NATIVE-CLAIM-BINDING.private.json"));
+      expect(sha256(bindingBytes)).toBe("045e5c73a1e2344246f9d31ff130e29d9356a38d3a480c094d7ebf8541143c5f");
+      const proof=JSON.parse(bindingBytes.toString()), index=JSON.parse(readFileSync(join(readonlyProofDir,"FILES.private.json"),"utf8")) as Array<{path:string;sha256:string;bytes:number;localPath:string}>;
+      expect(index.length).toBe(175);
+      const control=join(dir,"old"), oldOut=join(control,"apply-v1"), stateDir=join(dir,"state");
+      for(const path of [control,oldOut,stateDir])mkdirSync(path,{mode:0o700});
+      const oldRemote=JSON.parse(readFileSync(index.find(ref=>ref.path.endsWith("/attempt-once.json"))!.localPath,"utf8")).options.outDir as string;
+      const pathMap=new Map(index.map(ref=>[ref.path,join(ref.path.includes(".apply-claim.json")?stateDir:ref.path.startsWith(oldRemote+"/")?oldOut:control,basename(ref.path))]));
+      for(const ref of index){const bytes=readFileSync(ref.localPath);expect(bytes.length===ref.bytes&&sha256(bytes)===ref.sha256,"private native transfer hash").toBe(true);writeFileSync(pathMap.get(ref.path)!,bytes,{mode:0o600,flag:"wx"});}
+      const cohort=JSON.parse(readFileSync(join(readonlyProofDir,"COHORT11.private.json"),"utf8"));cohort.stateDir=stateDir;
+      const cohortPath=join(dir,"cohort.json");writeFileSync(cohortPath,JSON.stringify(cohort),{mode:0o600});
+      const options=finiteOptions(cohortPath,join(dir,"new-out"));
+      const capsule=JSON.parse(gunzipSync(readFileSync(join(readonlyProofDir,"remote-PRE-capsule.json.gz"))).toString());capsule.cohortSha256=options.cohortSha256;
+      const capsulePath=join(dir,"PRE.gz"), capsuleBytes=gzipSync(JSON.stringify(capsule));writeFileSync(capsulePath,capsuleBytes,{mode:0o600});
+      const preSha=sha256(capsuleBytes), attemptPath=join(oldOut,"attempt-once.json"), attempt=JSON.parse(readFileSync(attemptPath,"utf8"));
+      Object.assign(options,{afterCode:attempt.options.afterCode,maxTargets:attempt.options.maxTargets});
+      Object.assign(attempt.options,{cohortPath,cohortSha256:options.cohortSha256,capsulePath,capsuleSha256:preSha,outDir:oldOut});writeFileSync(attemptPath,JSON.stringify(attempt));
+      for(const ref of proof.claims){const path=pathMap.get(ref.path)!,claim=JSON.parse(readFileSync(path,"utf8"));Object.assign(claim,{outDir:oldOut,cohortSha256:options.cohortSha256,preSha256:preSha});writeFileSync(path,JSON.stringify(claim));}
+      const updateRef=(ref:{path:string;sha256:string;bytes:number})=>{ref.path=pathMap.get(ref.path)!;const bytes=readFileSync(ref.path);ref.sha256=sha256(bytes);ref.bytes=bytes.length;};
+      for(const ref of [...proof.claims,...proof.records,...proof.native.flatMap((row:{intent:object;requestBody:object;responseMetadata:object;responseBody:object})=>[row.intent,row.requestBody,row.responseMetadata,row.responseBody])])updateRef(ref);
+      const proofPath=join(dir,"readonly-proof.json");
+      const saveProof=()=>{const bytes=Buffer.from(JSON.stringify(proof));writeFileSync(proofPath,bytes,{mode:0o600});return {...options,capsulePath,capsuleSha256:preSha,resumeReadonlyProofPath:proofPath,resumeReadonlyProofSha256:sha256(bytes)};};
+      let admitted=saveProof();
+      const d1url=new URL(JSON.parse(readFileSync(proof.native[0].intent.path,"utf8")).url);
+      isolatedSavedEnv();
+      vi.spyOn(sharedEnv,"CLOUDFLARE_ACCOUNT_ID").mockReturnValue(d1url.pathname.split("/")[4]);
+      vi.spyOn(sharedEnv,"D1_DATABASE_ID").mockReturnValue(d1url.pathname.split("/")[7]);
+      vi.spyOn(process,"kill").mockImplementation(()=>{throw Object.assign(new Error("declared closed prior PID"),{code:"ESRCH"});});
+      expect(qualifySavedReadonlyResume(admitted,cohort).claims.length).toBe(11);
+      const rejected=(value:Parameters<typeof qualifySavedReadonlyResume>[0],label:string)=>{let refused=false;try{qualifySavedReadonlyResume(value,cohort);}catch{refused=true;}expect(refused,label).toBe(true);};
+      for(const change of [{cohortSha256:"f".repeat(64)},{capsuleSha256:"f".repeat(64)},{afterCode:"1911"},{maxTargets:10},{ordersDocumentScope:"historical" as const}])rejected({...admitted,...change},"wrong prior binding");
+      const faultFile=(ref:{path:string;sha256:string;bytes:number},change:(value:Record<string,unknown>)=>void,label:string)=>{
+        const original=readFileSync(ref.path);changeFile(JSON.parse(original.toString()));
+        function changeFile(value:Record<string,unknown>){change(value);const bytes=Buffer.from(JSON.stringify(value));writeFileSync(ref.path,bytes);ref.sha256=sha256(bytes);ref.bytes=bytes.length;}
+        rejected(saveProof(),label);writeFileSync(ref.path,original);ref.sha256=sha256(original);ref.bytes=original.length;admitted=saveProof();
+      };
+      const responseRef=proof.native[0].responseMetadata,responseOriginal=readFileSync(responseRef.path);
+      const changedResponse=JSON.parse(responseOriginal.toString());changedResponse.kind="d1_batch";
+      writeFileSync(responseRef.path,JSON.stringify(changedResponse));responseRef.sha256=sha256(readFileSync(responseRef.path));responseRef.bytes=readFileSync(responseRef.path).length;
+      faultFile(proof.native[0].intent,v=>{v.kind="d1_batch";},"write intent rejected even with matched request/response kinds and fresh declared hashes");
+      writeFileSync(responseRef.path,responseOriginal);responseRef.sha256=sha256(responseOriginal);responseRef.bytes=responseOriginal.length;admitted=saveProof();
+      faultFile(proof.records.find((ref:{path:string})=>ref.path.endsWith("APPLY-EXIT.private.json")),v=>{v.exitCode=null;},"unknown terminal rejected");
+      const response=proof.native.at(-1).responseMetadata, body=readFileSync(response.path);rmSync(response.path);rejected(admitted,"missing response rejected");writeFileSync(response.path,body,{mode:0o600});
+      const partial=join(oldOut,"native-40-response-partial.body");writeFileSync(partial,"",{mode:0o600});rejected(admitted,"partial journal rejected");rmSync(partial);
+      const oldHashes=index.map(ref=>sha256(readFileSync(pathMap.get(ref.path)!)));
+      vi.spyOn(notionClient,"setNotionMaxRps").mockImplementation(()=>{});
+      let attempts=0;globalThis.fetch=async()=>{attempts++;expect(existsSync(join(oldOut,"readonly-resume-once.json"))).toBe(true);throw new Error("declared unknown resumed native read");};
+      await expect(runSavedOrders(admitted,process.cwd())).rejects.toThrow();expect(attempts).toBe(1);
+      expect(index.every((ref,i)=>sha256(readFileSync(pathMap.get(ref.path)!))===oldHashes[i]),"all old receipts and permanent claims remain immutable").toBe(true);
+      rejected({...admitted,outDir:join(dir,"another-out")},"one-use marker rejects a new-out bypass after unknown");
+      expect(existsSync(join(options.outDir,"STOP.json"))).toBe(true);
+    } catch(error) {
+      const bytes=Buffer.from(error instanceof Error?error.stack!:String(error));failure=sha256(bytes);
+      writeFileSync(join(readonlyProofDir,"REGRESSION-ERROR.private.txt"),bytes,{mode:0o600});
+    } finally {globalThis.fetch=native;vi.restoreAllMocks();rmSync(dir,{recursive:true,force:true});}
+    expect(failure,"actual39/11 replay failed; full private cause saved, SHA only").toBeUndefined();
   });
 });
