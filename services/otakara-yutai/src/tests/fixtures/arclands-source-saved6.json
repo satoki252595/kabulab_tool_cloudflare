@@ -1,0 +1,119 @@
+{
+  "privateFixtureDir": "tmp/yutai-arclands-source-proof-v1",
+  "files": [
+    {
+      "path": "SAVED-SOURCE-PACKET.private.json",
+      "sha256": "0534191f1fadb36a9c29aa7166f74024c9a325426287a4340984dc62788dca1d",
+      "bytes": 4966980
+    },
+    {
+      "path": "SAVED-ROWS.private.json",
+      "sha256": "b56e1df2ae1f925833f63c231391c7b60e38fc47061d321ff8b9bec872022997",
+      "bytes": 4571
+    },
+    {
+      "path": "PROVIDER-9842-RAW.private.json",
+      "sha256": "fd232ce71d40cb696bd2977e4ff8b0005295552a91c760274df681dc59d3b641",
+      "bytes": 227391
+    },
+    {
+      "path": "official-ir.private.html",
+      "sha256": "da66aab739bbb24e6d91cb963d427b88ff0604d30f74d1ed52340f912c7725a2",
+      "bytes": 123104
+    },
+    {
+      "path": "official-tiers.private.png",
+      "sha256": "dac48004ca4bbbe5bf59f9d96c06a8b081cbc2777eb7d59b349c456e9c6fbc15",
+      "bytes": 60442
+    },
+    {
+      "path": "official-store-list-2026-10.private.pdf",
+      "sha256": "214bd9cc4991bd87c3c4ebff32004b2a0f942bb4fdabef3fbe0543512c96af4b",
+      "bytes": 2514583
+    },
+    {
+      "path": "official-ir-news.private.html",
+      "sha256": "85ca7eb9ba3170a213f881c642f4d9b8c51ed164ed677d0e9eac25982c817c6d",
+      "bytes": 419867
+    },
+    {
+      "path": "official-introduction-2023-11-14.private.pdf",
+      "sha256": "ea834ede2120895a7bc785a313c80fa4e832373d601c2e439dd538039eaafd07",
+      "bytes": 199753
+    },
+    {
+      "path": "official-integration-date-2026-07-03.private.pdf",
+      "sha256": "903626e70961cab5f5126137166ac2f2199389ecaabe0e30a7fafd8053747b89",
+      "bytes": 236497
+    }
+  ],
+  "expectedRows": [
+    {
+      "minShares": 100,
+      "recordMonth": 2,
+      "recordDate": null,
+      "descriptionSha256": "3681da0679e56f60a3fbbf414700d2ab842e060a231c29429a7561c3ac0d609b"
+    },
+    {
+      "minShares": 100,
+      "recordMonth": 8,
+      "recordDate": null,
+      "descriptionSha256": "3681da0679e56f60a3fbbf414700d2ab842e060a231c29429a7561c3ac0d609b"
+    },
+    {
+      "minShares": 200,
+      "recordMonth": 2,
+      "recordDate": null,
+      "descriptionSha256": "ddc9d02ac4ffa263071fbae0197a06535db3dc63e287501866fc5d3234c687fa"
+    },
+    {
+      "minShares": 200,
+      "recordMonth": 8,
+      "recordDate": null,
+      "descriptionSha256": "ddc9d02ac4ffa263071fbae0197a06535db3dc63e287501866fc5d3234c687fa"
+    },
+    {
+      "minShares": 1000,
+      "recordMonth": 2,
+      "recordDate": null,
+      "descriptionSha256": "798b0a7367ceb12a726aa5cf11bd44aceba2b0833eae533a47a38fa25c5c1c24"
+    },
+    {
+      "minShares": 1000,
+      "recordMonth": 8,
+      "recordDate": null,
+      "descriptionSha256": "798b0a7367ceb12a726aa5cf11bd44aceba2b0833eae533a47a38fa25c5c1c24"
+    }
+  ],
+  "canonical": [
+    {
+      "minShares": 100,
+      "summarySha256": "679a1e17bb46f2f0902dd7d9e0dd32cdb59a16cd90c9e2934c988a0009645cb2",
+      "summaryCharacters": 246,
+      "estimatedValue": 1100
+    },
+    {
+      "minShares": 200,
+      "summarySha256": "230b5625f1fc4db0ba854d1deb6e60f72576e9db021cbc337f0c8e9ff280d137",
+      "summaryCharacters": 246,
+      "estimatedValue": 2200
+    },
+    {
+      "minShares": 1000,
+      "summarySha256": "0c9be0298fbca4d6e5acae9b2e114b4d46cb4ba5b1fdc008027a261b3674506c",
+      "summaryCharacters": 250,
+      "estimatedValue": 11000
+    }
+  ],
+  "stockId": 1308,
+  "ids": [
+    64093,
+    64094,
+    64095,
+    64096,
+    64097,
+    64098
+  ],
+  "providerReceivedAt": "2026-10-21T16:55:08.814Z",
+  "providerBatchFetchedAt": "2026-10-21T16:56:22.538Z"
+}

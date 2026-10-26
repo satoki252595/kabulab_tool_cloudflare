@@ -7,6 +7,7 @@ import { sourceSummaryConditions } from "./summary-contract.js";
 import { parsePublicBenefitFacts, type PublicBenefitFacts as Facts } from "../src/public-facts.js";
 import { compileMusashinoOfficialLiteral } from "./musashino-source.js";
 import { compileKawasakiOfficialLiteral, KAWASAKI_OFFICIAL_URL } from "./kawasaki-source.js";
+import { compileArclandsOfficialLiteral, ARCLANDS_OFFICIAL_URL } from "./arclands-source.js";
 
 /** モデルを起動せず既存の厳密額面判定を共用する。候補の最大値・合計を採らない。 */
 export function evaluateCompanyValue(description: string, context: { minShares: readonly number[]; recordMonths: readonly number[] }) {
@@ -43,6 +44,11 @@ export function buildPublicBenefitFacts(input: {
   const tierLiterals = holdingStructure === null && !qualifiedRecordTier && choiceStructure.status !== "literal_parsed" ? extractBenefitTierLiterals(input.description) : null;
   const initial = compileMusashinoOfficialLiteral(input.description)?.recordDate === "2026-09-30";
   const kawasaki = compileKawasakiOfficialLiteral(input.description);
+  const arclands = compileArclandsOfficialLiteral(input.description);
+  if (arclands !== null && (input.code !== "9842" || input.official?.url !== ARCLANDS_OFFICIAL_URL ||
+      input.context.minShares.length === 0 || input.context.minShares.some(value => value !== arclands.minShares) ||
+      input.context.recordMonths.length === 0 || input.context.recordMonths.some(value => value !== 2 && value !== 8) ||
+      evaluation.value !== arclands.listedGrantYen)) throw new Error("arclands_source_context_changed");
   if (kawasaki !== null && (input.code !== "3045" || input.official?.url !== KAWASAKI_OFFICIAL_URL ||
       input.context.minShares.length === 0 || input.context.minShares.some(value => value !== kawasaki.minShares) ||
       input.context.recordMonths.length === 0 || input.context.recordMonths.some(value => value !== 2 && value !== 8))) throw new Error("kawasaki_source_context_changed");
@@ -53,6 +59,8 @@ export function buildPublicBenefitFacts(input: {
       applicability: "unverified", ast: { recordDate: "2026-09-30", minimumRegistryShares: 200, holdingPeriod: "not_required" } } : qualifiedRecordTier ? recordTier : holdingStructure !== null ? holdingStructure : tierLiterals !== null ? tierLiterals : choiceStructure,
     sourceGroup: benefitKey(input.code, input.description),
     ...conditions,
+    // 全3SHAと正規要約が確定した券種だけ。「記載又は記録」は贈答の選択ではない。
+    ...(arclands !== null ? { choice: false } : {}),
     ...(initial ? { holding: false, holdingPeriods: [] } : {}),
     combination: allowed === forbidden ? "unverified" : forbidden ? "not_allowed" : "allowed",
     valueStatus: evaluation.value === null ? "unresolved" : "source_amount_qualified",

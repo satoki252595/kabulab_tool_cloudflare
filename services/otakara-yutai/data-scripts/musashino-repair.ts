@@ -10,7 +10,7 @@ import { selectSummaryTasks, SummaryTask, type BenefitRow } from "./summary-task
 import { compileSimpleSummary } from "./summary-local.js";
 import { planSummaryImport } from "./summary-import.js";
 import { buildStockPreflightStatement, snapshotStockPreimages, type StockBatch } from "./atomic-apply.js";
-import { computeYieldEntries, type YieldInputs } from "./recompute-yields.js";
+import { buildYieldScoreStatements, computeYieldEntries, type YieldInputs } from "./recompute-yields.js";
 import { assertMonthScopePreimage, assertMonthScopeRowsEqual, fullCas, type MonthScopePreimage } from "./saved-month-scope.js";
 import { compileMusashinoOfficialLiteral, MUSASHINO_OFFICIAL_URL } from "./musashino-source.js";
 import { compileNoteOfficialLiteral, NOTE_OFFICIAL_URL } from "./note-source.js";
@@ -18,6 +18,7 @@ import { compileKawasakiOfficialLiteral, KAWASAKI_OFFICIAL_URL } from "./kawasak
 import { benefitKey } from "./benefit-key.js";
 import { SUMMARY_CONTRACT_VERSION } from "./summary-contract.js";
 import { parsePublicBenefitFacts } from "../src/public-facts.js";
+import { ARCLANDS_OFFICIAL_URL, ARCLANDS_OLD_SOURCE_SHA256, ARCLANDS_OLD_200_SUMMARY_SHA256, compileArclandsOfficialLiteral } from "./arclands-source.js";
 
 const oldHashes = ["254833a3cbe834255b7999d7508e33afe24f7b2cb9f41b17784c9bfa89d6394e", "9002f33a9730b8e991674129e226a168c4db0ecd820ee6e1978f4b91c833567e", "03d8d3329093dbe232c44fc28baabc02ba70577d3cd3e3c873a03dfc09d38ead"];
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -25,6 +26,7 @@ function assert(value: unknown, message: string): asserts value { if (!value) th
 
 /** 保存済み8336/5243/3045の全段階だけ。既存全4表CASと通常compiler/取込を共用する。 */
 export function planMusashinoSourceAdoption(db: YutaiFullImportDb, pre: MonthScopePreimage, data: StockYutaiData, batchFetchedAt: string, inputs: YieldInputs, now = Date.now()) {
+  if (data.code === "9842") return planArclandsSourceAdoption(db, pre, data, batchFetchedAt, inputs, now);
   assertMonthScopePreimage(pre);
   const note = data.code === "5243", kawasaki = data.code === "3045", code = note ? "5243" : kawasaki ? "3045" : "8336";
   const ids = kawasaki ? [57774, 57775, 57776, 57777] : note ? [59703, 59704] : [62011, 62012, 62013];
@@ -86,6 +88,67 @@ export function planMusashinoSourceAdoption(db: YutaiFullImportDb, pre: MonthSco
   statements.push(fullCas(expected));
   const batch: StockBatch = { stockId, key: `${note ? "note" : kawasaki ? "kawasaki" : "musashino"}-source-adoption:${stockId}`, statements };
   return { batch, expected, clock: undefined, yieldPlan, updatedRows: ids.length };
+}
+
+/** 9842の旧6行だけ。通常額面・利回り・scoreを同じ全4表CAS batchへ載せる。 */
+function planArclandsSourceAdoption(db: YutaiFullImportDb, pre: MonthScopePreimage, data: StockYutaiData, batchFetchedAt: string, inputs: YieldInputs, now: number) {
+  assertMonthScopePreimage(pre);
+  const stockId = 1308, ids = [64093, 64094, 64095, 64096, 64097, 64098], shares = [100, 100, 200, 200, 1000, 1000];
+  const current = [...pre.benefits].sort((a, b) => Number(a.id) - Number(b.id));
+  assert(pre.parent.id === stockId && pre.parent.code === data.code && data.official?.url === ARCLANDS_OFFICIAL_URL &&
+    data.sourceFetchedAt !== undefined && Number.isFinite(Date.parse(data.sourceFetchedAt)) && Number.isFinite(Date.parse(batchFetchedAt)) &&
+    Number.isSafeInteger(now) && now > 0 && current.length === 6 && current.every((row, i) => row.id === ids[i] && row.minShares === shares[i] &&
+      row.recordMonth === (i % 2 === 0 ? 2 : 8) && row.recordDate === null), "arclands_current_recipient_changed");
+  const source = benefitRowsOf(data), sourceRows = [...source.rows].sort((a, b) => a.minShares - b.minShares || a.recordMonth - b.recordMonth);
+  assert(source.heldBenefits === 0 && sourceRows.length === 6 && sourceRows.every((row, i) => row.minShares === shares[i] && row.recordMonth === current[i].recordMonth &&
+    compileArclandsOfficialLiteral(row.description)?.minShares === row.minShares), "arclands_full_source_changed");
+  const rows: BenefitRow[] = current.map((row, i) => ({ id: Number(row.id), stockId, stockCode: data.code, stockName: String(pre.parent.name),
+    description: sourceRows[i].description, shortSummary: null, estimatedValue: null, estimateValueSource: null,
+    minShares: Number(row.minShares), recordMonth: Number(row.recordMonth), recordDate: null, updatedAt: Number(row.updatedAt) }));
+  const tasks = selectSummaryTasks(rows), results = tasks.map(compileSimpleSummary);
+  assert(tasks.length === 3 && results.every(result => result !== null), "arclands_normal_compiler_held");
+  const summaryPlan = planSummaryImport({ tasks, currentRows: rows, resultsText: results.map(result => JSON.stringify(result)).join("\n") });
+  assert(summaryPlan.rejections.length === 0 && summaryPlan.updates.length === 3 && summaryPlan.updates.every(update => update.ids.length === 2), "arclands_normal_import_held");
+  const expected = structuredClone(pre), executionSecond = Math.floor(now / 1000);
+  const changes = sourceRows.map((row, i) => {
+    const literal = compileArclandsOfficialLiteral(row.description), update = summaryPlan.updates.find(value => value.ids.includes(ids[i]));
+    assert(literal !== null && update !== undefined && update.estimatedValue === literal.listedGrantYen && update.estimateValueSource === "company", "arclands_value_not_qualified");
+    const publicFacts = buildPublicBenefitFacts({ code: data.code, description: row.description, context: { minShares: [row.minShares], recordMonths: [row.recordMonth] },
+      fetchedAt: data.sourceFetchedAt!, batchFetchedAt, official: data.official });
+    const values = { description: row.description, shortSummary: update.shortSummary, estimatedValue: update.estimatedValue,
+      estimateValueSource: update.estimateValueSource, publicFacts: JSON.stringify(publicFacts) };
+    const target = expected.benefits.find(value => value.id === ids[i]); assert(target !== undefined, "arclands_target_missing");
+    Object.assign(target, values, { updatedAt: executionSecond });
+    return { id: ids[i], values, publicFacts };
+  });
+  const inputBenefits = inputs.benefits.get(stockId); assert(inputBenefits !== undefined, "arclands_recompute_benefits_missing");
+  const snapshot = snapshotStockPreimages(inputs, [stockId]).get(stockId);
+  assert(snapshot !== undefined && snapshot.parent.code === data.code && snapshot.benefits.length === 6, "arclands_recompute_scope_changed");
+  const project = (row: Record<string, string | number | null> | null, shape: object | null) => shape === null ? row : row === null ? null : Object.fromEntries(Object.keys(shape).map(key => [key, row[key]]));
+  assert(isDeepStrictEqual(current.map(row => project(row, snapshot.benefits[0])), snapshot.benefits) &&
+    isDeepStrictEqual(project(pre.financial, snapshot.financial), snapshot.financial) && isDeepStrictEqual(project(pre.scores, snapshot.scores), snapshot.scores), "arclands_recompute_preimage_changed");
+  const nextInputs = { ...inputs, benefits: new Map(inputs.benefits) };
+  nextInputs.benefits.set(stockId, expected.benefits.map(row => ({ rowId: Number(row.id), minShares: Number(row.minShares), recordMonth: Number(row.recordMonth), recordDate: null,
+    description: String(row.description), shortSummary: row.shortSummary as string, estimatedValue: Number(row.estimatedValue), estimateValueSource: String(row.estimateValueSource), updatedAt: Number(row.updatedAt) })));
+  const yieldPlan = computeYieldEntries([stockId], nextInputs), entry = yieldPlan.entries[0];
+  const equivalent = changes.every(change => Object.entries(change.values).every(([key, value]) => current.find(row => row.id === change.id)![key] === value));
+  if (equivalent) {
+    assert(entry === undefined || (!entry.changed && !entry.scoreChanged), "arclands_adopted_derived_stale");
+    return { batch: null, expected: pre, clock: undefined, yieldPlan, updatedRows: 0 };
+  }
+  assert(current.every((row, i) => digest(String(row.description)) === ARCLANDS_OLD_SOURCE_SHA256[Math.floor(i / 2)] &&
+    (shares[i] === 200 ? typeof row.shortSummary === "string" && digest(row.shortSummary) === ARCLANDS_OLD_200_SUMMARY_SHA256 : row.shortSummary === null) &&
+    row.estimatedValue === null && row.estimateValueSource === null), "arclands_original_six_sources_changed");
+  if (entry?.changed && expected.financial !== null) expected.financial.yutaiYield = entry.next;
+  if (entry?.scoreChanged && entry.scoreNext !== null && expected.scores !== null) Object.assign(expected.scores, entry.scoreNext);
+  const clock = entry?.changed ? { minimum: executionSecond, maximum: executionSecond + 15 * 60 } : undefined;
+  const statements: D1BatchStatement[] = [buildStockPreflightStatement(snapshot), fullCas(pre)];
+  for (const change of changes) statements.push(...toD1BatchStatements([db.update(yutaiBenefits).set({ ...change.values, publicFacts: change.publicFacts, updatedAt: new Date(executionSecond * 1000) })
+    .where(and(eq(yutaiBenefits.id, change.id), eq(yutaiBenefits.stockId, stockId)))]), { sql: "SELECT json(CASE WHEN changes() = 1 THEN 'null' ELSE '' END)", params: [] });
+  if (entry !== undefined) for (const statement of buildYieldScoreStatements(entry)) statements.push(statement, { sql: "SELECT json(CASE WHEN changes() = 1 THEN 'null' ELSE '' END)", params: [] });
+  statements.push(fullCas(expected, clock));
+  const batch: StockBatch = { stockId, key: `arclands-source-adoption:${stockId}`, statements };
+  return { batch, expected, clock, yieldPlan, updatedRows: 6 };
 }
 
 /** 初回追加後の実採番IDだけを回収し、他の全列は計画どおりか照合する。 */

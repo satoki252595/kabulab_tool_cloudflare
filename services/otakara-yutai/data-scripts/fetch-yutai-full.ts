@@ -41,6 +41,7 @@ import { assertMonthScopePost, assertMonthScopeRowsEqual, loadMonthScopePreimage
 import { adoptMusashinoOfficialSource, MUSASHINO_LISTING_URL, MUSASHINO_OFFICIAL_URL, MUSASHINO_NOTICE_URL } from "./musashino-source.js";
 import { adoptNoteOfficialSource, NOTE_LISTING_URL, NOTE_OFFICIAL_URL, NOTE_NOTICE_URL } from "./note-source.js";
 import { adoptKawasakiOfficialSource, KAWASAKI_LISTING_URL, KAWASAKI_OFFICIAL_URL, KAWASAKI_NOTICE_URL } from "./kawasaki-source.js";
+import { adoptArclandsOfficialSource, ARCLANDS_SOURCES } from "./arclands-source.js";
 import { extractPdfText } from "../../ir-catalog/src/services/pdf-sentiment/extract-text.js";
 import { z } from "../../../src/shared/zod-mini.js";
 import { assertMusashinoInitialPost, planMusashinoInitialEvent, planMusashinoSourceAdoption } from "./musashino-repair.js";
@@ -56,10 +57,12 @@ type RawPage = {
 type CapturePage = (page: RawPage) => void;
 type SavedOfficialPage = { page: RawPage; path: string; filename: string; contentType: string };
 
-function saveOfficialSourcePage(page: RawPage, runId: string, dir: string, code: "8336" | "5243" | "3045" = "8336"): SavedOfficialPage {
+function saveOfficialSourcePage(page: RawPage, runId: string, dir: string, code: "8336" | "5243" | "3045" | "9842" = "8336"): SavedOfficialPage {
   const contentType = page.contentType === null ? "application/octet-stream" : page.contentType.split(";")[0].trim().toLowerCase();
-  const suffix = page.url === `https://minkabu.jp/stock/${code}/yutai` ? "provider" : page.url === (code === "8336" ? MUSASHINO_OFFICIAL_URL : code === "5243" ? NOTE_OFFICIAL_URL : KAWASAKI_OFFICIAL_URL) ? "official" : "notice";
-  const filename = `yutai-official-${code}-${runId}-${suffix}.${contentType === "text/html" ? "html" : contentType === "application/pdf" ? "pdf" : "bin"}`;
+  const suffix = code === "9842" ? ARCLANDS_SOURCES.find(source => source.url === page.url)?.suffix :
+    page.url === `https://minkabu.jp/stock/${code}/yutai` ? "provider" : page.url === (code === "8336" ? MUSASHINO_OFFICIAL_URL : code === "5243" ? NOTE_OFFICIAL_URL : KAWASAKI_OFFICIAL_URL) ? "official" : "notice";
+  if (suffix === undefined) throw new Error("arclands_source_url_changed");
+  const filename = `yutai-official-${code}-${runId}-${suffix}.${contentType === "text/html" ? "html" : contentType === "application/pdf" ? "pdf" : contentType === "image/png" ? "png" : "bin"}`;
   const saved = writeSummaryLocal({ key: `yutai-official-${code}-${runId}`, files: [{ filename, bytes: Buffer.from(page.bodyBase64, "base64"), contentType }] }, dir);
   if (!saved.ok) throw new Error("musashino_source_local_save_failed");
   return { page, path: saved.path, filename, contentType };
@@ -140,9 +143,10 @@ export async function archiveRawFile(path: string, runId: string, source: string
   return { pageId: archived.pageId, files };
 }
 
-/** 8336/5243/3045の両公式原本と元提供元を実体保管し、新本文を同じmanifestへ束縛する。 */
-async function archiveOfficialSources(pages: readonly SavedOfficialPage[], runId: string, data: StockYutaiData | undefined, providerArchive: { key: string; sha256: string }, initialEvent = false, code: "8336" | "5243" | "3045" = "8336"): Promise<{ pageId: string } | undefined> {
-  const urls = code === "8336" ? [MUSASHINO_OFFICIAL_URL, MUSASHINO_NOTICE_URL] : code === "5243" ? [NOTE_OFFICIAL_URL, NOTE_NOTICE_URL] : [KAWASAKI_OFFICIAL_URL, KAWASAKI_NOTICE_URL];
+/** 明示した公式原本と元提供元を実体保管し、新本文を同じmanifestへ束縛する。 */
+async function archiveOfficialSources(pages: readonly SavedOfficialPage[], runId: string, data: StockYutaiData | undefined, providerArchive: { key: string; sha256: string }, initialEvent = false, code: "8336" | "5243" | "3045" | "9842" = "8336"): Promise<{ pageId: string } | undefined> {
+  const urls = code === "9842" ? ARCLANDS_SOURCES.slice(1).map(source => source.url) :
+    code === "8336" ? [MUSASHINO_OFFICIAL_URL, MUSASHINO_NOTICE_URL] : code === "5243" ? [NOTE_OFFICIAL_URL, NOTE_NOTICE_URL] : [KAWASAKI_OFFICIAL_URL, KAWASAKI_NOTICE_URL];
   if (!pages.some(({ page }) => urls.includes(page.url))) return;
   const sources = await Promise.all(pages.map(async ({ page, path, filename, contentType }) => {
     const bytes = Uint8Array.from(readFileSync(path));
@@ -266,16 +270,40 @@ export type StockDetailResult =
   | { status: "ok"; data: StockYutaiData }
   | { status: "unknown"; code: string; reason: string };
 
+async function adoptArclandsPages(data: StockYutaiData, pages: readonly RawPage[]): Promise<StockYutaiData> {
+  const sources = pages.map(page => ({ url: page.url, bytes: Uint8Array.from(Buffer.from(page.bodyBase64, "base64")) }));
+  const pdfTexts: string[] = [];
+  for (const index of [2, 4, 5]) {
+    const text = await extractPdfText(sources[index].bytes);
+    if (text === null) throw new Error("arclands_official_pdf_unreadable");
+    pdfTexts.push(text);
+  }
+  return adoptArclandsOfficialSource(data, sources, pdfTexts, new Date(pages[pages.length - 1].receivedAt).toISOString());
+}
+
 export async function fetchStockDetail(code: string, onRaw?: CapturePage, beforeRequest?: () => void): Promise<StockDetailResult> {
   let sourceFetchedAt: string | undefined;
   try {
-    const html = await fetchPage(`https://minkabu.jp/stock/${code}/yutai`, page => {
-      sourceFetchedAt = page.receivedAt;
-      onRaw?.(page);
-    }, beforeRequest);
+    const capture: CapturePage = page => { sourceFetchedAt = page.receivedAt; onRaw?.(page); };
+    let html: string;
+    if (code === "9842") {
+      const source = ARCLANDS_SOURCES[0];
+      const page = await fetchRawPage(source.url, capture, beforeRequest, { bytes: source.maxBytes, contentType: source.contentType });
+      if (page.status !== 200) throw new Error("arclands_response_status_changed");
+      html = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.from(page.bodyBase64, "base64"));
+    } else html = await fetchPage(`https://minkabu.jp/stock/${code}/yutai`, capture, beforeRequest);
     const result = parseStockDetail(code, html);
     if (result.status !== "ok") return result;
     result.data.sourceFetchedAt = sourceFetchedAt;
+    if (code === "9842") {
+      const pages: RawPage[] = [];
+      for (const source of ARCLANDS_SOURCES.slice(1)) {
+        const page = await fetchRawPage(source.url, onRaw, beforeRequest, { bytes: source.maxBytes, contentType: source.contentType });
+        if (page.status !== 200) throw new Error("arclands_response_status_changed");
+        pages.push(page);
+      }
+      return { status: "ok", data: await adoptArclandsPages(result.data, pages) };
+    }
     if (code !== "8336" && code !== "5243" && code !== "3045") return result;
     // 明示公式採用。取得・全文資格に失敗したら旧提供元へ戻さずUNKNOWNにする。
     const official = await fetchRawPage(code === "8336" ? MUSASHINO_OFFICIAL_URL : code === "5243" ? NOTE_OFFICIAL_URL : KAWASAKI_OFFICIAL_URL, onRaw, beforeRequest, { bytes: 256 * 1024, contentType: "text/html" });
@@ -477,7 +505,7 @@ export function parseStockDetail(code: string, html: string): StockDetailResult 
 
 // ===== Main =====
 export async function main(argv: readonly string[] = []) {
-  if (argv.includes("--adopt-musashino-source") || argv.includes("--add-musashino-initial-event") || argv.includes("--adopt-note-source") || argv.includes("--adopt-kawasaki-source")) return adoptSavedOfficialSource(argv);
+  if (argv.includes("--adopt-musashino-source") || argv.includes("--add-musashino-initial-event") || argv.includes("--adopt-note-source") || argv.includes("--adopt-kawasaki-source") || argv.includes("--adopt-arclands-source")) return adoptSavedOfficialSource(argv);
   if (argv.length > 0) return repairSavedMonthScope(argv);
   const window = nativeJobExecutionWindow(Date.now(), sharedEnv.BATCH_JOB_STARTED_AT(), 360, 10);
   const assertSource = () => {
@@ -505,6 +533,8 @@ export async function main(argv: readonly string[] = []) {
   const notePages: SavedOfficialPage[] = [];
   let kawasakiData: StockYutaiData | undefined;
   const kawasakiPages: SavedOfficialPage[] = [];
+  let arclandsData: StockYutaiData | undefined;
+  const arclandsPages: SavedOfficialPage[] = [];
   const capture: CapturePage = (page) => {
     if ([MUSASHINO_LISTING_URL, MUSASHINO_OFFICIAL_URL, MUSASHINO_NOTICE_URL].includes(page.url)) {
       musashinoPages.push(saveOfficialSourcePage(page, runId, dir));
@@ -518,6 +548,10 @@ export async function main(argv: readonly string[] = []) {
     if ([KAWASAKI_LISTING_URL, KAWASAKI_OFFICIAL_URL, KAWASAKI_NOTICE_URL].includes(page.url)) {
       kawasakiPages.push(saveOfficialSourcePage(page, runId, dir, "3045"));
       if (page.url !== KAWASAKI_LISTING_URL) return;
+    }
+    if (ARCLANDS_SOURCES.some(source => source.url === page.url)) {
+      arclandsPages.push(saveOfficialSourcePage(page, runId, dir, "9842"));
+      if (page.url !== ARCLANDS_SOURCES[0].url) return;
     }
     // 次GETより先に全bytesをdurable保存。全量base64をRAMへ保持しない。
     writeFileSync(fd, JSON.stringify(page) + "\n");
@@ -538,6 +572,7 @@ export async function main(argv: readonly string[] = []) {
       if (code === "8336" && result.status === "ok") musashinoData = result.data;
       if (code === "5243" && result.status === "ok") noteData = result.data;
       if (code === "3045" && result.status === "ok") kawasakiData = result.data;
+      if (code === "9842" && result.status === "ok") arclandsData = result.data;
       return result;
     });
   } finally {
@@ -555,6 +590,7 @@ export async function main(argv: readonly string[] = []) {
       await archiveOfficialSources(musashinoPages, runId, musashinoData, providerArchive);
       await archiveOfficialSources(notePages, runId, noteData, providerArchive, false, "5243");
       await archiveOfficialSources(kawasakiPages, runId, kawasakiData, providerArchive, false, "3045");
+      await archiveOfficialSources(arclandsPages, runId, arclandsData, providerArchive, false, "9842");
     }
   }
   if (lastClock === null) throw new Error("優待原本の実取得時計が無いためSTOP");
@@ -562,14 +598,14 @@ export async function main(argv: readonly string[] = []) {
   } finally { restore?.(); }
 }
 
-// ponytail: 2026-10-21保存providerの8336/5243/3045だけ。別cohortは通常collectorで再資格化する。
+// ponytail: 2026-10-21保存providerの明示issuerだけ。別cohortは通常collectorで再資格化する。
 const OfficialSavedPacket = z.strictObject({
   version: z.literal(1),
   providerArchiveKey: z.literal("yutai-source-local-411af4c3"),
   providerArchiveSha256: z.literal("0e9167f08f4a7c74a081b97db90b25eb87e265ac88a9c8ab4a17cede470053a4"),
   providerBatchFetchedAt: z.literal("2026-10-21T16:56:22.538Z"),
-  pages: z.array(z.strictObject({ url: z.string(), receivedAt: z.string(), status: z.literal(200), contentType: z.string(),
-    byteLength: z.number().check(z.int(), z.positive()), bodyBase64: z.string() })).check(z.minLength(3), z.maxLength(3)),
+  pages: z.array(z.strictObject({ url: z.string(), receivedAt: z.string(), status: z.nullable(z.literal(200)), contentType: z.string(),
+    byteLength: z.number().check(z.int(), z.positive()), bodyBase64: z.string() })).check(z.minLength(3), z.maxLength(7)),
 });
 
 /** 保存済み3issuerの原本だけ。応答時計は変えず、DTOの検証時計だけ既存ISO形式へ正規化する。 */
@@ -578,11 +614,12 @@ async function readSavedOfficialPacket(path: string, sha256: string, code: "8336
   const bytes = readMonthScopeRawBytes(path, sha256);
   if (bytes.length > 4 * 1024 * 1024) throw new Error(`${prefix}_saved_packet_too_large`);
   const packet = OfficialSavedPacket.parse(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
+  if (packet.pages.length !== 3) throw new Error(`${prefix}_saved_response_invalid`);
   const urls = code === "8336" ? [MUSASHINO_LISTING_URL, MUSASHINO_OFFICIAL_URL, MUSASHINO_NOTICE_URL] : code === "5243" ? [NOTE_LISTING_URL, NOTE_OFFICIAL_URL, NOTE_NOTICE_URL] : [KAWASAKI_LISTING_URL, KAWASAKI_OFFICIAL_URL, KAWASAKI_NOTICE_URL];
   const savedClocks = code === "5243" ? ["2026-10-21T16:30:29.082Z", "2026-10-25T20:29:07.105213+00:00", "2026-10-25T20:29:07.337103+00:00"] : ["2026-10-21T16:16:52.221Z", "2026-10-25T20:29:30.806839+00:00", "2026-10-25T20:29:41.991941+00:00"];
   for (const [i, page] of packet.pages.entries()) {
     const body = Buffer.from(page.bodyBase64, "base64"), clock = new Date(page.receivedAt);
-    if (page.url !== urls[i] || body.length !== page.byteLength || body.toString("base64") !== page.bodyBase64 ||
+    if (page.status !== 200 || page.url !== urls[i] || body.length !== page.byteLength || body.toString("base64") !== page.bodyBase64 ||
         !Number.isFinite(clock.getTime()) || (code === "8336" ? clock.toISOString() !== page.receivedAt : page.receivedAt !== savedClocks[i]) ||
         page.contentType.split(";")[0].trim().toLowerCase() !== (i === 2 ? "application/pdf" : "text/html")) throw new Error(`${prefix}_saved_response_invalid`);
   }
@@ -619,22 +656,43 @@ export async function readSavedKawasakiSource(path: string, sha256: string) {
   return { packet: source.packet, annual: data, data };
 }
 
-/** 8336/5243/3045の固定入力mode。既存state/unknownを再送しない。 */
+/** 固定9842の7実原本だけ。旧3応答の未露出statusはnullのまま全文SHAへ束縛する。 */
+export async function readSavedArclandsSource(path: string, sha256: string) {
+  const bytes = readMonthScopeRawBytes(path, sha256);
+  if (bytes.length > 8 * 1024 * 1024) throw new Error("arclands_saved_packet_too_large");
+  const packet = OfficialSavedPacket.parse(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
+  const expected = [{"receivedAt":"2026-10-21T16:55:08.814Z","status":200,"byteLength":169686,"sha256":"1e5dccef0219c9a8dc269615d4db8296d63c25ae61ca745126e7b363515f84b6"},{"receivedAt":"2026-10-25T23:30:49.315069+00:00","status":200,"byteLength":123104,"sha256":"da66aab739bbb24e6d91cb963d427b88ff0604d30f74d1ed52340f912c7725a2"},{"receivedAt":"2026-10-25T23:30:49.405174+00:00","status":200,"byteLength":60442,"sha256":"dac48004ca4bbbe5bf59f9d96c06a8b081cbc2777eb7d59b349c456e9c6fbc15"},{"receivedAt":"2026-10-25T23:30:49.676839+00:00","status":200,"byteLength":2514583,"sha256":"214bd9cc4991bd87c3c4ebff32004b2a0f942bb4fdabef3fbe0543512c96af4b"},{"receivedAt":"2026-10-25T23:31:34.194723+00:00","status":null,"byteLength":419867,"sha256":"85ca7eb9ba3170a213f881c642f4d9b8c51ed164ed677d0e9eac25982c817c6d"},{"receivedAt":"2026-10-25T23:32:05.972708+00:00","status":null,"byteLength":199753,"sha256":"ea834ede2120895a7bc785a313c80fa4e832373d601c2e439dd538039eaafd07"},{"receivedAt":"2026-10-25T23:32:06.226210+00:00","status":null,"byteLength":236497,"sha256":"903626e70961cab5f5126137166ac2f2199389ecaabe0e30a7fafd8053747b89"}];
+  if (packet.pages.length !== 7) throw new Error("arclands_saved_response_invalid");
+  for (const [index, page] of packet.pages.entries()) {
+    const source = ARCLANDS_SOURCES[index], pin = expected[index], body = Buffer.from(page.bodyBase64, "base64");
+    if (page.url !== source.url || page.status !== pin.status || page.receivedAt !== pin.receivedAt ||
+        page.byteLength !== pin.byteLength || body.byteLength !== page.byteLength || body.toString("base64") !== page.bodyBase64 ||
+        page.contentType.split(";")[0].trim().toLowerCase() !== source.contentType ||
+        await sha256HexBytes(body) !== pin.sha256) throw new Error("arclands_saved_response_invalid");
+  }
+  const provider = parseStockDetail("9842", new TextDecoder("utf-8", { fatal: true }).decode(Buffer.from(packet.pages[0].bodyBase64, "base64")));
+  if (provider.status !== "ok") throw new Error("arclands_saved_provider_unreadable");
+  provider.data.sourceFetchedAt = packet.pages[0].receivedAt;
+  const data = await adoptArclandsPages(provider.data, packet.pages.slice(1));
+  return { packet, annual: data, data };
+}
+
+/** 明示issuer全行の固定入力mode。既存state/unknownを再送しない。 */
 export function parseMusashinoAdoptionArgs(argv: readonly string[]) {
   const { values, tokens } = parseArgs({ args: [...argv], strict: true, allowPositionals: false, tokens: true, options: {
-    "adopt-musashino-source": { type: "boolean" }, "add-musashino-initial-event": { type: "boolean" }, "adopt-note-source": { type: "boolean" }, "adopt-kawasaki-source": { type: "boolean" }, "saved-source": { type: "string" }, "saved-source-sha256": { type: "string" },
+    "adopt-musashino-source": { type: "boolean" }, "add-musashino-initial-event": { type: "boolean" }, "adopt-note-source": { type: "boolean" }, "adopt-kawasaki-source": { type: "boolean" }, "adopt-arclands-source": { type: "boolean" }, "saved-source": { type: "string" }, "saved-source-sha256": { type: "string" },
     "expected-pre": { type: "string" }, "expected-pre-sha256": { type: "string" }, "state-dir": { type: "string" },
   } });
   const seen = new Set<string>();
   for (const token of tokens) if (token.kind === "option") { if (seen.has(token.name)) throw new Error("musashino_duplicate_option"); seen.add(token.name); }
-  if ([values["adopt-musashino-source"], values["add-musashino-initial-event"], values["adopt-note-source"], values["adopt-kawasaki-source"]].filter(value => value === true).length !== 1 || !values["saved-source"] || !values["expected-pre"] || !values["state-dir"] ||
+  if ([values["adopt-musashino-source"], values["add-musashino-initial-event"], values["adopt-note-source"], values["adopt-kawasaki-source"], values["adopt-arclands-source"]].filter(value => value === true).length !== 1 || !values["saved-source"] || !values["expected-pre"] || !values["state-dir"] ||
       !values["saved-source-sha256"] || !/^[a-f0-9]{64}$/.test(values["saved-source-sha256"]) ||
       !values["expected-pre-sha256"] || !/^[a-f0-9]{64}$/.test(values["expected-pre-sha256"])) throw new Error("musashino_fixed_inputs_required");
   return { path: values["saved-source"], sha256: values["saved-source-sha256"], expectedPre: values["expected-pre"], preSha256: values["expected-pre-sha256"], state: resolve(values["state-dir"]), initialEvent: values["add-musashino-initial-event"] === true };
 }
 
 async function adoptSavedOfficialSource(argv: readonly string[]): Promise<void> {
-  const code = argv.includes("--adopt-note-source") ? "5243" : argv.includes("--adopt-kawasaki-source") ? "3045" : "8336";
+  const code = argv.includes("--adopt-arclands-source") ? "9842" : argv.includes("--adopt-note-source") ? "5243" : argv.includes("--adopt-kawasaki-source") ? "3045" : "8336";
   const options = parseMusashinoAdoptionArgs(argv), started = Date.now(), native = nativeJobExecutionWindow(started, sharedEnv.BATCH_JOB_STARTED_AT(), 360, 10);
   const deadline = Math.min(started + 15 * 60_000, native === undefined ? Infinity : native.deadline);
   const sourceDeadline = Math.min(started + 10 * 60_000, native === undefined ? Infinity : native.sourceDeadline);
@@ -642,7 +700,7 @@ async function adoptSavedOfficialSource(argv: readonly string[]): Promise<void> 
   const assertSource = () => { assertActive(); if (Date.now() >= sourceDeadline) throw new Error("musashino_adoption_source_deadline"); };
   assertSource();
   if (existsSync(options.state)) throw new Error("musashino_adoption_state_already_started");
-  const pre = readMonthScopePreimage(options.expectedPre, options.preSha256), source = code === "8336" ? await readSavedMusashinoSource(options.path, options.sha256, options.initialEvent) : code === "5243" ? await readSavedNoteSource(options.path, options.sha256) : await readSavedKawasakiSource(options.path, options.sha256);
+  const pre = readMonthScopePreimage(options.expectedPre, options.preSha256), source = code === "8336" ? await readSavedMusashinoSource(options.path, options.sha256, options.initialEvent) : code === "5243" ? await readSavedNoteSource(options.path, options.sha256) : code === "3045" ? await readSavedKawasakiSource(options.path, options.sha256) : await readSavedArclandsSource(options.path, options.sha256);
   assertSource();
   for (const getter of [sharedEnv.R2_ACCOUNT_ID, sharedEnv.R2_ACCESS_KEY_ID, sharedEnv.R2_SECRET_ACCESS_KEY, sharedEnv.R2_BUCKET_RAW,
     notionEnv.NOTION_TOKEN, notionEnv.NOTION_ARCHIVE_PAGE_ID]) getter();
@@ -666,7 +724,7 @@ async function adoptSavedOfficialSource(argv: readonly string[]): Promise<void> 
       });
       save("PRE.private.json", pre); save("PLAN.private.json", plan);
       if (plan.batch === null) { save("FINISHED.private.json", { code, updatedRows: 0, SQL: 0, sourceArchiveThisRun: false }); return; }
-      const publication = await writer.reserve("yutai-source-import", { kind: code === "3045" ? "kawasaki-source-adoption-v1" : code === "5243" ? "note-source-adoption-v1" : options.initialEvent ? "musashino-initial-event-v1" : "musashino-source-adoption-v1", sourceSha256: options.sha256, preSha256: options.preSha256 }, JSON.stringify({ options, source, pre, plan }));
+      const publication = await writer.reserve("yutai-source-import", { kind: code === "9842" ? "arclands-source-adoption-v1" : code === "3045" ? "kawasaki-source-adoption-v1" : code === "5243" ? "note-source-adoption-v1" : options.initialEvent ? "musashino-initial-event-v1" : "musashino-source-adoption-v1", sourceSha256: options.sha256, preSha256: options.preSha256 }, JSON.stringify({ options, source, pre, plan }));
       const pages = source.packet.pages.map(page => saveOfficialSourcePage(page, runId, join(options.state, "sources"), code));
       assertSource();
       const original = await archiveOfficialSources(pages, runId, source.data, { key: source.packet.providerArchiveKey, sha256: source.packet.providerArchiveSha256 }, options.initialEvent, code);
@@ -674,7 +732,7 @@ async function adoptSavedOfficialSource(argv: readonly string[]): Promise<void> 
       const archive = async (phase: "pre" | "post", rows: unknown) => {
         const bytes = Buffer.from(JSON.stringify(rows));
         const saved = await archivePages([{ url: `D1:stock ${code} source adoption ${phase}`, receivedAt: new Date().toISOString(), status: null,
-          contentType: "application/json", byteLength: bytes.length, bodyBase64: bytes.toString("base64") }], `${runId}-${code === "8336" ? "musashino" : code === "5243" ? "note" : "kawasaki"}-${phase}`, `D1 complete four-table ${code} source adoption ${phase}`);
+          contentType: "application/json", byteLength: bytes.length, bodyBase64: bytes.toString("base64") }], `${runId}-${code === "8336" ? "musashino" : code === "5243" ? "note" : code === "3045" ? "kawasaki" : "arclands"}-${phase}`, `D1 complete four-table ${code} source adoption ${phase}`);
         if (saved === undefined) throw new Error("musashino_snapshot_archive_missing");
         return { saved, bytes };
       };

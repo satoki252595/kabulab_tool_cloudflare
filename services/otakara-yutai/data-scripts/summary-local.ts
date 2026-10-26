@@ -1,4 +1,5 @@
 /** 標準は機械要約のみ。未対応は保留し、明示許可時だけローカル生成。金額・原子取込は共有契約を通す。 */
+import { compileArclandsOfficialLiteral } from "./arclands-source.js";
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -176,10 +177,21 @@ export function companyValue(task: SummaryTask): {
   return evaluateCompanyValue(task.description, context);
 }
 
-export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v25";
+export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v26";
 
 /** 対応する種類＋額面・全文1点選択・全文対応の期間/名簿条件を定型化する。未対応条件を削らない。 */
 export function compileSimpleSummary(task: SummaryTask): SummaryResult | null {
+  const arclands = compileArclandsOfficialLiteral(task.description);
+  if (arclands !== null) {
+    const amount = companyValue(task);
+    if (task.stockCode !== "9842" || task.rowCount !== 2 || task.recipients.length !== 2 ||
+      amount.value !== arclands.listedGrantYen || amount.reason !== "qualified_company_per_grant" ||
+      checkSummary(arclands.shortSummary).length > 0 || !isSummaryNumbersGrounded(task.description, arclands.shortSummary, {
+        minShares: task.recipients.map(row => row.minShares), recordMonths: task.recipients.map(row => row.recordMonth),
+        recordDates: task.recipients.map(row => row.recordDate),
+      })) return null;
+    return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion, shortSummary: arclands.shortSummary, estimatedValue: amount.value });
+  }
   const kawasaki = compileKawasakiOfficialLiteral(task.description);
   if (kawasaki !== null) {
     const amount = companyValue(task);

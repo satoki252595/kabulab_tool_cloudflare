@@ -21,6 +21,7 @@
  *   注記記号の取り込み 38 行 / 60 字超 35 行 / です・ます調 5 行 (重複あり計 ~70 行)
  */
 
+import { compileArclandsOfficialLiteral } from "./arclands-source.js";
 import { createHash } from "node:crypto";
 import { compileMusashinoOfficialLiteral } from "./musashino-source.js";
 import { compileNoteOfficialLiteral } from "./note-source.js";
@@ -34,7 +35,7 @@ import { compileAnnualGiftHistoryLiteral, compileBankDepositChoiceLiteral, compi
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-10-26.12";
+export const SUMMARY_CONTRACT_VERSION = "2026-10-26.13";
 
 /** 比較時だけ同じ月期間の表記を揃え、数値・比較条件・保存文面は変えない。 */
 function normalizeMonthPeriods(text: string): string {
@@ -129,6 +130,11 @@ export function isSummaryNumbersGrounded(
   context: { minShares: readonly number[]; recordMonths: readonly number[]; recordDates?: readonly (string | null)[] },
 ): boolean {
   const normalized = shortSummary.normalize("NFKC").trim();
+  const arclands = compileArclandsOfficialLiteral(description);
+  if (arclands !== null || normalized.startsWith("アークランズ共通優待券")) return arclands !== null && normalized === arclands.shortSummary.normalize("NFKC") &&
+    context.minShares.length > 0 && context.minShares.length <= 2 && context.minShares.every(value => value === arclands.minShares) &&
+    context.recordMonths.length === context.minShares.length && context.recordMonths.every(value => value === 2 || value === 8) &&
+    new Set(context.recordMonths).size === context.recordMonths.length && context.recordDates?.length === context.minShares.length && context.recordDates.every(value => value === null);
   const kawasaki = compileKawasakiOfficialLiteral(description);
   if (kawasaki !== null || normalized.startsWith("カワサキ公式:")) return kawasaki !== null && normalized === kawasaki.shortSummary.normalize("NFKC") &&
     context.minShares.length > 0 && context.minShares.length <= 2 && context.minShares.every(value => value === kawasaki.minShares) &&
