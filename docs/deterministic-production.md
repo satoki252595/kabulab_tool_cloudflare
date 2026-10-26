@@ -1,6 +1,6 @@
 # 決定的な本番処理
 
-更新: 2026-10-25。**本文39/基本補足と優待の決定的同期はGitHub Actions日次。Mac定期は廃止・停止済みで、Clef・競合の意味判断・優待`--allow-model`は[月次手動](mac-monthly-manual.md)**。[取得元・機能の全件一覧](batch-data-inventory.md)を参照。取得・抽出・計算・照合・保存・検証は通常CLIと共有関数を使う。過去分の有限補完も同じparser・保存・停止条件を通す。
+更新: 2026-10-27。**本文39/基本補足と優待の決定的同期はGitHub Actions日次。Mac定期は廃止・停止済みで、Clef・競合の意味判断・優待`--allow-model`は[月次手動](mac-monthly-manual.md)**。[取得元・機能の全件一覧](batch-data-inventory.md)を参照。取得・抽出・計算・照合・保存・検証は通常CLIと共有関数を使う。過去分の有限補完も同じparser・保存・停止条件を通す。
 
 予定・担当・先行条件・LLM利用は[README](../README.md#本番の定期処理先行条件llm利用)、workflowとSSHの運用は[本番処理一覧](production-job-inventory.md)、最新の実測・残件・未受入は[10/25の作業記録](work-plans/production-completion-20261025.md)を参照する。予定と実行成功、個別復旧と全件完了を区別する。
 
@@ -14,6 +14,8 @@
 | SSH nipogi | 必要対象を固定した不足補完 | 日次の重複cron、全履歴RAWミラー |
 
 ローカル・SSHはリポジトリのNixと依存lockを使う。本番Actionsの通常CLIと入力契約を合わせ、復旧中のruntime・設定は固定する。
+
+株式同期とVWAPの市場session・日足・5分足は、Actionsで開始前にNode直接取得を明示選択する。既存のD1共有停止と通信期限を通し、失敗後にCloudflare経由へ切り替えない。VWAPの通常CLIは`--yahoo-direct`を使い、Actions run IDとjob開始時計がない指定を取得前に拒否する。
 
 財務NULLの[有限診断](financial-null-audit.md)はNixの手動CLI。コード別の③読取だけにsingle-attempt/HTTP上限/絶対期限を適用し、保存原本のlocal再解析を分離する。既存normalizerの任意診断で理由を残し、Actions/CF/Macの通常writer・定期・計算結果は変更しない。未完partitionや原本HOLDを全履歴充足にしない。
 
