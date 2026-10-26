@@ -78,6 +78,14 @@ it("Linux DAG reserves setup/closure time and lets yutai run after known supplem
     expect(job).toContain("ref: ${{ github.sha }}");
     expect(job).not.toMatch(/allow-model|pip |uv |mlx|clef/);
   }
+  const artifact = yutai.slice(yutai.indexOf("      - name: 優待の対象metadata"));
+  expect(artifact).toContain("if: always()");
+  expect(artifact).toContain("uses: actions/upload-artifact@v4");
+  expect(artifact).toContain("retention-days: 7");
+  expect(artifact).toContain("if-no-files-found: warn");
+  expect([...artifact.matchAll(/^ {12}(.+)$/gm)].map(match => match[1])).toEqual(
+    ["task-metadata.json", "post-verified.json", "complete.json"].map(name =>
+      `\${{ runner.temp }}/yutai-mechanical/*/${name}`));
 });
 
 it("native setup time shortens only the absolute window, preserving five-minute closure and the requested budget", () => {

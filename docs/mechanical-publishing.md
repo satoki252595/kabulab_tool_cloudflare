@@ -43,6 +43,8 @@
 
 優待のモデルなし・保存reviewedなし・更新0は、選択した全行の最新値一致とprivate入力/bundle/reportを保存し、Notion保管・publication予約・pending作成を省く。新しい一次取得も業務更新もない再判定で、HOLD/残件を解消扱いにしない。公平cursorは既存owner下でCAS更新し、結果不明ならownerを保持する。before/next cursorの全bytesと入力SHAは同じprivate bundleに残す。allow-model/reviewedと更新ありの物理PRE/POSTは従来どおり。将来sourceでのoperator受入はこの更新0を物理POST必須の更新経路と区別し、過去のoperator/受入証跡は変更しない。Mac固定runtime/契約/初期化も変更しない。
 
+Actionsは終了時に到達済みの`task-metadata.json`・`post-verified.json`・`complete.json`だけをartifactへ7日保存する。対象は最大60群のID/code・原文SHA・実recipient・契約と固定の終了集計/HOLD理由で、本文・要約・raw bundle・envを含めない。task保存後の途中停止でも対象metadataを保持し、選定前停止/対象なしではファイルなしを許容する。recipient数によるbytes上限は追加せず、ファイルの存在を外側owner閉鎖や実行成功の証明にしない。
+
 ## 初回切替（root/operatorが一度だけ実施）
 
 **以下は10/25に一度実施済みの切替手順。通常runのたびに初期化しない。Linuxから初期化はできない。** `.runtime/mac-publishing-20261025`の作成・受入・fence閉鎖は[受入台帳](work-plans/production-completion-20261025.md)に記録した。

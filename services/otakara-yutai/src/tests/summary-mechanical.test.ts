@@ -120,6 +120,31 @@ describe("Linux mechanical summary / shared writer", () => {
     expect(existsSync(join(nextHost, run, "complete.json"))).toBe(true);
   });
   const actualHoldsPath = join(ROOT, musashinoSaved.privateFixtureDir, "SAVED-ROWS.private.json");
+  it.each([false, true])("全HOLD/途中read停止のartifactは本文・要約を含まず対象を残す（read失敗=%s）", async failRead => {
+    const sensitive = "controlled-private-token https://notion-static.invalid/source?signature=controlled-private-signature";
+    const initial = [{ ...row(1, `合成未対応優待 ${sensitive}`), stockName: sensitive, shortSummary: `※合成旧要約 ${sensitive}` }];
+    const tasks = selectSummaryTasks(initial), memory = storeFixture(), dir = state();
+    const { deps } = dependencies(initial, memory.events); let reads = 0;
+    const load = deps.loadRows;
+    deps.loadRows = vi.fn(async () => {
+      if (++reads === 2 && failRead) throw new Error(sensitive);
+      return load();
+    });
+    const result = runMechanicalSummary({ stateDir: dir, limit: 60 }, () => deps, memory.store);
+    if (failRead) await expect(result).rejects.toThrow("publishing_read_only_failed");
+    else expect(await result).toMatchObject({ selected: 1, held: 1, accepted: 0 });
+    const run = readdirSync(dir).find(name => name !== "progress.json")!;
+    const metadata = JSON.parse(readFileSync(join(dir, run, "task-metadata.json"), "utf8"));
+    expect(metadata).toEqual(tasks.map(task => ({ taskId: task.taskId, stockCode: task.stockCode,
+      sourceSha256: createHash("sha256").update(task.description).digest("hex"),
+      recipients: task.recipients, contractVersion: task.contractVersion })));
+    for (const name of ["task-metadata.json", "post-verified.json", "complete.json"]) {
+      const path = join(dir, run, name);
+      expect(existsSync(path)).toBe(name === "task-metadata.json" || !failRead);
+      if (existsSync(path)) expect(readFileSync(path, "utf8")).not.toMatch(/https?:|signature|controlled-private|description|shortSummary|stockName/);
+    }
+    expect(deps.generate).not.toHaveBeenCalled(); expect(deps.apply).not.toHaveBeenCalled(); expect(deps.archive).not.toHaveBeenCalled();
+  });
   it.skipIf(!existsSync(actualHoldsPath))("実保存3群のHOLDを上限内のID/全文SHA/固定理由だけで返し、標準JSONログへ原文や秘密を出さない（CIはprivate不在skip）", async () => {
     const bytes = readFileSync(actualHoldsPath);
     expect(createHash("sha256").update(bytes).digest("hex")).toBe(musashinoSaved.files.find(file => file.path === "SAVED-ROWS.private.json")!.sha256);
