@@ -14,6 +14,7 @@ import { computeYieldEntries, type YieldInputs } from "./recompute-yields.js";
 import { assertMonthScopePreimage, assertMonthScopeRowsEqual, fullCas, type MonthScopePreimage } from "./saved-month-scope.js";
 import { compileMusashinoOfficialLiteral, MUSASHINO_OFFICIAL_URL } from "./musashino-source.js";
 import { compileNoteOfficialLiteral, NOTE_OFFICIAL_URL } from "./note-source.js";
+import { compileKawasakiOfficialLiteral, KAWASAKI_OFFICIAL_URL } from "./kawasaki-source.js";
 import { benefitKey } from "./benefit-key.js";
 import { SUMMARY_CONTRACT_VERSION } from "./summary-contract.js";
 import { parsePublicBenefitFacts } from "../src/public-facts.js";
@@ -22,30 +23,34 @@ const oldHashes = ["254833a3cbe834255b7999d7508e33afe24f7b2cb9f41b17784c9bfa89d6
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message); }
 
-/** 8336全3段階または5243全2段階だけ。全4表CASと通常compiler/取込/利回り計算を共用する。 */
+/** 保存済み8336/5243/3045の全段階だけ。既存全4表CASと通常compiler/取込を共用する。 */
 export function planMusashinoSourceAdoption(db: YutaiFullImportDb, pre: MonthScopePreimage, data: StockYutaiData, batchFetchedAt: string, inputs: YieldInputs, now = Date.now()) {
   assertMonthScopePreimage(pre);
-  const note = data.code === "5243", code = note ? "5243" : "8336", month = note ? 11 : 3;
-  const ids = note ? [59703, 59704] : [62011, 62012, 62013], shares = note ? [100, 200] : [200, 600, 2000];
-  const stockId = Number(pre.parent.id), current = [...pre.benefits].sort((a, b) => Number(a.minShares) - Number(b.minShares));
-  assert(pre.parent.code === code && data.code === code && (!note || stockId === 871) && data.official?.url === (note ? NOTE_OFFICIAL_URL : MUSASHINO_OFFICIAL_URL) && data.sourceFetchedAt !== undefined &&
-    current.length === ids.length && current.every((row, i) => row.id === ids[i] && row.minShares === shares[i] && row.recordMonth === month && row.recordDate === null), "musashino_current_recipient_changed");
+  const note = data.code === "5243", kawasaki = data.code === "3045", code = note ? "5243" : kawasaki ? "3045" : "8336";
+  const ids = kawasaki ? [57774, 57775, 57776, 57777] : note ? [59703, 59704] : [62011, 62012, 62013];
+  const shares = kawasaki ? [100, 100, 300, 300] : note ? [100, 200] : [200, 600, 2000];
+  const months = kawasaki ? [2, 8, 2, 8] : ids.map(() => note ? 11 : 3);
+  const stockId = Number(pre.parent.id), current = [...pre.benefits].sort((a, b) => Number(a.minShares) - Number(b.minShares) || Number(a.recordMonth) - Number(b.recordMonth));
+  assert(pre.parent.code === code && data.code === code && (!note || stockId === 871) && (!kawasaki || stockId === 244) &&
+    data.official?.url === (note ? NOTE_OFFICIAL_URL : kawasaki ? KAWASAKI_OFFICIAL_URL : MUSASHINO_OFFICIAL_URL) && data.sourceFetchedAt !== undefined &&
+    current.length === ids.length && current.every((row, i) => row.id === ids[i] && row.minShares === shares[i] && row.recordMonth === months[i] && row.recordDate === null), "musashino_current_recipient_changed");
   assert(Number.isSafeInteger(now) && now > 0, "musashino_execution_clock_invalid");
   const source = benefitRowsOf(data);
-  assert(source.heldBenefits === 0 && source.rows.length === ids.length && source.rows.every((row, i) => row.minShares === current[i].minShares && row.recordMonth === month), "musashino_adopted_source_incomplete");
+  assert(source.heldBenefits === 0 && source.rows.length === ids.length && source.rows.every((row, i) => row.minShares === current[i].minShares && row.recordMonth === months[i]), "musashino_adopted_source_incomplete");
   assert(!note || source.rows.every(row => compileNoteOfficialLiteral(row.description)?.minShares === row.minShares), "note_full_source_changed");
+  assert(!kawasaki || source.rows.every(row => compileKawasakiOfficialLiteral(row.description)?.minShares === row.minShares), "kawasaki_full_source_changed");
   const rows: BenefitRow[] = current.map((row, i) => ({ id: Number(row.id), stockId, stockCode: code, stockName: String(pre.parent.name),
     description: source.rows[i].description, shortSummary: null, estimatedValue: null, estimateValueSource: null,
-    minShares: Number(row.minShares), recordMonth: month, recordDate: null, updatedAt: Number(row.updatedAt) }));
+    minShares: Number(row.minShares), recordMonth: months[i], recordDate: null, updatedAt: Number(row.updatedAt) }));
   const tasks = selectSummaryTasks(rows), results = tasks.map(compileSimpleSummary);
-  assert(tasks.length === ids.length && results.every(result => result !== null), "musashino_normal_compiler_held");
+  assert(tasks.length === (kawasaki ? 2 : ids.length) && results.every(result => result !== null), "musashino_normal_compiler_held");
   const summaryPlan = planSummaryImport({ tasks, currentRows: rows, resultsText: results.map(result => JSON.stringify(result)).join("\n") });
-  assert(summaryPlan.rejections.length === 0 && summaryPlan.updates.length === ids.length, "musashino_normal_import_held");
+  assert(summaryPlan.rejections.length === 0 && summaryPlan.updates.length === tasks.length, "musashino_normal_import_held");
   const expected = structuredClone(pre), executionSecond = Math.floor(now / 1000);
   const changes = source.rows.map((sourceRow, i) => {
-    const update = summaryPlan.updates.find(value => value.ids.length === 1 && value.ids[0] === current[i].id);
+    const update = summaryPlan.updates.find(value => value.ids.includes(Number(current[i].id)));
     assert(update !== undefined && update.estimatedValue === null && update.estimateValueSource === null, "musashino_value_not_qualified");
-    const publicFacts = buildPublicBenefitFacts({ code, description: sourceRow.description, context: { minShares: [sourceRow.minShares], recordMonths: [month] },
+    const publicFacts = buildPublicBenefitFacts({ code, description: sourceRow.description, context: { minShares: [sourceRow.minShares], recordMonths: [sourceRow.recordMonth] },
       fetchedAt: data.sourceFetchedAt!, batchFetchedAt, official: data.official });
     const values = { description: sourceRow.description, publicFacts: JSON.stringify(publicFacts), shortSummary: update.shortSummary, estimatedValue: null, estimateValueSource: null };
     const target = expected.benefits.find(row => row.id === current[i].id)!;
@@ -67,7 +72,8 @@ export function planMusashinoSourceAdoption(db: YutaiFullImportDb, pre: MonthSco
   if (equivalent) {
     return { batch: null, expected: pre, clock: undefined, yieldPlan, updatedRows: 0 };
   }
-  const originalHashes = note ? ["b689b61ef9d3d573625a92cf429a17ec10e5520bce32e87929cf4036681bf612", "84c97aabda01c7054f9f4548f342ecbdb053757a2c55454957587439bef1e85d"] : oldHashes;
+  const originalHashes = kawasaki ? ["879b2f6c67d219daf6329ffb277c6ff7aeca6ceb595ff9ffe844e496a94672b2", "879b2f6c67d219daf6329ffb277c6ff7aeca6ceb595ff9ffe844e496a94672b2", "d90abf29e50bf52e40ae87887ded76a98157e092929be8b99e892a120c8a8908", "d90abf29e50bf52e40ae87887ded76a98157e092929be8b99e892a120c8a8908"]
+    : note ? ["b689b61ef9d3d573625a92cf429a17ec10e5520bce32e87929cf4036681bf612", "84c97aabda01c7054f9f4548f342ecbdb053757a2c55454957587439bef1e85d"] : oldHashes;
   assert(current.every((row, i) => digest(String(row.description)) === originalHashes[i] &&
     (note && i === 0 ? typeof row.shortSummary === "string" && digest(row.shortSummary) === "3bc4d332cb0fd46f5330cedaea789935eb54cc90093ba6252f450eb67a389a0b" : row.shortSummary === null) &&
     row.estimatedValue === null && row.estimateValueSource === null), "musashino_original_three_sources_changed");
@@ -78,7 +84,7 @@ export function planMusashinoSourceAdoption(db: YutaiFullImportDb, pre: MonthSco
     { sql: "SELECT json(CASE WHEN changes() = 1 THEN 'null' ELSE '' END)", params: [] });
   }
   statements.push(fullCas(expected));
-  const batch: StockBatch = { stockId, key: `${note ? "note" : "musashino"}-source-adoption:${stockId}`, statements };
+  const batch: StockBatch = { stockId, key: `${note ? "note" : kawasaki ? "kawasaki" : "musashino"}-source-adoption:${stockId}`, statements };
   return { batch, expected, clock: undefined, yieldPlan, updatedRows: ids.length };
 }
 
