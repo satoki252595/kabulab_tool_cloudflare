@@ -24,7 +24,7 @@ import reparse_financials_from_notion as reparse  # noqa: E402
 from test_backfill_financials_from_notion import _page  # noqa: E402
 from jp_stock_pipeline.notion import schema as S  # noqa: E402
 from jp_stock_pipeline.notion.upsert import _FIN_FIELD_TO_PROP  # noqa: E402
-from jp_stock_pipeline.cloud_store.financials import COLUMNS, record_to_row  # noqa: E402
+from jp_stock_pipeline.cloud_store.financials import COLUMNS, build_upsert_sql, record_to_row  # noqa: E402
 from jp_stock_pipeline.cloud_store.schema import _FINANCIALS  # noqa: E402
 from test_financial_context_units import EDINET_CASES, fixture_provenance, fixture_tidy  # noqa: E402
 from jp_stock_pipeline.transform.normalize import tidy_to_financial_record  # noqa: E402
@@ -673,6 +673,79 @@ def test_d1_repair_rejects_duplicate_live_key_before_d1_write(tmp_path, monkeypa
     monkeypatch.setattr(reparse, "D1Store", lambda *args, **kwargs: pytest.fail("重複ならD1接続しない"))
     with pytest.raises(ValueError, match="財務キーが一意"):
         reparse.sync_d1(journal, receipts)
+
+
+@pytest.mark.parametrize("relation", ["same", "older_existing", "other_source", "other_raw",
+                                     "missing_old_raw", "missing_new_raw", "new_disclosure", "new_key"])
+def test_normal_and_verified_repair_keep_later_clock_only_for_the_same_original(
+    tmp_path, monkeypatch, relation,
+):
+    case = EDINET_CASES[0]
+    record = tidy_to_financial_record(fixture_tidy(case), case["code"], fixture_provenance(case))
+    record = replace(record, disclosed_at=record.provenance.fetched_at)
+    digest = None if relation == "missing_new_raw" else case["raw_sha256"]
+    item = {"page_id": "original", "old": reparse._record_dict(record),
+            "new": reparse._record_dict(record), "parser_sha256": reparse.PARSER_SHA256,
+            "raw_sha256": digest, "raw_url": case["raw_url"]}
+    journal, receipts = tmp_path / "audit.jsonl", tmp_path / "applied.jsonl"
+    journal.write_text(json.dumps(item) + "\n")
+    receipts.write_text(json.dumps({"page_id": "original", "target_page_id": "original",
+                                   "record": item["new"], "parser_sha256": reparse.PARSER_SHA256,
+                                   "raw_sha256": digest}) + "\n")
+    new = record_to_row(record, stock_id=1, doc_id=reparse._doc_id(item), raw_sha256=digest)
+    old = dict(zip(COLUMNS, new, strict=True))
+    # 実原本の金融値は不変。取得順と原本同一性の境界だけを宣言した障害注入。
+    old["fetched_at"] += -1 if relation == "older_existing" else 1
+    if relation == "other_source":
+        old["source"] = "TDnet"
+    elif relation == "other_raw":
+        old["raw_sha256"] = EDINET_CASES[1]["raw_sha256"]
+    elif relation == "missing_old_raw":
+        old["raw_sha256"] = None
+    elif relation == "missing_new_raw":
+        old["raw_sha256"] = case["raw_sha256"]
+    elif relation == "new_disclosure":
+        old["disclosed_at"] -= 1
+    elif relation == "new_key":
+        old["consolidated"] = "単体" if record.consolidated == "連結" else "連結"
+    expected = dict(zip(COLUMNS, new, strict=True))
+    if relation == "same":
+        expected["fetched_at"] = old["fetched_at"]
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(_FINANCIALS)
+    conn.execute("CREATE TABLE core_stocks(id INTEGER,code TEXT)")
+    conn.execute("INSERT INTO core_stocks VALUES(1,?)", [record.code])
+
+    class Store:
+        def query(self, sql, params=None):
+            return [dict(row) for row in conn.execute(sql, params or []).fetchall()]
+
+    class Client:
+        def query_database(self, *args, **kwargs):
+            return [{"id": "original", "record": record}]
+
+    monkeypatch.setattr(reparse, "D1Store", lambda *args, **kwargs: Store())
+    monkeypatch.setattr(reparse, "NotionClient", lambda *args, **kwargs: Client())
+    monkeypatch.setattr(reparse, "_page_record", lambda page: page["record"])
+    monkeypatch.setattr(reparse, "load_settings", lambda: SimpleNamespace(
+        notion_token="test-token", notion_rps=2.5, db_id=lambda key: "db",
+        cloud_store=SimpleNamespace(d1_enabled=lambda: True),
+    ))
+    for normal in (True, False):
+        conn.execute("DELETE FROM jss_financials")
+        conn.execute(build_upsert_sql(1), [old[c] for c in COLUMNS])
+        if normal:
+            conn.execute(build_upsert_sql(1), new)
+        else:
+            reparse.sync_d1(journal, receipts)
+            reparse.sync_d1(journal, receipts)  # 完全再入でも全34列の期待値が一致する。
+        saved = Store().query("SELECT * FROM jss_financials WHERE consolidated = ?",
+                              [expected["consolidated"]])
+        assert len(saved) == 1 and saved[0] == expected
+        if relation == "new_key":
+            assert Store().query("SELECT * FROM jss_financials WHERE consolidated = ?",
+                                 [old["consolidated"]]) == [old]
 
 
 def test_d1_repair_does_not_keep_document_id_from_a_known_different_raw_sha():
