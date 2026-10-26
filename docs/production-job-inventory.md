@@ -1,6 +1,6 @@
 # 本番定期処理とSSH補完
 
-確認日: 2026-10-25。予定時刻・先行条件・LLM利用の正本は[READMEの定期処理表](../README.md#本番の定期処理先行条件llm利用)。機能・取得元・手動/停止/未実装の全件は[データ一覧](batch-data-inventory.md)。日次の本体はGitHub Actions。本文39・基本補足・優待機械要約は[Linux日次](mechanical-publishing.md)へ分離し、共有状態移行・有限本番確認後に有効化済み。初回Actionsは本文31社同期/今回未着手19・優待60件保留/適用0・モデル0でFAILURE終了し、[受入台帳](work-plans/production-completion-20261025.md)へ分離する。Mac自動起動は廃止を維持し、Clef判定・競合入力準備は[月次手動](mac-monthly-manual.md)。SSHのnipogiは有限補完用。
+確認日: 2026-10-26。予定時刻・先行条件・LLM利用の正本は[READMEの定期処理表](../README.md#本番の定期処理先行条件llm利用)。機能・取得元・手動/停止/未実装の全件は[データ一覧](batch-data-inventory.md)。日次の本体はGitHub Actions。本文39・基本補足・優待機械要約は[Linux日次](mechanical-publishing.md)へ分離し、共有状態移行・有限本番確認後に有効化済み。初回Actionsは本文31社同期/今回未着手19・優待60件保留/適用0・モデル0でFAILURE終了し、[受入台帳](work-plans/production-completion-20261025.md)へ分離する。Mac自動起動は廃止を維持し、Clef判定・競合入力準備は[月次手動](mac-monthly-manual.md)。SSHのnipogiは有限補完用。
 
 ## 起動と担当
 
@@ -17,7 +17,7 @@
 | Mac月次手動 | Calendar予定＋メール通知のコマンド | 適格新規/実入力変更のClef判定、競合入力準備 | 旧LaunchAgentの2labelはdisable＋bootout。受入済みruntime・state・未完intent・原本を保持し、共有writerを使用 | Clef判定のみあり |
 | SSH nipogi | 対象・入力・期限を固定した手動補完 | 本番と同じ通常CLIで価格・保有・原本等を補完 | kabulab-cf用のSSH日次cronは未登録。定期writerと競合させない | なし |
 
-GitHubのYAMLは15本、宣言23 jobs。歴史RAW全量用`raw_index_backfill.yml`の1 jobは意図的無効で、残る14 workflow／22 jobsには移行済み機械publisherの2 jobsを含む。`MECHANICAL_PUBLISHING_ENABLED=true`は読戻し済み。`backfill.yml`・`roa_saved_raw_publish.yml`は手動用。予定日時・受付・締切の正本は[時刻契約](stock-scheduler.md#取得処理の時刻契約)。設定有効・自然定期の成功・全データ充足は別に確認する。
+10/26 02:05ZのGitHub公式一覧は16 workflow（repo内YAML15本＋GitHub生成Dependency Graph1本）。repo内は宣言23 jobsで、歴史RAW全量用`raw_index_backfill.yml`の1 jobを意図的無効とし、14 workflowがactive（宣言22 jobs、機械publisher2 jobsを含む）。これはCI・手動・条件付き/退役案内を含む宣言数で、自動実行job数ではない。`MECHANICAL_PUBLISHING_ENABLED=true`は読戻し済み。`backfill.yml`・`cloud_check.yml`・`roa_saved_raw_publish.yml`は手動用。予定日時・受付・締切の正本は[時刻契約](stock-scheduler.md#取得処理の時刻契約)。設定有効・自然定期の成功・全データ充足は別に確認する。
 
 時刻契約を持つActions CLIは、`record-job-clock`が取得した元jobの実開始時刻を使い、段階ごとのCLI開始でnative上限を延長しない。固定JST締切とnative終了前の余裕を両方守り、新source停止後も取得済み原本の保管・照合をhardまで進める。機械publisherは各job30分、hardは「CLI開始＋元budget＋5分」と「job実開始＋25分」の早い方、softはhardの5分前。clock欠落・残時間不足では共有owner取得前に停止する。HTTPとR2も同じhardを使い、送信済み結果不明は未完のまま保持する。
 
