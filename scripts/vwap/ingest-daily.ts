@@ -17,6 +17,8 @@ import { publishDailyPriceSnapshot } from "./lib/holdings-price-registry.js";
 import { scheduledVwapGuard } from "./lib/scheduled-window.js";
 import { notionStats } from "../../src/shared/notion-archive/client.js";
 import { ScheduledSourceDeadlineError } from "../../src/shared/scheduled-admission.js";
+import { createStockYahooDirectTransport } from "../sync/yahoo-direct.js";
+import { YahooSharedCooldownError } from "../../src/shared/yahoo/shared-cooldown.js";
 
 /**
  * 明示 10y range (run 起点の JST 暦日。repair保護上限/従来skip用)。先頭barからの導出は禁止
@@ -42,6 +44,11 @@ export async function main() {
   const startedAt = new Date().toISOString();
   const sessionSource = resolveDailySessionSource(arg("session-source"), arg("session-date"), startedAt);
   const runId = resolveRunId();
+  const directArgs = process.argv.slice(2).filter(value => value === "--yahoo-direct" || value.startsWith("--yahoo-direct="));
+  if (directArgs.length > 0 && (directArgs.length !== 1 || directArgs[0] !== "--yahoo-direct" ||
+      !/^\d+\.\d+$/.test(runId) || sharedEnv.BATCH_JOB_STARTED_AT() === undefined)) {
+    throw new Error("--yahoo-directはjob開始時計のあるActions VWAPだけで指定してください");
+  }
   if (arg("scheduled-date") !== undefined && sessionSource.kind !== "yahoo-direct") {
     throw new Error("定時VWAPの市場sessionは従来のyahoo-directだけです。保存原本は明示手動選択してください");
   }
@@ -50,7 +57,9 @@ export async function main() {
   const restore = schedule.installDeadline();
   try {
   schedule.assertSource();
-  const fetchReference = (stage?: string) => fetchDailySessionReference(runId, stage, schedule.assertSource);
+  const transport = directArgs.length === 1 ? createStockYahooDirectTransport() : undefined;
+  if (transport !== undefined) console.info("[vwap-daily] Yahoo transport=node-direct shared-cooldown=D1");
+  const fetchReference = (stage?: string) => fetchDailySessionReference(runId, stage, schedule.assertSource, transport);
   console.info(JSON.stringify({ dailySessionSource: sessionSource }));
   const { delayMs: DELAY } = sharedEnv.vwapKnobs();
   const universe = await loadCodes();
@@ -187,6 +196,7 @@ export async function main() {
         try {
           // 1 社 1 回の単発取得 (producer 側の chart retry なし。失敗は error/HOLD 計数へ)。
           ({ bars, splits, proof, corporateEvents } = await fetchDaily(`${code}.T`, "10y", {
+            transport,
             beforeRequest: schedule.assertSource,
             onRaw: (capture) => {
               sourceCapture = capture;
@@ -208,7 +218,7 @@ export async function main() {
             outcomes[code] = { status: "notStarted", latestSourceBar: null, bodySha: null, reason: failureReason(e) };
             return;
           }
-          if (e instanceof YahooRawTooLargeError) fatal = true;
+          if (e instanceof YahooRawTooLargeError || e instanceof YahooSharedCooldownError) fatal = true;
           if (!captured) missing.push({ api: "daily", symbol: `${code}.T`, attempt: 1,
             error: sanitizeLogText(e instanceof Error ? e.message : String(e)), failedAt: new Date().toISOString() });
           // 429/503の初回で全体を中断する。期限や連続数に関係なく同run再取得なし。

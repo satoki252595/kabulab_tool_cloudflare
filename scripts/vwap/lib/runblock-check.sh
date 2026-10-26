@@ -46,11 +46,14 @@ check() { # name daily_rc intra_rc want_final want_intra_run [daily_only] [daily
     fail=$((fail+1)); echo "FAIL $1: want final=$4 intra_run=$5, got final=$rc intra_run=$ran"; echo "$out"
   fi
   echo "$out" | grep -q "daily_exit=" || { fail=$((fail+1)); echo "FAIL $1: status line missing"; }
-  expected_daily="ingest:vwap-daily"
+  expected_daily="ingest:vwap-daily --yahoo-direct"
   if [ "$DAILY_ONLY" = "true" ] && [ -n "$DAILY_CODES" ]; then expected_daily="$expected_daily --codes=$DAILY_CODES"; fi
   [ "$(grep -Fc 'ingest:vwap-daily' "$STUB_LOG")" -eq 1 ] && grep -Fxq "$expected_daily" "$STUB_LOG" || {
     fail=$((fail+1)); echo "FAIL $1: daily arguments/call count differ";
   }
+  if [ "$ran" = "yes" ]; then
+    grep -Fxq 'ingest:vwap-intra --yahoo-direct' "$STUB_LOG" || { fail=$((fail+1)); echo "FAIL $1: intra direct argument missing"; }
+  fi
 }
 
 check "daily1-intra-runs-final1" 1 0 1 yes

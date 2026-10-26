@@ -14,8 +14,11 @@ import { NotionConfigError } from "../../src/shared/notion-archive/env.js";
 import { archiveYahooRawBatch } from "../../src/shared/yahoo/raw-custody.js";
 import { main } from "./ingest-intra.js";
 import { scheduledVwapGuard } from "./lib/scheduled-window.js";
+import { createStockYahooDirectTransport } from "../sync/yahoo-direct.js";
+import { YahooSharedCooldownError } from "../../src/shared/yahoo/shared-cooldown.js";
 
 const intraSource = vi.hoisted(() => vi.fn());
+vi.mock("../sync/yahoo-direct.js", () => ({ createStockYahooDirectTransport: vi.fn() }));
 const intraWindowSource = vi.hoisted(() => vi.fn());
 const rawHook = vi.hoisted(() => ({ enabled: true, replay: null as Map<string, YahooRawCapture> | null }));
 
@@ -138,6 +141,37 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
   vi.unstubAllEnvs();
+});
+
+describe("VWAP intraの明示Actions direct", () => {
+  it.each(["range", "window"])("%sは選択transportを渡し、D1不明で後続source/PUTを停止する", async kind => {
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime("2026-10-13T19:43:00.000Z");
+    vi.stubEnv("GITHUB_RUN_ID", "101"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
+    vi.stubEnv("BATCH_JOB_STARTED_AT", new Date().toISOString());
+    const transport = vi.fn(); vi.mocked(createStockYahooDirectTransport).mockReturnValue(transport);
+    process.argv.push("--yahoo-direct");
+    if (kind === "window") process.argv.push("--codes=593A,598A", "--from=2026-08-17T00:00:00Z", "--to-exclusive=2026-10-13T06:30:01Z");
+    const source = kind === "window" ? intraWindowSource : mockFetch5m;
+    rawHook.enabled = false; mockLoadCodes.mockResolvedValue(kind === "window" ? ["593A", "598A"] : ["A", "B"]);
+    source.mockRejectedValueOnce(new YahooSharedCooldownError());
+    await main();
+    expect(createStockYahooDirectTransport).toHaveBeenCalledTimes(1); expect(source).toHaveBeenCalledTimes(1);
+    expect(source.mock.calls[0][2]).toMatchObject({ transport, beforeRequest: expect.any(Function) });
+    expect(kind === "window" ? mockFetch5m : intraWindowSource).not.toHaveBeenCalled();
+    expect(mockRawArchive.mock.calls[0][0]).toMatchObject({ captures: [], missing: [expect.objectContaining({ attempt: 1 })] });
+    expect(mockR2Put).not.toHaveBeenCalled(); expect(process.exitCode).toBe(2);
+  });
+  it.each(["no-job-clock", "local", "duplicate", "value"])("不完全direct %sは母集団/transport/source前に拒否する", async mode => {
+    vi.stubEnv("GITHUB_RUN_ID", "101"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
+    vi.stubEnv("BATCH_JOB_STARTED_AT", new Date().toISOString());
+    process.argv.push(mode === "value" ? "--yahoo-direct=true" : "--yahoo-direct");
+    if (mode === "no-job-clock") vi.stubEnv("BATCH_JOB_STARTED_AT", "");
+    if (mode === "local") vi.stubEnv("GITHUB_RUN_ID", "");
+    if (mode === "duplicate") process.argv.push("--yahoo-direct");
+    await expect(main()).rejects.toThrow("Actions VWAP");
+    expect(mockLoadCodes).not.toHaveBeenCalled(); expect(createStockYahooDirectTransport).not.toHaveBeenCalled();
+    expect(mockFetch5m).not.toHaveBeenCalled(); expect(intraWindowSource).not.toHaveBeenCalled();
+  });
 });
 
 describe("通常定時VWAPの5分足は同run受付と終了窓を継承", () => {

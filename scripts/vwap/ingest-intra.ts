@@ -17,10 +17,17 @@ import { scheduledVwapGuard } from "./lib/scheduled-window.js";
 import { jstDateSec, type IntraSourceStatus } from "../../src/shared/vwap/proof.js";
 import { notionStats } from "../../src/shared/notion-archive/client.js";
 import { ScheduledSourceDeadlineError } from "../../src/shared/scheduled-admission.js";
+import { createStockYahooDirectTransport } from "../sync/yahoo-direct.js";
+import { YahooSharedCooldownError } from "../../src/shared/yahoo/shared-cooldown.js";
 
 export async function main() {
   const startedAt = new Date().toISOString();
   const runId = resolveRunId();
+  const directArgs = process.argv.slice(2).filter(value => value === "--yahoo-direct" || value.startsWith("--yahoo-direct="));
+  if (directArgs.length > 0 && (directArgs.length !== 1 || directArgs[0] !== "--yahoo-direct" ||
+      !/^\d+\.\d+$/.test(runId) || sharedEnv.BATCH_JOB_STARTED_AT() === undefined)) {
+    throw new Error("--yahoo-directはjob開始時計のあるActions VWAPだけで指定してください");
+  }
   const only = arg("codes"), maxStartSeconds = arg("max-start-seconds");
   if (maxStartSeconds !== undefined && (!only || only.split(",").length > 100 ||
       new Set(only.split(",")).size !== only.split(",").length || arg("limit") !== undefined)) {
@@ -31,6 +38,8 @@ export async function main() {
   const restore = schedule.installDeadline();
   try {
   schedule.assertSource();
+  const transport = directArgs.length === 1 ? createStockYahooDirectTransport() : undefined;
+  if (transport !== undefined) console.info("[vwap-intra] Yahoo transport=node-direct shared-cooldown=D1");
   // knob は main 内で型付き取得する (未設定・不正値は final catch で exit 2)。
   // 通常値は vwap-ingest.yml・.env.example で明示宣言。黙示既定なし。
   const { delayMs: DELAY, keepDays: KEEP_DAYS } = sharedEnv.vwapKnobs();
@@ -116,6 +125,7 @@ export async function main() {
             try {
               let rawCapture: YahooRawCapture | undefined;
               const options = {
+                transport,
                 beforeRequest: schedule.assertSource,
                 onRaw: (capture: YahooRawCapture) => {
                   captures.push({ api: "intra", attempt, capture });
@@ -142,7 +152,7 @@ export async function main() {
               }
               return bars;
             } catch (e) {
-              if (e instanceof YahooRawTooLargeError) fatal = true;
+              if (e instanceof YahooRawTooLargeError || e instanceof YahooSharedCooldownError) fatal = true;
               if (!captured) missing.push({ api: "intra", symbol: `${code}.T`, attempt,
                 error: sanitizeLogText(e instanceof Error ? e.message : String(e)), failedAt: new Date().toISOString() });
               throw e;
