@@ -1289,6 +1289,7 @@ interface RecoveryInfo {
   /** 元unknown journalは不変。物理置換proofと原legacy PREを通常完了まで引き継ぐ。 */
   patchResolution?: HoldingPatchResolution;
   priceQueueVersion?: 1; nextHoldingOffset?: number; unavailableRows?: number; snapshotId?: string;
+  reportedSourceHoldObservedAt?: string;
   previousPricePass?: { snapshotId: string; nextHoldingOffset: number; unavailableRows: number; pre: MigrationFile };
 }
 
@@ -1549,7 +1550,7 @@ export async function resumePendingShareholdingsPrices(args: {
   const query = async (status: string, size: number) => {
     const listed = await notionRequest<{ results: HoldingPage[]; has_more: boolean; next_cursor: string | null }>(
       "POST", `/databases/${dbId}/query`, { filter: { property: "保有価格状態", select: { equals: status } },
-        sorts: [{ timestamp: "created_time", direction: "ascending" }], page_size: size });
+        sorts: [{ timestamp: status === "再開待ち" ? "last_edited_time" : "created_time", direction: "ascending" }], page_size: size });
     assert(listed.results.length <= size, "保有価格queue応答が要求page_sizeを超えています");
     return listed;
   };
@@ -1594,11 +1595,14 @@ export async function resumePendingShareholdingsPrices(args: {
     assert.ok(Number.isSafeInteger(info.nextHoldingOffset) && info.nextHoldingOffset! >= 0 && info.nextHoldingOffset! <= info.parsed);
     assert.ok(Number.isSafeInteger(info.unavailableRows) && info.unavailableRows! >= 0 && info.unavailableRows! <= info.nextHoldingOffset!);
     assertPreviousPricePass(info);
-    // 既知の状態HOLDは価格のunknown markerより前に分離する。queueや旧値は変更しない。
+    // 既知HOLDは原本/値/cursorを保持し、価格metadataだけ触って後続の日次windowへ譲る。
     try { await assertReportedDocumentUsable(args.sourceDb, info.source.docId); }
     catch (error) {
       if (error instanceof ReportedDocumentHoldError) {
-        result.held++; result.review.sources.push({ archivePageId: page.id, source: info.source, status: "held", reason: error.message, pending: false }); continue;
+        await recordRecoveryInfo(page.id, { ...info, reportedSourceHoldObservedAt: new Date().toISOString() }, "再開待ち", error.message, true, undefined, undefined, true);
+        // Native編集時計が同じ分に丸められても、完了や次runでの順序変更とは見なさない。
+        result.held++; result.pending = true;
+        result.review.sources.push({ archivePageId: page.id, source: info.source, status: "held", reason: error.message, pending: true }); continue;
       }
       throw error;
     }

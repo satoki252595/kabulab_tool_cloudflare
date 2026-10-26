@@ -902,14 +902,95 @@ describe("原本完了とは独立した保存価格queue", () => {
     const { db, sqlite } = createReportedSourceTestDb();
     sqlite.prepare("insert into yuho_edinet_reported_changes (source_page_id,seq_number,source_raw_sha256,doc_id,parent_doc_id,reported_state,observation_json) values(?,?,?,?,?,?,?)").run(
       "declared-source", 1, "declared-not-original-SHA", source.docId, null, "reported_withdrawal", "{\"protocolFault\":true}");
-    const before = structuredClone(saved), loader = vi.fn(async () => ready);
+    const before = structuredClone(saved), loader = vi.fn(async () => ready), observedAfter = Date.now();
     vi.mocked(notionRequest).mockClear(); vi.mocked(listPageFiles).mockClear();
     const outcome = await resumePendingShareholdingsPrices({ sourceDb: db, maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: loader });
-    expect(outcome).toMatchObject({ usedRows: 0, resumed: 0, held: 1 });
-    expect(saved).toEqual(before); expect(loader).not.toHaveBeenCalled(); expect(listPageFiles).not.toHaveBeenCalled();
-    expect(vi.mocked(notionRequest).mock.calls.filter(([method]) => method === "PATCH" || method === "DELETE")).toEqual([]); sqlite.close();
+    expect(outcome).toMatchObject({ usedRows: 0, resumed: 0, held: 1, pending: true });
+    const { reportedSourceHoldObservedAt, ...kept } = restartInfo(saved[`/pages/${args.archivePageId}`], "保有価格");
+    expect(kept).toEqual(restartInfo(before[`/pages/${args.archivePageId}`], "保有価格"));
+    expect(Date.parse(reportedSourceHoldObservedAt as string)).toBeGreaterThanOrEqual(observedAfter);
+    expect(Date.parse(reportedSourceHoldObservedAt as string)).toBeLessThanOrEqual(Date.now());
+    expect({ ...saved, [`/pages/${args.archivePageId}`]: before[`/pages/${args.archivePageId}`] }).toEqual(before);
+    const patch = vi.mocked(notionRequest).mock.calls.find(([method]) => method === "PATCH")![2] as { properties: Record<string, unknown> };
+    expect(Object.keys(patch.properties).sort()).toEqual(["保有価格再開情報", "保有価格状態", "保有価格理由"]);
+    for (const [name, value] of Object.entries(testProperties(before[`/pages/${args.archivePageId}`]))) if (!Object.hasOwn(patch.properties, name)) {
+      expect(testProperties(saved[`/pages/${args.archivePageId}`])[name]).toEqual(value);
+    }
+    expect(patch.properties["保有価格状態"]).toEqual({ select: { name: "再開待ち" } });
+    expect(vi.mocked(notionRequest).mock.calls.filter(([, path]) => path === `/pages/${args.archivePageId}`).map(([method]) => method)).toEqual(["GET", "PATCH", "GET"]);
+    expect(loader).not.toHaveBeenCalled(); expect(listPageFiles).not.toHaveBeenCalled();
+    const held = structuredClone(saved); vi.mocked(notionRequest).mockClear();
+    vi.spyOn(sqlite, "prepare").mockImplementationOnce(() => { throw new Error("DECLARED_D1_UNKNOWN"); });
+    await expect(resumePendingShareholdingsPrices({ sourceDb: db, maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: loader })).rejects.toMatchObject({ cause: { message: "DECLARED_D1_UNKNOWN" } });
+    expect(saved).toEqual(held); expect(vi.mocked(notionRequest).mock.calls.some(([method]) => method === "PATCH" || method === "DELETE")).toBe(false);
+    const transport = vi.mocked(notionRequest).getMockImplementation()!; let gets = 0;
+    vi.mocked(notionRequest).mockImplementation(async (method, path, body, options) => {
+      if (method === "GET" && path === `/pages/${args.archivePageId}` && ++gets === 2) throw new Error("DECLARED_HOLD_READBACK_UNKNOWN");
+      return transport(method, path, body, options);
+    });
+    vi.mocked(notionRequest).mockClear();
+    await expect(resumePendingShareholdingsPrices({ sourceDb: db, maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: loader })).rejects.toThrow("DECLARED_HOLD_READBACK_UNKNOWN");
+    expect(vi.mocked(notionRequest).mock.calls.filter(([, path]) => path === `/pages/${args.archivePageId}`).map(([method]) => method)).toEqual(["GET", "PATCH", "GET"]);
+    expect(loader).not.toHaveBeenCalled(); expect(listPageFiles).not.toHaveBeenCalled();
+    sqlite.close();
   });
-  afterEach(() => vi.restoreAllMocks());
+  it("pending先頭5件の既知HOLDは同分でも未完を保ち、native時計が進んだ後のrunで旧第6件へ到達する", async () => {
+    await seedPublishedSource();
+    const original = vi.mocked(notionRequest).getMockImplementation()!;
+    const page = await original("GET", `/pages/${args.archivePageId}`) as TestPage;
+    const { db, sqlite } = createReportedSourceTestDb();
+    const ids = Array.from({ length: 5 }, (_, n) => (n + 1).toString(16).padStart(32, "0"));
+    for (const [n, id] of ids.entries()) {
+      const docId = `S100HLD${n}`, info = { ...restartInfo(saved[`/pages/${args.archivePageId}`], "保有価格"), source: { ...source, docId } };
+      sqlite.prepare("insert into yuho_edinet_reported_changes (source_page_id,seq_number,source_raw_sha256,doc_id,parent_doc_id,reported_state,observation_json) values(?,?,?,?,?,?,?)")
+        .run(`declared-pending-hold-${n}`, n, "declared-observation", docId, null, "reported_withdrawal", "{}");
+      saved[`/pages/${id}`] = { ...structuredClone(testProperties(saved[`/pages/${args.archivePageId}`])),
+        Key: { title: [{ text: { content: `${docId}:type1` } }] }, "保有価格再開情報": { rich_text: [{ text: { content: JSON.stringify(info) } }] } };
+    }
+    const allIds = [...ids, args.archivePageId], before = structuredClone(saved);
+    const edited = new Map(allIds.map(id => [id, "2026-07-01T00:00:00.000Z"]));
+    const nativePage = (id: string) => ({ ...page, id, last_edited_time: edited.get(id), properties: { ...page.properties, ...mirrored(testProperties(saved[`/pages/${id}`])) } });
+    vi.mocked(notionRequest).mockImplementation(async (method, path, body, options) => {
+      if (method === "POST" && path === `/databases/${"p".repeat(32)}/query`) {
+        const query = body as { filter: { select: { equals: string } }; sorts: Array<{ timestamp: string; direction: string }>; page_size: number };
+        const pages = allIds.map(nativePage).filter(p => p.properties["保有価格状態"].select?.name === query.filter.select.equals);
+        if (query.sorts[0].timestamp === "last_edited_time") pages.sort((a, b) => a.last_edited_time!.localeCompare(b.last_edited_time!));
+        return { results: pages.slice(0, query.page_size), has_more: pages.length > query.page_size, next_cursor: pages.length > query.page_size ? "declared-next" : null };
+      }
+      const id = path.split("/").at(-1)!;
+      if (method === "GET" && allIds.includes(id)) return nativePage(id);
+      const response = await original(method, path, body, options);
+      if (method === "PATCH" && allIds.includes(id)) edited.set(id, new Date(Math.floor(Date.now() / 60_000) * 60_000).toISOString());
+      return response;
+    });
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-07-01T00:00:30.000Z"));
+    vi.mocked(notionRequest).mockClear(); vi.mocked(listPageFiles).mockClear();
+    const loader = vi.fn(async () => ready), run = () => resumePendingShareholdingsPrices({ sourceDb: db, maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: loader });
+    for (const clock of ["2026-07-01T00:00:30.000Z", "2026-07-01T00:00:45.000Z", "2026-07-01T00:01:30.000Z"]) {
+      vi.setSystemTime(new Date(clock));
+      expect(await run()).toMatchObject({ usedRows: 0, resumed: 0, held: 5, pending: true });
+      expect(loader).not.toHaveBeenCalled(); expect(listPageFiles).not.toHaveBeenCalled();
+      for (const id of ids) {
+        const { reportedSourceHoldObservedAt, ...kept } = restartInfo(saved[`/pages/${id}`], "保有価格");
+        expect(reportedSourceHoldObservedAt).toBe(clock); expect(kept).toEqual(restartInfo(before[`/pages/${id}`], "保有価格"));
+      }
+      expect(saved[`/pages/${args.archivePageId}`]).toEqual(before[`/pages/${args.archivePageId}`]);
+    }
+    const holdPatches = vi.mocked(notionRequest).mock.calls.filter(([method]) => method === "PATCH");
+    expect(holdPatches).toHaveLength(15); // 5 HOLDs × 3 runs; each uses only the existing GET/PATCH/GET.
+    for (const [, , body] of holdPatches) expect(Object.keys((body as { properties: object }).properties).sort()).toEqual(["保有価格再開情報", "保有価格状態", "保有価格理由"]);
+    expect(saved[rowPath]).toEqual(before[rowPath]);
+    vi.setSystemTime(new Date("2026-07-01T00:02:30.000Z")); vi.mocked(qualifyHoldingValuation).mockResolvedValue(qualified());
+    const outcome = await run();
+    expect(outcome).toMatchObject({ usedRows: 1, resumed: 1, held: 4, pending: true });
+    expect(outcome.review.queuedSourcePageIds[0]).toBe(args.archivePageId); expect(loader).toHaveBeenCalledTimes(1);
+    for (const [, , body] of vi.mocked(notionRequest).mock.calls.filter(([method, path]) => method === "POST" && path === `/databases/${"p".repeat(32)}/query`)) {
+      const query = body as { filter: { select: { equals: string } }; sorts: unknown };
+      expect(query.sorts).toEqual([{ timestamp: query.filter.select.equals === "再開待ち" ? "last_edited_time" : "created_time", direction: "ascending" }]);
+    }
+    sqlite.close();
+  });
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
   it("原本完了と価格pendingの3propsを一度のPATCHで原子的に登録する", async () => {
     await publishVerifiedShareholdings(args);
