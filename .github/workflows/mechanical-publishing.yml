@@ -71,3 +71,16 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: 優待機械要約（最大60群・モデル禁止）
         run: pnpm sync:mechanical --target=yutai --limit=60 --budget-min=15 --state-dir="${{ runner.temp }}/yutai-mechanical"
+      - name: 優待の対象metadata・終了集計を7日保存
+        if: always()
+        timeout-minutes: 5
+        uses: actions/upload-artifact@v4
+        with:
+          name: yutai-mechanical-${{ github.run_id }}-${{ github.run_attempt }}
+          # Public repository: never upload tasks/results, source text or PRE/POST bundles.
+          path: |
+            ${{ runner.temp }}/yutai-mechanical/*/task-metadata.json
+            ${{ runner.temp }}/yutai-mechanical/*/post-verified.json
+            ${{ runner.temp }}/yutai-mechanical/*/complete.json
+          if-no-files-found: warn
+          retention-days: 7

@@ -600,6 +600,11 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
   // Validate our exact emitted task bytes with the same importer contract.
   parseTaskFile(tasksText);
   writePrivate(join(runDir, "tasks.jsonl"), tasksText);
+  // Public Actions artifacts retain cohort identity, never source text or summaries.
+  writePrivate(join(runDir, "task-metadata.json"), JSON.stringify(tasks.map(task => ({
+    taskId: task.taskId, stockCode: task.stockCode, sourceSha256: sha(task.description),
+    recipients: task.recipients, contractVersion: task.contractVersion,
+  }))));
   writePrivate(
     join(runDir, "selected-pre.json"),
     JSON.stringify(rows.filter((r) => tasks.some((t) => t.taskId === benefitKey(r.stockCode, r.description)))),
