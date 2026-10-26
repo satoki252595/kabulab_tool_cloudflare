@@ -21,6 +21,11 @@ import type { TdnetItemRaw } from "./types.js";
 import { recordPrimaryData, verifyArchivedAttachments } from "../../../../../src/shared/notion-archive/index.js";
 import { notionEnv } from "../../../../../src/shared/notion-archive/env.js";
 import { sha256HexBytes } from "../../../../../src/shared/sha256.js";
+import {
+  formatYanoshinUpstreamLog,
+  judgeYanoshinUpstream,
+  newestPubdateOfItems,
+} from "../../../../../src/shared/yanoshin-upstream.js";
 import { normalizeTdnetItem } from "./types.js";
 
 const API_BASE = "https://webapi.yanoshin.jp/webapi/tdnet/list";
@@ -170,5 +175,23 @@ export async function listRange(range: string, beforeSource?: () => void): Promi
     const day = await fetchDay(dateToYmd(d), beforeSource);
     for (const it of day) out.push(it);
   }
+  // 過去月の backfill は今日を含まないので、当時の最新が「いま」より古いのは正常。
+  // 今日を含む範囲だけ、最新 pubdate が止まっていれば空配列を成功にしない。
+  const today = jstYmd(Date.now());
+  if (dateToYmd(start) <= today && today <= dateToYmd(end)) {
+    const upstream = judgeYanoshinUpstream(newestPubdateOfItems(out), new Date());
+    const line = formatYanoshinUpstreamLog(upstream);
+    console.info(line);
+    if (upstream.judgement === "upstream_stopped") {
+      throw new Error(`yanoshin upstream stopped: ${line}`);
+    }
+  }
   return out;
+}
+
+/** epoch の JST 暦日 YYYYMMDD。list の range キーと同じ桁。 */
+function jstYmd(ms: number): string {
+  const wall = new Date(ms + 9 * 3600 * 1000);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${wall.getUTCFullYear()}${p(wall.getUTCMonth() + 1)}${p(wall.getUTCDate())}`;
 }

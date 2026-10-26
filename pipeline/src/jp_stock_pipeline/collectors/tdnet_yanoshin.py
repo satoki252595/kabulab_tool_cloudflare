@@ -429,7 +429,9 @@ def list_disclosures(
         raise FetchError(f"やのしん list 応答が JSON でない: {url}") from exc
     # 構造検証 (CONTRACTS「HTTP 200 のエラーレスポンス」): items が list でない
     # 応答はエラー/制限メッセージとみなし、原本保存せず FetchError とする。
-    # {"items": []} は正当な0件として通す
+    # {"items": []} は JSON としては欠落ではない。上流が生きている証明には
+    # ならない。0 件成功は yanoshin_upstream が fresh と判定したときだけ
+    # （tdnet_hourly / ir-catalog catchup / ops_check）。ここでは構造だけ見る。
     if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
         raise FetchError(f"やのしん list 応答が想定外構造 (items 欠落): {url}")
     artifact = save_raw(

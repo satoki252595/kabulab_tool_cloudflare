@@ -15,6 +15,12 @@ from functools import partial
 from ..cloud_store import notion_pages
 from ..cloud_store.d1 import D1Error, D1Store
 from ..collectors import tdnet_official_fallback, tdnet_yanoshin
+from ..collectors.yanoshin_upstream import (
+    YanoshinUpstreamStopped,
+    format_yanoshin_upstream_log,
+    judge_yanoshin_upstream,
+    probe_yanoshin_newest,
+)
 from ..convert import convert_artifact, xbrl_to_csv
 from ..http import FetchError, fetch
 from ..licensing import source_license
@@ -194,6 +200,17 @@ def execute(ctx: JobContext) -> None:
     )
     if observed_empty:
         ctx.upload_raw(batches[0][0], sha_map_date=target_date)
+        # 当日一覧が空でも、recent の最新 pubdate が止まっていれば 0 件成功にしない。
+        # 最新が対象日にあるのに当日 items が空なのも、窓が本当に空であることの否定。
+        newest = probe_yanoshin_newest(ctx.settings, **source_request_options(ctx.args))
+        judgement = judge_yanoshin_upstream(newest, started)
+        shown = judgement.judgement
+        if newest is not None and newest.astimezone(JST).date() == target_date:
+            shown = "upstream_stopped"
+        line = format_yanoshin_upstream_log(judgement, judgement_name=shown)
+        logger.info("%s", line)
+        if shown == "upstream_stopped":
+            raise YanoshinUpstreamStopped(f"yanoshin upstream stopped: {line}")
         ctx.confirm_zero_work(STATUS_OBSERVED_EMPTY)
         return
 
