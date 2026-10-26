@@ -175,23 +175,23 @@ pnpm biztag:monthly --runtime .runtime/mac-publishing-20261025 --preflight # 月
 
 ### 現在の復旧状況
 
-10/26更新の[完了条件と残件](docs/work-plans/production-completion-20261025.md)に、改修・データ不足・本番受入をまとめています。#621 main `75d7468a`までのCI・Cloudflareの100%配備・SSHへの同一revision反映を確認しました。全件充足は未完です。
+10/26 11:54:46 JSTまでの受入は[完了条件と残件](docs/work-plans/production-completion-20261025.md)へ集約しています。#630 main `3d990b21`のCI・Cloudflare 100%配備・Mac/SSH同一revisionを受入済みです。コード/配備、対象限定の実データ受入、全件充足を分けます。
 
-**定期設定と全データ充足は別です。** CFの14 trigger、GitHubの14有効workflow（機械同期を含む）は継続。Macの20/21時calendarは廃止し、専用分は月次手動スクリプトへ変更しました。歴史RAW用workflow1本も意図的停止。10/21の株式429・VWAP保存不明・有報停止と修正範囲は[10/22の稼働確認](docs/test-logs/recovery-functional-status-20261022.md)、現設定は[全件一覧](docs/batch-data-inventory.md)へ記録します。以下は10/26までの有限確認で、全件充足を示す数値ではありません。残件は[Issue #348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)で追跡します。
+**定期設定と全データ充足は別です。** CFは14 trigger。10/26 02:05ZのGitHub公式一覧16本は、repo内YAML15本と生成Dependency Graph1本です。repo内は14 workflowがactive、歴史RAW全量用1本が意図的無効。CI・手動・条件付き起動を含み、activeを毎日の実行や全件成功とは読み替えません。宣言job数と起動条件は[本番定期処理一覧](docs/production-job-inventory.md)、原20機能の残は[Issue #348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)と完了条件表で追跡します。Macの旧20/21時calendarは廃止を維持し、専用分は合意済み月次手動です。
 
 | 対象 | 確認済み | 残り・未検収 |
 | --- | --- | --- |
-| 実行環境 | #621 main `75d7468a`の[CI 40238932712](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40238932712)3本成功・CF `90f44edc` 100%・07:23 SSH同headを受入。env・受注166state・独立補完runtimeを保持 | 次の自然定期の成功は別受入。Mac専用の意味判断は合意済み月次手動 |
-| 株価・VWAP | 日足run[40169768650](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40169768650)は更新2,695・skip990・HOLD1。5分足run[40177951577](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40177951577)は更新3,679・skip2・error5。両runとも全3,686件集計・unknown/未着手0、summary保管済み | 日足523Aの履歴欠測、株式マスタ38件、5分足5エラー・更新分の旧日付40件・5d窓外欠測、旧PUT不明は未検収。メタデータPUTだけを足の更新に数えない |
-| 本文39列・有報・財務 | 固定3,686社で638処理・残キュー3,048社を確認（07:17閉鎖窓まで、後続実行中を含む）。2683の商号差も別窓で同期し、原39と旧タグ根拠を保持。財務7911/8566のROA4行は反映済み | 06:36:07開始の独立固定runtime `4b0fb282`（実main PID `2604700`、0.8 RPS）が一巡実行中で、全体完了は未受入。全市場の財務・歴史relationは未完。保存scope候補なし137セルを公式非開示とは断定しない |
-| IR | 単一ID・期限付き再開と元PDF識別guardを配備。1279652は元URL/同一文書JPXとも404。[会社公式の限定調査](docs/research/tdnet-1279652-original-20261026.md)でも同一原本の移転先は未確認 | 1279652は原本未取得HOLD。40日窓外で日次再取得対象外、9/9差替PDFを代用しない |
-| 優待 | 8551年次3行、8336年次3行と初回2026-09-30単発3行、138Aの3群6行を反映・受入。通常全7,731行POSTで残26群/45行/10銘柄を実測 | 実測の26群/45行/10銘柄が未完。7856/2776/3139/4814/640Aは文法対応済み・通常データ適用待ち。原本不足・条件未対応を完了扱いしない |
-| 受注・海外 | 旧20文書75行・行なし13文書120明細に続き、20文書83行の連結区分NULLを補完。通常apply・別inspectで原本/本文・全6表・物理PRE/POSTと金額等の不変を受入 | 固定177文書の未claimは12文書。保存診断上の11文書41行と別枠6721を残し、現在sourceと全factを再資格化する。恒久state166ファイル/165claim、旧146全bytesを保持 |
-| 資金フロー | 10/23の独立28取得元は26正常・投信/REITの2取得元が503。[公式告知](https://www.imaj.or.jp/news/2026/20261023_001929.html)でも統計サービスの停止継続を確認 | 株価依存の業種売買代金は別経路で未検収。最新keyだけで全期間・全系列の充足とはしない |
-| 保有・権利処理 | 新snapshot `40169768650.1`・session10/23・3,685 membersを独立確認。通常再開の次窓も23書込のHTTP200・未解決書込なしで閉鎖し、pending=false | キュー消化は全価格の充足を意味しない。同窓のheld3と、全保有価格・分割/併合/増資等の法的日付・株数/価格basisの資格確認は残る |
-| 指標・意味判断 | API/MCPは代表読取を本番確認済み。Clefの保存済み結果を保持 | Prime売買代金20日比、個別需給/カタリスト（2週間、過去/未来の範囲は確認中）は未接続。タグ・競合等の意味判断は合意済み月次手動 |
+| 実行環境・定期接続 | #630 main `3d990b21`の[CI 40257605922](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40257605922)（check/python）とCF `f80802ed` 100%、Mac/SSH同headを受入。通常CLI/import・同lock・target設定を追跡し、#621–630の定期接続に欠落なし。優待定期の安全metadata/集計をartifactへ7日保存 | 将来runの実結果はrunごとに確認する。予定日の到来待ちだけを改修残にはしない。Macの意味判断は合意済み月次手動 |
+| 株価・VWAP | 日足run[40169768650](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40169768650)は更新2,695・skip990・HOLD1、5分足run[40177951577](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40177951577)は更新3,679・skip2・error5。両runとも全3,686件集計 | 株式日次同期の未更新38銘柄（保存区分35NULL＋技術3）と日足523Aの履歴欠測を残す。physicalChart確証は10/35のみで、NULLを無取引と断定しない。5分足5エラー・更新分の旧日付40件・5d窓外欠測、旧PUT不明も未検収。メタデータPUTだけを足の更新に数えない |
+| 本文39列・有報・財務 | 固定3,686社の一巡は累計1,438社（現在の連続23窓920社＋先行518社）まで受入（11:54:46 JST時点）。原39と旧タグ根拠を保持。財務7911/8566のROA4行は反映済み | 残2,248社は第24窓実行中/未観測を含む。固定runtime `4b0fb282`・0.8 RPSを保持し、全社/全列充足は未完。財務・歴史relation、保存scope候補なし137セルも未検収 |
+| IR | 単一ID・期限付き再開と元PDF識別guardを配備。1279652は元URL/同一文書JPXとも404。[会社公式の限定調査](docs/research/tdnet-1279652-original-20261026.md)でも同一原本未確認 | 原本未取得HOLD。40日窓外で日次再取得対象外、9/9差替PDFを代用しない |
+| 優待 | 8551年次3行、8336年次3行/初回2026-09-30単発3行、138Aの3群6行を反映・受入。通常全7,731行POSTで残26群/45行/10銘柄を実測 | source是正5243全2/3045全4/9842全6行と既存compilerのデータ適用は未実施。bulk閉鎖・原本物理保管・fresh PREを先行し、通常全POSTで再測定する。offlineの差引推計を現残にしない |
+| 受注・海外 | 11文書41区分と6721残4件を通常apply・別inspect・最終FS照合まで閉鎖。残4件は11phase/423HTTP全200・4batchで、全6表/物理PRE・POSTと旧178state不変を確認。固定current177/177＋歴史FY2021–24の4件、state182ファイル/181claimsを受入 | 固定集合と歴史4件の受入で、全市場の充足には広げない。会社発表比率の基準不明は、原本年額からの通常計算と区別し推測補正しない |
+| 資金フロー | 10/23の独立28取得元は26正常・投信/REITの2取得元が503。[公式告知](https://www.imaj.or.jp/news/2026/20261023_001929.html)でも統計サービス停止を確認 | 価格依存の業種売買代金、全期間/全系列の充足は別途未検収 |
+| 保有・権利処理 | snapshot `40169768650.1`・session10/23・3,685 membersを独立確認。通常resumeは23HTTP200・pending=false | キュー消化は全価格充足を意味しない。held3と、全保有価格・分割/併合/増資等の法的日付・株数/価格basisを残す |
+| 指標・意味判断・API | 認証API/MCPの代表読取と保存値を段階受入。Clefの保存済み結果を保持 | Prime売買代金20日比、個別需給の出来高期間、カタリスト2週間の過去/未来範囲は未接続/未回答。全API/全データ充足は未認定。タグ・競合等は合意済み月次手動 |
 
-旧数値と実測は[10/18の列別監査](docs/test-logs/notion-field-coverage-20261018.md)、[10/19の受入](docs/test-logs/recovery-functional-status-20261019.md)へ保存。旧欠測件数を現在の残数にせず、固定集合の成功も全体完了にしない。原本全量ミラー・全市場再取得・月次一括再実行は先行条件に戻さない。
+旧実測・経過はGit履歴、[10/18の列別監査](docs/test-logs/notion-field-coverage-20261018.md)、[10/19の受入](docs/test-logs/recovery-functional-status-20261019.md)、[10/22の稼働確認](docs/test-logs/recovery-functional-status-20261022.md)を参照します。旧欠測件数を現在残数へ繰り越さず、固定集合の成功も全体完了にしません。原本全量ミラー・全市場再取得・月次一括再実行は先行条件に戻しません。
 
 ## デプロイ
 
