@@ -11,14 +11,20 @@ vi.mock("../../services/ir-catalog/src/services/ingest.js", async () => ({
   ingestBatch: vi.fn(async () => ({ fetched: 0, inUniverse: 0, upserted: 0, unclassified: 0, byPrimaryTag: {}, notionArchive: null, notionByStock: null })),
 }));
 const now = Date.parse("2026-10-14T10:00:00Z");
+const freshUpstream = {
+  id: "FRESH1", pubdate: "2026-10-14 18:30:00", company_code: "72030", company_name: "試験",
+  title: "試験", document_url: "https://example.invalid/fresh.pdf", url_xbrl: null,
+  markets_string: null, update_history: null,
+};
 beforeEach(() => { vi.clearAllMocks(); vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(now); vi.spyOn(console, "info").mockImplementation(() => {}); });
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
 it("同じ41日一覧と12分phaseへだけ絶対締切を追加し、source順序を保つ", async () => {
   const deadline = now + 58.5 * 60_000;
+  vi.mocked(listRange).mockResolvedValue([freshUpstream]);
   await runIrCatalogCatchup({} as never, undefined, now, deadline);
   expect(listRange).toHaveBeenCalledWith("20260904-20261014", expect.any(Function));
-  expect(ingestBatch).toHaveBeenCalledWith(expect.anything(), [], expect.objectContaining({
+  expect(ingestBatch).toHaveBeenCalledWith(expect.anything(), [freshUpstream], expect.objectContaining({
     batchKey: "tdnet-daily-2026-10-14", dailySnapshot: true,
     notionByStockBudgetMs: 720_000, notionByStockDeadlineMs: deadline - 10 * 60_000, unsavedLookbackDays: 40,
   }));

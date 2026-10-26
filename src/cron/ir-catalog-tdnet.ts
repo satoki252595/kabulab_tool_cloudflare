@@ -30,6 +30,11 @@ import type { Database } from "../../services/ir-catalog/src/db/client.js";
 import { loadIngestCodeToId } from "../shared/db/active-equity.js";
 import { listRange } from "../../services/ir-catalog/src/services/tdnet/client.js";
 import {
+  formatYanoshinUpstreamLog,
+  judgeYanoshinUpstream,
+  newestPubdateOfItems,
+} from "../shared/yanoshin-upstream.js";
+import {
   catchupListingRange,
   formatUniverseGapLog,
   ingestBatch,
@@ -114,6 +119,14 @@ export async function runIrCatalogCatchup(
   beforeSource?.();
   const items = beforeSource === undefined ? await listRange(range) : await listRange(range, beforeSource);
   if (deadlineMs !== undefined && Date.now() >= deadlineMs) throw new Error("TDnet catchupの絶対締切です（原文保管を保持・再送なし）");
+  // 一覧の最新 pubdate が止まっていると、空も「その窓は本当に 0 件」も言えない。
+  // 日次完了ログと D1 取込の前に落とす（listRange がモックされても同じ）。
+  const upstream = judgeYanoshinUpstream(newestPubdateOfItems(items), new Date(nowMs));
+  const upstreamLine = formatYanoshinUpstreamLog(upstream);
+  console.info(upstreamLine);
+  if (upstream.judgement === "upstream_stopped") {
+    throw new Error(`yanoshin upstream stopped: ${upstreamLine}`);
+  }
   const existingTdnetIds = await loadTdnetIdsSince(
     db,
     new Date(nowMs - TDNET_PDF_RETAIN_DAYS * 86_400_000)

@@ -1,0 +1,169 @@
+{
+  "watchOpenHourJst": 9,
+  "watchCloseHourJst": 19,
+  "maxWatchSilenceSeconds": 14400,
+  "rationale": "監視窓は JST 9:00 以上 19:00 未満（tdnet_hourly の定時）。この窓の外（夜間・土日・JPX 公式休業日）は経過に足さない。許容は窓の実時間で 4 時間。ちょうど 4 時間は fresh、それを超えたら upstream_stopped。前セッション終盤まで更新していれば翌セッション午前の本物の 0 件は失敗にせず、10/24 13:15 で止まったフィードは 10/26 15:00 には失敗する。pubdate が 1 件も無い場合は休場でも fresh にしない。",
+  "cases": [
+    {
+      "id": "incident-monday-1500",
+      "now": "2026-10-26T15:00:00+09:00",
+      "newest": "2026-10-24T13:15:00+09:00",
+      "elapsedWatchSeconds": 21600,
+      "judgement": "upstream_stopped"
+    },
+    {
+      "id": "incident-monday-1900",
+      "now": "2026-10-26T19:00:00+09:00",
+      "newest": "2026-10-24T13:15:00+09:00",
+      "elapsedWatchSeconds": 36000,
+      "judgement": "upstream_stopped"
+    },
+    {
+      "id": "incident-monday-open-still-inside-grace",
+      "now": "2026-10-26T09:00:00+09:00",
+      "newest": "2026-10-24T13:15:00+09:00",
+      "elapsedWatchSeconds": 0,
+      "judgement": "fresh"
+    },
+    {
+      "id": "friday-silence-inside-4h",
+      "now": "2026-10-23T17:00:00+09:00",
+      "newest": "2026-10-23T13:15:00+09:00",
+      "elapsedWatchSeconds": 13500,
+      "judgement": "fresh"
+    },
+    {
+      "id": "friday-silence-over-4h",
+      "now": "2026-10-23T18:00:00+09:00",
+      "newest": "2026-10-23T13:15:00+09:00",
+      "elapsedWatchSeconds": 17100,
+      "judgement": "upstream_stopped"
+    },
+    {
+      "id": "exact-4h-is-fresh",
+      "now": "2026-10-23T17:15:00+09:00",
+      "newest": "2026-10-23T13:15:00+09:00",
+      "elapsedWatchSeconds": 14400,
+      "judgement": "fresh"
+    },
+    {
+      "id": "one-second-over-4h",
+      "now": "2026-10-23T17:15:01+09:00",
+      "newest": "2026-10-23T13:15:00+09:00",
+      "elapsedWatchSeconds": 14401,
+      "judgement": "upstream_stopped"
+    },
+    {
+      "id": "weekend-healthy",
+      "now": "2026-10-25T12:00:00+09:00",
+      "newest": "2026-10-23T18:00:00+09:00",
+      "elapsedWatchSeconds": 3600,
+      "judgement": "fresh"
+    },
+    {
+      "id": "weekend-keeps-friday-breach",
+      "now": "2026-10-25T12:00:00+09:00",
+      "newest": "2026-10-23T13:15:00+09:00",
+      "elapsedWatchSeconds": 20700,
+      "judgement": "upstream_stopped"
+    },
+    {
+      "id": "holiday-sports-day",
+      "now": "2026-10-12T15:00:00+09:00",
+      "newest": "2026-10-09T18:00:00+09:00",
+      "elapsedWatchSeconds": 3600,
+      "judgement": "fresh"
+    },
+    {
+      "id": "closure-year-end",
+      "now": "2026-12-31T11:00:00+09:00",
+      "newest": "2026-12-30T17:30:00+09:00",
+      "elapsedWatchSeconds": 5400,
+      "judgement": "fresh"
+    },
+    {
+      "id": "night-before-open",
+      "now": "2026-10-08T02:30:00+09:00",
+      "newest": "2026-10-07T18:00:00+09:00",
+      "elapsedWatchSeconds": 3600,
+      "judgement": "fresh"
+    },
+    {
+      "id": "night-after-close",
+      "now": "2026-10-23T23:30:00+09:00",
+      "newest": "2026-10-23T18:30:00+09:00",
+      "elapsedWatchSeconds": 1800,
+      "judgement": "fresh"
+    },
+    {
+      "id": "night-keeps-daytime-breach",
+      "now": "2026-10-23T23:30:00+09:00",
+      "newest": "2026-10-23T13:15:00+09:00",
+      "elapsedWatchSeconds": 20700,
+      "judgement": "upstream_stopped"
+    },
+    {
+      "id": "fresh-same-afternoon",
+      "now": "2026-10-26T15:00:00+09:00",
+      "newest": "2026-10-26T14:50:00+09:00",
+      "elapsedWatchSeconds": 600,
+      "judgement": "fresh"
+    },
+    {
+      "id": "no-pubdate",
+      "now": "2026-10-26T15:00:00+09:00",
+      "newest": null,
+      "elapsedWatchSeconds": null,
+      "judgement": "upstream_stopped"
+    },
+    {
+      "id": "no-pubdate-on-weekend",
+      "now": "2026-10-25T12:00:00+09:00",
+      "newest": null,
+      "elapsedWatchSeconds": null,
+      "judgement": "upstream_stopped"
+    },
+    {
+      "id": "future-pubdate",
+      "now": "2026-10-26T10:00:00+09:00",
+      "newest": "2026-10-26T15:00:00+09:00",
+      "elapsedWatchSeconds": 0,
+      "judgement": "fresh"
+    },
+    {
+      "id": "golden-week",
+      "now": "2026-05-06T12:00:00+09:00",
+      "newest": "2026-05-01T17:00:00+09:00",
+      "elapsedWatchSeconds": 7200,
+      "judgement": "fresh"
+    },
+    {
+      "id": "monday-morning-after-healthy-friday",
+      "now": "2026-10-26T10:00:00+09:00",
+      "newest": "2026-10-23T18:00:00+09:00",
+      "elapsedWatchSeconds": 7200,
+      "judgement": "fresh"
+    },
+    {
+      "id": "monday-afternoon-feed-idle",
+      "now": "2026-10-26T15:00:00+09:00",
+      "newest": "2026-10-23T18:00:00+09:00",
+      "elapsedWatchSeconds": 25200,
+      "judgement": "upstream_stopped"
+    },
+    {
+      "id": "after-hours-pubdate-over-weekend",
+      "now": "2026-10-24T12:00:00+09:00",
+      "newest": "2026-10-23T20:30:00+09:00",
+      "elapsedWatchSeconds": 0,
+      "judgement": "fresh"
+    },
+    {
+      "id": "ops-check-2330-healthy",
+      "now": "2026-10-26T23:30:00+09:00",
+      "newest": "2026-10-26T18:30:00+09:00",
+      "elapsedWatchSeconds": 1800,
+      "judgement": "fresh"
+    }
+  ]
+}

@@ -312,6 +312,10 @@ describe("TDnet の日次は保持日数内の D1 欠測を母集団内だけ挿
       return [
         tdnetItem("7203", { id: "LATE1", pubdate: PUB_20D, title: "後から母集団に入った開示" }),
         tdnetItem("1206", { id: "OUT1", pubdate: PUB_20D, title: "母集団外の開示" }),
+        // 20日前だけの一覧は上流停止になる。時刻の証人は母集団に入らないコード。
+        tdnetItem("7203", {
+          id: "FEED1", pubdate: "2026-10-07 18:00:00", company_code: "BAD", title: "上流時刻",
+        }),
         ...extra,
       ];
     });
