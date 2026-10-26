@@ -2,7 +2,7 @@
 
 対象は[Issue #348](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/348)。[原20機能](../test-logs/feature-gap-audit-20261014.md)と[全データ一覧](../batch-data-inventory.md)を維持する。コード/配備の受入、対象限定の実データ受入、全件充足を分ける。旧欠測数は現在残数へ繰り越さず、経過と旧実測はGit履歴・各検証記録を参照する。
 
-2026-10-26 14:05 JSTまでの受入を基準とする。main #633 `3cb953ed`の[CI 40270629676](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40270629676)とCloudflare version `b9b155a6-645f-4fb8-8ec1-826021fabdfe` 100%、Mac/SSH同HEADを受入。保存20原本の診断で確定した1375の2行5項目はNotion・D1へ通常反映/再読済み。受注は固定current177/177＋歴史4件を保持。補足一巡は13:39 JST時点で1,718/3,686社、優待は通常7731行POSTの26群/45行/10銘柄が直近実測で、bulk終了後の続行待ち。全体完了ではない。
+2026-10-26 14:40 JSTまでの受入を基準とする。main #634 `a45ef65c`の[CI 40273196630](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/40273196630)とCloudflare version `27c1bf82-1a3a-49a0-b333-b3d55cd1ac7d` 100%、Mac/SSH同HEADを受入。保存20原本の診断で確定した1375の2行5項目はNotion・D1へ通常反映/再読済み。受注は固定current177/177＋歴史4件を保持。補足は1,909/3,686社を反映済み、保留9社・未処理1,768社（実行中を含む）。優待は通常7731行POSTの26群/45行/10銘柄が直近実測で、bulk終了後の続行待ち。全体完了ではない。
 
 ## 定期接続と実行環境
 
@@ -20,7 +20,7 @@ MacはNix/既存lockの月次手動＋Calendar/メールが合意済み運用。
 | マクロ判定 | 日米session/時刻guardと通常起動を配備 | 東証プライム売買代金20日平均比、個別需給/カタリストは下記の未接続 | 対象市場・系列・公表時計/許諾の確定 | なし（未実装あり） |
 | 財務サマリ | 7911/8566のROA4行をNotion/D1へ反映、17行全34列照合。保存20原本で確定した1375のIFRS指標3項目と税前混入2項目も、通常2行反映・全34列再読済み | 全市場のNULL/抽出漏れ分類・歴史relation。候補なし137を非開示と断定しない | 通常parser・原典の期間/単位/連結scope | なし |
 | EDINET継続取得と本文範囲 | 日次catchup→通常ingest、報告HOLDを保持する経路を配備 | 識別保留/本文なし/原本不足を各対象の根拠で解決 | 公式主体・doc/FY・保存ZIP/本文 | なし |
-| 有報39項目 | 固定3,686社の一巡処理は累計1,718社（30窓1,200社＋先行518社）まで受入（13:39 JST時点）、固定runtime4b0で続行中 | 同時点の残1,968社は実行中/未観測を含む。全社一巡・各列充足は未完。原39と旧タグ根拠を保持 | 共有owner/pending閉鎖・同定済み本文/7メタ/全文 | なし |
+| 有報39項目 | 固定3,686社のうち累計1,909社を反映（35窓1,400社＝反映1,391・保留9＋先行518社、14:40 JST時点）。固定runtime4b0で続行中 | 保留9社・未処理1,768社（実行中を含む）。既知6社は現stockIdの保存文書が全種類0件と確認、未提出/未取込/主体linkずれの区別は未確定。追加3社（589A/590A/593A）は保存summaryで最新有報候補なし、全種類の文書は未照合。全社一巡・各列充足は未完 | 共有owner/pending閉鎖・同定済み本文/7メタ/全文 | なし |
 | 受注と海外売上 | 11文書41区分と6721残4件を通常apply＋別inspect・最終FS照合まで受入。固定current177/177＋歴史FY2021–24の4件、state182ファイル/181claims、旧178ファイル不変 | 固定集合と歴史4件の受入で、全市場の充足は未認定。会社発表比率の基準不明は保存年額からの通常計算と区別する | 全6表fresh CAS・source本文・物理PRE/POST・通常mapper/projection | なし |
 | TDnetとIR PDF | 期限/単一ID再開と元PDF同定guardを配備 | 1279652は両入口404、限定公式調査でも同一原本未確認/HOLD | 同一元PDF資格。別日差替で代用しない | なし |
 | VWAP日足 | 全3,686対象の通常runとactive snapshotを受入 | 523A等の対象別欠測、旧PUT不明の個別閉鎖 | 原本・価格basis・完全readback | なし |
@@ -47,4 +47,4 @@ MacはNix/既存lockの月次手動＋Calendar/メールが合意済み運用。
 
 6721の歴史FY2022/23/24とcurrent FY2025は、受入済みFY2022 PREを置換せず通常11phaseを自然終端0で閉鎖した。423HTTPは全200・4D1 batch、全6表・物理PRE/POST・別inspect・1,826ファイルのFS照合を受入。最終の全5FY各2factsと32growthを実値で確認し、旧178state全bytesを保持した。固定current177/177＋歴史4件＝181claims/182stateファイルであり、全市場の完了や総claim数だけの判定へ広げない。会社発表比率の比較基準不明は原本年額からの通常計算と分け、逆算や特例で補正しない。上流停止・原本不足・曖昧な金額/主体は理由付きHOLD、0/推定値や別原典で補わない。未知の送信は自動再送せず、既知readonly停止の限定resumeだけ全native証跡と通常guardを使う。
 
-受入証跡はprivateの`main630-acceptance-v1/`、受注11と6721全4残件の通常apply/独立inspect closure・最終受入、`yutai-pending7731-normal-post-fs-v1/`、本文bulkの各終端窓を正本とする。詳細の原本・秘密値はGitへ載せない。予定と先行条件は[本番処理一覧](../production-job-inventory.md)、停止/手動/未実装を含む全scopeは[データ一覧](../batch-data-inventory.md)を参照する。
+受入証跡はprivateの`main630-acceptance-v1/`、`main633-acceptance-v1/`、`main634-acceptance-v1/`、1375の通常apply/syncと独立再読、受注11と6721全4残件の通常apply/独立inspect closure・最終受入、`yutai-pending7731-normal-post-fs-v1/`、本文bulkの各終端窓を正本とする。詳細の原本・秘密値はGitへ載せない。予定と先行条件は[本番処理一覧](../production-job-inventory.md)、停止/手動/未実装を含む全scopeは[データ一覧](../batch-data-inventory.md)を参照する。

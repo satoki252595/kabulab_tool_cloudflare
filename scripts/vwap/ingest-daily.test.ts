@@ -14,7 +14,7 @@ import { NotionUnknownResultError } from "../../src/shared/notion-archive/client
 import { NotionConfigError } from "../../src/shared/notion-archive/env.js";
 import { archiveYahooRawBatch } from "../../src/shared/yahoo/raw-custody.js";
 import { main, tenYearRange } from "./ingest-daily.js";
-import { assertSavedDailyShape, completedDailyFetch, hasCompletedDailyFetch } from "./lib/ingest-guard.js";
+import { assertSavedDailyShape, buildIngestSummary, completedDailyFetch, hasCompletedDailyFetch, sourceObservedAggregate } from "./lib/ingest-guard.js";
 import { fetchDailySessionReference, qualifyDailySourceRange, loadArchivedDailySessionReference } from "./lib/daily-session.js";
 import { referenceFromArchivedParts, readPriceReference, priceMetadata } from "../../src/shared/holdings/price-registry.js";
 import { publishDailyPriceSnapshot } from "./lib/holdings-price-registry.js";
@@ -352,7 +352,12 @@ describe("daily source前の同日確定済み再開", () => {
       expect(mockFetchDaily).not.toHaveBeenCalled();
       expect(mockR2Put).not.toHaveBeenCalled();
       expect(recordedMetadata().sourceObserved).toMatchObject({ count: 0 });
-      expect((recordedBody().outcomes as Record<string, unknown>).A).toMatchObject({ status: "skipped", sourceFetched: false, latestSourceBar: "2026-10-02" });
+      expect((recordedBody().outcomes as Record<string, unknown>).A).toMatchObject({ status: "skipped", sourceFetched: false, latestSourceBar: null });
+      const stats = recordedBody() as unknown as Parameters<typeof buildIngestSummary>[0];
+      const legacyOutcome = { ...stats.outcomes.A, latestSourceBar: "2026-10-02" };
+      expect(() => buildIngestSummary({ ...stats, outcomes: { A: legacyOutcome } })).toThrow("source未取得");
+      expect(sourceObservedAggregate({ A: legacyOutcome })).toEqual({ count: 0, maxDate: null, maxTs: null });
+      expect(legacyOutcome.latestSourceBar).toBe("2026-10-02");
       expect(saved.proof?.observedAt).toBe(observedAt);
 
       vi.clearAllMocks();

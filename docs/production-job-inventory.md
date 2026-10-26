@@ -61,7 +61,7 @@ nix --extra-experimental-features 'nix-command flakes' develop --offline --no-wr
 |---|---|
 | VWAP | `ingest:vwap-daily`／`ingest:vwap-intra`。一般5分足は銘柄＋最大60日。過去の任意時刻は専用の固定対象契約のみ |
 | 信用残 | `ingest:vwap-margin --date=YYYYMMDD`。公開元に残る原本が必要 |
-| Python有報 | Nix内の`pipeline`から`uv run python -m jp_stock_pipeline.jobs.edinet_daily --date YYYY-MM-DD --require-cloud` |
+| Python有報 | Nix内・repo直下から`uv run --frozen --env-file .env --project pipeline python -m jp_stock_pipeline.jobs.edinet_daily --date YYYY-MM-DD --require-cloud` |
 | 月次 | `sync:universe`→`yutai:fetch`→`sync:monthly:core`。`sync:monthly`は優待取得→再計算だけ。原文取込も共有writerの初回移行が必要で、要約は独立Linux日次 |
 | 保有価格 | `scripts/notion/shareholdings.ts resume-prices <private-output.json>`。通常queue・固定window・原本/basis/主体検査を使用 |
 | 本文39・基本補足 | `sync:mechanical --target=supplement --codes=<固定対象> --limit=<同数> --budget-min=<分>`。最大50社、保存原本の資格を確認。新規/変更入力の意味判定は保留 |
