@@ -165,7 +165,7 @@ export async function main() {
             // ponytail: 同じ確定sessionのvendor訂正は自動追跡しない。訂正取得は明示別scope。
             if (standingReference.status === "ready" && hasCompletedDailyFetch(saved, SOURCE_RANGE)) {
               skipped++;
-              outcomes[code] = { status: "skipped", latestSourceBar: SOURCE_RANGE.to,
+              outcomes[code] = { status: "skipped", latestSourceBar: null,
                 bodySha: bodyPin(existing), sourceFetched: false };
               return;
             }

@@ -9,6 +9,8 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ## 2026-10-26
 
+- 日足取得を保存原本で省略した銘柄の`latestSourceBar`をNULLにし、対象日を今回取得した価格日へ代用しない。新規summary生成時に矛盾を拒否し、既存summaryの読取と鮮度集計の除外条件は保持する。SSH Pythonは`.env`・依存lockを明示し、Cloudflare/D1の正規名と旧CF_*名の3組を共有設定で照合する。不一致は値を表示せず停止する。
+
 - 本番作業: 保存20原本の診断で確定した1375の2行5項目を通常再解析からNotion・D1へ反映。IFRS営業CF・財務CF・ROEを補い、税前利益の経常利益への混入2項目をNULLへ訂正。原本・キー・他項目を保持し、Notion全9行・D1全34列の通常PRE/POSTを照合。全市場のNULL解消は未完。
 
 - 財務再解析CLIは実行するscriptと同じ`pipeline/src`を優先し、既存venvの古いeditable設定や別cwd・PYTHONPATHで旧parserへ入る問題を防ぐ。

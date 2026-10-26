@@ -701,6 +701,11 @@ export function buildIngestSummary(stats: IngestRunStats): {
   metadata: Record<string, unknown>;
   files: Array<{ bytes: Uint8Array; filename: string; contentType: string }>;
 } {
+  for (const outcome of Object.values(stats.outcomes)) {
+    if (outcome.sourceFetched === false && outcome.latestSourceBar !== null) {
+      throw new Error("source未取得のlatestSourceBarはnullでなければなりません");
+    }
+  }
   const day = stats.finishedAt.slice(0, 10).replaceAll("-", "");
   if (!/^\d{8}$/.test(day)) {
     throw new Error(`finishedAt から日付キー不能: ${stats.finishedAt}`);

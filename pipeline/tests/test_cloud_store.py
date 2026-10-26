@@ -11,6 +11,7 @@ from datetime import date
 
 import pytest
 
+from jp_stock_pipeline.config import ConfigError, load_settings
 from jp_stock_pipeline.cloud_store import keys
 from jp_stock_pipeline.cloud_store.guards import (
     GuardError,
@@ -23,6 +24,49 @@ MARGIN_CONTRACT = {
     "$": ("week",),
     "rows[]": ("code", "sell", "sell_chg", "buy", "buy_chg"),
 }
+
+
+@pytest.mark.parametrize("canonical,legacy,field", [
+    ("CLOUDFLARE_ACCOUNT_ID", "CF_ACCOUNT_ID", "cf_account_id"),
+    ("CLOUDFLARE_API_TOKEN", "CF_API_TOKEN", "cf_api_token"),
+    ("D1_DATABASE_ID", "CF_D1_DATABASE_ID", "d1_database_id"),
+])
+@pytest.mark.parametrize("canonical_value,legacy_value,expected", [
+    pytest.param(" declared-shared-value ", None, "declared-shared-value", id="canonical"),
+    pytest.param(None, " declared-shared-value ", "declared-shared-value", id="legacy"),
+    pytest.param(" declared-shared-value ", "declared-shared-value", "declared-shared-value", id="same"),
+    pytest.param("DECLARED_CANONICAL_SECRET", "DECLARED_LEGACY_SECRET", ConfigError, id="conflict"),
+    pytest.param(None, None, None, id="missing"),
+    pytest.param("", "", None, id="empty"),
+    pytest.param(" \t", "  ", None, id="blank"),
+    pytest.param("  ", "declared-shared-value", "declared-shared-value", id="canonical-blank"),
+    pytest.param("declared-shared-value", "  ", "declared-shared-value", id="legacy-blank"),
+])
+def test_cloud_environment_aliases(tmp_path, canonical, legacy, field,
+                                  canonical_value, legacy_value, expected):
+    env = {"NOTION_DB_IDS_FILE": str(tmp_path / "absent-db-ids.json"),
+           "CF_ACCOUNT_ID": "declared-account", "CF_API_TOKEN": "declared-token",
+           "CF_D1_DATABASE_ID": "declared-db", "R2_ACCESS_KEY_ID": "declared-r2-access",
+           "R2_SECRET_ACCESS_KEY": "declared-r2-secret"}
+    env.pop(legacy)
+    for key, value in ((canonical, canonical_value), (legacy, legacy_value)):
+        if value is not None:
+            env[key] = value
+    before = dict(env)
+    if expected is ConfigError:
+        with pytest.raises(ConfigError) as caught:
+            load_settings(env=env)
+        assert canonical in str(caught.value) and legacy in str(caught.value)
+        assert canonical_value not in str(caught.value) and legacy_value not in str(caught.value)
+    else:
+        settings = load_settings(env=env).cloud_store
+        assert getattr(settings, field) == expected
+        if expected is None:
+            with pytest.raises(ConfigError, match=legacy):
+                settings.require_complete()
+        else:
+            settings.require_complete()
+    assert env == before
 
 
 class TestKeys:

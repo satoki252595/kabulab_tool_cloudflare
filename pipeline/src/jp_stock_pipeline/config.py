@@ -193,13 +193,21 @@ class CloudStoreSettings:
             raise ConfigError("Cloudflare本番保存の必須設定が不足: " + ", ".join(missing))
 
 
+def _cloud_env_alias(env: dict[str, str], canonical: str, legacy: str) -> str | None:
+    values = {env[key].strip() for key in (canonical, legacy)
+              if env.get(key) and env[key].strip()}
+    if len(values) > 1:
+        raise ConfigError(f"Cloudflare設定の別名が不一致: {canonical} / {legacy}")
+    return next(iter(values)) if values else None
+
+
 def _load_cloud_store(env: dict[str, str]) -> CloudStoreSettings:
     return CloudStoreSettings(
-        cf_account_id=env.get("CF_ACCOUNT_ID") or None,
+        cf_account_id=_cloud_env_alias(env, "CLOUDFLARE_ACCOUNT_ID", "CF_ACCOUNT_ID"),
         r2_access_key_id=env.get("R2_ACCESS_KEY_ID") or None,
         r2_secret_access_key=env.get("R2_SECRET_ACCESS_KEY") or None,
-        cf_api_token=env.get("CF_API_TOKEN") or None,
-        d1_database_id=env.get("CF_D1_DATABASE_ID") or None,
+        cf_api_token=_cloud_env_alias(env, "CLOUDFLARE_API_TOKEN", "CF_API_TOKEN"),
+        d1_database_id=_cloud_env_alias(env, "D1_DATABASE_ID", "CF_D1_DATABASE_ID"),
         bucket_timeseries=env.get("R2_BUCKET_TIMESERIES") or DEFAULT_R2_BUCKET_TIMESERIES,
         bucket_raw=env.get("R2_BUCKET_RAW") or DEFAULT_R2_BUCKET_RAW,
         bucket_supply=env.get("R2_BUCKET_SUPPLY") or DEFAULT_R2_BUCKET_SUPPLY,
