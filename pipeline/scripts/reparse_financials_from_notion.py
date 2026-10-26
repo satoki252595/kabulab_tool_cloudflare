@@ -9,6 +9,7 @@ import json
 import math
 import os
 import re
+import sys
 import time
 import zipfile
 from collections import Counter, defaultdict
@@ -21,6 +22,8 @@ from urllib.parse import urlparse
 from uuid import UUID
 
 import httpx
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from backfill_financials_from_notion import _bounds, _next_month, notion_financial
 from jp_stock_pipeline.config import load_settings

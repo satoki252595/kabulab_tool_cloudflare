@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import runpy
 import sqlite3
+import subprocess
 import sys
 from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
@@ -26,6 +28,27 @@ from jp_stock_pipeline.cloud_store.financials import COLUMNS, record_to_row  # n
 from jp_stock_pipeline.cloud_store.schema import _FINANCIALS  # noqa: E402
 from test_financial_context_units import EDINET_CASES, fixture_provenance, fixture_tidy  # noqa: E402
 from jp_stock_pipeline.transform.normalize import tidy_to_financial_record  # noqa: E402
+
+
+def test_cli_help_binds_script_source_before_stale_pythonpath(tmp_path):
+    """別cwd/旧editable相当の負fixtureでも、実CLI自身と同じsourceを読む。"""
+    wrong_package = tmp_path / "declared-stale-package" / "jp_stock_pipeline"
+    wrong_package.mkdir(parents=True)
+    (wrong_package / "__init__.py").write_text(
+        'raise RuntimeError("DECLARED_STALE_EDITABLE_PACKAGE")\n'
+    )
+    other_cwd = tmp_path / "outside-repository"
+    other_cwd.mkdir()
+    result = subprocess.run(
+        [sys.executable, str(Path(reparse.__file__).resolve()), "--help"],
+        cwd=other_cwd,
+        env={**os.environ, "PYTHONPATH": str(wrong_package.parent),
+             "PYTHONDONTWRITEBYTECODE": "1"},
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "--diagnose-capture" in result.stdout
+    assert "DECLARED_STALE_EDITABLE_PACKAGE" not in result.stderr
 
 
 @pytest.mark.parametrize("invalid", [None, "id", "parent", "archived", "in_trash"])
