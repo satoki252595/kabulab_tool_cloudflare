@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import { describe, it, expect } from "vitest";
-import { parseOrderData } from "../../src/services/edinet/order-parser.js";
+import { parseOrderData, type OrderExtraction } from "../../src/services/edinet/order-parser.js";
 import {
   toOrderSaveRows,
   validateOrderRepairSet,
@@ -33,6 +33,9 @@ import {
   runSavedOverseas,
   reserveSavedClaims,
   savedBusinessView,
+  assertSavedLatest,
+  assertSavedSourcePageMetadata,
+  type SavedOverseasItem,
 } from "./saved-overseas-backfill.js";
 
 const fixture = fileURLToPath(
@@ -55,9 +58,87 @@ const target = {
   periodEnd: item.periodEnd,
 };
 const clock = 1792200000;
+const historicalProof = join(process.cwd(), "tmp/orders-historical-proof-v1/CASE.private.json");
 
 // Actual financial rows only; mutations below are declared negative/projection tests.
 describe("normal finite orders repair", () => {
+  it("requires explicit historical scope and selects the exact saved document, retaining latest admission by default", async () => {
+    const doc = before.yuho_documents.find(row => row.doc_id === "S100W3NJ")!;
+    const historical = { ...item, documentId: doc.id, docId: doc.doc_id, periodEnd: doc.period_end };
+    await expect(assertSavedLatest(process.cwd(), before, [historical])).rejects.toThrow();
+    expect((await assertSavedLatest(process.cwd(), before, [historical], "historical")).get(historical.docId)).toBe(doc.notion_doc_page_id);
+    expect((await assertSavedLatest(process.cwd(), before, [item])).get(item.docId)).toBe(before.yuho_documents.find(row => row.id === item.documentId)!.notion_doc_page_id);
+    await expect(assertSavedLatest(process.cwd(), before, [item], "historical")).rejects.toThrow();
+    for (const fault of [
+      { ...historical, stockId: historical.stockId + 1 },
+      { ...historical, documentId: item.documentId },
+      { ...historical, edinetCode: "E02083" },
+      { ...historical, periodEnd: item.periodEnd },
+    ]) await expect(assertSavedLatest(process.cwd(), before, [fault], "historical")).rejects.toThrow();
+    for (const change of [{ text_parse_status: null }, { notion_doc_page_id: "" }, { doc_type_code: "140" }]) {
+      const snapshot = structuredClone(before);
+      Object.assign(snapshot.yuho_documents.find(row => row.id === doc.id)!, change);
+      await expect(assertSavedLatest(process.cwd(), snapshot, [historical], "historical")).rejects.toThrow();
+    }
+  });
+  it.skipIf(!existsSync(historicalProof))("replays four qualified 6721 originals through historical identity and normal six-table repair before current projection", async () => {
+    const bytes = readFileSync(historicalProof);
+    expect(sha(bytes)).toBe("cc887bef3a6e4c28ee9864bbfdd9c5d3bca207b88d3cc41969cd335993053cb3");
+    const actual = JSON.parse(bytes.toString()) as {
+      before: Snapshot;
+      history: { item: SavedOverseasItem; parsed: OrderExtraction; sourcePage: Parameters<typeof assertSavedSourcePageMetadata>[1] }[];
+      current: OrderExtraction;
+    };
+    let snapshot = actual.before;
+    const runClock = Number(snapshot.p_yuho_growth[0].computed_at) + 1;
+    let failureSha: string | undefined;
+    // Primary paragraphs stay private; failed bulk comparisons only report a fixed label.
+    try {
+      for (const entry of actual.history) {
+        const doc = snapshot.yuho_documents.find(row => row.id === entry.item.documentId)!;
+        await assertSavedLatest(process.cwd(), snapshot, [entry.item], "historical");
+        assertSavedSourcePageMetadata(entry.item, entry.sourcePage, doc);
+        const raw = entry.sourcePage.properties.Metadata as { rich_text: { plain_text: string }[] };
+        const native = JSON.parse(raw.rich_text.map(part => part.plain_text).join(""));
+        for (const field of ["docID", "edinetCode", "secCode", "filerName", "docTypeCode", "periodStart", "periodEnd", "submitDateTime"]) {
+          const fault = structuredClone(entry.sourcePage);
+          const text = JSON.stringify({ ...native, [field]: "declared-negative-identity" });
+          fault.properties.Metadata = { type: "rich_text", rich_text: [{ type: "text", plain_text: text, text: { content: text } }] };
+          expect(() => assertSavedSourcePageMetadata(entry.item, fault, doc)).toThrow();
+        }
+        const built = await buildOrdersAtomicWithCommonProjection(process.cwd(), snapshot, entry.item, entry.parsed, runClock);
+        const db = openActualSnapshot(process.cwd(), snapshot);
+        try {
+          db.exec("BEGIN");
+          for (const statement of built.statements) db.prepare(statement.sql).all(...(statement.params as (number | string | null)[]));
+          db.exec("COMMIT");
+          const post = readSnapshot(db, entry.item.stockId);
+          assertTargetPost(post, built.expected, entry.item, "orders");
+          const oldFacts = snapshot.yuho_order_facts.filter(row => row.document_id === entry.item.documentId);
+          const newFacts = post.yuho_order_facts.filter(row => row.document_id === entry.item.documentId);
+          expect(oldFacts.every(row => row.orders_received_raw === null)).toBe(true);
+          expect(newFacts.every(row => row.orders_received_raw === oldFacts[0].order_backlog_raw && row.order_backlog_raw !== oldFacts[0].order_backlog_raw)).toBe(true);
+          snapshot = post;
+        } finally { db.close(); }
+      }
+      const doc = snapshot.yuho_documents.find(row => row.doc_id === "S100XW0L")!;
+      const built = await buildOrdersAtomicWithCommonProjection(process.cwd(), snapshot,
+        { stockId: 3979, documentId: Number(doc.id), docId: String(doc.doc_id), periodEnd: String(doc.period_end) }, actual.current, runClock);
+      const result = built.expected.p_yuho_growth[0];
+      expect(result.ord_years).toBe(5);
+      expect(result.ord_orders_yoy).toBeCloseTo(0.729206446192622, 12);
+      expect(result.ord_backlog_yoy).toBeCloseTo(-0.11918665332141543, 12);
+      expect(result.ord_orders_cagr).toBeCloseTo(-0.013108323083954043, 12);
+      expect(result.ord_backlog_cagr).toBeCloseTo(-0.08111171069828393, 12);
+      // Amount-derived YoY is deliberately not replaced with the printed -7.8%.
+      expect(result.ord_orders_yoy).not.toBeCloseTo(-0.078, 2);
+    } catch (error) {
+      const path = join(process.cwd(), "tmp/orders-historical-proof-v1/FAILURE.private.txt");
+      writeFileSync(path, String(error), { mode: 0o600 });
+      failureSha = sha(readFileSync(path));
+    }
+    expect(failureSha, "private replay failure: diagnostic is saved privately; only SHA is reported").toBeUndefined();
+  });
   it("keeps orders and overseas cohorts incompatible and binds the original saved source", () => {
     expect(sha(zip)).toBe(provenance.zipSha256);
     expect(sha(readFileSync(join(fixture, "snapshot.json")))).toBe(
@@ -330,6 +411,13 @@ describe("normal finite orders repair", () => {
           qualified: [{ item }],
           freshReadAt: "new-PRE",
         },
+        {
+          version: 2,
+          kind: "orders",
+          ordersDocumentScope: "historical",
+          cohortSha256,
+          qualified: [{ item }],
+        },
         { version: 1, cohortSha256, qualified: [{ item }] },
       ].entries()) {
         const path = join(dir, `PRE-${n}.gz`),
@@ -353,11 +441,17 @@ describe("normal finite orders repair", () => {
           maxRequestBytes: 1024 ** 2,
           notAfter: new Date(Date.now() + 3600000).toISOString(),
         };
-        await expect(runSavedOrders(options, process.cwd())).rejects.toThrow();
-        expect(existsSync(options.outDir)).toBe(false);
-        await expect(
-          runSavedOverseas(options, process.cwd()),
-        ).rejects.toThrow();
+        for (const ordersDocumentScope of [undefined, "historical"] as const) {
+          // Old/latest PRE and historical PRE cannot be mixed in either direction.
+          const scoped = { ...options, ordersDocumentScope };
+          if (capsule.version === 2 && capsule.ordersDocumentScope !== ordersDocumentScope)
+            await expect(runSavedOrders(scoped, process.cwd())).rejects.toThrow("saved document scope differs from PRE");
+          else await expect(runSavedOrders(scoped, process.cwd())).rejects.toThrow();
+          expect(existsSync(scoped.outDir)).toBe(false);
+          if (ordersDocumentScope === "historical")
+            await expect(runSavedOverseas(scoped, process.cwd())).rejects.toThrow("historical document scope is orders-only");
+          else await expect(runSavedOverseas(scoped, process.cwd())).rejects.toThrow();
+        }
       }
       expect(sends).toBe(0);
       expect(readFileSync(claim).equals(old)).toBe(true);
