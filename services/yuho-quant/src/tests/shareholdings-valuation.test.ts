@@ -153,6 +153,13 @@ describe("保有明細の期末参考時価", () => {
     await expect(qualify(source({ currency: "USD" }))).rejects.toThrow();
     await expect(qualify(source({ issuerName: "STRUCTURAL MISMATCH" }))).rejects.toThrow();
     await expect(qualify({ ...source(), sha256: "0".repeat(64) })).rejects.toThrow();
+    // Existing structural chart: fault only the capture metadata, not the business values.
+    for (const receivedAt of ["not-a-clock", "2026-06-29T23:59:59.999Z"]) {
+      const saved = source(), wrapper = JSON.parse(gunzipSync(saved.bytes).toString("utf8"));
+      wrapper.members[0].receivedAt = receivedAt;
+      const bytes = gzipSync(Buffer.from(JSON.stringify(wrapper))), prices = new HoldingsPriceIndex([{ ...saved, bytes, sha256: hash(bytes) }]);
+      for (let attempt = 0; attempt < 2; attempt++) await expect(qualifyHoldingValuation({ holding, fiscalYearEnd: "2026-06-30", catalog, prices })).rejects.toThrow("captureclock");
+    }
   });
   it("明示indexは同じsourceを一度だけ展開し、同symbolのchart検証を共有して同じ結果を返す", async () => {
     const saved = source(), spy = vi.spyOn(JSON, "parse");
@@ -226,4 +233,21 @@ it.skipIf(!existsSync(new URL("result.private.json", HOLIDAY_SAVED)))("actual250
   for (const result of after) if (result.status === "qualified") expect(result.priceSource).toMatchObject({ evaluationDate:"2025-12-31",sharesAsOf:"2025-12-31",priceAsOf:"2025-12-30",marketCalendar:{calendarSources:[expect.objectContaining({readback:true}),expect.objectContaining({readback:true}),expect.objectContaining({readback:true})]} });
   expect(before.valuations.every((v:{result:{status:string}})=>v.result.status==="unavailable")).toBe(true);
   expect(parsed.holdings).toHaveLength(10);
+  // Actual 4502 raw chart/holding are unchanged. This deliberately impossible receipt is a fault projection.
+  const saved = prices.find(p => p.priceMembers?.["4502.T"] !== undefined)!;
+  const wrapper = JSON.parse(gunzipSync(saved.bytes).toString("utf8"));
+  const expected = saved.priceMembers!["4502.T"];
+  const member = wrapper.members.find((m: { api: string; symbol: string; sha256: string; receivedAt: string }) =>
+    m.api === "daily" && m.symbol === "4502.T" && m.sha256 === expected.bodySha256 && m.receivedAt === expected.receivedAt);
+  expect(member).toBeDefined();
+  const observed = after.find(v => v.status === "qualified" && v.identity.code === "4502")!;
+  expect(observed.status).toBe("qualified"); if (observed.status !== "qualified") throw new Error("actual 4502 not qualified");
+  const capture = new Date(observed.priceSource.sourceTimestamp * 1000 - 1).toISOString(); member.receivedAt = capture;
+  const bytes = gzipSync(Buffer.from(JSON.stringify(wrapper)));
+  const fault = { ...saved, bytes, sha256: hash(bytes), priceMembers: { ...saved.priceMembers,
+    "4502.T": { ...saved.priceMembers!["4502.T"], receivedAt: capture } } };
+  const actualHolding = parsed.holdings.find(h => exactLegalName(h.name) === exactLegalName(observed.identity.legalName))!;
+  expect(actualHolding).toBeDefined();
+  await expect(qualifyHoldingValuation({ holding: actualHolding, fiscalYearEnd: before.source.fiscalYearEnd,
+    catalog: actualCatalog, prices: [fault] })).rejects.toThrow("captureclockより未来");
 });

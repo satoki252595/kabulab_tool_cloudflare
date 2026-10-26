@@ -7,7 +7,7 @@ import { tokenizeDelimited } from "./csv.js";
 import { parseStockCode } from "../../../../../src/shared/jpx/stock-code.js";
 import { parseDailyChart } from "../../../../../src/shared/yahoo/client.js";
 import { lastJpxSessionOnOrBefore, type JpxReferenceSession } from "../../../../../src/shared/market-calendar.js";
-import { jstDateSec } from "../../../../../src/shared/vwap/proof.js";
+import { isStrictIsoUtc, jstDateSec } from "../../../../../src/shared/vwap/proof.js";
 import type { Shareholding } from "./shareholdings.js";
 import type { OfficialIssuerEnglishName, OfficialIssuerNames } from "./shareholdings-issuer-names.js";
 import type { PreSplitFiscalYearBasis } from "./shareholdings-split-basis.js";
@@ -161,11 +161,15 @@ export class HoldingsPriceIndex {
       verified = (async () => {
         const { member } = candidate;
         assert.equal(member.status, 200);
+        assert.ok(isStrictIsoUtc(member.receivedAt), "保有価格原本の実captureclockが不正です");
+        const capturedAtMs = Date.parse(member.receivedAt);
         const bytes = Buffer.from(member.bodyBase64, "base64");
         assert.equal(bytes.length, member.byteLength); assert.equal(sha(bytes), member.sha256);
         const range = chartRequest(member.url, symbol);
         const parsed = await parseDailyChart(symbol, range, bytes, member.receivedAt);
         const raw = JSON.parse(bytes.toString("utf8")) as { chart: { result: VerifiedPriceChart["raw"][] } };
+        assert.ok(raw.chart.result[0].timestamp.every(ts => ts * 1000 <= capturedAtMs),
+          "保有価格原本の日足時刻が実captureclockより未来です");
         return { range, parsed, raw: raw.chart.result[0] };
       })();
       this.#verified.set(candidate, verified);
