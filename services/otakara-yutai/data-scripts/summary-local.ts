@@ -40,6 +40,7 @@ import { parseBenefitChoiceStructure } from "./choice-structure.js";
 import { compileAnnualGiftHistoryLiteral, compileBankDepositChoiceLiteral, compileBankHoldingHistoryLiteral, compileDepartmentHoldingLiteral, compileEqualAllocationHoldingLiteral, compileHoldingGiftChoiceLiteral, compileHoldingPointCarryLiteral, compileHotelHoldingLiteral, compileMealTicketSplitLiteral, compilePointExchangeLiteral, compilePremiumClubCarryLiteral, compileRegistryTierLiteral, compileSkiTicketBundleLiteral, compileVenueAdmissionLiteral, parseBenefitHoldingStructure } from "./holding-structure.js";
 import { compileMusashinoOfficialLiteral } from "./musashino-source.js";
 import { compileNoteOfficialLiteral } from "./note-source.js";
+import { compileKawasakiOfficialLiteral } from "./kawasaki-source.js";
 import { parseBenefitRecordTierStructure } from "./record-tier-structure.js";
 import { benefitKey } from "./benefit-key.js";
 import { loadBenefitRows, openOtakaraD1 } from "./benefit-rows.js";
@@ -175,10 +176,19 @@ export function companyValue(task: SummaryTask): {
   return evaluateCompanyValue(task.description, context);
 }
 
-export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v24";
+export const DETERMINISTIC_SUMMARY_RULE = "simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v25";
 
 /** 対応する種類＋額面・全文1点選択・全文対応の期間/名簿条件を定型化する。未対応条件を削らない。 */
 export function compileSimpleSummary(task: SummaryTask): SummaryResult | null {
+  const kawasaki = compileKawasakiOfficialLiteral(task.description);
+  if (kawasaki !== null) {
+    const amount = companyValue(task);
+    if (task.stockCode !== "3045" || task.rowCount !== 2 || task.recipients.length !== 2 ||
+        amount.value !== null || amount.reason !== "multi_month_amounts" || checkSummary(kawasaki.shortSummary).length > 0 ||
+        !isSummaryNumbersGrounded(task.description, kawasaki.shortSummary, { minShares: task.recipients.map(row => row.minShares),
+          recordMonths: task.recipients.map(row => row.recordMonth), recordDates: task.recipients.map(row => row.recordDate) })) return null;
+    return SummaryResult.parse({ taskId: task.taskId, contractVersion: task.contractVersion, shortSummary: kawasaki.shortSummary, estimatedValue: null });
+  }
   const registryTier = compileRegistryTierLiteral(task.description);
   if (registryTier !== null) {
     const amount = companyValue(task);
