@@ -18,7 +18,7 @@ from ..collectors import tdnet_official_fallback, tdnet_yanoshin
 from ..convert import convert_artifact, xbrl_to_csv
 from ..http import FetchError, fetch
 from ..licensing import source_license
-from ..models import JST, DisclosureRecord, Provenance, RawArtifact, Source, now_jst
+from ..models import JST, ConvertStatus, DisclosureRecord, Provenance, RawArtifact, Source, now_jst
 from ..notion import file_upload, upsert
 from ..notion.client import NotionUnknownResultError
 from ..rawstore import save_raw
@@ -106,10 +106,16 @@ def _process_financial_xbrl(
     # executeで通常resolverが既に同定した個社だけ。rawのための追加検索はしない。
     if record.code:
         artifact.qualified_master_page_id = master_id
-    tidy = xbrl_to_csv.xbrl_zip_to_tidy(
-        artifact.local_path.read_bytes(), record.code or "", record.doc_id
-    )
-    xbrl_to_csv.write_tidy(tidy, artifact)
+    try:
+        tidy = xbrl_to_csv.xbrl_zip_to_tidy(
+            artifact.local_path.read_bytes(), record.code or "", record.doc_id
+        )
+        xbrl_to_csv.write_tidy(tidy, artifact)
+    except Exception:
+        # EDINETと同じく変換失敗も⑤へ保全。保管不明は送出し、③へ進まない。
+        artifact.convert_status = ConvertStatus.FAILED
+        ctx.upload_raw(artifact, sha_map=sha_map, sha_map_date=sha_map_date)
+        raise
     raw_page_id = ctx.upload_raw(artifact, sha_map=sha_map, sha_map_date=sha_map_date)
 
     # ⑧ 短信 XBRL の全ファクトをローカル専用ストアへミラー（§7.1, factual-cite=内部利用）。
