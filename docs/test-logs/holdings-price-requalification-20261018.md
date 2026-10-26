@@ -19,7 +19,7 @@ PRE送信前に通常価格markerを「実行中（結果未確定）」へ単�
 
 ## 上限・費用
 
-候補queryは最大3ページ×100 metadata行、再開のためのsource読取は成功数によらず最大5試行。各sourceの前に停止時計を確認し、ZIPの既知size（未知なら20MiB）を既存256MiB予算へ先に予約、実byteを控除する。新passの通常writer前に再読する同ZIPも同じ予算へ控除し、不足なら「再開待ち」を保って次runへ残す。通常価格passは従来の100明細・116価格chunk・256MiB・300秒の条件を維持する。旧初回passのsource読取契約は変更しない。5sourceを再開した場合は、残りの旧HOLDを完了と扱わないため保守的に`pending=true`とする。候補の全件処理を保証するcursorや新tableは追加しない。
+10/26改修: 候補queryは最大3ページ×100 metadata行。原本完了sourceだけを編集時刻の古い順に選び、新世代が来ても未試行の古いsourceを優先する。再資格成立は最大5件とし、既知readonlyの取下げ・原本不足はこの5枠を消費せず次候補へ進む。旧実装の「成功数によらず5試行」で先頭HOLDが後方を止める問題を修正した。各sourceの前に停止時計を確認し、ZIPの既知size（未知なら20MiB）を既存256MiB予算へ先に予約、実byteを控除する。新passの通常writer前に再読する同ZIPも同じ予算へ控除し、不足なら「再開待ち」を保って次runへ残す。通常価格passは従来の100明細・116価格chunk・256MiB・300秒の条件を維持する。既知HOLDが多い時のD1/Notion metadata読取は300候補まで増えるが、新しい数値HTTP上限は設けず、既存の全byte予約・実時計で停止する。予算不足は即座に閉じ、unknownは次候補へ進まず送信・再資格を止める。HOLD試行markerや新claimは書かず、旧snapshot/株数/価格を保つ。旧初回passのsource読取契約は変更しない。5sourceを再開した場合は、残りの旧HOLDを完了と扱わないため保守的に`pending=true`とする。候補の全件処理を保証するcursorや新tableは追加しない。
 
 追加費用は新世代確認の既存active metadata読取、最大3候補query、再開sourceごとの保存ZIP読取・全period照合・PRE物理保管・価格marker 2回である。ZIPは従来の1source 20MiB上限、PREも1source 20MiB上限。通常publisherには新passの既確定行保持を確認するperiod読取が加わる。これらは追加費用であり、旧passの保存費用や将来のD1/Notion実費をゼロとしない。
 
@@ -77,3 +77,10 @@ PRE送信前に通常価格markerを「実行中（結果未確定）」へ単�
 - 集計 `actual-closed-read/result.json`: SHA256 `8c99d552fbe44dc2b842675c21fef7d34bf4ec51a90f23834a0c5b41ed92aeff`
 - 通常閉鎖 `saved-known-closure-v1.json`: SHA256 `1749a1d7c1300c3c4c0e3daeefa949e3ac2bf9b624e2c9ec96617fc9342af289`
 - Root保存物照合 `root-reason-acceptance-v1.json`: SHA256 `89082d5f49e703a164ade02661dada643aba60e5eb9f584352c0e0e5fc083c5c`
+
+
+## 結果の範囲（2026-10-26）
+
+通常resultの`held`は初回要確認1件sampleと今回の価格windowのHOLDを足した互換counterであり、全未解決文書数ではない。`pending=false`も選択queue窓の終端だけを表す。追加の`review`にsampleの`has_more`・記録済みsnapshot・原本ID、queueの対象ID、再資格候補/readonly HOLD/成立件数、今回sourceごとの実snapshot・未資格理由を残す。`windowUnavailableReasons`は今回window、`unavailableRows`はsource内の累計である。CLI私有JSONと通常日次結果は同じreportを保持する。全件カウント用の追加queryは日次へ入れない。
+
+10/26の有限読取は要確認1query/100文書・3,846,943Bで`has_more=true`。100は下限で、直近resumeの`held3`を全残3件とはしない。100文書のうち現価格snapshot5、旧世代94、snapshot未記載1。skip条件に該当したのは原本未完了208Aの1文書で、他99文書は既存の終端cursor/未資格正数を満たしていた。旧世代の価格が直ちに不正であるとは判断しない。

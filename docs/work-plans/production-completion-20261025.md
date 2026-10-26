@@ -29,9 +29,9 @@ MacはNix/既存lockの月次手動＋Calendar/メールが合意済み運用。
 | 株主優待取得と要約 | main630の.13/v26通常collector/compiler/importへ接続。7731行POSTで残26群45行10銘柄を実測 | 5243全2/3045全4/9842全6のsource是正と既存compiler適用は未実施。差引推計を現残にしない | bulk終了＋共有owner/pending閉鎖、全原本物理保管→fresh4表PRE/通常派生→原子適用/全POST再測定 | 実行時モデルなし |
 | 事業タグとMac定時処理 | 旧自動2label停止、月次Calendar/メール・受入runtime45629c8・通常preflight確認 | 適格新規/実入力変更の意味判定は合意済み月次手動 | Nix・受入HEAD/同lock/private env/state・kernel/shared writer | Clef判定のみあり |
 | 競合判定 | 月次driverで設定済みscopeの機械入力準備へ接続 | 意味判定・TypeSafe・全社自動判定は意図的停止 | biztag成功、既存cursor/pending・固定scope | 準備なし／意味判定停止 |
-| 資金フロー | 独立28source通常runは26正常・投信/REIT2source503、公式統計停止告知を確認 | 停止2source、価格依存sector-turnover、全期間/全系列の充足 | 取得元ごとの公表期間/単位、sectorは価格資格と株式成功 | なし |
+| 資金フロー | 独立28source通常runは26正常・投信/REIT2source503 | 2sourceは取得元都合の保留。[公式10/23案内](https://www.imaj.or.jp/news/2026/20261023_001929.html)・[統計入口](https://www.imaj.or.jp/statistics/)で停止継続を10/26確認。価格依存sector-turnover、全期間/全系列の充足も未確認 | 取得元ごとの公表期間/単位、sectorは価格資格と株式成功 | なし |
 | 原本とAPI索引 | 通常取得は共有Notionへ実体/SHA保存。必要RAW限定補完を使用 | 歴史原本のcustody/未索引分類は未完。全量ミラーは意図的停止 | 本番が読む原本だけ、通常writerと同定/SHA/読戻し | なし |
-| 有価証券保有明細 | snapshot40169768650.1/session10月23日/3,685members、通常resume23HTTP200・pending=false | held3、全保有価格・分割/併合/増資等の法的日付/株数/価格basis | 主体・株式種類・通貨/単位・対象日・原典 | なし |
+| 有価証券保有明細 | snapshot40169768650.1/session10月23日/3,685members。通常resumeは30明細/2文書・23HTTP200。held3/pending=falseは初回sample＋今回queue窓の結果 | 10/26の要確認1queryで100文書・has_more=trueを実測（下限100）。現snapshot5・旧世代94・snapshot未記載1で、全価格未解決数は未確定。再資格は古い編集順・最大5成立/300候補へ修正し、readonly HOLDが後続を塞がない。分割/併合/増資等の法的日付/株数/価格basisも未完 | 主体・株式種類・通貨/単位・対象日・原典 | なし |
 | APIとMCP | 認証旧3＋REST7ケース77行、MCP3ケース、公開5ケースを段階受入 | 全API/全データ充足は未認定 | 既存認証・license・公開資格と実保存値 | なし |
 | 監視とNotion案内 | 既存CF receipt/Actions/ops・schema/license照合を維持。優待定期の安全metadataを7日保存 | MAX日付だけで全件充足にしない。案内/現況表の時点更新 | 既存receiptと対象集合/失敗区分。経過はGit履歴参照 | なし |
 

@@ -60,7 +60,7 @@ vi.mock("../../services/yuho-quant/src/services/ingest.js", () => ({
 vi.mock("../shared/notion-archive/shareholdings.js", async original => ({
   ...await original<typeof import("../shared/notion-archive/shareholdings.js")>(),
   resumePendingShareholdings: vi.fn(async () => ({ usedRows: 0, resumed: 0, held: 0, pending: false })),
-  resumePendingShareholdingsPrices: vi.fn(async () => ({ usedRows: 0, resumed: 0, held: 0, pending: false })),
+  resumePendingShareholdingsPrices: vi.fn(async () => ({ usedRows: 0, resumed: 0, held: 0, pending: false, review: { scope: "initial-attention-sample-and-selected-window" as const, attentionHasMore: false, attentionSample: [], queueSize: 0, queueHasMore: false, queuedSourcePageIds: [], sources: [] } })),
 }));
 vi.mock("../../services/yuho-quant/src/services/edinet/archive.js", () => ({
   checkDocsCustody: vi.fn(async () => new Map()),
@@ -252,7 +252,7 @@ describe("catchup 応答契約: 実失敗だけ非 2xx", () => {
     vi.mocked(resumePendingShareholdingsPrices).mockImplementationOnce(async args => {
       vi.setSystemTime(deadline - 60_001); expect(args.shouldStop()).toBe(false);
       vi.setSystemTime(deadline - 60_000); expect(args.shouldStop()).toBe(true);
-      return { usedRows: 0, resumed: 0, held: 0, pending: true };
+      return { usedRows: 0, resumed: 0, held: 0, pending: true, review: { scope: "initial-attention-sample-and-selected-window", attentionHasMore: false, attentionSample: [], queueSize: 0, queueHasMore: false, queuedSourcePageIds: [], sources: [] } };
     });
     const result = await runCatchup(now, vi.fn(), deadline);
     expect(result.byStatus["holdings_price:pending"]).toBe(1); expect(result.reachedCap).toBe(true);
@@ -271,12 +271,14 @@ describe("catchup 応答契約: 実失敗だけ非 2xx", () => {
   it("原本・L2完了を優先した後、Nodeの価格loaderだけを別予算で呼び未完を隠さない", async () => {
     const loader: HoldingPriceSourceLoader = vi.fn();
     vi.mocked(listDocuments).mockResolvedValue({ results: [] } as never);
-    vi.mocked(resumePendingShareholdingsPrices).mockResolvedValueOnce({ usedRows: 10, resumed: 1, held: 1, pending: true });
+    const review = { scope: "initial-attention-sample-and-selected-window" as const, attentionHasMore: true, attentionSample: [], queueSize: 1, queueHasMore: false, queuedSourcePageIds: [], sources: [] };
+    vi.mocked(resumePendingShareholdingsPrices).mockResolvedValueOnce({ usedRows: 10, resumed: 1, held: 1, pending: true, review });
     const result = await runCatchup(undefined, loader);
     expect(resumePendingShareholdingsPrices).toHaveBeenLastCalledWith({ sourceDb: db, maxRows: 100, shouldStop: expect.any(Function),
       budget: { remainingChunks: 116, remainingBytes: 256 * 1024 * 1024 }, loadSources: loader });
     expect(vi.mocked(rebuildYuhoGrowthProjection).mock.invocationCallOrder.at(-1)).toBeLessThan(vi.mocked(resumePendingShareholdingsPrices).mock.invocationCallOrder.at(-1)!);
     expect(result.byStatus).toMatchObject({ "holdings_price:resumed": 1, "holdings_price:requires_review": 1, "holdings_price:pending": 1 });
+    expect(result.holdingsPrices?.review).toEqual(review);
     expect(catchupHttpStatus(result)).toBe(500);
   });
   it("Workerの通常callerでは価格loader/S3処理を呼ばない", async () => {

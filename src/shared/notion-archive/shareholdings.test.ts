@@ -925,7 +925,7 @@ describe("原本完了とは独立した保存価格queue", () => {
     await seedPublishedSource(undefined, zip);
     vi.mocked(qualifyHoldingValuation).mockResolvedValue(qualified());
     expect(await resumePendingShareholdingsPrices({ sourceDb, maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: async () => ready }))
-      .toEqual({ usedRows: 1, resumed: 1, held: 0, pending: false });
+      .toMatchObject({ usedRows: 1, resumed: 1, held: 0, pending: false });
     const verified = vi.mocked(verifySavedHoldingsSource).mock.calls.at(-1)!;
     const parsed = vi.mocked(parseShareholdingsData).mock.calls.at(-1)!;
     expect(verified[0].length).toBe(zip.length); expect(verified[1]).toEqual(source); expect(parsed[1]).toEqual(source);
@@ -956,7 +956,7 @@ describe("原本完了とは独立した保存価格queue", () => {
     const loader = vi.fn<HoldingPriceSourceLoader>(async () => ready);
     const shouldStop = () => false;
     const result = await resumePendingShareholdingsPrices({ sourceDb, maxRows: 100, shouldStop, budget: budget(), loadSources: loader });
-    expect(result).toEqual({ usedRows: 1, resumed: 1, held: 0, pending: false });
+    expect(result).toMatchObject({ usedRows: 1, resumed: 1, held: 0, pending: false });
     expect(loader).toHaveBeenCalledWith(extraction.holdings, budget(), shouldStop, source.fiscalYearEnd, undefined);
     const patch = vi.mocked(notionRequest).mock.calls.find(([method, path]) => method === "PATCH" && path === rowPath)![2] as { properties: Record<string, unknown> };
     expect(patch.properties).toMatchObject({ "株価": { number: 100 }, "保有時価": { number: 1200 }, "価格照合済": { checkbox: true } });
@@ -990,8 +990,10 @@ describe("原本完了とは独立した保存価格queue", () => {
     const mismatch = new HoldingPriceIssuerMismatch({ ...proof, archivePageId: evidence.archivePageId, filename: evidence.filename });
     vi.mocked(qualifyHoldingValuation).mockResolvedValueOnce(qualified()).mockRejectedValueOnce(mismatch);
     vi.mocked(notionRequest).mockClear();
-    expect(await resumePendingShareholdingsPrices({ sourceDb, maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: async () => ready }))
-      .toEqual({ usedRows: 2, resumed: 1, held: 1, pending: false });
+    const outcome = await resumePendingShareholdingsPrices({ sourceDb, maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: async () => ready });
+    expect(outcome).toMatchObject({ usedRows: 2, resumed: 1, held: 1, pending: false });
+    expect(outcome.review.sources).toEqual([{ archivePageId: args.archivePageId, source, status: "published", snapshotId: ready.snapshotId, unavailableRows: 1, pending: false,
+      windowUnavailableReasons: [{ reason: mismatch.message, rows: 1 }] }]);
     expect(saved[rowPath]).toMatchObject({ "株価": { number: 100 }, "保有時価": { number: 1200 }, "価格照合済": { checkbox: true } });
     const unavailablePath = `/pages/${"f".repeat(32)}`;
     expect(saved[unavailablePath]).toMatchObject({ "株価": { number: null }, "保有時価": { number: null }, "価格照合済": { checkbox: false } });
@@ -1012,8 +1014,9 @@ describe("原本完了とは独立した保存価格queue", () => {
     const mismatch = new HoldingPriceShareBasisMismatch({ symbol: "1798.T", fiscalYearEnd: "2026-03-31", marketExDate: "2026-03-30",
       priceCapturedAt: issuer.priceCapturedAt, priceBodySha256: "62ad3b17c528bb5e89ae781746f350932da60a9152992d53b13fc5bfdc2914ef", issuer, basis: issuer.preSplitFiscalYearBasis });
     vi.mocked(qualifyHoldingValuation).mockRejectedValue(mismatch); vi.mocked(notionRequest).mockClear();
-    expect(await resumePendingShareholdingsPrices({ sourceDb, maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: async () => ready }))
-      .toEqual({ usedRows: 0, resumed: 0, held: 1, pending: false });
+    const outcome = await resumePendingShareholdingsPrices({ sourceDb, maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: async () => ready });
+    expect(outcome).toMatchObject({ usedRows: 0, resumed: 0, held: 1, pending: false });
+    expect(outcome.review.sources).toEqual([{ archivePageId: args.archivePageId, source, status: "held", reason: mismatch.message, pending: false }]);
     const mutations = vi.mocked(notionRequest).mock.calls.filter(([method, path]) => method === "PATCH" || method === "POST" && path === "/pages");
     expect(mutations).toHaveLength(1); expect(mutations[0][1]).toBe(`/pages/${args.archivePageId}`);
     expect(JSON.stringify(mutations)).not.toContain("実行中（結果未確定）");
@@ -1021,6 +1024,31 @@ describe("原本完了とは独立した保存価格queue", () => {
     expect(restartInfo(saved[`/pages/${args.archivePageId}`], "保有価格")).toEqual(restartInfo(sourceBefore, "保有価格"));
     for (const name of ["保有明細状態", "保有明細理由", "保有明細再開情報"]) expect((saved[`/pages/${args.archivePageId}`] as Record<string, unknown>)[name]).toEqual(sourceBefore[name]);
     for (const [path, row] of Object.entries(rowsBefore)) if (path !== `/pages/${args.archivePageId}`) expect(saved[path]).toEqual(row);
+    // 既存1件sampleにhas_moreがあれば、held1/pendingfalseでも全要確認の総数とはしない。
+    const original = vi.mocked(notionRequest).getMockImplementation()!;
+    let oversized = false;
+    vi.mocked(notionRequest).mockImplementation(async (method, path, body, options) => {
+      const response = await original(method, path, body, options);
+      if (method === "POST" && path.endsWith("/query") && (body as { filter: { select?: { equals: string } } }).filter.select?.equals === "要確認") {
+        const sample = response as { results: unknown[] };
+        return { ...sample, ...(oversized ? { results: [sample.results[0], sample.results[0]] } : {}), has_more: true, next_cursor: "declared-review-next-page" };
+      }
+      return response;
+    });
+    vi.mocked(notionRequest).mockClear();
+    const sample = await resumePendingShareholdingsPrices({ sourceDb, maxRows: 0, shouldStop: () => false, budget: budget(), loadSources: async () => ready });
+    expect(sample).toEqual({ usedRows: 0, resumed: 0, held: 1, pending: false, review: {
+      scope: "initial-attention-sample-and-selected-window", attentionHasMore: true,
+      attentionSample: [{ archivePageId: args.archivePageId, source, reason: mismatch.message }], queueSize: 0, queueHasMore: false, queuedSourcePageIds: [], sources: [] } });
+    expect(vi.mocked(notionRequest).mock.calls).toHaveLength(3);
+    expect(vi.mocked(notionRequest).mock.calls.every(([method,path]) => method === "POST" && path.endsWith("/query"))).toBe(true);
+    const beforeOversized = structuredClone(saved), unusedLoader = vi.fn(async () => ready);
+    oversized = true; vi.mocked(notionRequest).mockClear(); vi.mocked(listPageFiles).mockClear();
+    await expect(resumePendingShareholdingsPrices({ sourceDb, maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: unusedLoader })).rejects.toThrow("page_size");
+    expect(saved).toEqual(beforeOversized); expect(unusedLoader).not.toHaveBeenCalled(); expect(listPageFiles).not.toHaveBeenCalled();
+    expect(vi.mocked(notionRequest).mock.calls).toHaveLength(3);
+    expect(vi.mocked(notionRequest).mock.calls.every(([method,path]) => method === "POST" && path.endsWith("/query"))).toBe(true);
+    vi.mocked(notionRequest).mockImplementation(original);
     // Same prose with an untyped transport/source error remains an unknown latch; no catch-all reclassification.
     saved = structuredClone(rowsBefore); vi.mocked(qualifyHoldingValuation).mockRejectedValue(new Error(mismatch.message));
     await expect(resumePendingShareholdingsPrices({ sourceDb, maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: async () => ready })).rejects.toThrow("期末株数");
@@ -1031,7 +1059,7 @@ describe("原本完了とは独立した保存価格queue", () => {
     await seedPublishedSource(); vi.mocked(qualifyHoldingValuation).mockResolvedValue(qualified()); vi.mocked(notionRequest).mockClear();
     const checkOfficialIssuerNames = vi.fn(async () => ({ status: "held" as const, reason: "公式issuerの最新doc変更" }));
     expect(await resumePendingShareholdingsPrices({ sourceDb, maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: async () => ({ ...ready, checkOfficialIssuerNames }) }))
-      .toEqual({ usedRows: 0, resumed: 0, held: 1, pending: false });
+      .toMatchObject({ usedRows: 0, resumed: 0, held: 1, pending: false });
     expect(checkOfficialIssuerNames).toHaveBeenCalledTimes(1);
     const patches = vi.mocked(notionRequest).mock.calls.filter(([method]) => method === "PATCH");
     expect(patches).toHaveLength(1); expect(JSON.stringify(patches)).not.toContain("実行中（結果未確定）");
@@ -1042,7 +1070,7 @@ describe("原本完了とは独立した保存価格queue", () => {
     const before = await seedPublishedSource(); vi.mocked(qualifyHoldingValuation).mockResolvedValue(qualified()); vi.mocked(notionRequest).mockClear();
     const checkOfficialIssuerNames = async () => ({ status: "held" as const, reasonCode: "budget_exhausted" as const, reason: "公式issuer照合の実時間予算不足" });
     expect(await resumePendingShareholdingsPrices({ sourceDb, maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: async () => ({ ...ready, checkOfficialIssuerNames }) }))
-      .toEqual({ usedRows: 0, resumed: 0, held: 0, pending: true });
+      .toMatchObject({ usedRows: 0, resumed: 0, held: 0, pending: true });
     const patches = vi.mocked(notionRequest).mock.calls.filter(([method]) => method === "PATCH");
     expect(patches).toHaveLength(1); expect(JSON.stringify(patches)).not.toContain("実行中（結果未確定）");
     expect(saved[`/pages/${args.archivePageId}`]).toMatchObject({ "保有価格状態": { select: { name: "再開待ち" } } });
@@ -1233,6 +1261,60 @@ describe("原本完了とは独立した保存価格queue", () => {
     expect(restartInfo(saved[`/pages/${args.archivePageId}`],"保有価格")).toMatchObject({snapshotId:"next-price-snapshot",nextHoldingOffset:1,unavailableRows:0,
       previousPricePass:{snapshotId:ready.snapshotId,nextHoldingOffset:1,unavailableRows:1,pre:{pageId:"1".repeat(32)}}});
     for(const field of ["保有明細状態","保有明細理由","保有明細再開情報"]) expect(testProperties(saved[`/pages/${args.archivePageId}`])[field]).toEqual(testProperties(before[`/pages/${args.archivePageId}`])[field]);
+    const query = vi.mocked(notionRequest).mock.calls.find(([m, p, b]) => m === "POST" && p.endsWith("/query") && Array.isArray((b as { filter: { and?: unknown[] } }).filter.and))![2];
+    expect(query).toMatchObject({ sorts: [{ timestamp: "last_edited_time", direction: "ascending" }], page_size: 100,
+      filter: { and: expect.arrayContaining([{ property: "保有明細状態", select: { equals: "明細原本照合済" } }]) } });
+  });
+  it.each(["reported", "saved-source"] as const)("先頭5文書の既知readonly HOLDで再資格5枠を使い切らず、6番目へ進む: %s", async mode => {
+    await completedUnavailable(); const original = vi.mocked(notionRequest).getMockImplementation()!;
+    const page = await original("GET", `/pages/${args.archivePageId}`) as { id: string; properties: Record<string, unknown> };
+    const { db, sqlite } = createReportedSourceTestDb();
+    const held = Array.from({ length: 5 }, (_, n) => {
+      const docId = `S100HLD${n}`, info = { ...restartInfo(page.properties, "保有価格"), source: { ...source, docId } };
+      if (mode === "reported") sqlite.prepare("insert into yuho_edinet_reported_changes (source_page_id,seq_number,source_raw_sha256,doc_id,parent_doc_id,reported_state,observation_json) values(?,?,?,?,?,?,?)")
+        .run(`declared-hold-${n}`, n, "declared-observation", docId, null, "reported_withdrawal", "{}");
+      return { ...structuredClone(page), id: (n + 1).toString(16).padStart(32, "0"), properties: { ...page.properties, ...mirrored({
+        Key: { title: [{ text: { content: `${docId}:type1` } }] }, "保有価格再開情報": { rich_text: [{ text: { content: JSON.stringify(info) } }] } }) } };
+    });
+    const lookup = vi.mocked(queryUniqueRow).getMockImplementation()!;
+    if (mode === "saved-source") vi.mocked(queryUniqueRow).mockImplementation(async (databaseId, filter, context) => {
+      const key = (filter as { title?: { equals?: string } }).title?.equals;
+      return key !== undefined && /^S100HLD[0-4](?::type1)?$/.test(key) ? null : lookup(databaseId, filter, context);
+    });
+    vi.mocked(notionRequest).mockImplementation(async (method, path, body, options) => {
+      const response = await original(method, path, body, options);
+      return method === "POST" && path === `/databases/${"p".repeat(32)}/query` && Array.isArray((body as { filter: { and?: unknown[] } }).filter.and)
+        ? { ...response as object, results: [...held, page], has_more: false, next_cursor: null } : response;
+    });
+    vi.mocked(qualifyHoldingValuation).mockResolvedValue(qualified());
+    const result = await resumePendingShareholdingsPrices({ sourceDb: db, maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: nextLoader() });
+    expect(result).toMatchObject({ resumed: 1, review: { requalification: { metadataCandidates: 6, readOnlyHeld: 5, requalifiedSources: 1 } } });
+    expect(recordPrimaryData).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(notionRequest).mock.calls.filter(([m,p]) => m === "PATCH" && held.some(h => p === `/pages/${h.id}`))).toEqual([]);
+    vi.mocked(queryUniqueRow).mockImplementation(lookup); sqlite.close();
+  });
+  it("不適格300候補で3queryの有限境界を閉じ、未知の保存reader失敗はPATCHせず停止する", async () => {
+    await completedUnavailable(); const original = vi.mocked(notionRequest).getMockImplementation()!;
+    const page = await original("GET", `/pages/${args.archivePageId}`) as { id: string; properties: Record<string, unknown> };
+    let pages = 0;
+    vi.mocked(notionRequest).mockImplementation(async (method, path, body, options) => {
+      if (method === "POST" && path === `/databases/${"p".repeat(32)}/query` && Array.isArray((body as { filter: { and?: unknown[] } }).filter.and)) {
+        pages++; const info = { ...restartInfo(page.properties, "保有価格"), nextHoldingOffset: 0, unavailableRows: 0 };
+        return { results: Array.from({ length: 100 }, (_, n) => ({ ...page, id: (pages * 100 + n).toString(16).padStart(32, "0"),
+          properties: { ...page.properties, ...mirrored({ "保有価格再開情報": { rich_text: [{ text: { content: JSON.stringify(info) } }] } }) } })), has_more: true, next_cursor: `declared-page-${pages}` };
+      }
+      return original(method, path, body, options);
+    });
+    vi.mocked(listPageFiles).mockClear();
+    const result = await resumePendingShareholdingsPrices({ sourceDb, maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: nextLoader() });
+    expect(pages).toBe(3); expect(result.review.requalification).toEqual({ metadataCandidates: 300, readOnlyHeld: 0, requalifiedSources: 0 });
+    expect(listPageFiles).not.toHaveBeenCalled(); expect(recordPrimaryData).not.toHaveBeenCalled();
+    expect(vi.mocked(notionRequest).mock.calls.filter(([m]) => m === "PATCH")).toEqual([]);
+    vi.mocked(notionRequest).mockImplementation(original); const before = structuredClone(saved);
+    vi.mocked(listPageFiles).mockRejectedValueOnce(new Error("DECLARED_UNKNOWN_SOURCE_READER"));
+    await expect(resumePendingShareholdingsPrices({ sourceDb, maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: nextLoader() })).rejects.toThrow("DECLARED_UNKNOWN_SOURCE_READER");
+    expect(saved).toEqual(before); expect(recordPrimaryData).not.toHaveBeenCalled();
+    expect(vi.mocked(notionRequest).mock.calls.filter(([m]) => m === "PATCH")).toEqual([]);
   });
   it("同snapshotやsource未完了は価格HOLDを再開せずarchive/PATCH0",async()=>{
     await completedUnavailable();

@@ -1,11 +1,12 @@
 # 原本の財務範囲・単位回帰fixture
 
-EDINETのcommercial-ok原本5件の数値ファクト・DEI・CSV全列を原文のまま抜粋した。公開URLと原ZIP SHA256は `manifest.json`。TSVはUTF-8で保持し、テストで原API形式のUTF-16へ符号化する。
+EDINETのcommercial-ok原本6件の数値ファクト・DEI・CSV全列を原文のまま抜粋した。公開URLと原ZIP SHA256は `manifest.json` と `1375-ifrs-summary.source.json`。TSVはUTF-8で保持し、テストで原API形式のUTF-16へ符号化する。
 
 - 5918: 会社全体とセグメントの売上を区別する。
 - 6269: 同一要素/contextのUSDとJPY、USDPerSharesとJPYPerSharesを区別する。
 - 6269/7951: IFRSのBPSと自己資本比率をunit=JPYPerShares/pureで区別する。
 - 7384: 中間期末のBPS・自己資本比率を年度末の時点値と区別する。pureの0.0281は2.81%として表示する。
+- 1375: S100YK0Wの当期連結のIFRS営業CF・財務CF・ROEを読み、過年度・単体・セグメント・別単位・多値を拒否する。税引前利益を経常利益や予想経常利益へ代用しない。原本文段落は含めない。
 
 TDnetはこの公開repoへ再配布しない。`tdnet.source.txt` は公開URL・原本SHA・期等の取得ポインタだけを持つ。保存済み原本cacheから次のコマンドでローカルのignored fixtureへ複製する。
 

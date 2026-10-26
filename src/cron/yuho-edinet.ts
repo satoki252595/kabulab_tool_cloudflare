@@ -30,7 +30,7 @@ import { ingestDocument } from "../../services/yuho-quant/src/services/ingest.js
 import { ExistingTextReadbackMismatchError } from "../../services/yuho-quant/src/services/text-backup.js";
 import { checkDocsCustody } from "../../services/yuho-quant/src/services/edinet/archive.js";
 import { rebuildYuhoGrowthProjection } from "../../services/yuho-quant/src/services/projection.js";
-import { isExplicitNotApplicableHoldings, resumePendingShareholdings, resumePendingShareholdingsPrices, type HoldingPriceSourceLoader } from "../shared/notion-archive/shareholdings.js";
+import { isExplicitNotApplicableHoldings, resumePendingShareholdings, resumePendingShareholdingsPrices, type HoldingPriceSourceLoader, type HoldingPriceResumeResult } from "../shared/notion-archive/shareholdings.js";
 
 const WINDOW_DAYS = 60;
 /**
@@ -70,6 +70,8 @@ export interface YuhoEdinetResult {
   /** 選択した日付queueと、保存保留/翌日待ちの実内訳。成功判定は従来どおり。 */
   sourceProgress?: Awaited<ReturnType<typeof progressSummary>> & { queuedAtStart: number };
   byStatus: Record<string, number>;
+  /** 初回要確認sampleと今回価格window。held/pendingは全体残数・全価格完了ではない。 */
+  holdingsPrices?: HoldingPriceResumeResult;
   reachedCap: boolean;
   elapsedSec: number;
   /** L2 投影 `p_yuho_growth` の再生成銘柄数。シャード実行では 0 (再生成しない) */
@@ -137,6 +139,7 @@ export async function runYuhoEdinetCatchup(
   const codeToId = await loadIngestCodeToId(db);
 
   const byStatus: Record<string, number> = {};
+  let holdingsPrices: HoldingPriceResumeResult | undefined;
   let scannedDays = 0;
   let matched = 0;
   let ingested = 0;
@@ -418,6 +421,7 @@ export async function runYuhoEdinetCatchup(
       shouldStop: () => Date.now() - priceStarted > TIME_BUDGET_MS ||
         (deadlineMs !== undefined && Date.now() >= deadlineMs - 60_000),
       budget: { remainingChunks: 116, remainingBytes: 256 * 1024 * 1024 }, loadSources: holdingPriceSourceLoader });
+    holdingsPrices = prices;
     if (prices.resumed > 0) byStatus["holdings_price:resumed"] = prices.resumed;
     if (prices.held > 0) byStatus["holdings_price:requires_review"] = prices.held;
     if (prices.pending) byStatus["holdings_price:pending"] = 1;
@@ -442,6 +446,7 @@ export async function runYuhoEdinetCatchup(
     pendingDocuments,
     sourceProgress,
     byStatus,
+    ...(holdingsPrices === undefined ? {} : { holdingsPrices }),
     reachedCap,
     elapsedSec,
     projectionStocks,
