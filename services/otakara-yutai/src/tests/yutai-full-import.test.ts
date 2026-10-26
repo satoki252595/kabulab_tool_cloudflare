@@ -56,12 +56,13 @@ import { parsePublicBenefitFacts } from "../public-facts.js";
 import { benefitKey } from "../../data-scripts/benefit-key.js";
 import { SUMMARY_CONTRACT_VERSION, SUMMARY_MAX_CHARS } from "../../data-scripts/summary-contract.js";
 import { assertMusashinoInitialPost, planMusashinoInitialEvent, planMusashinoSourceAdoption } from "../../data-scripts/musashino-repair.js";
-import { readSavedMusashinoSource, readSavedNoteSource, readSavedKawasakiSource } from "../../data-scripts/fetch-yutai-full.js";
+import { readSavedMusashinoSource, readSavedNoteSource, readSavedKawasakiSource, readSavedArclandsSource } from "../../data-scripts/fetch-yutai-full.js";
 import { loadMonthScopePreimage, assertMonthScopePost } from "../../data-scripts/saved-month-scope.js";
 import { fetchYieldInputs } from "../../data-scripts/recompute-yields.js";
 import musashinoMetadata from "./fixtures/musashino-source-saved3.json";
 import noteMetadata from "./fixtures/note-source-saved2.json";
 import kawasakiMetadata from "./fixtures/kawasaki-source-saved4.json";
+import arclandsMetadata from "./fixtures/arclands-source-saved6.json";
 import admissionMetadata from "./fixtures/admission-saved3.json";
 import { compileSimpleSummary } from "../../data-scripts/summary-local.js";
 import type { SummaryTask } from "../../data-scripts/summary-tasks.js";
@@ -307,6 +308,65 @@ describe("importYutaiFull は母集団の銘柄の優待だけを作り直す", 
     expect(sha(next.benefits.filter(row => row.recordDate !== null))).toBe(sha(historical));
     expect(next.benefits.filter(row => row.recordDate === null)).toHaveLength(3);
   });
+
+  it.skipIf(!existsSync(join(ROOT, arclandsMetadata.privateFixtureDir, "SAVED-SOURCE-PACKET.private.json")))("実9842の3群6行と通常yield/scoreを全4表CASし、完全同値SQL0・部分/derived単独再修復を拒否する（SQLite制御DB）", async () => {
+    captureConsole();
+    const dir = join(ROOT, arclandsMetadata.privateFixtureDir), packet = arclandsMetadata.files.find(file => file.path === "SAVED-SOURCE-PACKET.private.json")!;
+    const { data } = await readSavedArclandsSource(join(dir, packet.path), packet.sha256), stockId = arclandsMetadata.stockId;
+    const original = JSON.parse(readFileSync(join(dir, "SAVED-ROWS.private.json"), "utf8")) as { id: number; stockName: string; description: string; shortSummary: string | null; minShares: number; recordMonth: number; updatedAt: number }[];
+    // 実原本と実recipient。財務/scoreは本番PREではなく、既存SQLite制御値で通常計算を検査する。
+    sqlite.prepare("UPDATE core_stocks SET id=?,code=?,name=?,is_yutai=1 WHERE id=?").run(stockId, data.code, original[0].stockName, NEW_HOLDER.id);
+    const genreId = YUTAI_GENRES.findIndex(genre => genre.slug === "voucher") + 1;
+    for (const row of original) sqlite.prepare("INSERT INTO yutai_benefits (id,stock_id,genre_id,description,short_summary,min_shares,record_month,updated_at) VALUES (?,?,?,?,?,?,?,?)").run(row.id, stockId, genreId, row.description, row.shortSummary, row.minShares, row.recordMonth, row.updatedAt);
+    sqlite.prepare("INSERT INTO otakara_stock_financials (stock_id,price,per,pbr,roe,dividend_yield,data_date) VALUES (?,1000,10,1,8,2,'2026-10-26')").run(stockId);
+    sqlite.prepare("INSERT INTO otakara_stock_scores (stock_id,fundamental_score,technical_score,total_score) VALUES (?,100,50,100)").run(stockId);
+    const pre = await loadMonthScopePreimage(db, data.code), inputs = await fetchYieldInputs(db, [stockId]), batchAt = arclandsMetadata.providerBatchFetchedAt;
+    const plan = planMusashinoSourceAdoption(db, pre, data, batchAt, inputs);
+    if (plan.batch === null) throw new Error("arclands_actual_six_update_missing");
+    expect(plan.updatedRows).toBe(6); expect(plan.yieldPlan.entries[0]).toMatchObject({ changed: true, scoreChanged: true });
+    expect(plan.yieldPlan.entries[0].next).toBeCloseTo(2.2);
+    expect(plan.batch.statements.filter(statement => /^update /iu.test(statement.sql))).toHaveLength(8);
+    expect(plan.batch.statements.some(statement => /\b(?:INSERT|DELETE)\b/iu.test(statement.sql))).toBe(false);
+    for (const changed of [
+      { ...pre, benefits: pre.benefits.slice(1) },
+      { ...pre, benefits: pre.benefits.map((row, i) => i === 0 ? { ...row, recordMonth: 3 } : row) },
+      { ...pre, benefits: pre.benefits.map((row, i) => i === 0 ? { ...row, recordDate: "2024-02-29" } : row) },
+      { ...pre, benefits: pre.benefits.map((row, i) => i === 0 ? { ...row, description: plan.expected.benefits[i].description } : row) },
+    ]) expect(() => planMusashinoSourceAdoption(db, changed, data, batchAt, inputs)).toThrow();
+    expect(() => planMusashinoSourceAdoption(db, pre, { ...data, benefits: data.benefits.map((row, i) => i === 0 ? { ...row, description: row.description.replace("550円", "500円") } : row) }, batchAt, inputs)).toThrow("arclands_full_source_changed");
+    expect(() => planMusashinoSourceAdoption(db, pre, { ...data, benefits: [...data.benefits, data.benefits[0]] }, batchAt, inputs)).toThrow("arclands_full_source_changed");
+    const all = () => ["core_stocks", "yutai_benefits", "otakara_stock_financials", "otakara_stock_scores", "yutai_genres"].map(table => sqlite.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all());
+    const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex"), before = all(), beforeHash = hash(before);
+    const mutations: [() => void, () => void][] = [
+      [() => { sqlite.prepare("UPDATE core_stocks SET name=name||'-drift' WHERE id=?").run(stockId); }, () => { sqlite.prepare("UPDATE core_stocks SET name=? WHERE id=?").run(pre.parent.name, stockId); }],
+      [() => { sqlite.prepare("UPDATE yutai_benefits SET public_facts='{}' WHERE id=?").run(original[0].id); }, () => { sqlite.prepare("UPDATE yutai_benefits SET public_facts=NULL WHERE id=?").run(original[0].id); }],
+      [() => { sqlite.prepare("UPDATE yutai_benefits SET created_at=created_at+1 WHERE id=?").run(original[0].id); }, () => { sqlite.prepare("UPDATE yutai_benefits SET created_at=created_at-1 WHERE id=?").run(original[0].id); }],
+      [() => { sqlite.prepare("UPDATE otakara_stock_financials SET price=1001 WHERE stock_id=?").run(stockId); }, () => { sqlite.prepare("UPDATE otakara_stock_financials SET price=1000 WHERE stock_id=?").run(stockId); }],
+      [() => { sqlite.prepare("UPDATE otakara_stock_scores SET technical_score=51 WHERE stock_id=?").run(stockId); }, () => { sqlite.prepare("UPDATE otakara_stock_scores SET technical_score=50 WHERE stock_id=?").run(stockId); }],
+    ];
+    for (const [mutate, undo] of mutations) {
+      mutate(); const changedHash = hash(all()); await expect(makeRecordingSender().sender(plan.batch.statements)).rejects.toThrow();
+      expect(hash(all())).toBe(changedHash); undo(); expect(hash(all())).toBe(beforeHash);
+    }
+    const sent = makeRecordingSender(); await sent.sender(plan.batch.statements); expect(sent.calls).toHaveLength(1);
+    const post = await loadMonthScopePreimage(db, data.code); assertMonthScopePost(plan, post);
+    expect(post.benefits.map(row => row.id)).toEqual(arclandsMetadata.ids); expect(post.benefits.map(row => row.estimatedValue)).toEqual([1100, 1100, 2200, 2200, 11000, 11000]);
+    expect(post.financial?.price).toBe(pre.financial?.price); expect(post.financial?.dataDate).toBe(pre.financial?.dataDate); expect(post.scores?.technicalScore).toBe(pre.scores?.technicalScore);
+    for (const row of post.benefits) { const old = pre.benefits.find(value => value.id === row.id)!; for (const key of ["id", "stockId", "genreId", "minShares", "recordMonth", "recordDate", "createdAt"]) expect(row[key]).toBe(old[key]); }
+    const after = all(); expect(hash(after[0])).toBe(hash(before[0])); expect(hash(after[4])).toBe(hash(before[4]));
+    expect(hash((after[1] as { stock_id: number }[]).filter(row => row.stock_id !== stockId))).toBe(hash((before[1] as { stock_id: number }[]).filter(row => row.stock_id !== stockId)));
+    const repeated = planMusashinoSourceAdoption(db, post, data, batchAt, await fetchYieldInputs(db, [stockId])); expect(repeated.batch).toBeNull(); expect(repeated.updatedRows).toBe(0); expect(hash(all())).toBe(hash(after));
+    sqlite.prepare("UPDATE otakara_stock_financials SET yutai_yield=NULL WHERE stock_id=?").run(stockId);
+    const stale = await loadMonthScopePreimage(db, data.code), staleInputs = await fetchYieldInputs(db, [stockId]);
+    expect(() => planMusashinoSourceAdoption(db, stale, data, batchAt, staleInputs)).toThrow("arclands_adopted_derived_stale");
+    sqlite.prepare("UPDATE otakara_stock_financials SET yutai_yield=? WHERE stock_id=?").run(plan.yieldPlan.entries[0].next, stockId);
+    await importYutaiFull(db, [...HELD.map(stock => fetched(stock.code)), data], makeRecordingSender().sender, batchAt);
+    const next = await loadMonthScopePreimage(db, data.code);
+    expect(next.benefits.map(row => row.shortSummary)).toEqual(post.benefits.map(row => row.shortSummary)); expect(next.benefits.map(row => row.estimatedValue)).toEqual(post.benefits.map(row => row.estimatedValue));
+    expect(next.benefits.every(row => (row.recordMonth === 2 || row.recordMonth === 8) && row.recordDate === null && parsePublicBenefitFacts(row.publicFacts, data.code)?.source.officialStatus === "verified")).toBe(true);
+    expect(post.benefits.every(row => parsePublicBenefitFacts(row.publicFacts, data.code)?.choice === false)).toBe(true);
+    expect(next.benefits.every(row => parsePublicBenefitFacts(row.publicFacts, data.code)?.choice === false)).toBe(true);
+  }, 20000);
 
   for (const { code, fixtureMetadata, holderId } of [{ code: "8336", fixtureMetadata: musashinoMetadata, holderId: NEW_HOLDER.id }, { code: "5243", fixtureMetadata: noteMetadata, holderId: 871 }, { code: "3045", fixtureMetadata: kawasakiMetadata, holderId: 244 }])
   it.skipIf(!existsSync(join(ROOT, fixtureMetadata.privateFixtureDir, "SAVED-SOURCE-PACKET.private.json")))(`実${code}の全段階限定UPDATEは全4表driftでrollbackし、POST再入SQL0・翌月通常carryを保つ（SQLite制御DB）`, async () => {

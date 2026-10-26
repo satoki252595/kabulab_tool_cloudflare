@@ -19,6 +19,8 @@ import { ROOT } from "../../../../src/shared/db/tests/source-scan.js";
 import musashinoMetadata from "./fixtures/musashino-source-saved3.json";
 import noteMetadata from "./fixtures/note-source-saved2.json";
 import kawasakiMetadata from "./fixtures/kawasaki-source-saved4.json";
+import arclandsMetadata from "./fixtures/arclands-source-saved6.json";
+import { ARCLANDS_SOURCES } from "../../data-scripts/arclands-source.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
@@ -35,6 +37,9 @@ import {
   parseStockDetail,
   parseStockListPage,
   parseSavedMonthScopeArgs,
+  parseMusashinoAdoptionArgs,
+  readSavedArclandsSource,
+  readSavedNoteSource,
   type StockDetailResult,
 } from "../../data-scripts/fetch-yutai-full.js";
 import { benefitRowsOf, type StockYutaiData } from "../../data-scripts/yutai-full-import.js";
@@ -590,7 +595,7 @@ describe("collectAllStockCodes は既知の最終ページだけで完了する"
     await expect(collectAllStockCodes(async () => pageWith(1, null, "9100"))).rejects.toThrow(/全件数/);
   });
 
-  for (const { code, fixtureMetadata } of [{ code: "8336", fixtureMetadata: musashinoMetadata }, { code: "5243", fixtureMetadata: noteMetadata }, { code: "3045", fixtureMetadata: kawasakiMetadata }])
+  for (const { code, fixtureMetadata } of [{ code: "8336", fixtureMetadata: musashinoMetadata }, { code: "5243", fixtureMetadata: noteMetadata }, { code: "3045", fixtureMetadata: kawasakiMetadata }, { code: "9842", fixtureMetadata: arclandsMetadata }])
   it.skipIf(!existsSync(join(ROOT, fixtureMetadata.privateFixtureDir, "SAVED-SOURCE-PACKET.private.json")))(`${code}公式実体添付と全新本文の照合前には通常取込へ進まない（private制御）`, async () => {
     const fixture = join(ROOT, fixtureMetadata.privateFixtureDir);
     const packet = JSON.parse(readFileSync(join(fixture, "SAVED-SOURCE-PACKET.private.json"), "utf8")) as { pages: { url: string; contentType: string; bodyBase64: string }[] };
@@ -606,16 +611,73 @@ describe("collectAllStockCodes は既知の最終ページだけで完了する"
     try {
       process.chdir(dir);
       await expect(main()).rejects.toThrow("controlled_archive_stop");
-      expect(fetched).toHaveBeenCalledTimes(4); expect(createD1HttpDb).not.toHaveBeenCalled();
+      expect(fetched).toHaveBeenCalledTimes(packet.pages.length + 1); expect(createD1HttpDb).not.toHaveBeenCalled();
       expect(recordPrimaryData).toHaveBeenCalledTimes(2);
       const base = vi.mocked(recordPrimaryData).mock.calls[0][0], adopted = vi.mocked(recordPrimaryData).mock.calls[1][0];
       const raw = gunzipSync(base.files![0].bytes).toString("utf8").trim().split("\n").map(line => JSON.parse(line));
       expect(raw.map((page: { url: string }) => page.url)).toEqual(["https://minkabu.jp/yutai/search?order=&page=1", packet.pages[0].url]);
-      expect(adopted.files).toHaveLength(3);
+      expect(adopted.files).toHaveLength(packet.pages.length);
+      expect(new Set(adopted.files!.map(file => file.filename)).size).toBe(packet.pages.length);
       for (const [index, file] of adopted.files!.entries()) expect(Buffer.from(file.bytes)).toEqual(Buffer.from(packet.pages[index].bodyBase64, "base64"));
       expect(adopted.metadata).toMatchObject({ adoption: "full_source_qualified", providerArchive: { key: base.key, sha256: createHash("sha256").update(base.files![0].bytes).digest("hex") }, rows: fixtureMetadata.expectedRows });
       expect(verifyArchivedAttachments).toHaveBeenCalledWith("controlled-page", adopted.files, `${code}公式原本と提供元`);
     } finally { process.chdir(cwd); fetched.mockRestore(); vi.clearAllMocks(); rmSync(dir, { recursive: true, force: true }); }
+  }, code === "9842" ? 15_000 : undefined);
+
+  it.skipIf(!existsSync(join(ROOT, arclandsMetadata.privateFixtureDir, "SAVED-SOURCE-PACKET.private.json")))("9842固定7原本だけを再解析し、旧status未露出3件の正確なbytes/時計と通常200を分ける", async () => {
+    const fixture = join(ROOT, arclandsMetadata.privateFixtureDir), path = join(fixture, "SAVED-SOURCE-PACKET.private.json");
+    const packet = JSON.parse(readFileSync(path, "utf8")) as { pages: { url: string; receivedAt: string; status: number | null; contentType: string; byteLength: number; bodyBase64: string }[] };
+    const sha = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+    const hash = arclandsMetadata.files.find(file => file.path === "SAVED-SOURCE-PACKET.private.json")!.sha256;
+    const source = await readSavedArclandsSource(path, hash);
+    expect(source.packet.pages.map(page => page.status)).toEqual([200, 200, 200, 200, null, null, null]);
+    expect(source.data.sourceFetchedAt).toBe("2026-10-21T16:55:08.814Z");
+    expect(source.packet.providerBatchFetchedAt).toBe("2026-10-21T16:56:22.538Z");
+    expect(benefitRowsOf(source.data).rows.map(row => ({ minShares: row.minShares, recordMonth: row.recordMonth, recordDate: null, descriptionSha256: sha(row.description) }))).toEqual(arclandsMetadata.expectedRows);
+    const dir = mkdtempSync(join(ROOT, "tmp/arclands-packet-negative-")); let ordinal = 0;
+    const reject = async (value: unknown, reader = readSavedArclandsSource) => {
+      const bytes = JSON.stringify(value), target = join(dir, `${ordinal++}.private.json`);
+      writeFileSync(target, bytes, { flag: "wx", mode: 0o600 });
+      await expect(reader(target, sha(bytes))).rejects.toThrow();
+    };
+    try {
+      for (const index of [0, 1, 2, 3, 4, 5, 6]) {
+        const changed = structuredClone(packet); changed.pages[index].status = index < 4 ? null : 200;
+        await reject(changed);
+      }
+      for (const field of ["receivedAt", "url", "bodyBase64", "byteLength", "contentType"] as const) {
+        const changed = structuredClone(packet), page = changed.pages[4];
+        if (field === "receivedAt") page.receivedAt = "2026-10-25T23:31:34.194Z";
+        if (field === "url") page.url += "?other";
+        if (field === "bodyBase64") page.bodyBase64 = Buffer.from("different_source").toString("base64");
+        if (field === "byteLength") page.byteLength += 1;
+        if (field === "contentType") page.contentType = "application/pdf";
+        await reject(changed);
+      }
+      await reject({ ...packet, pages: packet.pages.slice(1) });
+      await reject({ ...packet, pages: [packet.pages[0], ...packet.pages.slice(1, 6), packet.pages[5]] });
+      await reject(packet, readSavedNoteSource);
+      expect(() => parseMusashinoAdoptionArgs(["--adopt-arclands-source", "--adopt-note-source"])).toThrow();
+      const fetched = vi.spyOn(globalThis, "fetch").mockImplementation(async url => {
+        const page = packet.pages.find(page => page.url === url); if (page === undefined) throw new Error("unexpected_source_request");
+        return new Response(Buffer.from(page.bodyBase64, "base64"), { status: 200, headers: { "Content-Type": page.contentType } });
+      });
+      const before = vi.fn(), captured: { url: string; status: number | null }[] = [];
+      try {
+        const result = await fetchStockDetail("9842", page => captured.push(page), before);
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(benefitRowsOf(result.data).rows).toEqual(benefitRowsOf(source.data).rows);
+        expect(fetched.mock.calls.map(([url]) => url)).toEqual(ARCLANDS_SOURCES.map(source => source.url));
+        expect(captured.map(page => page.status)).toEqual([200, 200, 200, 200, 200, 200, 200]); expect(before).toHaveBeenCalledTimes(7);
+        fetched.mockClear();
+        fetched.mockImplementation(async url => {
+          const page = packet.pages.find(page => page.url === url)!;
+          return new Response(Buffer.from(page.bodyBase64, "base64"), { status: 201, headers: { "Content-Type": page.contentType } });
+        });
+        await expect(fetchStockDetail("9842")).resolves.toMatchObject({ status: "unknown", reason: "fetch: arclands_response_status_changed" });
+        expect(fetched).toHaveBeenCalledTimes(1);
+      } finally { fetched.mockRestore(); }
+    } finally { rmSync(dir, { recursive: true }); vi.clearAllMocks(); }
   });
 
   it("次GET失敗より先に原本をprivate保存し、終端stream gzipは全bytesを保管してD1へ進まない", async () => {
