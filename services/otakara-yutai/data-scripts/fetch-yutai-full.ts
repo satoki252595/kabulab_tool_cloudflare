@@ -40,6 +40,7 @@ import { fetchYieldInputs } from "./recompute-yields.js";
 import { assertMonthScopePost, assertMonthScopeRowsEqual, loadMonthScopePreimage, planSavedMonthScope, qualifySavedMonthScopeArchive, readMonthScopePreimage, readSavedMonthScopePage, readMonthScopeRawBytes } from "./saved-month-scope.js";
 import { adoptMusashinoOfficialSource, MUSASHINO_LISTING_URL, MUSASHINO_OFFICIAL_URL, MUSASHINO_NOTICE_URL } from "./musashino-source.js";
 import { adoptNoteOfficialSource, NOTE_LISTING_URL, NOTE_OFFICIAL_URL, NOTE_NOTICE_URL } from "./note-source.js";
+import { adoptKawasakiOfficialSource, KAWASAKI_LISTING_URL, KAWASAKI_OFFICIAL_URL, KAWASAKI_NOTICE_URL } from "./kawasaki-source.js";
 import { extractPdfText } from "../../ir-catalog/src/services/pdf-sentiment/extract-text.js";
 import { z } from "../../../src/shared/zod-mini.js";
 import { assertMusashinoInitialPost, planMusashinoInitialEvent, planMusashinoSourceAdoption } from "./musashino-repair.js";
@@ -55,9 +56,9 @@ type RawPage = {
 type CapturePage = (page: RawPage) => void;
 type SavedOfficialPage = { page: RawPage; path: string; filename: string; contentType: string };
 
-function saveOfficialSourcePage(page: RawPage, runId: string, dir: string, code: "8336" | "5243" = "8336"): SavedOfficialPage {
+function saveOfficialSourcePage(page: RawPage, runId: string, dir: string, code: "8336" | "5243" | "3045" = "8336"): SavedOfficialPage {
   const contentType = page.contentType === null ? "application/octet-stream" : page.contentType.split(";")[0].trim().toLowerCase();
-  const suffix = page.url === `https://minkabu.jp/stock/${code}/yutai` ? "provider" : page.url === (code === "8336" ? MUSASHINO_OFFICIAL_URL : NOTE_OFFICIAL_URL) ? "official" : "notice";
+  const suffix = page.url === `https://minkabu.jp/stock/${code}/yutai` ? "provider" : page.url === (code === "8336" ? MUSASHINO_OFFICIAL_URL : code === "5243" ? NOTE_OFFICIAL_URL : KAWASAKI_OFFICIAL_URL) ? "official" : "notice";
   const filename = `yutai-official-${code}-${runId}-${suffix}.${contentType === "text/html" ? "html" : contentType === "application/pdf" ? "pdf" : "bin"}`;
   const saved = writeSummaryLocal({ key: `yutai-official-${code}-${runId}`, files: [{ filename, bytes: Buffer.from(page.bodyBase64, "base64"), contentType }] }, dir);
   if (!saved.ok) throw new Error("musashino_source_local_save_failed");
@@ -139,9 +140,9 @@ export async function archiveRawFile(path: string, runId: string, source: string
   return { pageId: archived.pageId, files };
 }
 
-/** 8336/5243の両公式原本と元提供元を実体保管し、新本文を同じmanifestへ束縛する。 */
-async function archiveOfficialSources(pages: readonly SavedOfficialPage[], runId: string, data: StockYutaiData | undefined, providerArchive: { key: string; sha256: string }, initialEvent = false, code: "8336" | "5243" = "8336"): Promise<{ pageId: string } | undefined> {
-  const urls = code === "8336" ? [MUSASHINO_OFFICIAL_URL, MUSASHINO_NOTICE_URL] : [NOTE_OFFICIAL_URL, NOTE_NOTICE_URL];
+/** 8336/5243/3045の両公式原本と元提供元を実体保管し、新本文を同じmanifestへ束縛する。 */
+async function archiveOfficialSources(pages: readonly SavedOfficialPage[], runId: string, data: StockYutaiData | undefined, providerArchive: { key: string; sha256: string }, initialEvent = false, code: "8336" | "5243" | "3045" = "8336"): Promise<{ pageId: string } | undefined> {
+  const urls = code === "8336" ? [MUSASHINO_OFFICIAL_URL, MUSASHINO_NOTICE_URL] : code === "5243" ? [NOTE_OFFICIAL_URL, NOTE_NOTICE_URL] : [KAWASAKI_OFFICIAL_URL, KAWASAKI_NOTICE_URL];
   if (!pages.some(({ page }) => urls.includes(page.url))) return;
   const sources = await Promise.all(pages.map(async ({ page, path, filename, contentType }) => {
     const bytes = Uint8Array.from(readFileSync(path));
@@ -275,14 +276,14 @@ export async function fetchStockDetail(code: string, onRaw?: CapturePage, before
     const result = parseStockDetail(code, html);
     if (result.status !== "ok") return result;
     result.data.sourceFetchedAt = sourceFetchedAt;
-    if (code !== "8336" && code !== "5243") return result;
+    if (code !== "8336" && code !== "5243" && code !== "3045") return result;
     // 明示公式採用。取得・全文資格に失敗したら旧提供元へ戻さずUNKNOWNにする。
-    const official = await fetchRawPage(code === "8336" ? MUSASHINO_OFFICIAL_URL : NOTE_OFFICIAL_URL, onRaw, beforeRequest, { bytes: 256 * 1024, contentType: "text/html" });
-    const notice = await fetchRawPage(code === "8336" ? MUSASHINO_NOTICE_URL : NOTE_NOTICE_URL, onRaw, beforeRequest, { bytes: 2 * 1024 * 1024, contentType: "application/pdf" });
+    const official = await fetchRawPage(code === "8336" ? MUSASHINO_OFFICIAL_URL : code === "5243" ? NOTE_OFFICIAL_URL : KAWASAKI_OFFICIAL_URL, onRaw, beforeRequest, { bytes: 256 * 1024, contentType: "text/html" });
+    const notice = await fetchRawPage(code === "8336" ? MUSASHINO_NOTICE_URL : code === "5243" ? NOTE_NOTICE_URL : KAWASAKI_NOTICE_URL, onRaw, beforeRequest, { bytes: 2 * 1024 * 1024, contentType: "application/pdf" });
     const pdf = Uint8Array.from(Buffer.from(notice.bodyBase64, "base64"));
     const pdfText = await extractPdfText(pdf);
     if (pdfText === null) throw new Error("musashino_official_pdf_unreadable");
-    const adopt = code === "8336" ? adoptMusashinoOfficialSource : adoptNoteOfficialSource;
+    const adopt = code === "8336" ? adoptMusashinoOfficialSource : code === "5243" ? adoptNoteOfficialSource : adoptKawasakiOfficialSource;
     return { status: "ok", data: adopt(result.data, new TextDecoder("utf-8", { fatal: true }).decode(Buffer.from(official.bodyBase64, "base64")), pdf, pdfText, notice.receivedAt) };
   } catch (e) {
     if (e instanceof ScheduledSourceDeadlineError) throw e;
@@ -476,7 +477,7 @@ export function parseStockDetail(code: string, html: string): StockDetailResult 
 
 // ===== Main =====
 export async function main(argv: readonly string[] = []) {
-  if (argv.includes("--adopt-musashino-source") || argv.includes("--add-musashino-initial-event") || argv.includes("--adopt-note-source")) return adoptSavedOfficialSource(argv);
+  if (argv.includes("--adopt-musashino-source") || argv.includes("--add-musashino-initial-event") || argv.includes("--adopt-note-source") || argv.includes("--adopt-kawasaki-source")) return adoptSavedOfficialSource(argv);
   if (argv.length > 0) return repairSavedMonthScope(argv);
   const window = nativeJobExecutionWindow(Date.now(), sharedEnv.BATCH_JOB_STARTED_AT(), 360, 10);
   const assertSource = () => {
@@ -502,6 +503,8 @@ export async function main(argv: readonly string[] = []) {
   const musashinoPages: SavedOfficialPage[] = [];
   let noteData: StockYutaiData | undefined;
   const notePages: SavedOfficialPage[] = [];
+  let kawasakiData: StockYutaiData | undefined;
+  const kawasakiPages: SavedOfficialPage[] = [];
   const capture: CapturePage = (page) => {
     if ([MUSASHINO_LISTING_URL, MUSASHINO_OFFICIAL_URL, MUSASHINO_NOTICE_URL].includes(page.url)) {
       musashinoPages.push(saveOfficialSourcePage(page, runId, dir));
@@ -511,6 +514,10 @@ export async function main(argv: readonly string[] = []) {
     if ([NOTE_LISTING_URL, NOTE_OFFICIAL_URL, NOTE_NOTICE_URL].includes(page.url)) {
       notePages.push(saveOfficialSourcePage(page, runId, dir, "5243"));
       if (page.url !== NOTE_LISTING_URL) return;
+    }
+    if ([KAWASAKI_LISTING_URL, KAWASAKI_OFFICIAL_URL, KAWASAKI_NOTICE_URL].includes(page.url)) {
+      kawasakiPages.push(saveOfficialSourcePage(page, runId, dir, "3045"));
+      if (page.url !== KAWASAKI_LISTING_URL) return;
     }
     // 次GETより先に全bytesをdurable保存。全量base64をRAMへ保持しない。
     writeFileSync(fd, JSON.stringify(page) + "\n");
@@ -530,6 +537,7 @@ export async function main(argv: readonly string[] = []) {
       const result = await fetchStockDetail(code, capture, assertSource);
       if (code === "8336" && result.status === "ok") musashinoData = result.data;
       if (code === "5243" && result.status === "ok") noteData = result.data;
+      if (code === "3045" && result.status === "ok") kawasakiData = result.data;
       return result;
     });
   } finally {
@@ -546,6 +554,7 @@ export async function main(argv: readonly string[] = []) {
       const providerArchive = { key: `yutai-source-${runId}`, sha256: await sha256HexBytes(raw.files[0].bytes) };
       await archiveOfficialSources(musashinoPages, runId, musashinoData, providerArchive);
       await archiveOfficialSources(notePages, runId, noteData, providerArchive, false, "5243");
+      await archiveOfficialSources(kawasakiPages, runId, kawasakiData, providerArchive, false, "3045");
     }
   }
   if (lastClock === null) throw new Error("優待原本の実取得時計が無いためSTOP");
@@ -553,7 +562,7 @@ export async function main(argv: readonly string[] = []) {
   } finally { restore?.(); }
 }
 
-// ponytail: 2026-10-21保存providerの8336/5243だけ。別cohortは通常collectorで再資格化する。
+// ponytail: 2026-10-21保存providerの8336/5243/3045だけ。別cohortは通常collectorで再資格化する。
 const OfficialSavedPacket = z.strictObject({
   version: z.literal(1),
   providerArchiveKey: z.literal("yutai-source-local-411af4c3"),
@@ -563,22 +572,22 @@ const OfficialSavedPacket = z.strictObject({
     byteLength: z.number().check(z.int(), z.positive()), bodyBase64: z.string() })).check(z.minLength(3), z.maxLength(3)),
 });
 
-/** 保存済み2issuerの原本だけ。応答時計は変えず、DTOの検証時計だけ既存ISO形式へ正規化する。 */
-async function readSavedOfficialPacket(path: string, sha256: string, code: "8336" | "5243") {
-  const prefix = code === "8336" ? "musashino" : "note";
+/** 保存済み3issuerの原本だけ。応答時計は変えず、DTOの検証時計だけ既存ISO形式へ正規化する。 */
+async function readSavedOfficialPacket(path: string, sha256: string, code: "8336" | "5243" | "3045") {
+  const prefix = code === "8336" ? "musashino" : code === "5243" ? "note" : "kawasaki";
   const bytes = readMonthScopeRawBytes(path, sha256);
   if (bytes.length > 4 * 1024 * 1024) throw new Error(`${prefix}_saved_packet_too_large`);
   const packet = OfficialSavedPacket.parse(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
-  const urls = code === "8336" ? [MUSASHINO_LISTING_URL, MUSASHINO_OFFICIAL_URL, MUSASHINO_NOTICE_URL] : [NOTE_LISTING_URL, NOTE_OFFICIAL_URL, NOTE_NOTICE_URL];
-  const noteClocks = ["2026-10-21T16:30:29.082Z", "2026-10-25T20:29:07.105213+00:00", "2026-10-25T20:29:07.337103+00:00"];
+  const urls = code === "8336" ? [MUSASHINO_LISTING_URL, MUSASHINO_OFFICIAL_URL, MUSASHINO_NOTICE_URL] : code === "5243" ? [NOTE_LISTING_URL, NOTE_OFFICIAL_URL, NOTE_NOTICE_URL] : [KAWASAKI_LISTING_URL, KAWASAKI_OFFICIAL_URL, KAWASAKI_NOTICE_URL];
+  const savedClocks = code === "5243" ? ["2026-10-21T16:30:29.082Z", "2026-10-25T20:29:07.105213+00:00", "2026-10-25T20:29:07.337103+00:00"] : ["2026-10-21T16:16:52.221Z", "2026-10-25T20:29:30.806839+00:00", "2026-10-25T20:29:41.991941+00:00"];
   for (const [i, page] of packet.pages.entries()) {
     const body = Buffer.from(page.bodyBase64, "base64"), clock = new Date(page.receivedAt);
     if (page.url !== urls[i] || body.length !== page.byteLength || body.toString("base64") !== page.bodyBase64 ||
-        !Number.isFinite(clock.getTime()) || (code === "8336" ? clock.toISOString() !== page.receivedAt : page.receivedAt !== noteClocks[i]) ||
+        !Number.isFinite(clock.getTime()) || (code === "8336" ? clock.toISOString() !== page.receivedAt : page.receivedAt !== savedClocks[i]) ||
         page.contentType.split(";")[0].trim().toLowerCase() !== (i === 2 ? "application/pdf" : "text/html")) throw new Error(`${prefix}_saved_response_invalid`);
   }
-  if (packet.pages[0].receivedAt !== (code === "8336" ? "2026-10-21T16:47:17.281Z" : noteClocks[0]) ||
-      await sha256HexBytes(Buffer.from(packet.pages[0].bodyBase64, "base64")) !== (code === "8336" ? "be11f714fba48c731c1959d910ef6921afd7e04d16ae1f40ed5354463a6cbccc" : "360fd72f9de01d861f52b2aa102409e75b951b78186baa130be81ce032a7ddcb")) throw new Error(`${prefix}_saved_provider_changed`);
+  if (packet.pages[0].receivedAt !== (code === "8336" ? "2026-10-21T16:47:17.281Z" : savedClocks[0]) ||
+      await sha256HexBytes(Buffer.from(packet.pages[0].bodyBase64, "base64")) !== (code === "8336" ? "be11f714fba48c731c1959d910ef6921afd7e04d16ae1f40ed5354463a6cbccc" : code === "5243" ? "360fd72f9de01d861f52b2aa102409e75b951b78186baa130be81ce032a7ddcb" : "25981f5c8eb26e19e8d11e59ed2f05a82e3e7c28892608c0bb3cc97d30b57f8d")) throw new Error(`${prefix}_saved_provider_changed`);
   const decoded = (page: RawPage) => new TextDecoder("utf-8", { fatal: true }).decode(Buffer.from(page.bodyBase64, "base64"));
   const provider = parseStockDetail(code, decoded(packet.pages[0]));
   if (provider.status !== "ok") throw new Error(`${prefix}_saved_provider_unreadable`);
@@ -603,22 +612,29 @@ export async function readSavedNoteSource(path: string, sha256: string) {
   return { packet: source.packet, annual: data, data };
 }
 
-/** 8336全3行または5243全2行の固定入力mode。既存state/unknownを再送しない。 */
+/** 固定private3045原本だけ。変更前/2027年拡充後を含む2全文・年次4行。 */
+export async function readSavedKawasakiSource(path: string, sha256: string) {
+  const source = await readSavedOfficialPacket(path, sha256, "3045");
+  const data = adoptKawasakiOfficialSource(source.provider, source.html, source.pdf, source.pdfText, source.verifiedAt);
+  return { packet: source.packet, annual: data, data };
+}
+
+/** 8336/5243/3045の固定入力mode。既存state/unknownを再送しない。 */
 export function parseMusashinoAdoptionArgs(argv: readonly string[]) {
   const { values, tokens } = parseArgs({ args: [...argv], strict: true, allowPositionals: false, tokens: true, options: {
-    "adopt-musashino-source": { type: "boolean" }, "add-musashino-initial-event": { type: "boolean" }, "adopt-note-source": { type: "boolean" }, "saved-source": { type: "string" }, "saved-source-sha256": { type: "string" },
+    "adopt-musashino-source": { type: "boolean" }, "add-musashino-initial-event": { type: "boolean" }, "adopt-note-source": { type: "boolean" }, "adopt-kawasaki-source": { type: "boolean" }, "saved-source": { type: "string" }, "saved-source-sha256": { type: "string" },
     "expected-pre": { type: "string" }, "expected-pre-sha256": { type: "string" }, "state-dir": { type: "string" },
   } });
   const seen = new Set<string>();
   for (const token of tokens) if (token.kind === "option") { if (seen.has(token.name)) throw new Error("musashino_duplicate_option"); seen.add(token.name); }
-  if ([values["adopt-musashino-source"], values["add-musashino-initial-event"], values["adopt-note-source"]].filter(value => value === true).length !== 1 || !values["saved-source"] || !values["expected-pre"] || !values["state-dir"] ||
+  if ([values["adopt-musashino-source"], values["add-musashino-initial-event"], values["adopt-note-source"], values["adopt-kawasaki-source"]].filter(value => value === true).length !== 1 || !values["saved-source"] || !values["expected-pre"] || !values["state-dir"] ||
       !values["saved-source-sha256"] || !/^[a-f0-9]{64}$/.test(values["saved-source-sha256"]) ||
       !values["expected-pre-sha256"] || !/^[a-f0-9]{64}$/.test(values["expected-pre-sha256"])) throw new Error("musashino_fixed_inputs_required");
   return { path: values["saved-source"], sha256: values["saved-source-sha256"], expectedPre: values["expected-pre"], preSha256: values["expected-pre-sha256"], state: resolve(values["state-dir"]), initialEvent: values["add-musashino-initial-event"] === true };
 }
 
 async function adoptSavedOfficialSource(argv: readonly string[]): Promise<void> {
-  const code = argv.includes("--adopt-note-source") ? "5243" : "8336";
+  const code = argv.includes("--adopt-note-source") ? "5243" : argv.includes("--adopt-kawasaki-source") ? "3045" : "8336";
   const options = parseMusashinoAdoptionArgs(argv), started = Date.now(), native = nativeJobExecutionWindow(started, sharedEnv.BATCH_JOB_STARTED_AT(), 360, 10);
   const deadline = Math.min(started + 15 * 60_000, native === undefined ? Infinity : native.deadline);
   const sourceDeadline = Math.min(started + 10 * 60_000, native === undefined ? Infinity : native.sourceDeadline);
@@ -626,7 +642,7 @@ async function adoptSavedOfficialSource(argv: readonly string[]): Promise<void> 
   const assertSource = () => { assertActive(); if (Date.now() >= sourceDeadline) throw new Error("musashino_adoption_source_deadline"); };
   assertSource();
   if (existsSync(options.state)) throw new Error("musashino_adoption_state_already_started");
-  const pre = readMonthScopePreimage(options.expectedPre, options.preSha256), source = code === "8336" ? await readSavedMusashinoSource(options.path, options.sha256, options.initialEvent) : await readSavedNoteSource(options.path, options.sha256);
+  const pre = readMonthScopePreimage(options.expectedPre, options.preSha256), source = code === "8336" ? await readSavedMusashinoSource(options.path, options.sha256, options.initialEvent) : code === "5243" ? await readSavedNoteSource(options.path, options.sha256) : await readSavedKawasakiSource(options.path, options.sha256);
   assertSource();
   for (const getter of [sharedEnv.R2_ACCOUNT_ID, sharedEnv.R2_ACCESS_KEY_ID, sharedEnv.R2_SECRET_ACCESS_KEY, sharedEnv.R2_BUCKET_RAW,
     notionEnv.NOTION_TOKEN, notionEnv.NOTION_ARCHIVE_PAGE_ID]) getter();
@@ -650,7 +666,7 @@ async function adoptSavedOfficialSource(argv: readonly string[]): Promise<void> 
       });
       save("PRE.private.json", pre); save("PLAN.private.json", plan);
       if (plan.batch === null) { save("FINISHED.private.json", { code, updatedRows: 0, SQL: 0, sourceArchiveThisRun: false }); return; }
-      const publication = await writer.reserve("yutai-source-import", { kind: code === "5243" ? "note-source-adoption-v1" : options.initialEvent ? "musashino-initial-event-v1" : "musashino-source-adoption-v1", sourceSha256: options.sha256, preSha256: options.preSha256 }, JSON.stringify({ options, source, pre, plan }));
+      const publication = await writer.reserve("yutai-source-import", { kind: code === "3045" ? "kawasaki-source-adoption-v1" : code === "5243" ? "note-source-adoption-v1" : options.initialEvent ? "musashino-initial-event-v1" : "musashino-source-adoption-v1", sourceSha256: options.sha256, preSha256: options.preSha256 }, JSON.stringify({ options, source, pre, plan }));
       const pages = source.packet.pages.map(page => saveOfficialSourcePage(page, runId, join(options.state, "sources"), code));
       assertSource();
       const original = await archiveOfficialSources(pages, runId, source.data, { key: source.packet.providerArchiveKey, sha256: source.packet.providerArchiveSha256 }, options.initialEvent, code);
@@ -658,7 +674,7 @@ async function adoptSavedOfficialSource(argv: readonly string[]): Promise<void> 
       const archive = async (phase: "pre" | "post", rows: unknown) => {
         const bytes = Buffer.from(JSON.stringify(rows));
         const saved = await archivePages([{ url: `D1:stock ${code} source adoption ${phase}`, receivedAt: new Date().toISOString(), status: null,
-          contentType: "application/json", byteLength: bytes.length, bodyBase64: bytes.toString("base64") }], `${runId}-${code === "8336" ? "musashino" : "note"}-${phase}`, `D1 complete four-table ${code} source adoption ${phase}`);
+          contentType: "application/json", byteLength: bytes.length, bodyBase64: bytes.toString("base64") }], `${runId}-${code === "8336" ? "musashino" : code === "5243" ? "note" : "kawasaki"}-${phase}`, `D1 complete four-table ${code} source adoption ${phase}`);
         if (saved === undefined) throw new Error("musashino_snapshot_archive_missing");
         return { saved, bytes };
       };
@@ -669,8 +685,8 @@ async function adoptSavedOfficialSource(argv: readonly string[]): Promise<void> 
       save("POST.private.json", post);
       const after = await archive("post", post);
       assertActive(); await publication.complete({ sourceArchivePageId: original.pageId, preArchivePageId: before.saved.pageId, postArchivePageId: after.saved.pageId,
-        observedPostSha256: await sha256HexBytes(after.bytes), observedPostRows: post.benefits.length, updatedRows: options.initialEvent ? 0 : source.data.benefits.length, insertedRows: options.initialEvent ? 3 : 0, sourceSha256: options.sha256 });
-      save("FINISHED.private.json", { code, updatedRows: options.initialEvent ? 0 : source.data.benefits.length, insertedRows: options.initialEvent ? 3 : 0, sourceRequests: 0, modelCalls: 0 });
+        observedPostSha256: await sha256HexBytes(after.bytes), observedPostRows: post.benefits.length, updatedRows: options.initialEvent ? 0 : pre.benefits.length, insertedRows: options.initialEvent ? 3 : 0, sourceSha256: options.sha256 });
+      save("FINISHED.private.json", { code, updatedRows: options.initialEvent ? 0 : pre.benefits.length, insertedRows: options.initialEvent ? 3 : 0, sourceRequests: 0, modelCalls: 0 });
     }, publishingStore(deadline));
   } finally { restore(); }
 }

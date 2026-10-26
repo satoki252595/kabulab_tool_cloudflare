@@ -18,6 +18,7 @@ import { createHash } from "node:crypto";
 import { ROOT } from "../../../../src/shared/db/tests/source-scan.js";
 import musashinoMetadata from "./fixtures/musashino-source-saved3.json";
 import noteMetadata from "./fixtures/note-source-saved2.json";
+import kawasakiMetadata from "./fixtures/kawasaki-source-saved4.json";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
@@ -589,7 +590,7 @@ describe("collectAllStockCodes は既知の最終ページだけで完了する"
     await expect(collectAllStockCodes(async () => pageWith(1, null, "9100"))).rejects.toThrow(/全件数/);
   });
 
-  for (const { code, fixtureMetadata } of [{ code: "8336", fixtureMetadata: musashinoMetadata }, { code: "5243", fixtureMetadata: noteMetadata }])
+  for (const { code, fixtureMetadata } of [{ code: "8336", fixtureMetadata: musashinoMetadata }, { code: "5243", fixtureMetadata: noteMetadata }, { code: "3045", fixtureMetadata: kawasakiMetadata }])
   it.skipIf(!existsSync(join(ROOT, fixtureMetadata.privateFixtureDir, "SAVED-SOURCE-PACKET.private.json")))(`${code}公式実体添付と全新本文の照合前には通常取込へ進まない（private制御）`, async () => {
     const fixture = join(ROOT, fixtureMetadata.privateFixtureDir);
     const packet = JSON.parse(readFileSync(join(fixture, "SAVED-SOURCE-PACKET.private.json"), "utf8")) as { pages: { url: string; contentType: string; bodyBase64: string }[] };

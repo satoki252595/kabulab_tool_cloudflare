@@ -56,11 +56,12 @@ import { parsePublicBenefitFacts } from "../public-facts.js";
 import { benefitKey } from "../../data-scripts/benefit-key.js";
 import { SUMMARY_CONTRACT_VERSION, SUMMARY_MAX_CHARS } from "../../data-scripts/summary-contract.js";
 import { assertMusashinoInitialPost, planMusashinoInitialEvent, planMusashinoSourceAdoption } from "../../data-scripts/musashino-repair.js";
-import { readSavedMusashinoSource, readSavedNoteSource } from "../../data-scripts/fetch-yutai-full.js";
+import { readSavedMusashinoSource, readSavedNoteSource, readSavedKawasakiSource } from "../../data-scripts/fetch-yutai-full.js";
 import { loadMonthScopePreimage, assertMonthScopePost } from "../../data-scripts/saved-month-scope.js";
 import { fetchYieldInputs } from "../../data-scripts/recompute-yields.js";
 import musashinoMetadata from "./fixtures/musashino-source-saved3.json";
 import noteMetadata from "./fixtures/note-source-saved2.json";
+import kawasakiMetadata from "./fixtures/kawasaki-source-saved4.json";
 import admissionMetadata from "./fixtures/admission-saved3.json";
 import { compileSimpleSummary } from "../../data-scripts/summary-local.js";
 import type { SummaryTask } from "../../data-scripts/summary-tasks.js";
@@ -307,17 +308,17 @@ describe("importYutaiFull は母集団の銘柄の優待だけを作り直す", 
     expect(next.benefits.filter(row => row.recordDate === null)).toHaveLength(3);
   });
 
-  for (const { code, fixtureMetadata, holderId } of [{ code: "8336", fixtureMetadata: musashinoMetadata, holderId: NEW_HOLDER.id }, { code: "5243", fixtureMetadata: noteMetadata, holderId: 871 }])
+  for (const { code, fixtureMetadata, holderId } of [{ code: "8336", fixtureMetadata: musashinoMetadata, holderId: NEW_HOLDER.id }, { code: "5243", fixtureMetadata: noteMetadata, holderId: 871 }, { code: "3045", fixtureMetadata: kawasakiMetadata, holderId: 244 }])
   it.skipIf(!existsSync(join(ROOT, fixtureMetadata.privateFixtureDir, "SAVED-SOURCE-PACKET.private.json")))(`実${code}の全段階限定UPDATEは全4表driftでrollbackし、POST再入SQL0・翌月通常carryを保つ（SQLite制御DB）`, async () => {
     captureConsole();
     const fixture = join(ROOT, fixtureMetadata.privateFixtureDir), packet = fixtureMetadata.files.find(file => file.path === "SAVED-SOURCE-PACKET.private.json")!;
-    const { data } = code === "8336" ? await readSavedMusashinoSource(join(fixture, packet.path), packet.sha256) : await readSavedNoteSource(join(fixture, packet.path), packet.sha256);
+    const { data } = code === "8336" ? await readSavedMusashinoSource(join(fixture, packet.path), packet.sha256) : code === "5243" ? await readSavedNoteSource(join(fixture, packet.path), packet.sha256) : await readSavedKawasakiSource(join(fixture, packet.path), packet.sha256);
     const month = code === "8336" ? 3 : 11;
-    const original = JSON.parse(readFileSync(join(fixture, "SAVED-ROWS.private.json"), "utf8")) as { id: number; description: string; shortSummary: string | null; minShares: number; updatedAt: number }[];
+    const original = JSON.parse(readFileSync(join(fixture, "SAVED-ROWS.private.json"), "utf8")) as { id: number; description: string; shortSummary: string | null; minShares: number; recordMonth: number; updatedAt: number }[];
     // 実原本/recipientをローカル制御DBへ入れる。親の他列・制御用財務は本番PREを装わない。
     sqlite.prepare("UPDATE core_stocks SET id=?,code=?,is_yutai=1 WHERE id=?").run(holderId, code, NEW_HOLDER.id);
     const genreId = YUTAI_GENRES.findIndex(genre => genre.slug === "other") + 1;
-    for (const row of original) sqlite.prepare("INSERT INTO yutai_benefits (id,stock_id,genre_id,description,short_summary,min_shares,record_month,updated_at) VALUES (?,?,?,?,?,?,?,?)").run(row.id, holderId, genreId, row.description, row.shortSummary, row.minShares, month, row.updatedAt);
+    for (const row of original) sqlite.prepare("INSERT INTO yutai_benefits (id,stock_id,genre_id,description,short_summary,min_shares,record_month,updated_at) VALUES (?,?,?,?,?,?,?,?)").run(row.id, holderId, genreId, row.description, row.shortSummary, row.minShares, code === "3045" ? row.recordMonth : month, row.updatedAt);
     sqlite.prepare("INSERT INTO otakara_stock_financials (stock_id,price,data_date) VALUES (?,1000,'2026-10-26')").run(holderId);
     const pre = await loadMonthScopePreimage(db, code), inputs = await fetchYieldInputs(db, [holderId]);
     if (code === "5243") {
@@ -336,6 +337,11 @@ describe("importYutaiFull は母集団の銘柄の優待だけを作り直す", 
       expect(compileSimpleSummary(rebound)).toMatchObject({ estimatedValue: null });
       const wrong = { ...data, benefits: data.benefits.map((row, i) => i === 0 ? { ...row, heading: "", description: fault.description, notes: "" } : row) };
       expect(() => planMusashinoSourceAdoption(db, pre, wrong, "2026-10-21T16:56:22.538Z", inputs)).toThrow("note_full_source_changed");
+    }
+    if (code === "3045") {
+      const changed = { ...data, benefits: data.benefits.map((row, i) => i === 0 ? { ...row, notes: row.notes.replace("2027年2月28日", "2026年2月28日") } : row) };
+      expect(() => planMusashinoSourceAdoption(db, pre, changed, "2026-10-21T16:56:22.538Z", inputs)).toThrow("kawasaki_full_source_changed");
+      expect(() => planMusashinoSourceAdoption(db, { ...pre, benefits: pre.benefits.slice(1) }, data, "2026-10-21T16:56:22.538Z", inputs)).toThrow();
     }
     sqlite.prepare("UPDATE otakara_stock_financials SET yutai_yield=1 WHERE stock_id=?").run(holderId);
     const needsOtherUpdate = await loadMonthScopePreimage(db, code), needsOtherInputs = await fetchYieldInputs(db, [holderId]);
@@ -376,10 +382,11 @@ describe("importYutaiFull は母集団の銘柄の優待だけを作り直す", 
     await importYutaiFull(db, [...HELD.map(stock => fetched(stock.code)), data], makeRecordingSender().sender, "2026-10-21T16:56:22.538Z");
     const nextMonth = await loadMonthScopePreimage(db, code);
     expect(nextMonth.benefits.map(row => row.description)).toEqual(post.benefits.map(row => row.description));
-    expect(nextMonth.benefits.every(row => row.recordMonth === month && row.recordDate === null)).toBe(true);
+    expect(nextMonth.benefits.every(row => (code === "3045" ? row.recordMonth === 2 || row.recordMonth === 8 : row.recordMonth === month) && row.recordDate === null)).toBe(true);
     expect(nextMonth.benefits).toHaveLength(original.length);
     expect(nextMonth.benefits.map(row => row.shortSummary)).toEqual(post.benefits.map(row => row.shortSummary));
     expect(nextMonth.benefits.every(row => parsePublicBenefitFacts(row.publicFacts, data.code)?.source.officialStatus === "verified")).toBe(true);
+    if (code === "3045") expect(nextMonth.benefits.every(row => parsePublicBenefitFacts(row.publicFacts, data.code)?.version === 7)).toBe(true);
   });
 
   it("受信時計と純計算の公開条件を保存し、個別時計の欠落をバッチ時計で埋めない", async () => {

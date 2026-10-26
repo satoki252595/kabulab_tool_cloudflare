@@ -87,7 +87,9 @@ export type PublicBenefitFacts = ({ version: 1 } | { version: 2; conditionStruct
   | { version: 3; conditionStructure: BenefitHoldingStructure } | { version: 4; conditionStructure: BenefitRecordTierStructure }
   | { version: 5; conditionStructure: BenefitTierLiterals }
   | { version: 6; conditionStructure: { status: "literal_extracted"; rule: "initial-event-no-holding-period-v1"; sourceSha256: string;
-      applicability: "unverified"; ast: { recordDate: "2026-09-30"; minimumRegistryShares: 200; holdingPeriod: "not_required" } } }) & {
+      applicability: "unverified"; ast: { recordDate: "2026-09-30"; minimumRegistryShares: 200; holdingPeriod: "not_required" } } }
+  | { version: 7; conditionStructure: { status: "literal_extracted"; rule: "kawasaki-holding-period-transition-v1"; sourceSha256: string;
+      applicability: "unverified"; ast: { beforeHoldingPeriod: "not_stated"; fromRecordDate: "2027-02-28"; afterHoldingPeriods: ["半年以上", "3年以上"] } } }) & {
   sourceGroup: string;
   /** 掲載表記の検出。必要条件・適用対象を確認済みという意味ではない。 */
   holding: boolean;
@@ -175,9 +177,9 @@ export function parsePublicBenefitFacts(value: unknown, code?: string): PublicBe
   const raw: unknown = typeof value === "string" ? JSON.parse(value) : value;
   const version = typeof raw === "object" && raw !== null && "version" in raw ? raw.version : undefined;
   const facts = record(raw,
-    ["version", "sourceGroup", "holding", "holdingPeriods", "choice", "lottery", "application", "combination", "valueStatus", "qualifiedAmount", "valueReasons", "source", ...(version === 2 || version === 3 || version === 4 || version === 5 || version === 6 ? ["conditionStructure"] : [])]);
+    ["version", "sourceGroup", "holding", "holdingPeriods", "choice", "lottery", "application", "combination", "valueStatus", "qualifiedAmount", "valueReasons", "source", ...(version === 2 || version === 3 || version === 4 || version === 5 || version === 6 || version === 7 ? ["conditionStructure"] : [])]);
   const source = record(facts.source, ["listingUrl", "fetchedAt", "batchFetchedAt", "officialStatus", "officialUrl", "verifiedAt"]);
-  if ((facts.version !== 1 && facts.version !== 2 && facts.version !== 3 && facts.version !== 4 && facts.version !== 5 && facts.version !== 6) || typeof facts.sourceGroup !== "string" || !/^[0-9a-f]{16}$/.test(facts.sourceGroup) ||
+  if ((facts.version !== 1 && facts.version !== 2 && facts.version !== 3 && facts.version !== 4 && facts.version !== 5 && facts.version !== 6 && facts.version !== 7) || typeof facts.sourceGroup !== "string" || !/^[0-9a-f]{16}$/.test(facts.sourceGroup) ||
       [facts.holding, facts.choice, facts.lottery, facts.application].some(v => typeof v !== "boolean") ||
       !Array.isArray(facts.holdingPeriods) || facts.holdingPeriods.some(v => typeof v !== "string" || !/^(?:[0-9]+|半)(?:年|か月)(?:以上|未満|以下|超)$/.test(v)) ||
       (facts.holding === false && facts.holdingPeriods.length > 0) ||
@@ -288,6 +290,18 @@ export function parsePublicBenefitFacts(value: unknown, code?: string): PublicBe
         facts.holding !== false || facts.holdingPeriods.length !== 0 || facts.lottery !== false || facts.application !== false ||
         facts.combination !== "unverified" || facts.valueStatus !== "unresolved" || facts.qualifiedAmount !== null ||
         source.listingUrl !== "https://minkabu.jp/stock/8336/yutai" || source.officialStatus !== "verified" || source.officialUrl !== "https://www.musashinobank.co.jp/ir/stock/benefits.html") throw new Error("初回単発の保有期間条件が不正です");
+  }
+  if (facts.version === 7) {
+    const structure = record(facts.conditionStructure, ["status", "rule", "sourceSha256", "applicability", "ast"]);
+    const ast = record(structure.ast, ["beforeHoldingPeriod", "fromRecordDate", "afterHoldingPeriods"]);
+    if (structure.status !== "literal_extracted" || structure.rule !== "kawasaki-holding-period-transition-v1" ||
+        typeof structure.sourceSha256 !== "string" || !["35f44c0d3fda10849092331a4435378e07aaeafb849a2fee17c96d5109607b0f", "5229034fc6002dacee2b1b2d7df2392755c2d6bbd74bb5a1e0eef112ec1eab48"].includes(structure.sourceSha256) ||
+        structure.applicability !== "unverified" || ast.beforeHoldingPeriod !== "not_stated" || ast.fromRecordDate !== "2027-02-28" ||
+        JSON.stringify(ast.afterHoldingPeriods) !== JSON.stringify(["半年以上", "3年以上"]) ||
+        facts.holding !== true || JSON.stringify(facts.holdingPeriods) !== JSON.stringify(ast.afterHoldingPeriods) ||
+        facts.choice !== false || facts.lottery !== false || facts.application !== false || facts.combination !== "unverified" ||
+        facts.valueStatus !== "unresolved" || facts.qualifiedAmount !== null || source.listingUrl !== "https://minkabu.jp/stock/3045/yutai" ||
+        source.officialStatus !== "verified" || source.officialUrl !== "https://kawasaki-corp.co.jp/2928/") throw new Error("拡充前後の保有期間条件が不正です");
   }
   if (code !== undefined && source.listingUrl !== `https://minkabu.jp/stock/${code}/yutai`) {
     throw new Error("公開条件の銘柄と掲載出典が一致しません");
