@@ -1,0 +1,57 @@
+{
+  "sourceType": "saved_official_complete_table_cells_and_immutable_provider_record",
+  "privateFixtureDir": "tmp/yutai-kawasaki-source-proof-v1",
+  "officialPhysicalArchiveStatus": "NOT_ARCHIVED_PENDING",
+  "files": [
+    {
+      "path": "SAVED-SOURCE-PACKET.private.json",
+      "sha256": "321d1dd9b7053333f0fee162758e1f82b7b331d81d3d447351d0d55c32579adc",
+      "bytes": 441098
+    },
+    {
+      "path": "SAVED-ROWS.private.json",
+      "sha256": "79d69901c6dcf051c851ae934ad5fd314451e065e825fba6cf286eb88584acf7",
+      "bytes": 4677
+    }
+  ],
+  "expectedRows": [
+    {
+      "minShares": 100,
+      "recordMonth": 2,
+      "recordDate": null,
+      "descriptionSha256": "35f44c0d3fda10849092331a4435378e07aaeafb849a2fee17c96d5109607b0f"
+    },
+    {
+      "minShares": 100,
+      "recordMonth": 8,
+      "recordDate": null,
+      "descriptionSha256": "35f44c0d3fda10849092331a4435378e07aaeafb849a2fee17c96d5109607b0f"
+    },
+    {
+      "minShares": 300,
+      "recordMonth": 2,
+      "recordDate": null,
+      "descriptionSha256": "5229034fc6002dacee2b1b2d7df2392755c2d6bbd74bb5a1e0eef112ec1eab48"
+    },
+    {
+      "minShares": 300,
+      "recordMonth": 8,
+      "recordDate": null,
+      "descriptionSha256": "5229034fc6002dacee2b1b2d7df2392755c2d6bbd74bb5a1e0eef112ec1eab48"
+    }
+  ],
+  "canonical": [
+    {
+      "minShares": 100,
+      "summarySha256": "0b1e3812cb3ab1dce57258b1cafba8241153a2a6a541b873f08463dd4337d805",
+      "summaryCharacters": 232,
+      "estimatedValue": null
+    },
+    {
+      "minShares": 300,
+      "summarySha256": "ab381bbb00cf44d56c69b895c36cddac742f7fe685161cce0e9623f9012969fc",
+      "summaryCharacters": 253,
+      "estimatedValue": null
+    }
+  ]
+}
