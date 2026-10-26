@@ -52,7 +52,8 @@ Notion③と同じ完全置換で、NoneもNULLとして反映する。旧COALES
 
 ## 1 行に 1 つしか持てない来歴
 
-`source` / `fetched_at` / `quality` は NOT NULL なので必ず上書きになる。
+`source` / `quality` は NOT NULL なので必ず上書きになる。同一キー・source・
+非NULL原本SHA・開示日時が一致する再処理だけ、より新しい既存取得日時を保つ。
 値を完全置換するため、数値は今回の一次ソースだけを表す。列単位の過去の来歴が要るなら
 `docs/TARGET-ARCHITECTURE.md` §4.2 の
 追記専用（PK に `disclosed_at` を含める）へ進む必要があり、それは断面を読む
@@ -161,7 +162,14 @@ def build_upsert_sql(row_count: int) -> str:
     if row_count <= 0:
         raise D1Error("financials: 0 行の upsert は組み立てない")
     placeholders = "(" + ", ".join("?" for _ in COLUMNS) + ")"
-    assignments = [f"{c} = excluded.{c}" for c in OVERWRITE_COLUMNS]
+    assignments = [f"{c} = excluded.{c}" for c in OVERWRITE_COLUMNS if c != "fetched_at"]
+    assignments.append(
+        f"fetched_at = CASE WHEN excluded.source = {TABLE}.source "
+        f"AND excluded.raw_sha256 IS NOT NULL AND excluded.raw_sha256 = {TABLE}.raw_sha256 "
+        f"AND excluded.disclosed_at IS {TABLE}.disclosed_at "
+        f"AND {TABLE}.fetched_at > excluded.fetched_at THEN {TABLE}.fetched_at "
+        "ELSE excluded.fetched_at END"
+    )
     assignments.append(
         f"{LICENSE_COLUMN} = "
         + stricter_tag_sql(f"excluded.{LICENSE_COLUMN}", f"{TABLE}.{LICENSE_COLUMN}")

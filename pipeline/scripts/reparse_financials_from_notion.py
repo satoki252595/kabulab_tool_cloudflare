@@ -878,6 +878,12 @@ def sync_d1(journal: Path, receipts: Path) -> None:
     payload = []
     for row in rows:
         old = existing.get(tuple(row[COLUMNS.index(c)] for c in FINANCIALS_PK))
+        # 同じ原本の再解析では、後日の取得時計を巻き戻さない。
+        if (old is not None and old["raw_sha256"] is not None
+                and all(row[COLUMNS.index(c)] == old[c]
+                        for c in ("source", "raw_sha256", "disclosed_at"))
+                and old["fetched_at"] > row[COLUMNS.index("fetched_at")]):
+            row[COLUMNS.index("fetched_at")] = old["fetched_at"]
         payload.append({"new": row, "old": [old[c] for c in COLUMNS] if old is not None else None})
     for offset in range(0, len(payload), 100):
         store.query(_repair_sql(), [_json(payload[offset:offset + 100])])
