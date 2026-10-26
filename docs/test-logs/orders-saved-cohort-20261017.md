@@ -10,8 +10,17 @@
 
 - cohort は strict `{version:2,kind:"orders",stateDir,items}`。各itemは既存のstock/document/EDINET/FY/ZIP全SHA/元archivePageId/元manifest既知・未知/原取得時計で固定する。海外version1と混用できない。
 - `--saved-cohort` / `--cohort-sha256` / `--saved-mode=prepare|apply|inspect` / `--after-code=START|<code>` / `--max-targets` / `--out` / `--max-seconds` / `--not-after` / `--max-notion-rps` / `--max-http` / `--max-notion` / `--max-d1` / `--max-response-bytes` / `--max-request-bytes` を必須にする。apply/inspectは `--capsule` / `--capsule-sha256` も必須。通常のforce/limitによる迂回は拒否する。
-- 1window 1–20文書、最大1800秒、HTTP1000/Notion400/D1SELECT400、応答保持256MiB/要求64MiB。各nativeの前に65秒余白、単一試行/60秒/redirect拒否、未知・429・構造不正はsticky STOP。D1 rows_read 500kは応答後の停止上限で、SQL scanを事前に限定する保証ではない。応答保持量と受領済みchunk量も分けて記録する。
-- stateDirは専用の同一実体を継続使用する。既存realpath・本人所有・0700を必須とし、新しい空stateの自動生成はしない。同docId+ZIP SHAのclaimをapply HTTP前にwx/fsyncで保存し、成功も結果不明も削除しない。別PRE・別outだけでは再送不可。別stateを作り直す操作はこの保護を壊すため禁止。Actionsのephemeral filesystemが次runへ永続するとは主張しない。
+- 1window 1–20文書、最大1800秒、HTTP1000/Notion400/D1SELECT400、応答保持256MiB/要求64MiB。各nativeの前に65秒余白、各native試行60秒/redirect拒否、未知・構造不正はsticky STOP。Notion読取429だけは原応答を耐久保存後に既存共有clientへ渡し、Retry-Afterと既存再試行上限を使う。singleAttemptは再送せず、すべての試行を同じHTTP/Notion/byte/期限枠へ計上する。mutation/hosted/D1の失敗は従来どおり停止する。D1 rows_read 500kは応答後の停止上限で、SQL scanを事前に限定する保証ではない。応答保持量と受領済みchunk量も分けて記録する。
+- stateDirは専用の同一実体を継続使用する。既存realpath・本人所有・0700を必須とし、新しい空stateの自動生成はしない。同docId+ZIP SHAの既存claimは通信前に拒否し、新しい恒久claimのwx/fsync予約はfresh全6表/原本/本文と通常builderの資格化後・物理PRE書込前に行う。成功も結果不明も削除しない。別PRE・別outだけでは再送不可。別stateを作り直す操作はこの保護を壊すため禁止。Actionsのephemeral filesystemが次runへ永続するとは主張しない。
+- 旧fresh PREが読取429で既知終了した場合だけ、applyへ `--resume-readonly-proof=<既存native/claim binding JSON>` と `--resume-readonly-proof-sha256=<全SHA>` を対で指定できる。旧cohort/PRE/window/scope・恒久claim・attempt/STOP・自然exit1・全native要求/応答を実bytesで検証し、SQLは通常read allowlist、Notionはreadのみ、欠応答/partial/write/unknown/別bindingは拒否する。旧outのcanonical pathに一度限りのwx/fsync markerを最初の通信前に保存し、旧claim/receiptは変更しない。fresh資格・全6表CAS・物理PRE/POSTは通常どおり再実施し、再開後のunknownや二度目の再開は別outでも拒否する。
+
+### 明示した歴史文書の受注補修
+
+`backfill:orders` の3段階すべてへ `--saved-orders-document-scope=historical` を明示した場合だけ、cohortのdocumentId/docId/stockId/EDINET/期末に一致する旧有報を選ぶ。省略時は従来の最新有報限定、海外入口はこの指定を通信前に拒否する。scopeはprepare capsuleへ保存し、apply/inspectで一致を要求する。現active普通株の資格を保ち、旧文書の本文pointer/status、保存native8項目（元提出時計の通常保存表現を含む）、ZIP DEI・全SHA・元取得時計・本文を照合する。latestや対象期を偽装しない。
+
+同一stockの複数文書をcohortへ混在させず、1文書のprepare→apply→独立inspectを順に閉じてから、次の文書をfresh PREで資格化する。通常の全6表CAS・派生投影・恒久claim・unknown無再送・物理PRE/POSTは共用する。歴史factsの変更後に現在文書を適用する場合も、変更前のPREを流用せず通常prepareからやり直す。
+
+6721の保存原本4件の通常parser結果と元全6表を私有入力に束縛し、2021〜2024年の旧列ずれを通常atomic builderで補修した後、2025年の通常投影をCPU検証した。5年CAGRは受注高−1.310832%・受注残−8.111171%、直近YoYは受注高＋72.920645%・受注残−11.918665%。これは全社合計の円換算額を同一期末ごとの最新提出文書で採用する既存の計算で、会社掲載の受注高前年比−7.8%とは不一致が残る。現在/前年とも同じ連結期間・単一事業の表で、該当節には比較基準変更の説明がなく、その理由は未確定。会社%から金額を逆算したり、掲載%で通常投影を置換しない。ここでの確認は保存原本とCPU再生で、本番の履歴・現在金額の適用は別受入とする。
 
 ## 更新する値と保持する値
 

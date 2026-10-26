@@ -11,7 +11,10 @@ import {
   existsSync,
   realpathSync,
   statSync,
+  lstatSync,
+  readdirSync,
 } from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import { join, resolve, dirname } from "node:path";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { z } from "zod";
@@ -72,6 +75,8 @@ import {
   type OrderExtraction,
 } from "../../src/services/edinet/order-parser.js";
 import { validateOrderRepairSet } from "../../src/services/order-save-rows.js";
+import { edinetArchiveNativeMetadata } from "../../src/services/edinet/archive-metadata.js";
+import { parseSubmitDateTime } from "../../src/services/edinet/types.js";
 
 type SavedKind = "overseas" | "orders";
 const digest = (bytes: Uint8Array | string) =>
@@ -154,6 +159,7 @@ type Qualified<E = OverseasExtraction | OrderExtraction> = {
 interface SavedCapsule {
   version: 1 | 2;
   kind?: "orders";
+  ordersDocumentScope?: "historical";
   cohortSha256: string;
   schema: Record<string, string[]>;
   d1: Snapshot;
@@ -162,6 +168,7 @@ interface SavedCapsule {
 export interface SavedOverseasCapsule extends SavedCapsule {
   version: 1;
   kind?: never;
+  ordersDocumentScope?: never;
   qualified: Qualified<OverseasExtraction>[];
 }
 export interface SavedOrdersCapsule extends SavedCapsule {
@@ -303,6 +310,7 @@ export function assertSavedCanonicalSource(
   source: Page,
   actualSha: string,
   actualClock: string,
+  historicalDocument?: Row,
 ): void {
   assert.equal(actualSha, item.zipSha256);
   assert.equal(Date.parse(actualClock), Date.parse(item.sourceFetchedAt));
@@ -310,20 +318,49 @@ export function assertSavedCanonicalSource(
     date: { start: string };
   };
   assert.equal(Date.parse(rawClock.date.start), Date.parse(actualClock));
-  assertSavedSourcePageMetadata(item, source);
+  assertSavedSourcePageMetadata(item, source, historicalDocument);
 }
 
 /** Query admission and full-source qualification use the same metadata/lineage contract.
+ * Historical orders additionally bind all native identity fields to their explicit D1 document.
  * Missing issuer/FY metadata stays missing; the saved reader still requires official ZIP DEI.
  */
 export function assertSavedSourcePageMetadata(
   item: SavedOverseasItem,
   source: Page,
+  historicalDocument?: Row,
 ): void {
   assert.equal(
     verifySavedHoldingsMetadata(metadata(source), sourceOf(item)).status,
     "verified",
   );
+  if (historicalDocument !== undefined) {
+    const native = edinetArchiveNativeMetadata(metadata(source));
+    for (const [field, expected] of Object.entries({
+      docID: item.docId,
+      edinetCode: item.edinetCode,
+      secCode: `${item.stockCode}0`,
+      filerName: historicalDocument.filer_name,
+      docTypeCode: historicalDocument.doc_type_code,
+      periodStart: historicalDocument.period_start,
+      periodEnd: item.periodEnd,
+    })) {
+      assert.equal(typeof expected, "string", "historical native identity is incomplete");
+      assert(String(expected).trim().length > 0, "historical native identity is empty");
+      assert.equal(native[field], expected, `historical native ${field} mismatch`);
+    }
+    assert.equal(typeof native.submitDateTime, "string");
+    assert.match(String(native.submitDateTime), /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}$/);
+    assert.equal(
+      parseSubmitDateTime(String(native.submitDateTime)).toISOString().slice(0, 16),
+      String(native.submitDateTime).replace(" ", "T"),
+    );
+    assert.equal(
+      parseSubmitDateTime(String(native.submitDateTime)).getTime() / 1000,
+      historicalDocument.submitted_at,
+      "historical native submitDateTime mismatch",
+    );
+  }
   if (nid(source.id) !== nid(item.archivePageId)) {
     const data = metadata(source);
     assert.equal(data.edinetDocType, 1);
@@ -454,6 +491,7 @@ export async function assertSavedLatest(
   codeRoot: string,
   current: Snapshot,
   items: SavedOverseasItem[],
+  ordersDocumentScope?: "historical",
 ): Promise<Map<string, string>> {
   const local = openActualSnapshot(codeRoot, current);
   try {
@@ -476,15 +514,33 @@ export async function assertSavedLatest(
       assert.equal(found.length, 1);
       const doc = found[0].doc;
       assert(doc);
-      assert.equal(doc.docId, item.docId);
-      assert.equal(doc.periodEnd, item.periodEnd);
-      assert(doc.notionDocPageId);
       const native = current.yuho_documents.filter(
         (row) => row.id === item.documentId,
       );
       assert.equal(native.length, 1);
       assert.equal(native[0].edinet_code, item.edinetCode);
-      pointers.set(item.docId, doc.notionDocPageId);
+      if (ordersDocumentScope === "historical") {
+        const selected = native[0];
+        assert.equal(current.core_stocks.filter(row => row.id === item.stockId && row.code === item.stockCode).length, 1);
+        assert.equal(selected.stock_id, item.stockId);
+        assert.equal(selected.doc_id, item.docId);
+        assert.equal(selected.period_end, item.periodEnd);
+        assert(["120", "130"].includes(String(selected.doc_type_code)));
+        assert.equal(selected.text_parse_status, "ok");
+        assert(typeof selected.notion_doc_page_id === "string" && selected.notion_doc_page_id.length > 0);
+        assert.notEqual(doc.docId, item.docId, "historical scope requires an older explicit document");
+        assert(
+          item.periodEnd < doc.periodEnd ||
+            (item.periodEnd === doc.periodEnd &&
+              Number(selected.submitted_at) < Date.parse(doc.submittedAt) / 1000),
+        );
+        pointers.set(item.docId, selected.notion_doc_page_id);
+      } else {
+        assert.equal(doc.docId, item.docId);
+        assert.equal(doc.periodEnd, item.periodEnd);
+        assert(doc.notionDocPageId);
+        pointers.set(item.docId, doc.notionDocPageId);
+      }
     }
     return pointers;
   } finally {
@@ -515,10 +571,11 @@ async function capture(
   cohortSha256: string,
   dir: string,
   kind: SavedKind,
+  ordersDocumentScope?: "historical",
 ): Promise<SavedCapsule> {
   const schema = await columns(),
     d1 = await snapshot(cohort.items),
-    pointers = await assertSavedLatest(codeRoot, d1, cohort.items),
+    pointers = await assertSavedLatest(codeRoot, d1, cohort.items, ordersDocumentScope),
     qualified: Qualified[] = [];
   for (const item of cohort.items) {
     const saved = await readSavedHoldingsZip(sourceOf(item), {
@@ -530,7 +587,12 @@ async function capture(
       await notionRequest<Page>("GET", `/pages/${saved.archivePageId}`),
       saved.archivePageId,
     );
-    assertSavedCanonicalSource(item, sourcePage, saved.sha256, saved.fetchedAt);
+    assertSavedCanonicalSource(
+      item, sourcePage, saved.sha256, saved.fetchedAt,
+      ordersDocumentScope === "historical"
+        ? d1.yuho_documents.find(row => row.id === item.documentId)
+        : undefined,
+    );
     const extraction = parseSavedExtraction(saved.bytes, item.periodEnd, kind);
     const zipPath = durable(
         dir,
@@ -555,6 +617,7 @@ async function capture(
       ? { version: 2 as const, kind: "orders" as const }
       : { version: 1 as const }),
     cohortSha256,
+    ...(ordersDocumentScope === undefined ? {} : { ordersDocumentScope }),
     schema,
     d1,
     qualified,
@@ -569,6 +632,7 @@ async function assertSources(
     codeRoot,
     current,
     capsule.qualified.map((value) => value.item),
+    capsule.ordersDocumentScope,
   );
   for (const value of capsule.qualified) {
     const zip = readFileSync(value.zipPath);
@@ -586,6 +650,11 @@ async function assertSources(
       value.archivePageId,
     );
     same(stableSavedPage(source), stableSavedPage(value.sourcePage));
+    if (capsule.ordersDocumentScope === "historical")
+      assertSavedCanonicalSource(
+        value.item, source, value.zipSha256, value.item.sourceFetchedAt,
+        current.yuho_documents.find(row => row.id === value.item.documentId),
+      );
     const pointer = pointers.get(value.item.docId);
     assert(pointer);
     const actual = await body(value.item, pointer);
@@ -596,6 +665,9 @@ async function assertSources(
 
 export interface SavedRunOptions {
   mode: "prepare" | "apply" | "inspect";
+  ordersDocumentScope?: "historical";
+  resumeReadonlyProofPath?: string;
+  resumeReadonlyProofSha256?: string;
   cohortPath: string;
   cohortSha256: string;
   outDir: string;
@@ -614,7 +686,7 @@ export interface SavedRunOptions {
 }
 
 /** Native guard is local to this finite command; normal shared clients still own all IO. */
-function installGuard(
+export function installSavedNativeGuard(
   options: SavedRunOptions,
   cohort: SourceCohort,
   dir: string,
@@ -929,6 +1001,14 @@ function installGuard(
           bytes: body.length,
         }),
       );
+      // The shared client owns Retry-After/MAX_RETRY and honors singleAttempt.
+      // Keep the complete rejected read, without treating it as a successful page.
+      if (kind === "notion_read" && response.status === 429)
+        return new Response(new Uint8Array(body), {
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers,
+        });
       assert.equal(response.status, 200);
       if (kind === "d1_read" || kind === "d1_batch") {
         const data = JSON.parse(body.toString()) as {
@@ -1150,6 +1230,145 @@ export function reserveSavedClaims(
     );
 }
 
+type SavedFileReference = { path: string; sha256: string; bytes: number };
+function readPinnedSavedFile(ref: SavedFileReference): Buffer {
+  assert.equal(resolve(ref.path), ref.path);
+  assert.equal(realpathSync(ref.path), ref.path);
+  assert.match(ref.sha256, /^[a-f0-9]{64}$/);
+  assert(Number.isSafeInteger(ref.bytes) && ref.bytes >= 0 && ref.bytes <= 32 * 1024 ** 2);
+  const stat = lstatSync(ref.path);
+  assert(stat.isFile() && stat.uid === process.getuid!() && (stat.mode & 0o777) === 0o600);
+  assert.equal(stat.size, ref.bytes);
+  const bytes = readFileSync(ref.path);
+  assert.equal(digest(bytes), ref.sha256, "saved readonly evidence bytes changed");
+  return bytes;
+}
+
+/** A pinned prior read-only 429 is not an unknown write. Original claims/receipts stay immutable. */
+export function qualifySavedReadonlyResume(options: SavedRunOptions, cohort: SourceCohort) {
+  assert.equal(options.mode, "apply");
+  assert(options.resumeReadonlyProofPath && options.resumeReadonlyProofSha256);
+  const proofBytes = readPinnedSavedFile({ path: options.resumeReadonlyProofPath,
+    sha256: options.resumeReadonlyProofSha256, bytes: lstatSync(options.resumeReadonlyProofPath).size });
+  assert(proofBytes.length <= 1024 ** 2);
+  // Consume the existing native/claim file inventory, not its self-reported success counters.
+  const proof = JSON.parse(proofBytes.toString()) as {
+    claims: SavedFileReference[];
+    records: SavedFileReference[];
+    native: { n: number; intent: SavedFileReference; requestBody: SavedFileReference;
+      responseMetadata: SavedFileReference; responseBody: SavedFileReference }[];
+  };
+  assert.equal(proof.claims.length, cohort.items.length);
+  assert(proof.native.length > 0 && proof.native.length <= 1000);
+  const refs = [...proof.claims, ...proof.records, ...proof.native.flatMap(value =>
+    [value.intent, value.requestBody, value.responseMetadata, value.responseBody])];
+  assert(refs.reduce((sum, ref) => sum + ref.bytes, 0) <= 256 * 1024 ** 2, "saved readonly evidence cap");
+  const claims = cohort.items.map(item => {
+    const path = join(cohort.stateDir, `${item.docId}-${item.zipSha256}.apply-claim.json`);
+    const refs = proof.claims.filter(ref => ref.path === path);
+    assert.equal(refs.length, 1);
+    const claim = JSON.parse(readPinnedSavedFile(refs[0]).toString());
+    assert(isDeepStrictEqual(claim.source, item), "saved readonly claim source mismatch");
+    assert.equal(claim.cohortSha256, options.cohortSha256);
+    assert.equal(claim.preSha256, options.capsuleSha256);
+    assert.equal(claim.resend, 0);
+    assert.equal(claim.singleUse, true);
+    return { ref: refs[0], claim };
+  });
+  const oldOut = claims[0].claim.outDir as string;
+  assertSavedStateDirectory(oldOut);
+  assert(claims.every(({ claim }) => claim.outDir === oldOut));
+  assert.notEqual(oldOut, options.outDir);
+  assert(!existsSync(join(oldOut, "readonly-resume-once.json")), "saved readonly resume already consumed");
+  const record = (path: string) => {
+    const refs = proof.records.filter(ref => ref.path === path);
+    assert.equal(refs.length, 1);
+    return readPinnedSavedFile(refs[0]);
+  };
+  const attempt = JSON.parse(record(join(oldOut, "attempt-once.json")).toString());
+  assert.equal(attempt.resend, 0);
+  assert.equal(attempt.sourceAPI, 0);
+  assert.equal(attempt.models, 0);
+  const previous = attempt.options as SavedRunOptions;
+  assert.equal(previous.mode, "apply");
+  assert.equal(previous.outDir, oldOut);
+  assert.equal(previous.resumeReadonlyProofPath, undefined, "chained readonly resume is forbidden");
+  for (const key of ["cohortSha256", "capsuleSha256", "afterCode", "maxTargets", "ordersDocumentScope"] as const)
+    assert.equal(previous[key], options[key], `saved readonly ${key} mismatch`);
+  assert.equal(digest(readFileSync(previous.cohortPath)), options.cohortSha256);
+  const stop = JSON.parse(record(join(oldOut, "STOP.json")).toString());
+  assert.equal(stop.phase, "fresh PRE");
+  assert.equal(stop.resend, 0);
+  assert.equal(stop.io.requests, proof.native.length);
+  assert.equal(stop.io.d1Batches, 0);
+  assert.equal(stop.io.hosted, 0);
+  const control = dirname(oldOut);
+  const started = record(join(control, "APPLY-STARTED.private.json"));
+  const child = JSON.parse(record(join(control, "APPLY-CHILD.private.json")).toString());
+  const exit = JSON.parse(record(join(control, "APPLY-EXIT.private.json")).toString());
+  assert.equal(exit.status, "ONE_RELEASED_APPLY_NATURAL_TERMINAL");
+  assert.equal(exit.exitCode, 1);
+  assert.equal(exit.inspectReleased, false);
+  assert.equal(exit.startSha256, digest(started));
+  assert.equal(exit.pid, child.pid);
+  assert.equal(exit.parentPid, child.parentPid);
+  assert.equal(exit.resend, 0);
+  for (const pid of [exit.pid, exit.parentPid]) {
+    assert(Number.isSafeInteger(pid) && pid > 0);
+    try { process.kill(pid, 0); assert.fail("prior saved process is still live"); }
+    catch (error) { assert.equal((error as NodeJS.ErrnoException).code, "ESRCH", "prior saved process is not known closed"); }
+  }
+  const expectedFiles = new Set(["attempt-once.json", "STOP.json"]);
+  const allowed = new Set(savedReadQueries(cohort).map(query => JSON.stringify(query)));
+  let d1 = 0, notion = 0;
+  for (const [index, value] of proof.native.entries()) {
+    assert.equal(value.n, index + 1);
+    const refs = [value.intent, value.requestBody, value.responseMetadata, value.responseBody];
+    const names = [`native-${value.n}-intent.json`, `native-${value.n}-request.body`, `native-${value.n}-response.json`, `native-${value.n}-response.body`];
+    refs.forEach((ref, i) => { assert.equal(ref.path, join(oldOut, names[i])); expectedFiles.add(names[i]); });
+    const [intentBytes, request, responseBytes, body] = refs.map(readPinnedSavedFile);
+    const intent = JSON.parse(intentBytes.toString()), response = JSON.parse(responseBytes.toString());
+    assert.equal(intent.resend, 0);
+    assert.equal(intent.bytes, request.length);
+    assert.equal(intent.bodySha256, digest(request));
+    assert.equal(response.bytes, body.length);
+    assert.equal(response.sha256, digest(body));
+    assert.equal(intent.kind, response.kind);
+    assert.equal(response.status, index === proof.native.length - 1 ? 429 : 200);
+    const url = new URL(intent.url);
+    if (intent.kind === "d1_read") {
+      d1++;
+      assert.equal(intent.method, "POST");
+      assert.equal(intent.url, d1HttpQueryUrl());
+      assert(allowed.has(JSON.stringify(JSON.parse(request.toString()))), "saved readonly SQL is outside the normal read allowlist");
+      const result = JSON.parse(body.toString());
+      assertD1SingleQueryResponse(result);
+      assert.equal(result.result[0].meta.rows_written, 0);
+      assert.equal(result.result[0].meta.changed_db, false);
+    } else {
+      notion++;
+      assert.equal(intent.kind, "notion_read");
+      assert.equal(url.origin, "https://api.notion.com");
+      assert(intent.method === "GET" || (intent.method === "POST" &&
+        (url.pathname === "/v1/search" || /^\/v1\/databases\/[a-f0-9-]+\/query$/i.test(url.pathname))), "saved readonly Notion method is a mutation");
+      if (response.status === 429) {
+        const rejection = JSON.parse(body.toString());
+        assert.equal(rejection.object, "error");
+        assert.equal(rejection.code, "rate_limited");
+      }
+    }
+  }
+  assert.equal(d1, stop.io.d1Reads);
+  assert.equal(notion, stop.io.notion);
+  assert(isDeepStrictEqual(readdirSync(oldOut).sort(), [...expectedFiles].sort()), "saved readonly run has partial, write, missing or unknown artifacts");
+  // Verify all declared control files too; none can be replaced by a later terminal.
+  for (const ref of proof.records) {
+    assert([oldOut, control].includes(dirname(ref.path)));
+    readPinnedSavedFile(ref);
+  }
+  return { oldOut, claims: claims.map(value => value.ref) };
+}
+
 /** Unknown inflight records never authorize reentry. A new cohort requires its own finite command. */
 export async function runSavedOverseas(
   options: SavedRunOptions,
@@ -1168,6 +1387,11 @@ async function runSaved(
   codeRoot: string,
   kind: SavedKind,
 ): Promise<void> {
+  assert(
+    options.ordersDocumentScope === undefined ||
+      (kind === "orders" && options.ordersDocumentScope === "historical"),
+    "historical document scope is orders-only",
+  );
   assert(["prepare", "apply", "inspect"].includes(options.mode));
   assert.equal(resolve(options.outDir), options.outDir);
   assert.equal(existsSync(options.outDir), false);
@@ -1231,6 +1455,7 @@ async function runSaved(
     ancestor = JSON.parse(gunzipSync(bytes).toString()) as SavedCapsule;
     assert.equal(ancestor.version, kind === "orders" ? 2 : 1);
     assert.equal(ancestor.kind, kind === "orders" ? "orders" : undefined);
+    assert.equal(ancestor.ordersDocumentScope, options.ordersDocumentScope, "saved document scope differs from PRE");
     assert.equal(ancestor.cohortSha256, options.cohortSha256);
     same(
       ancestor.qualified.map((value) => value.item),
@@ -1238,7 +1463,9 @@ async function runSaved(
     );
   }
   assertSavedStateDirectory(cohort.stateDir);
-  if (options.mode === "apply") assertSavedClaimsAvailable(cohort);
+  const resume = options.resumeReadonlyProofPath === undefined ? null : qualifySavedReadonlyResume(options, cohort);
+  assert.equal(options.resumeReadonlyProofPath === undefined, options.resumeReadonlyProofSha256 === undefined);
+  if (options.mode === "apply" && resume === null) assertSavedClaimsAvailable(cohort);
   mkdirSync(options.outDir, { mode: 0o700 });
   durable(
     options.outDir,
@@ -1252,20 +1479,18 @@ async function runSaved(
     }),
   );
   setNotionMaxRps(options.maxNotionRps);
-  const io = installGuard(options, cohort, options.outDir, ancestor, kind);
+  const io = installSavedNativeGuard(options, cohort, options.outDir, ancestor, kind);
   let phase = "fresh PRE";
   try {
+    if (resume !== null)
+      durable(resume.oldOut, "readonly-resume-once.json", JSON.stringify({
+        at: new Date().toISOString(), oldOut: resume.oldOut, outDir: options.outDir,
+        cohortSha256: options.cohortSha256, preSha256: options.capsuleSha256,
+        proofSha256: options.resumeReadonlyProofSha256, resend: 0, singleUse: true,
+      }));
     // The six-table local replay is not a qualification of the production observation table.
     // Bind the current fixed set with one real indexed D1 read before any Notion PRE/archive.
     await assertCurrentReported(cohort.items);
-    if (options.mode === "apply") {
-      assert(options.capsuleSha256);
-      reserveSavedClaims(cohort, {
-        cohortSha256: options.cohortSha256,
-        preSha256: options.capsuleSha256,
-        outDir: options.outDir,
-      });
-    }
     if (options.mode === "prepare") {
       const capsule = await capture(
           codeRoot,
@@ -1273,6 +1498,7 @@ async function runSaved(
           options.cohortSha256,
           options.outDir,
           kind,
+          options.ordersDocumentScope,
         ),
         bytes = gzipSync(JSON.stringify(capsule));
       durable(options.outDir, "PRE-capsule.json.gz", bytes);
@@ -1365,6 +1591,14 @@ async function runSaved(
       JSON.stringify({ ...ancestor, d1: current, runStartedSec }),
     );
     durable(options.outDir, "PRE-capsule.json.gz", pre);
+    if (resume === null) {
+      assert(options.capsuleSha256);
+      reserveSavedClaims(cohort, {
+        cohortSha256: options.cohortSha256,
+        preSha256: options.capsuleSha256,
+        outDir: options.outDir,
+      });
+    } else for (const claim of resume.claims) readPinnedSavedFile(claim);
     phase = "physical PRE";
     await io.archive("PRE", pre);
     for (const { value, built, noop } of prepared) {
@@ -1506,10 +1740,25 @@ export function parseSavedOverseasOptions(
   const after = required("after-code");
   const afterCode = after === "START" ? null : after;
   const maxTargets = numeric("max-targets");
+  const resumeReadonlyProofPath = values.get("resume-readonly-proof");
+  const resumeReadonlyProofSha256 = values.get("resume-readonly-proof-sha256");
+  assert.equal(resumeReadonlyProofPath === undefined, resumeReadonlyProofSha256 === undefined);
+  if (resumeReadonlyProofPath !== undefined) {
+    assert.equal(mode, "apply");
+    values.delete("resume-readonly-proof");
+    values.delete("resume-readonly-proof-sha256");
+  }
+  const ordersDocumentScope = values.get("saved-orders-document-scope");
+  if (ordersDocumentScope !== undefined) {
+    assert.equal(ordersDocumentScope, "historical");
+    values.delete("saved-orders-document-scope");
+  }
   const options: SavedRunOptions = {
     mode,
     afterCode,
     maxTargets,
+    ...(resumeReadonlyProofPath === undefined ? {} : { resumeReadonlyProofPath: resolve(resumeReadonlyProofPath), resumeReadonlyProofSha256 }),
+    ...(ordersDocumentScope === undefined ? {} : { ordersDocumentScope }),
     cohortPath: resolve(required("saved-cohort")),
     cohortSha256: required("cohort-sha256"),
     outDir: resolve(required("out")),
