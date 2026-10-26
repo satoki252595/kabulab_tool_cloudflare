@@ -1,6 +1,7 @@
+import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
-import { main, mechanicalPublishingWindow, parseMechanicalPublishingArgs } from "./mechanical-publishing.js";
+import { main, mechanicalPublishingAssertionDiagnostic, mechanicalPublishingWindow, parseMechanicalPublishingArgs } from "./mechanical-publishing.js";
 import * as publishing from "../mechanical-publishing/shared-writer.js";
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.useRealTimers(); });
@@ -104,4 +105,30 @@ it("a GitHub job without native clock stops before shared owner configuration or
   vi.stubEnv("GITHUB_EVENT_NAME", "schedule"); vi.stubEnv("GITHUB_REF", "refs/heads/main");
   vi.stubEnv("BATCH_JOB_STARTED_AT", ""); vi.stubEnv("R2_BUCKET_RAW", "");
   await expect(main(["--target=supplement"])).rejects.toThrow("job開始時計");
+});
+
+it("logs an AssertionError message and only its first frame", () => {
+  const marker = "INC-20261026-kabulab_tool_cloudflare-mechpub-fail";
+  const clipped = new Error(`${"あ".repeat(299)}\n${"い".repeat(10)}`);
+  clipped.stack = "AssertionError: clipped\n    at run (file:///workspace/scripts/mechanical-publishing/shared-writer.ts:141:3)\n    at later (file:///workspace/scripts/sync/mechanical-publishing.ts:79:5)";
+  const line = mechanicalPublishingAssertionDiagnostic(clipped);
+  expect(line).toBe(`[${marker}] assert=${"あ".repeat(299)}  at=file:///workspace/scripts/mechanical-publishing/shared-writer.ts:141:3`);
+  expect(line).not.toContain("い");
+  expect(line).not.toContain("mechanical-publishing.ts:79");
+  const missing = new Error("only");
+  missing.stack = undefined;
+  expect(mechanicalPublishingAssertionDiagnostic(missing)).toBe(`[${marker}] assert=only at=不明`);
+  const unparsed = new Error("only");
+  unparsed.stack = "AssertionError: only\n    at not-a-frame\n    at real (file:///workspace/scripts/mechanical-publishing/shared-writer.ts:141:3)";
+  expect(mechanicalPublishingAssertionDiagnostic(unparsed)).toBe(`[${marker}] assert=only at=不明`);
+  let caught: unknown;
+  try { assert.equal("refs/heads/topic", "refs/heads/main"); }
+  catch (error) { caught = error; }
+  if (!(caught instanceof Error) || caught.name !== "AssertionError") throw new Error("expected AssertionError");
+  const actual = mechanicalPublishingAssertionDiagnostic(caught);
+  expect(actual.startsWith(`[${marker}] assert=`)).toBe(true);
+  expect(actual).toContain("refs/heads/topic");
+  expect(actual).toContain("refs/heads/main");
+  expect(actual).toMatch(/ at=\S+:\d+:\d+$/);
+  expect(actual.includes("\n")).toBe(false);
 });

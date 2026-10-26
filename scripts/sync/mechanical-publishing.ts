@@ -75,10 +75,32 @@ export async function main(argv = process.argv.slice(2)) {
       "rejected" in result && result.rejected > 0 ? 1 : 0;
   } finally { restore(); }
 }
+
+/** INC-20261026 の計測専用。AssertionError の message と先頭フレームだけを足す。 */
+export function mechanicalPublishingAssertionDiagnostic(error: Error): string {
+  const raw = typeof error.message === "string" ? error.message : "";
+  const message = Array.from(raw.replace(/\r\n|\r|\n/g, " ")).slice(0, 300).join("");
+  return `[INC-20261026-kabulab_tool_cloudflare-mechpub-fail] assert=${message} at=${firstAssertionFrame(error.stack)}`;
+}
+function firstAssertionFrame(stack: string | undefined): string {
+  if (typeof stack !== "string") return "不明";
+  for (const line of stack.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("at ")) continue;
+    const located = trimmed.match(/^at\s+(?:async\s+)?(?:.*\s\()?(.+):(\d+):(\d+)\)?$/);
+    return located ? `${located[1]}:${located[2]}:${located[3]}` : "不明";
+  }
+  return "不明";
+}
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try { process.exitCode = await main(); }
   catch (error) {
     const name = error instanceof Error && ["NotionConfigError", "NotionUnknownResultError", "PublishingReadOnlyError", "R2PutRejectedError", "R2PutUnknownError", "AssertionError"].includes(error.name) ? error.name : "unexpected_failure";
-    console.error(`[mechanical-publishing] stopped_no_automatic_retry class=${name}`); process.exitCode = 2;
+    console.error(`[mechanical-publishing] stopped_no_automatic_retry class=${name}`);
+    if (error instanceof Error && error.name === "AssertionError") {
+      try { console.error(mechanicalPublishingAssertionDiagnostic(error)); }
+      catch { /* 計測行の失敗では停止種別も終了コードも変えない */ }
+    }
+    process.exitCode = 2;
   }
 }
