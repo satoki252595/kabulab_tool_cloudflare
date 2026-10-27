@@ -360,12 +360,20 @@ describe("株式保有の原典限定writer", () => {
     await expect(realAbsence(actualAbsences[0], true)).rejects.toThrow("他の原本props");
     expect(vi.mocked(notionRequest).mock.calls.filter(([method]) => method === "PATCH")).toHaveLength(1);
   });
-  it.each(["normal", "following-held", "expired-after-read", "changed-proof", "legacy-cursor", "soft-expired"])("保存実206Aの旧不該当の有限再資格: %s", async mode => {
+  it.each(["normal", "primary-wrapper", "following-held", "expired-after-read", "changed-proof", "legacy-cursor", "soft-expired"])("保存実206Aの旧不該当の有限再資格: %s", async mode => {
     const fixture = actualAbsences[0], { page } = await realAbsence(fixture);
     page.properties["保有明細状態"].select = { name: "要確認" };
-    page.properties.Metadata = mirrored({ Metadata: { rich_text: [{ text: { content: JSON.stringify({ docID: fixture.source.docId,
+    const flatMeta = { docID: fixture.source.docId,
       secCode: `${fixture.source.stockCode}0`, edinetCode: fixture.source.edinetCode, periodEnd: fixture.source.fiscalYearEnd,
-      filerName: fixture.ownerName, edinetDocType: 1 }) } }] } }).Metadata as never;
+      filerName: fixture.ownerName, edinetDocType: 1 };
+    const wrapperMeta = { docID: fixture.source.docId, stockCode: fixture.source.stockCode, rawSecCode: `${fixture.source.stockCode}0`, edinetDocType: 1,
+      primary: { seqNumber: 281, docID: fixture.source.docId, edinetCode: fixture.source.edinetCode, secCode: `${fixture.source.stockCode}0`,
+        JCN: "6020001095131", filerName: fixture.ownerName, fundCode: null, ordinanceCode: "010", formCode: "030000", docTypeCode: "120",
+        periodStart: "2024-10-01", periodEnd: fixture.source.fiscalYearEnd, submitDateTime: "2025-12-24 15:30",
+        docDescription: "有価証券報告書－第14期(2024/10/01－2025/09/30)", issuerEdinetCode: null, subjectEdinetCode: null,
+        subsidiaryEdinetCode: null, currentReportReason: null, parentDocID: null, opeDateTime: null, withdrawalStatus: "0",
+        docInfoEditStatus: "0", disclosureStatus: "0", xbrlFlag: "1", pdfFlag: "1", attachDocFlag: "1", englishDocFlag: "0", csvFlag: "1", legalStatus: "1" } };
+    page.properties.Metadata = mirrored({ Metadata: { rich_text: [{ text: { content: JSON.stringify(mode === "primary-wrapper" ? wrapperMeta : flatMeta) } }] } }).Metadata as never;
     page.properties["Fetched At"] = { type: "date", date: { start: "2026-09-18T00:00:00Z" } } as never;
     if (mode === "changed-proof" || mode === "legacy-cursor") {
       const info = restartInfo(page.properties);
@@ -400,7 +408,7 @@ describe("株式保有の原典限定writer", () => {
       } else {
         expect(await running).toEqual({ usedRows: 0, resumed: 0, held: mode === "following-held" ? 1 : 0, pending: false, explicitNotApplicable: 1 });
       }
-      if (!["normal", "following-held"].includes(mode)) {
+      if (!["normal", "primary-wrapper", "following-held"].includes(mode)) {
         expect(page.properties["保有明細状態"].select?.name).toBe("要確認");
         expect(vi.mocked(notionRequest).mock.calls.filter(([method]) => method === "PATCH")).toHaveLength(0);
         expect(native).toHaveBeenCalledTimes(mode === "legacy-cursor" || mode === "soft-expired" ? 0 : 1);

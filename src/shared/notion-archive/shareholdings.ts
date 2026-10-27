@@ -9,6 +9,7 @@ import type { OfficialIssuerNames } from "../../../services/yuho-quant/src/servi
 import type { HoldingNameChange } from "../../../services/yuho-quant/src/services/edinet/shareholdings-name-change.js";
 import { HoldingPriceIssuerMismatch, HoldingPriceShareBasisMismatch, HoldingsPriceIndex, parseHoldingsCodeList, qualifyHoldingValuation, type ArchivedSource, type HoldingValuation } from "../../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js";
 import { edinetArchiveFilename } from "../../../services/yuho-quant/src/services/edinet/archive.js";
+import { edinetArchiveNativeMetadata } from "../../../services/yuho-quant/src/services/edinet/archive-metadata.js";
 import { findUniqueBackupChildByTitle, queryUniqueRow, recordPrimaryData } from "./archive.js";
 import { assertCursorProgress, notionRequest } from "./client.js";
 import { notionEnv } from "./env.js";
@@ -1117,6 +1118,11 @@ function valuationProperties(holding: Shareholding, valuation: HoldingValuation,
   return properties;
 }
 
+type HoldingsArchiveMetadata = Record<string, unknown> & {
+  sourceZIPBytes?: number;
+  _fileManifest?: { version?: number; files: Array<{ originalFilename?: string; byteLength: number; sha256: string }> };
+};
+
 /** 原metadataの欠測は書き換えず、存在するissuer/期末とコード証拠を束縛する。 */
 export function verifySavedHoldingsMetadata(metadata: Record<string, unknown>, source: ShareholdingsSource): { status: "verified"; missing: string[] } | { status: "held"; reason: string } {
   if (!("docID" in metadata)) return { status: "held", reason: "保存原本metadataにdocIDがなく同一文書の資格が未確認です（旧metadataは変更しません）" };
@@ -1163,9 +1169,9 @@ export async function readSavedHoldingsZip(source: ShareholdingsSource, budget?:
   if (files.length !== 1 || files[0].kind !== "file" || files[0].name !== edinetArchiveFilename(docId, 1)) return { status: "held", reason: `${sourceCustody}原本のtype1単一Notion-hosted物理添付を確認できません（CSVは代用しません）` };
   const parts = page.properties["Metadata"]?.rich_text;
   assert.ok(Array.isArray(parts));
-  const metadata = JSON.parse(parts.map(part => {
+  const metadata = edinetArchiveNativeMetadata(JSON.parse(parts.map(part => {
     assert.equal(part.type, "text"); assert.equal(part.plain_text, part.text?.content); return part.plain_text;
-  }).join(""));
+  }).join(""))) as HoldingsArchiveMetadata;
   let reservedBytes = 0;
   if (budget) {
     reservedBytes = HOLDINGS_ZIP_MAX_BYTES;
@@ -1684,13 +1690,13 @@ function qualifyUnknownHoldingsSource(page: HoldingPage, dbId: string): UnknownH
   assert.ok(Number.isSafeInteger(info.sourceNextHoldingOffset) && info.sourceNextHoldingOffset! >= 0 && info.sourceNextHoldingOffset! < info.parsed);
   assert.match(info.zipSha256, /^[a-f0-9]{64}$/); assert.match(info.factsSha256!, /^[a-f0-9]{64}$/);
   assert.ok(Number.isSafeInteger(info.zipBytes) && info.zipBytes > 0 && info.zipBytes <= HOLDINGS_ZIP_MAX_BYTES);
-  const metadata = JSON.parse(richValue(page.properties["Metadata"]));
+  const metadata = edinetArchiveNativeMetadata(JSON.parse(richValue(page.properties["Metadata"]))) as HoldingsArchiveMetadata;
   const proof = verifySavedHoldingsMetadata(metadata, info.source);
   assert.equal(proof.status, "verified", "未知sourceの原本主体が未確認です");
   assert.ok(proof.status === "verified" && proof.missing.length === 0, "未知sourceの提出者/期末が欠けています");
   assert.equal(metadata.edinetDocType, 1); assert.equal(metadata.filerName, info.ownerName);
-  assert.equal(metadata._fileManifest.version, 1); assert.equal(metadata._fileManifest.files.length, 1);
-  const file = metadata._fileManifest.files[0];
+  assert.equal(metadata._fileManifest?.version, 1); assert.equal(metadata._fileManifest?.files.length, 1);
+  const file = metadata._fileManifest!.files[0];
   assert.equal(file.originalFilename, edinetArchiveFilename(info.source.docId, 1));
   assert.equal(file.sha256, info.zipSha256); assert.equal(file.byteLength, info.zipBytes);
   const attachments = page.properties["Files"] as { type?: unknown; files?: Array<{ name?: unknown; type?: unknown }> };
