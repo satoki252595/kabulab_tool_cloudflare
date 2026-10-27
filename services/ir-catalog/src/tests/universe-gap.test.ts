@@ -79,4 +79,26 @@ describe("selectDisclosuresForCatchup", () => {
     expect(before.missingTdnetIds).toEqual([]);
     expect(before.pastRetainInUniverseIds).toEqual(["BEFORE"]);
   });
+
+  it("D1 未保存の開示を既存行の再 upsert より先に並べる", () => {
+    const selected = selectDisclosuresForCatchup({
+      nowMs: NOW,
+      recentWindowDays: 7,
+      retainDays: 40,
+      codeToId: CODE_TO_ID,
+      existingTdnetIds: new Set(["RECENT-EXISTING-1", "RECENT-EXISTING-2"]),
+      items: [
+        item({ id: "RECENT-EXISTING-1", pubdate: "2026-10-02 15:00:00", company_code: "72030" }),
+        item({ id: "RECENT-EXISTING-2", pubdate: "2026-10-03 15:00:00", company_code: "72030" }),
+        item({ id: "RECENT-NEW-1", pubdate: "2026-10-06 15:00:00", company_code: "72030" }),
+        item({ id: "RECENT-NEW-2", pubdate: "2026-10-07 15:00:00", company_code: "130A0" }),
+      ],
+    });
+    expect(selected.items.map((row) => row.id)).toEqual([
+      "RECENT-NEW-1",
+      "RECENT-NEW-2",
+      "RECENT-EXISTING-1",
+      "RECENT-EXISTING-2",
+    ]);
+  });
 });
