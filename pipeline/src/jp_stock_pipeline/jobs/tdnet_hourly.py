@@ -16,6 +16,7 @@ from ..cloud_store import notion_pages
 from ..cloud_store.d1 import D1Error, D1Store
 from ..collectors import tdnet_official_fallback, tdnet_yanoshin
 from ..collectors.yanoshin_upstream import (
+    MAX_WATCH_SILENCE_SECONDS,
     YanoshinUpstreamStopped,
     format_yanoshin_upstream_log,
     judge_yanoshin_upstream,
@@ -180,6 +181,30 @@ def _load_map_guarded(loader, label: str):
         return {}, False
 
 
+def _require_item_count(artifact: RawArtifact) -> int:
+    """原本 JSON の items 件数。配列でなければ止める（0 件には読み替えない）。"""
+    payload = json.loads(artifact.local_path.read_bytes())
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        raise ValueError("やのしん list の items が配列でない")
+    return len(payload["items"])
+
+
+def _nonempty_upstream_stopped(judgement) -> bool:
+    """非空一覧を上流停止にする。
+
+    空一覧の共有判定は経過が 4 時間を超えたときだけ停止で、ちょうど 4 時間は fresh。
+    非空は同じ秒数で、ちょうど 4 時間も停止にする。2026-04-01 から 10-23 の JPX
+    セッション 138 日（やのしん日次一覧、limit=1000）では、監視窓の開示間隔と
+    19:00 までの末尾沈黙の最大がどちらも 5400 秒で、4 時間以上は 0 日だった。
+    """
+    if judgement.judgement == "upstream_stopped":
+        return True
+    elapsed = judgement.elapsed_watch_seconds
+    if elapsed is None:
+        return False
+    return elapsed >= MAX_WATCH_SILENCE_SECONDS
+
+
 def default_target_date(now: datetime) -> date:
     """9〜19時JSTの予定分が翌朝9時前に遅配されても対象日を進めない。"""
     if now.tzinfo is None or now.utcoffset() is None:
@@ -212,6 +237,31 @@ def execute(ctx: JobContext) -> None:
         if shown == "upstream_stopped":
             raise YanoshinUpstreamStopped(f"yanoshin upstream stopped: {line}")
         ctx.confirm_zero_work(STATUS_OBSERVED_EMPTY)
+        return
+
+    # 非空でも recent の最新を見る。対象日に1件載ったあと上流が止まると、
+    # 空一覧の判定には入らないまま古い一覧で成功していた。
+    record_count = sum(len(records) for _artifact, records, _urls in batches)
+    item_count = (
+        sum(_require_item_count(artifact) for artifact, _records, _urls in batches)
+        if record_count == 0
+        else None
+    )
+    newest = probe_yanoshin_newest(ctx.settings, **source_request_options(ctx.args))
+    judgement = judge_yanoshin_upstream(newest, started)
+    stopped = _nonempty_upstream_stopped(judgement)
+    shown = "upstream_stopped" if stopped else judgement.judgement
+    line = format_yanoshin_upstream_log(judgement, judgement_name=shown)
+    logger.info("%s", line)
+    if stopped:
+        for artifact, _records, _urls in batches:
+            ctx.upload_raw(artifact, sha_map_date=target_date)
+        raise YanoshinUpstreamStopped(f"yanoshin upstream stopped: {line}")
+    if item_count is not None and item_count >= 1:
+        # 原本に items があるのに1件も解析できていない。0件成功にも観測時点0件にもしない。
+        for artifact, _records, _urls in batches:
+            ctx.upload_raw(artifact, sha_map_date=target_date)
+        ctx.add_failure("tdnet_list", f"items {item_count}件・解析0件")
         return
 
     # ① relation マップ(全件・有界)と ④ dedup マップ(対象日のみ)を1回ずつ事前ロード。

@@ -363,6 +363,10 @@ class TestTdnetHourly:
             return artifact, records
 
         monkeypatch.setattr(tdnet_yanoshin, "list_disclosures", fake_list)
+        # フィクスチャの pubdate は実行日より前。鮮度はこのテストの対象外。
+        monkeypatch.setattr(
+            tdnet_hourly, "probe_yanoshin_newest", lambda *a, **k: datetime.now(JST)
+        )
         # XBRL 取得はネットワークのため遮断 (失敗経路 = 欠損として記録 §3-2)
         from jp_stock_pipeline.http import FetchError
 
@@ -408,6 +412,9 @@ class TestTdnetHourly:
             return artifact, records
 
         monkeypatch.setattr(tdnet_yanoshin, "list_disclosures", fake_list)
+        monkeypatch.setattr(
+            tdnet_hourly, "probe_yanoshin_newest", lambda *a, **k: datetime.now(JST)
+        )
         monkeypatch.setattr(tdnet_hourly, "fetch", lambda url, **k: (_ for _ in ()).throw(
             FetchError("net cut")))
 
