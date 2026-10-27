@@ -1,5 +1,6 @@
 /** EDINET 日次取込。Node から既存 D1 HTTP/atomic sender で共通処理を直接 await。 */
 import "dotenv/config";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { createD1HttpDb, createD1HttpBatchSender } from "../../src/shared/db/d1-http-client.js";
 import { notionEnv } from "../../src/shared/notion-archive/env.js";
@@ -54,6 +55,40 @@ export async function main(args = process.argv.slice(2)): Promise<0 | 1> {
   return catchupHttpStatus(result) === 200 ? 0 : 1;
 }
 
+/**
+ * code=unknown の分類。ログに載せるのは name・kind・message の sha256 先頭12桁だけ。
+ * 本文、stack、cause、URL、SQL、bind、鍵は読まない（kind の3桁以外に本文を含めない）。
+ * 優先順は `D1 HTTP ` 直後のちょうど3桁、`EDINET` 始まり、TypeError、それ以外。
+ * 非 Error、または message が文字列でないときは値を文字列化しない。ダイジェスト入力は空。
+ */
+export function classifyYuhoEdinetUnknownFailure(error: unknown): { name: string; kind: string; msgSha: string } {
+  function readName(value: unknown): string {
+    if (!(value instanceof Error)) return typeof value;
+    if (typeof value.name !== "string") return typeof value.name;
+    return value.name.replace(/[\r\n]/g, "");
+  }
+  function readMessage(value: unknown): string {
+    if (value instanceof Error && typeof value.message === "string") return value.message;
+    return "";
+  }
+  function classifyKind(value: unknown, message: string): string {
+    const d1 = /^D1 HTTP (\d{3})(?!\d)/.exec(message);
+    if (d1 !== null) {
+      const status = d1[1];
+      if (status !== undefined) return `d1_http_${status}`;
+    }
+    if (message.startsWith("EDINET")) return "edinet_other";
+    if (value instanceof TypeError) return "network";
+    return "other";
+  }
+  const message = readMessage(error);
+  return {
+    name: readName(error),
+    kind: classifyKind(error, message),
+    msgSha: createHash("sha256").update(message).digest("hex").slice(0, 12),
+  };
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   process.exitCode = 2;
   try {
@@ -74,5 +109,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     ]);
     const code = error instanceof Error ? known.get(error.message) : undefined;
     console.error(`[yuho-edinet] 失敗: code=${code === undefined ? "unknown" : code} 完了せず停止しました（再送なし）`);
+    // この catch に所要時間は無い。計測のために時計は足さない。
+    if (code === undefined) {
+      const diag = classifyYuhoEdinetUnknownFailure(error);
+      console.error(`[INC-20261019-kabulab_tool_cloudflare-yuho-edinet-exit2] name=${diag.name} kind=${diag.kind} msgSha=${diag.msgSha}`);
+    }
   }
 }
