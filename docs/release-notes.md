@@ -7,9 +7,14 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ---
 
+## 2026-10-28
+
+- TDnet日次キャッチアップの抽出（`selectDisclosuresForCatchup`）でD1未保存の開示を既存7日窓の再upsert対象より先に並べ、途中エラー時にも新規開示が優先してD1へ保存されるよう修正。また`aggregateSectorDaily`と`decideMarketContextGate`にJPX公式休場日ガードを追加し、業種集計は`latest_date = today`の指標に厳密一致させることで前日以前の残存行混入やUTC日跨ぎでの集計漏れを防止。
+- 本番作業: 有報補足の残690社（窓63–81）と端数17社の`resume82`（窓82）を完走し、対象3,686社のうち正常同期3,665社・基本情報のみ2社・保留19社・**未着手0社**で全窓を閉鎖。あわせて利用者報告の3テーブルを復旧：(1) `ir_disclosures`に10/22夜間〜10/26の302件を反映して52,241行へ更新し、`freshness_probe`で`jss_dataset_freshness`（`tdnet_disclosures`）の最新日を`2026-10-26`へ更新、(2) `swing_sector_daily`の9/14〜10/27欠落18営業日を`swing_daily_ohlcv`（カバレッジ99.73%〜99.97%）から復元し全28営業日942行（休場日0行）へ整備、(3) `swing_market_context`から休場日16行（土日・祝日）を削除し、Notion保管済み一次原本から欠落10営業日（9/28、9/30、10/1、10/5〜9、10/13、10/23）と9/29確定終値・前日比1日騰落率を復元（123行・休場日0行）。
+
 ## 2026-10-27
 
-- 保有明細の保存済みZIP再読と結果不明ソース資格化でも`Metadata`を`edinetArchiveNativeMetadata`経由で射影し、`primary`包装形式（206A `S100XCIN:type1`等）の旧`explicit_not_applicable`再資格時に提出者名参照が`undefined`になって日次catchupが停止する問題を修正。
+- 保有明細の保存済みZIP再読と結果不明ソース資格化でも`Metadata`を`edinetArchiveNativeMetadata`経由で射影し、`primary`包装形式（206A `S100XCIN:type1`等）の旧`explicit_not_applicable`再資格時に提出者名参照が`undefined`になって日次catchupが停止する問題を修正。 #643
 - 本番作業: VWAP日足の不足338銘柄をActions直接取得で通常実行し、`^N225`基準日2026-10-27の資格化後に9267・523Aを含む309銘柄をR2へ書込・原文12ページをNotionへ保管（skipped/empty/invalid/rateLimited/unknown0、当日バー不在の29銘柄は`daily session HOLD`）。有報補足の固定runtimeは日次境界前に窓62まで閉鎖し、日次run閉鎖後に共有3keyを再読して残690銘柄（窓63–80＋窓52の未着手2銘柄を窓81へ配置）の`resume63`を再開、窓63閉鎖・正常同期累計3,015社まで確認して完了条件台帳を更新した。
 
 - やのしんの当日一覧が1件以上残ったまま更新が止まると、毎時取得は古い一覧のまま成功しない。監視窓の経過が4時間以上（ちょうど4時間を含む）なら上流停止で失敗する。一覧に項目があるのに1件も解析できないときも失敗にし、0件成功にはしない。

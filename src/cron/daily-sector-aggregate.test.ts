@@ -368,4 +368,27 @@ describe("行キーは実データの取引日 (F-06)", () => {
     expect(savedRows("2026-09-11").map((r) => r.sector)).toEqual(["情報・通信業"]);
     expect(savedRows(TODAY)).toEqual([]);
   });
+
+  it("JPX 休場日 (祝日・土日) が渡された場合は書かず null を返す", async () => {
+    seedStock({ id: 1, jpxSector: null, sector33: "情報・通信業", pct1d: 1, latestDate: "2026-09-23" });
+    expect(await aggregateSectorDaily(db(), "2026-09-23", sendLocalBatch)).toBeNull();
+    expect(await aggregateSectorDaily(db(), "2026-09-26", sendLocalBatch)).toBeNull();
+    expect(batches).toEqual([]);
+    expect(savedRows("2026-09-23")).toEqual([]);
+    expect(savedRows("2026-09-26")).toEqual([]);
+  });
+
+  it("latest_date が today と一致する銘柄のみ集計し、前日以前の残存行を混ぜない", async () => {
+    for (let id = 1; id <= 9; id++) {
+      seedStock({ id, jpxSector: null, sector33: "情報・通信業", pct1d: 2, latestDate: TODAY });
+    }
+    // 1 銘柄だけ前日 (2026-09-11) のまま残存していても、9/10=90% で TODAY 分のみ集計される
+    seedStock({ id: 10, jpxSector: null, sector33: "銀行業", pct1d: -50, latestDate: "2026-09-11" });
+
+    const written = await aggregateSectorDaily(db(), TODAY, sendLocalBatch);
+    expect(written).toBe(1);
+    expect(savedRows(TODAY)).toEqual([
+      { sector: "情報・通信業", pct1d: 2, stockCount: 9, rank1d: 1 },
+    ]);
+  });
 });

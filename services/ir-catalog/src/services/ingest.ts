@@ -383,7 +383,8 @@ export function selectDisclosuresForCatchup(input: {
   if (retainCutoff > recentStart) {
     throw new Error("TDnet の保持日数が直近窓より短いため停止");
   }
-  const items: TdnetItemRaw[] = [];
+  const newItems: TdnetItemRaw[] = [];
+  const existingItems: TdnetItemRaw[] = [];
   const missing = new Map<string, number>();
   const pastRetain = new Map<string, number>();
   for (const it of input.items) {
@@ -395,10 +396,13 @@ export function selectDisclosuresForCatchup(input: {
       continue;
     }
     const recent = pubMs >= recentStart;
-    if (inUniverse && !recent && input.existingTdnetIds.has(it.id)) continue;
+    const isExisting = input.existingTdnetIds.has(it.id);
+    if (inUniverse && !recent && isExisting) continue;
     if (inUniverse && !recent) missing.set(it.id, pubMs);
-    items.push(it);
+    if (isExisting) existingItems.push(it);
+    else newItems.push(it);
   }
+  const items = [...newItems, ...existingItems];
   const byPubThenId = (ids: Map<string, number>) =>
     [...ids.entries()]
       .sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]))

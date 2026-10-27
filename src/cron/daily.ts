@@ -65,6 +65,7 @@ import { sha256HexBytes } from "../shared/sha256.js";
 import type { StockCorporateDiagnostics } from "../shared/yahoo/stock-corporate-events.js";
 import { collectOfficialRightsCustody, type OfficialRightsCustody } from "./rights-official-custody.js";
 import { diagnoseConfirmedCloses, selectConfirmedCloses } from "./macro-session.js";
+import { marketClosure } from "../shared/market-calendar.js";
 import { captureMacroJpLeg, loadMacroJpLeg, macroJpCacheKey, type MacroJpLeg, type MacroJpLegStore } from "./macro-jp-leg.js";
 import { formatConfirmedHoldDiag, formatNullBandHoldLog, formatStockSessionDiag } from "./inc-financials-stale-diag.js";
 import { finishNullBarsSummaryLine, logFreshCloseNullBars, startNullBarsRun } from "./inc-stock-sync-null-bars-diag.js";
@@ -1936,6 +1937,15 @@ export async function aggregateSectorDaily(
   sendBatch: ReturnType<typeof createD1HttpBatchSender>,
   beforeWrite?: () => void
 ): Promise<number | null> {
+  const jpxClosure = marketClosure("JPX", today);
+  if (jpxClosure !== null) {
+    console.warn(
+      `[sync-daily]   セクター集計スキップ: ${today} は JPX 休場日 (${jpxClosure.reason})。` +
+        `sector_daily は前回値を保持します。`
+    );
+    return null;
+  }
+
   const [{ activeCount }] = await db
     .select({ activeCount: sql<number>`count(*)` })
     .from(coreSchema.stocks)
@@ -1954,10 +1964,18 @@ export async function aggregateSectorDaily(
     .where(
       and(
         activeEquityCondition(),
-        // D1/SQLite: computed_at は epoch 秒。本日(UTC)0 時の epoch と比較。
-        gte(
-          swingSchema.stockIndicators.computedAt,
-          sql`unixepoch('now','start of day')`
+        // latest_date がある行は実取引日 today と厳密一致。UTC 日跨ぎや回収後でも
+        // 当該取引日の指標だけを集計し、前日以前の残存行を混ぜない。
+        // latest_date が NULL の旧テスト fixture は当日(UTC)0 時以降の computed_at で判定。
+        or(
+          eq(swingSchema.stockIndicators.latestDate, today),
+          and(
+            isNull(swingSchema.stockIndicators.latestDate),
+            gte(
+              swingSchema.stockIndicators.computedAt,
+              sql`unixepoch('now','start of day')`
+            )
+          )
         )
       )
     );
@@ -3357,6 +3375,10 @@ function decideMarketContextGate(draft: MarketContextDraft, expectedDate?: strin
   }
   if (expectedDate !== undefined && key !== expectedDate) {
     return { ok: false, key, reason: `GSPC 確定日 ${key} ≠ 予定日 ${expectedDate} (過去日を代用しない)` };
+  }
+  const jpxClosure = marketClosure("JPX", key);
+  if (jpxClosure !== null) {
+    return { ok: false, key, reason: `JPX 休場日 (${jpxClosure.reason}) は書かない` };
   }
   const dates: Array<[string, string | null]> = [
     ["N225 確定日", n225.date],
