@@ -6,7 +6,7 @@ import "dotenv/config";
 // 実行: npx tsx scripts/ingest-intra.ts [--codes=...] [--limit=N] [--range=60d]   KEEP_DAYS=365
 import { fileURLToPath } from "node:url";
 import { fetchBars5m, fetchBars5mWindow, describeIntraSource, YahooIntraSourceUnavailableError, YahooRawTooLargeError, MAX_YAHOO_RAW_BYTES, type YahooRawCapture } from "../../src/shared/yahoo/client.js";
-import { r2GetVersion, r2Put, confirmUnknownPricePut, mapLimit, sleep, retry, R2PutRejectedError, R2PutUnknownError, type PricePutReadback } from "./lib/r2.js";
+import { r2GetVersion, r2Put, confirmUnknownPricePut, mapLimit, sleep, retry, beginR2PutDiagRun, logR2PutRunSummary, noteR2PutFatal, R2PutRejectedError, R2PutUnknownError, type PricePutReadback } from "./lib/r2.js";
 import { assertCodesInUniverse, loadCodes, arg } from "./lib/codes.js";
 import { sharedEnv } from "../../src/shared/env.js";
 import { archiveSummaryOrFatal, assertSavedIntraShape, bodyPin, buildIngestSummary, findInvalidBars, mergeIntraBars, resolveExitCode, resolveRunId, retainIntraSourceStatus, sanitizeLogText, shouldSkipPut, universePin, writeSummaryLocal, type IngestCodeOutcome, type SavedIntra } from "./lib/ingest-guard.js";
@@ -35,8 +35,10 @@ export async function main() {
   }
   const schedule = scheduledVwapGuard({ plannedDate: arg("scheduled-date"), runId, phase: "intra", maxStartSeconds,
     jobStartedAt: sharedEnv.BATCH_JOB_STARTED_AT() });
+  let fatal = false;
   const restore = schedule.installDeadline();
   try {
+  try { beginR2PutDiagRun(); } catch { /* 計測だけ */ }
   schedule.assertSource();
   const transport = directArgs.length === 1 ? createStockYahooDirectTransport() : undefined;
   if (transport !== undefined) console.info("[vwap-intra] Yahoo transport=node-direct shared-cooldown=D1");
@@ -63,7 +65,10 @@ export async function main() {
   const cutoffTs = Math.floor(Date.now() / 1000) - KEEP_DAYS * 86400;
   const CONC = 1; // Yahoo取得は環境変数によらず直列。実HTTP間隔は共有clientで制御。
   let written = 0, empty = 0, errors = 0, rateLimited = 0, invalid = 0, skipped = 0, done = 0;
-  let consecRL = 0, aborted = false, fatal = false;
+  let consecRL = 0, aborted = false;
+  const noteFatal = (site: string, reason: unknown): void => {
+    try { noteR2PutFatal(site, reason); } catch { /* 計測だけ */ }
+  };
   let sourceStopped = false;
   const sourceAllowed = () => {
     try { schedule.assertSource(); return true; }
@@ -86,6 +91,7 @@ export async function main() {
   const stopNewWork = (code: string, why: unknown) => {
     if (!fatal) {
       fatal = true;
+      noteFatal("ingest-intra.ts:stopNewWork", why);
       // 生 SDK cause (URL 等) を出さず sanitized のみ。
       const text = why instanceof Error ? `${why.name}: ${why.message}` : String(why);
       console.error(`  ${code}: R2 fault のため新規作業を停止します: ${sanitizeLogText(text).slice(0, 200)}`);
@@ -134,7 +140,9 @@ export async function main() {
                   captured = true;
                   if (capture.symbol !== `${code}.T`) {
                     fatal = true;
-                    throw new Error("Yahoo5分足の原本captureと要求銘柄が一致しません (raw custody STOP)");
+                    const mismatch = new Error("Yahoo5分足の原本captureと要求銘柄が一致しません (raw custody STOP)");
+                    noteFatal("ingest-intra.ts:symbolMismatch", mismatch);
+                    throw mismatch;
                   }
                 },
               };
@@ -142,17 +150,19 @@ export async function main() {
                 await fetchBars5mWindow(`${code}.T`, sourceWindow, options);
               if (!captured) {
                 fatal = true;
-                throw new Error("Yahoo5分足が返りましたが原HTTP本文captureがありません (raw custody STOP)");
+                const missingCapture = new Error("Yahoo5分足が返りましたが原HTTP本文captureがありません (raw custody STOP)");
+                noteFatal("ingest-intra.ts:missingCapture", missingCapture);
+                throw missingCapture;
               }
               if (sourceWindow !== null) {
                 try {
                   sourceProofs[code] = proveIntraRecoveryCapture(rawCapture!, sourceWindow, `${code}.T`);
                   if (bars.length === 0) throw new Error("5分足明示回復: 全raw行の解析後に採用barがなく回復未成立です");
-                } catch (error) { fatal = true; throw error; }
+                } catch (error) { fatal = true; noteFatal("ingest-intra.ts:recoveryProof", error); throw error; }
               }
               return bars;
             } catch (e) {
-              if (e instanceof YahooRawTooLargeError || e instanceof YahooSharedCooldownError) fatal = true;
+              if (e instanceof YahooRawTooLargeError || e instanceof YahooSharedCooldownError) { fatal = true; noteFatal("ingest-intra.ts:sourceFatal", e); }
               if (!captured) missing.push({ api: "intra", symbol: `${code}.T`, attempt,
                 error: sanitizeLogText(e instanceof Error ? e.message : String(e)), failedAt: new Date().toISOString() });
               throw e;
@@ -261,7 +271,7 @@ export async function main() {
               .then(() => undefined, error => {
                 const confirmation = confirmUnknownPricePut(error, `intra/${code}.json`, payloadJson, undefined, schedule.assertActive, schedule.ioOptions);
                 // 他の開始済みPUTはsettleさせ、未確定中の次PUTはbarrierで止める。
-                putBarrier = Promise.all([putBarrier, confirmation]).then(() => {}, () => { fatal = true; });
+                putBarrier = Promise.all([putBarrier, confirmation]).then(() => {}, (reason) => { fatal = true; noteFatal("ingest-intra.ts:putBarrier", reason); });
                 return confirmation;
               });
           } catch (e) {
@@ -291,6 +301,7 @@ export async function main() {
       for (let i = captureStart; i < captures.length; i++) rawBytes += captures[i].capture.bytes.length;
       if (settled.some((r) => r.status === "rejected")) {
         fatal = true;
+        noteFatal("ingest-intra.ts:prepareRejected", "intra prepare rejected");
         console.error("intra prepare が想定外に中断しました。取得済原本を保管してSTOPします");
       }
     }
@@ -303,6 +314,7 @@ export async function main() {
       }
     } catch (e) {
       fatal = true;
+      noteFatal("ingest-intra.ts:rawCustody", e);
       rawCustodyError = e;
       console.error(`intra raw custody STOP: ${sanitizeLogText(e instanceof Error ? e.message : String(e)).slice(0, 200)}`);
     }
@@ -358,7 +370,10 @@ export async function main() {
   // errors/invalid/rateLimited 計数があれば非0終了 (銘柄 PUT0 は上で確定済み)。
   // R2 fault (fatal) は 2。
   process.exitCode = resolveExitCode({ aborted: aborted || sourceStopped, fatalUnknown: fatal, errors, invalid, rateLimited });
-  } finally { restore(); }
+  } finally {
+    try { logR2PutRunSummary(fatal); } catch { /* 計測だけ */ }
+    restore();
+  }
 }
 // loadCodes/config 等の想定外失敗は exit 2。sanitized 1 行のみ、再試行なし。
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

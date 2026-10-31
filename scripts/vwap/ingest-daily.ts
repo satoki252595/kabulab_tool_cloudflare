@@ -3,7 +3,7 @@ import "dotenv/config";
 // 実行: npx tsx scripts/ingest-daily.ts [--codes=7203,6758] [--limit=50]
 import { fileURLToPath } from "node:url";
 import { fetchDaily, YahooRawTooLargeError, MAX_YAHOO_RAW_BYTES, type YahooRawCapture } from "../../src/shared/yahoo/client.js";
-import { r2GetVersion, r2Put, confirmUnknownPricePut, mapLimit, sleep, R2PutRejectedError, R2PutUnknownError, type PricePutReadback } from "./lib/r2.js";
+import { r2GetVersion, r2Put, confirmUnknownPricePut, mapLimit, sleep, beginR2PutDiagRun, logR2PutRunSummary, noteR2PutFatal, R2PutRejectedError, R2PutUnknownError, type PricePutReadback } from "./lib/r2.js";
 import { buildRepairPost } from "./lib/repair-daily.js";
 import { assertCodesInUniverse, loadCodes, arg } from "./lib/codes.js";
 import { sharedEnv } from "../../src/shared/env.js";
@@ -54,8 +54,10 @@ export async function main() {
   }
   const schedule = scheduledVwapGuard({ plannedDate: arg("scheduled-date"), scheduledAt: arg("scheduled-at"), runId, phase: "daily",
     jobStartedAt: sharedEnv.BATCH_JOB_STARTED_AT() });
+  let fatal = false;
   const restore = schedule.installDeadline();
   try {
+  try { beginR2PutDiagRun(); } catch { /* 計測だけ */ }
   schedule.assertSource();
   const transport = directArgs.length === 1 ? createStockYahooDirectTransport() : undefined;
   if (transport !== undefined) console.info("[vwap-daily] Yahoo transport=node-direct shared-cooldown=D1");
@@ -77,7 +79,10 @@ export async function main() {
   let SOURCE_RANGE = tenYearRangeForDate(reference.date);
   let referenceGeneration = 0;
   let written = 0, empty = 0, errors = 0, backfilled = 0, rateLimited = 0, invalid = 0, skipped = 0;
-  let consecRL = 0, aborted = false, fatal = false;
+  let consecRL = 0, aborted = false;
+  const noteFatal = (site: string, reason: unknown): void => {
+    try { noteR2PutFatal(site, reason); } catch { /* 計測だけ */ }
+  };
   let sourceStopped = false;
   const sourceAllowed = () => {
     try { schedule.assertSource(); return true; }
@@ -98,13 +103,14 @@ export async function main() {
   const stopNewWork = (code: string, why: unknown) => {
     if (!fatal) {
       fatal = true;
+      noteFatal("ingest-daily.ts:stopNewWork", why);
       // 生 SDK cause (URL 等) を出さず sanitized のみ。
       const text = why instanceof Error ? `${why.name}: ${why.message}` : String(why);
       console.error(`  ${code}: R2 fault のため新規作業を停止します: ${sanitizeLogText(text).slice(0, 200)}`);
     }
   };
   for (let offset = 0; offset < codes.length && !aborted && !fatal && !sourceStopped;) {
-    try { if (!sourceAllowed()) break; } catch (e) { fatal = true; rawCustodyError = e; break; }
+    try { if (!sourceAllowed()) break; } catch (e) { fatal = true; noteFatal("ingest-daily.ts:sourceAllowed", e); rawCustodyError = e; break; }
     if (jstDateSec(Date.now() / 1000) !== jstDateSec(Date.parse(reference.observedAt) / 1000)) {
       try {
         // 前batchを物理保管/条件付PUTで閉じてから取得する。unknown後に未保管batchを送らない。
@@ -118,6 +124,7 @@ export async function main() {
         SOURCE_RANGE = tenYearRangeForDate(reference.date);
       } catch (e) {
         fatal = true;
+        noteFatal("ingest-daily.ts:sessionRefresh", e);
         rawCustodyError = e;
         errors++;
         outcomes[codes[offset]] = { status: "error", latestSourceBar: null, bodySha: null, reason: failureReason(e) };
@@ -138,7 +145,7 @@ export async function main() {
       offset - batchStart < 30 && rawBytes < MAX_YAHOO_RAW_BYTES; wave++) {
       await sleep(DELAY);
       if (aborted || fatal) break;
-      try { if (!sourceAllowed()) break; } catch (e) { fatal = true; rawCustodyError = e; break; }
+      try { if (!sourceAllowed()) break; } catch (e) { fatal = true; noteFatal("ingest-daily.ts:sourceAllowedWave", e); rawCustodyError = e; break; }
       // HTTP中に跨いだ1件は既存資格検査でHOLD。次銘柄前にbatchを閉じて基準原本を更新する。
       if (jstDateSec(Date.now() / 1000) !== jstDateSec(Date.parse(reference.observedAt) / 1000)) break;
       const waveCodes = codes.slice(offset, offset + Math.min(CONC, 30 - (offset - batchStart)));
@@ -204,13 +211,17 @@ export async function main() {
               captured = true;
               if (capture.symbol !== `${code}.T`) {
                 fatal = true;
-                throw new Error("Yahoo日足の原本captureと要求銘柄が一致しません (raw custody STOP)");
+                const mismatch = new Error("Yahoo日足の原本captureと要求銘柄が一致しません (raw custody STOP)");
+                noteFatal("ingest-daily.ts:symbolMismatch", mismatch);
+                throw mismatch;
               }
             },
           }));
           if (!captured) {
             fatal = true;
-            throw new Error("Yahoo日足が返りましたが原HTTP本文captureがありません (raw custody STOP)");
+            const missingCapture = new Error("Yahoo日足が返りましたが原HTTP本文captureがありません (raw custody STOP)");
+            noteFatal("ingest-daily.ts:missingCapture", missingCapture);
+            throw missingCapture;
           }
         } catch (e) {
           if (e instanceof ScheduledSourceDeadlineError) {
@@ -218,7 +229,7 @@ export async function main() {
             outcomes[code] = { status: "notStarted", latestSourceBar: null, bodySha: null, reason: failureReason(e) };
             return;
           }
-          if (e instanceof YahooRawTooLargeError || e instanceof YahooSharedCooldownError) fatal = true;
+          if (e instanceof YahooRawTooLargeError || e instanceof YahooSharedCooldownError) { fatal = true; noteFatal("ingest-daily.ts:sourceFatal", e); }
           if (!captured) missing.push({ api: "daily", symbol: `${code}.T`, attempt: 1,
             error: sanitizeLogText(e instanceof Error ? e.message : String(e)), failedAt: new Date().toISOString() });
           // 429/503の初回で全体を中断する。期限や連続数に関係なく同run再取得なし。
@@ -306,7 +317,7 @@ export async function main() {
                 const confirmation = confirmUnknownPricePut(error, `daily/${code}.json`, postJson, metadata, schedule.assertActive, schedule.ioOptions);
                 // 他の開始済みPUTはsettleさせるが、全readbackが閉じるまで次を開始しない。
                 // 元confirmationのrejectは下の既存catchでunknownとして記録する。
-                putBarrier = Promise.all([putBarrier, confirmation]).then(() => {}, () => { fatal = true; });
+                putBarrier = Promise.all([putBarrier, confirmation]).then(() => {}, (reason) => { fatal = true; noteFatal("ingest-daily.ts:putBarrier", reason); });
                 return confirmation;
               });
             priceReferences.set(code, priceReference);
@@ -338,6 +349,7 @@ export async function main() {
       for (let i = captureStart; i < captures.length; i++) rawBytes += captures[i].capture.bytes.length;
       if (settled.some((r) => r.status === "rejected")) {
         fatal = true;
+        noteFatal("ingest-daily.ts:prepareRejected", "daily prepare rejected");
         console.error("daily prepare が想定外に中断しました。取得済原本を保管してSTOPします");
       }
     }
@@ -352,6 +364,7 @@ export async function main() {
       }
     } catch (e) {
       fatal = true;
+      noteFatal("ingest-daily.ts:rawCustody", e);
       rawCustodyError = e;
       console.error(`daily raw custody STOP: ${sanitizeLogText(e instanceof Error ? e.message : String(e)).slice(0, 200)}`);
     }
@@ -410,7 +423,10 @@ export async function main() {
   // errors/invalid/rateLimited 計数があれば非0終了 (銘柄 PUT0 は上で確定済み)。
   // R2 fault (fatal) は 2。ワークフローは exit 2 で intra を走らせない。
   process.exitCode = resolveExitCode({ aborted: aborted || sourceStopped, fatalUnknown: fatal, errors, invalid, rateLimited });
-  } finally { restore(); }
+  } finally {
+    try { logR2PutRunSummary(fatal); } catch { /* 計測だけ */ }
+    restore();
+  }
 }
 // loadCodes/config 等の想定外失敗は exit 2 (daily crash 1 で intra を誘発しない)。
 // sanitized 1 行のみ、再試行なし。

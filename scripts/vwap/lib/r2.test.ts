@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
 import { Readable } from "node:stream";
@@ -8,6 +9,9 @@ import {
   r2Put,
   r2PutBytes,
   confirmUnknownPricePut,
+  beginR2PutDiagRun,
+  logR2PutRunSummary,
+  noteR2PutFatal,
   R2PutRejectedError,
   R2PutUnknownError,
   type R2ReadOptions,
@@ -20,9 +24,17 @@ vi.mock("../../../src/shared/env.js", () => ({
     R2_ACCOUNT_ID: () => "test-account",
     R2_ACCESS_KEY_ID: () => "test-access",
     R2_SECRET_ACCESS_KEY: () => "test-secret",
+    GITHUB_SHA: () => {
+      const value = process.env.GITHUB_SHA;
+      return value && value.trim() !== "" ? value : undefined;
+    },
+    GITHUB_RUN_ID: () => {
+      const value = process.env.GITHUB_RUN_ID;
+      return value && value.trim() !== "" ? value : undefined;
+    },
   },
 }));
-afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); beginR2PutDiagRun(); });
 
 const okGet = () => ({
   ETag: '"native-etag"',
@@ -274,12 +286,13 @@ describe("r2Put contract (1 attempt, no retry)", () => {
     expect(send).toHaveBeenCalledTimes(1);
     const lines = logged.mock.calls.map((call) => String(call[0])).filter((line) => line.startsWith("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown]"));
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toMatch(/^\[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown\] key=daily\/7203\.json status=500 name=InternalError code=SlowDown requestId=req-abc body=/);
-    const loggedBody = lines[0].slice(lines[0].indexOf(" body=") + " body=".length);
-    expect(Array.from(loggedBody)).toHaveLength(300);
+    expect(lines[0]).toMatch(/^\[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown\] put seq=\d+ key=daily\/7203\.json startMs=\d+ endMs=\d+ durMs=\d+ bytes=2 sha8=[0-9a-f]{8} cond=IfMatch inflight=\d+ status=500 name=InternalError code=SlowDown cause=none abort=0 abortReason=none attempts=none requestId=req-abc httpStatusCode=500 amzRequestId=req-header body=/);
+    const loggedBody = lines[0]!.slice(lines[0]!.indexOf(" body=") + " body=".length);
+    expect(Array.from(loggedBody)).toHaveLength(200);
     expect(loggedBody.startsWith("<Error><Code>SlowDown</Code>")).toBe(true);
     expect(lines[0]).not.toMatch(/[\r\n]/);
-    for (const secret of ["https://", "abcdef", "Bearer", "test-secret", "test-access", "application/xml", "req-header"]) {
+    expect(lines[0]).not.toContain("observed");
+    for (const secret of ["https://", "abcdef", "Bearer", "test-secret", "test-access", "application/xml"]) {
       expect(lines[0]).not.toContain(secret);
     }
   });
@@ -292,7 +305,7 @@ describe("r2Put contract (1 attempt, no retry)", () => {
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     await expect(r2Put("daily/7203.json", "{}", null)).rejects.toBeInstanceOf(R2PutUnknownError);
     const line = logged.mock.calls.map((call) => String(call[0])).find((item) => item.startsWith("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown]"));
-    expect(line).toBe("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown] key=daily/7203.json status=none name=TimeoutError code=none body=see secret=<redacted> <url> <redacted> <redacted> id=<redacted> <redacted> next");
+    expect(line).toMatch(/^\[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown\] put seq=\d+ key=daily\/7203\.json startMs=\d+ endMs=\d+ durMs=\d+ bytes=2 sha8=[0-9a-f]{8} cond=IfNoneMatch inflight=\d+ status=none name=TimeoutError code=none cause=none abort=0 abortReason=none attempts=none body=see secret=<redacted> <url> <redacted> <redacted> id=<redacted> <redacted> next$/);
     expect(line).not.toContain("private-value");
   });
 
@@ -306,7 +319,7 @@ describe("r2Put contract (1 attempt, no retry)", () => {
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     await expect(r2Put("intra/7203.json", "{}", null)).rejects.toBeInstanceOf(R2PutUnknownError);
     const line = logged.mock.calls.map((call) => String(call[0])).find((item) => item.startsWith("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown]"));
-    expect(line).toBe("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown] key=intra/7203.json status=none name=UnknownError code=InternalError requestId=xml-req body=ignored");
+    expect(line).toMatch(/^\[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown\] put seq=\d+ key=intra\/7203\.json startMs=\d+ endMs=\d+ durMs=\d+ bytes=2 sha8=[0-9a-f]{8} cond=IfNoneMatch inflight=\d+ status=none name=UnknownError code=InternalError cause=none abort=0 abortReason=none attempts=none requestId=xml-req amzRequestId=xml-req body=ignored$/);
   });
 
   it("a throwing response body falls through to a redacted message and still throws unknown", async () => {
@@ -322,7 +335,7 @@ describe("r2Put contract (1 attempt, no retry)", () => {
     expect(error).toBeInstanceOf(R2PutUnknownError);
     expect((error as Error).cause).toBe(sdk);
     const line = logged.mock.calls.map((call) => String(call[0])).find((item) => item.startsWith("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown]"));
-    expect(line).toBe("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown] key=daily/7203.json status=500 name=InternalError code=ECONNRESET requestId=req-keep body=<url>");
+    expect(line).toMatch(/^\[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown\] put seq=\d+ key=daily\/7203\.json startMs=\d+ endMs=\d+ durMs=\d+ bytes=2 sha8=[0-9a-f]{8} cond=IfNoneMatch inflight=\d+ status=500 name=InternalError code=ECONNRESET cause=none abort=0 abortReason=none attempts=none requestId=req-keep httpStatusCode=500 body=<url>$/);
     expect(line).not.toContain("LEAK");
   });
 
@@ -335,7 +348,7 @@ describe("r2Put contract (1 attempt, no retry)", () => {
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     await expect(r2Put("daily/7203.json", "{}", null)).rejects.toBeInstanceOf(R2PutUnknownError);
     const line = logged.mock.calls.map((call) => String(call[0])).find((item) => item.startsWith("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown]"));
-    expect(line).toBe("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown] key=daily/7203.json status=500 name=TimeoutError code=none requestId=<unreadable> body=<unreadable>");
+    expect(line).toMatch(/^\[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown\] put seq=\d+ key=daily\/7203\.json startMs=\d+ endMs=\d+ durMs=\d+ bytes=2 sha8=[0-9a-f]{8} cond=IfNoneMatch inflight=\d+ status=500 name=TimeoutError code=none cause=none abort=0 abortReason=none attempts=none requestId=<unreadable> httpStatusCode=500 body=<unreadable>$/);
   });
 
   it("logs an explicit rejection without turning it into unknown", async () => {
@@ -346,7 +359,7 @@ describe("r2Put contract (1 attempt, no retry)", () => {
     expect(error).toBeInstanceOf(R2PutRejectedError);
     expect(error).not.toBeInstanceOf(R2PutUnknownError);
     const line = logged.mock.calls.map((call) => String(call[0])).find((item) => item.startsWith("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown]"));
-    expect(line).toBe("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown] key=daily/7203.json status=412 name=PreconditionFailed code=none body=PreconditionFailed");
+    expect(line).toMatch(/^\[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown\] put seq=\d+ key=daily\/7203\.json startMs=\d+ endMs=\d+ durMs=\d+ bytes=2 sha8=[0-9a-f]{8} cond=IfNoneMatch inflight=\d+ status=412 name=PreconditionFailed code=none cause=none abort=0 abortReason=none attempts=none httpStatusCode=412 body=PreconditionFailed$/);
   });
 
   it("logs a resolved response that misses the success schema", async () => {
@@ -357,7 +370,7 @@ describe("r2Put contract (1 attempt, no retry)", () => {
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     await expect(r2Put("daily/7203.json", "{}", null)).rejects.toBeInstanceOf(R2PutUnknownError);
     const line = logged.mock.calls.map((call) => String(call[0])).find((item) => item.startsWith("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown]"));
-    expect(line).toBe("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown] key=daily/7203.json status=200 name=none code=none requestId=req-bad body=<absent>");
+    expect(line).toMatch(/^\[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown\] put seq=\d+ key=daily\/7203\.json startMs=\d+ endMs=\d+ durMs=\d+ bytes=2 sha8=[0-9a-f]{8} cond=IfNoneMatch inflight=\d+ status=200 name=none code=none cause=none abort=0 abortReason=none attempts=none requestId=req-bad httpStatusCode=200 body=<absent>$/);
   });
 
   it("a failing incident log does not change the thrown PUT error", async () => {
@@ -366,16 +379,19 @@ describe("r2Put contract (1 attempt, no retry)", () => {
     await expect(r2Put("daily/7203.json", "{}", null)).rejects.toBeInstanceOf(R2PutUnknownError);
   });
 
-  it("does not emit the incident line for success, pre-send rejection, or GET faults", async () => {
+  it("logs one measurement line for a successful PUT and none for pre-send rejection or GET faults", async () => {
     const send = vi.spyOn(S3Client.prototype, "send");
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const incident = () => logged.mock.calls.map((call) => String(call[0])).filter((line) => line.startsWith("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown]"));
     send.mockImplementationOnce(async () => okPut());
     await r2Put("daily/7203.json", "{}", null);
+    expect(incident()).toHaveLength(1);
+    expect(incident()[0]).toMatch(/ put seq=\d+ key=daily\/7203\.json .* cond=IfNoneMatch inflight=\d+ status=200 name=none code=none cause=none abort=0 abortReason=none attempts=none httpStatusCode=200 body=none$/);
+    expect(incident()[0]).not.toContain("put-etag");
     await expect(r2Put("daily/7203.json", "{}", " ")).rejects.toThrow("observed ETag");
     send.mockRejectedValueOnce(svcError("Forbidden", 403));
     await expect(r2GetVersion("daily/7203.json")).rejects.toThrow();
-    expect(incident()).toEqual([]);
+    expect(incident()).toHaveLength(1);
     expect(send).toHaveBeenCalledTimes(2);
   });
 
@@ -954,9 +970,8 @@ describe("R2 abort signal diagnostic", () => {
     expect((caught as Error).cause).toBe(sdk);
     expect(send).toHaveBeenCalledTimes(1);
     const lines = logged.mock.calls.map((call) => String(call[0]));
-    expect(lines.filter((line) => line.startsWith("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown]"))).toEqual([
-      "[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown] key=daily/3931.json status=none name=AbortError code=none body=Request aborted",
-    ]);
+    expect(lines.filter((line) => line.startsWith("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown]"))).toHaveLength(1);
+    expect(lines.find((line) => line.startsWith("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown]"))).toMatch(/ put seq=\d+ key=daily\/3931\.json .* status=none name=AbortError code=none cause=TimeoutError abort=1 abortReason=TimeoutError attempts=none body=Request aborted$/);
     expect(abortLogLines(logged)[0]).toMatch(new RegExp(`^${ABORT_LOG.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} signal=要求ごと60秒 phase=ヘッダ受信前 reason=TimeoutError cause=TimeoutError elapsedMs=\\d+ key=daily/3931\\.json$`));
   });
 
@@ -994,5 +1009,131 @@ describe("R2 abort signal diagnostic", () => {
     const caught = await r2Put("daily/7203.json", "{}", null).catch((error: unknown) => error);
     expect(caught).toBeInstanceOf(R2PutUnknownError);
     expect((caught as Error).cause).toBe(putSdk);
+  });
+});
+
+const INCIDENT = "[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown]";
+const incidentLines = (logged: { mock: { calls: unknown[][] } }) =>
+  logged.mock.calls.map((call) => String(call[0])).filter((line) => line.startsWith(INCIDENT));
+
+describe("R2 PUT measurement", () => {
+  const sha8 = (text: string) => createHash("sha256").update(text).digest("hex").slice(0, 8);
+
+  it("logs one success line, a 500 confirm and neighbors, and a run summary without secrets", async () => {
+    beginR2PutDiagRun();
+    const prevSha = process.env.GITHUB_SHA;
+    const prevRun = process.env.GITHUB_RUN_ID;
+    process.env.GITHUB_SHA = "0123456789abcdef0123456789abcdef01234567";
+    process.env.GITHUB_RUN_ID = "987654321";
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const send = vi.spyOn(S3Client.prototype, "send");
+    try {
+      send.mockImplementation(async () => okPut());
+      for (const code of ["1001", "1002", "1003", "1004", "1005"]) await r2Put(`daily/${code}.json`, "{}", null);
+      const secretEtag = "super-secret-etag";
+      const body = '{"code":"7203"}';
+      const bodyBytes = new TextEncoder().encode(body).byteLength;
+      const sdk = Object.assign(new Error("ignored"), {
+        name: "InternalError",
+        code: "SlowDown",
+        cause: Object.assign(new Error("https://acct.r2.cloudflarestorage.com/leak?X-Amz-Signature=deadbeef"), { name: "NetworkError" }),
+        $metadata: { httpStatusCode: 500, requestId: "req-abc", extendedRequestId: "ext-1", cfId: "meta-cf", attempts: 1 },
+        $response: {
+          headers: { authorization: "Bearer test-secret", "cf-ray": "ray-123", "x-amz-request-id": "req-header", "cf-id": "hdr-cf", "content-type": "application/xml" },
+          body: new TextEncoder().encode("see https://acct.r2.cloudflarestorage.com/b?X-Amz-Signature=deadbeef Authorization: Bearer test-secret"),
+        },
+      });
+      send.mockRejectedValueOnce(sdk);
+      const error = await r2Put("daily/7203.json", body, `"${secretEtag}"`).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(R2PutUnknownError);
+      const bytes = Buffer.from(body);
+      send.mockImplementationOnce(async () => ({
+        ETag: '"native-observed"', ContentLength: bytes.length, ContentType: "application/json",
+        LastModified: new Date("2026-10-13T00:00:00.000Z"), Body: Readable.from([bytes]), $metadata: { httpStatusCode: 200 },
+      }));
+      const proof = await confirmUnknownPricePut(error, "daily/7203.json", body, undefined, () => {});
+      expect(proof).toMatchObject({ putAcknowledgement: "unknown", state: "exact-post-observed", etag: '"native-observed"', bodyBytes: bytes.length, complete: true });
+      for (const code of ["2001", "2002", "2003", "2004", "2005"]) await r2Put(`daily/${code}.json`, "{}", null);
+      noteR2PutFatal("ingest-daily.ts:putBarrier", new Error("R2 PUT 結果不明 cause=InternalError/500 https://acct.r2.cloudflarestorage.com/secret"));
+      logR2PutRunSummary(true);
+      const lines = incidentLines(logged);
+      const puts = lines.filter((line) => line.includes(" put "));
+      const confirms = lines.filter((line) => line.includes(" confirm "));
+      const neighbors = lines.filter((line) => line.includes(" neighbors "));
+      const summaries = lines.filter((line) => line.includes(" summary "));
+      expect(puts).toHaveLength(11);
+      expect(confirms).toHaveLength(1);
+      expect(neighbors).toHaveLength(1);
+      expect(summaries).toHaveLength(1);
+      expect(puts[0]).toMatch(new RegExp(`^${INCIDENT.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} put seq=1 key=daily/1001\\.json startMs=\\d+ endMs=\\d+ durMs=\\d+ bytes=2 sha8=${sha8("{}")} cond=IfNoneMatch inflight=1 status=200 name=none code=none cause=none abort=0 abortReason=none attempts=none httpStatusCode=200 body=none$`));
+      const unknown = puts[5]!;
+      expect(unknown).toMatch(new RegExp(`key=daily/7203\\.json startMs=\\d+ endMs=\\d+ durMs=\\d+ bytes=${bodyBytes} sha8=${sha8(body)} cond=IfMatch inflight=1 status=500 name=InternalError code=SlowDown cause=NetworkError abort=0 abortReason=none attempts=1 requestId=req-abc extendedRequestId=ext-1 cfId=meta-cf httpStatusCode=500 cfRay=ray-123 amzRequestId=req-header body=`));
+      expect(confirms[0]).toContain('confirm seq=6 key=daily/7203.json present=1 etag="native-observed"');
+      expect(confirms[0]).toContain(`bytes=${bytes.length}`);
+      expect(confirms[0]).toContain("lastModified=2026-10-13T00:00:00.000Z");
+      expect(confirms[0]).toContain(`shaMatch=1 sentSha8=${sha8(body)} gotSha8=${sha8(body)}`);
+      const brief = (line: string) => {
+        const key = line.match(/key=(\S+)/)?.[1];
+        const status = line.match(/ status=(\S+)/)?.[1];
+        const dur = line.match(/durMs=(\d+)/)?.[1];
+        return `${key}:${status}:${dur}`;
+      };
+      expect(neighbors[0]).toBe(`${INCIDENT} neighbors seq=6 key=daily/7203.json before=${puts.slice(0, 5).map(brief).join(";")} after=${puts.slice(6).map(brief).join(";")}`);
+      const durs = puts.map((line) => Number(line.match(/durMs=(\d+)/)?.[1])).sort((a, b) => a - b);
+      const pct = (p: number) => durs[Math.min(durs.length, Math.max(1, Math.ceil((p / 100) * durs.length))) - 1];
+      const minutes = new Map<string, number>();
+      for (const line of puts) {
+        const ms = Number(line.match(/startMs=(\d+)/)?.[1]);
+        const stamp = new Date(ms);
+        const pad = (n: number) => String(n).padStart(2, "0");
+        const minute = `${stamp.getUTCFullYear()}-${pad(stamp.getUTCMonth() + 1)}-${pad(stamp.getUTCDate())}T${pad(stamp.getUTCHours())}:${pad(stamp.getUTCMinutes())}Z`;
+        minutes.set(minute, (minutes.get(minute) ?? 0) + 1);
+      }
+      const perMinute = [...minutes.entries()].sort(([a], [b]) => a < b ? -1 : 1).map(([key, count]) => `${key}=${count}`).join(",");
+      const summary = summaries[0]!;
+      expect(summary).toContain(" total=11 ");
+      expect(summary).toContain(" ok=10 ");
+      expect(summary).toContain(" unknown=1 ");
+      expect(summary).toContain(" fail=0 ");
+      expect(summary).toContain(` p50=${pct(50)} `);
+      expect(summary).toContain(` p95=${pct(95)} `);
+      expect(summary).toContain(` max=${durs[durs.length - 1]} `);
+      expect(summary).toContain(` perMinute=${perMinute} `);
+      expect(summary).toContain(" fatal=1 ");
+      expect(summary).toContain(" site=ingest-daily.ts:putBarrier ");
+      expect(summary).toContain(" sha=0123456789abcdef0123456789abcdef01234567 ");
+      expect(summary).toContain(" runId=987654321");
+      expect(send).toHaveBeenCalledTimes(12);
+      for (const line of lines) {
+        expect(line.startsWith(INCIDENT)).toBe(true);
+        expect(line).not.toMatch(/[\r\n]/);
+        for (const secret of [secretEtag, "https://", "deadbeef", "Bearer", "test-secret", "test-access", "test-bucket", "test-account", "cloudflarestorage", "hdr-cf", "application/xml", "Authorization"]) {
+          expect(line).not.toContain(secret);
+        }
+        const start = Number(line.match(/startMs=(\d+)/)?.[1]);
+        const end = Number(line.match(/endMs=(\d+)/)?.[1]);
+        if (line.includes(" put ")) expect(end).toBeGreaterThanOrEqual(start);
+      }
+    } finally {
+      if (prevSha === undefined) delete process.env.GITHUB_SHA;
+      else process.env.GITHUB_SHA = prevSha;
+      if (prevRun === undefined) delete process.env.GITHUB_RUN_ID;
+      else process.env.GITHUB_RUN_ID = prevRun;
+    }
+  });
+
+  it("logs a failed readback without replacing the original unknown error", async () => {
+    beginR2PutDiagRun();
+    const send = vi.spyOn(S3Client.prototype, "send");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    send.mockRejectedValueOnce(svcError("InternalError", 500));
+    const error = await r2Put("daily/7203.json", '{"a":1}', null).catch((e: unknown) => e);
+    send.mockRejectedValueOnce(svcError("TimeoutError", 500));
+    await expect(confirmUnknownPricePut(error, "daily/7203.json", '{"a":1}', undefined, () => {})).rejects.toBe(error);
+    expect(send).toHaveBeenCalledTimes(2);
+    const confirm = incidentLines(logged).find((line) => line.includes(" confirm "));
+    expect(confirm).toMatch(/present=none etag=none bytes=none lastModified=none shaMatch=none read=error name=TimeoutError/);
+    expect(confirm).not.toContain("https://");
+    expect(confirm).not.toContain("test-secret");
   });
 });

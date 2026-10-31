@@ -84,6 +84,11 @@ export const sharedEnv = {
   GITHUB_RUN_ID: () => optional("GITHUB_RUN_ID"),
   GITHUB_RUN_ATTEMPT: () => optional("GITHUB_RUN_ATTEMPT"),
   /**
+   * この実行の commit SHA。GitHub Actions が `GITHUB_SHA` を自動注入する
+   * (シークレットではない。ローカルでは未設定 = `undefined`)。
+   */
+  GITHUB_SHA: () => optional("GITHUB_SHA"),
+  /**
    * GitHub Actions の step 出力ファイル。ローカル実行では未設定 =
    * `undefined` (呼び出し側が出力を諦める。throw しない)。
    */

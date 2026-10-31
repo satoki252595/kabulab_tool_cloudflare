@@ -77,12 +77,17 @@ export async function confirmUnknownPricePut(error: unknown, key: string, body: 
   // S3のcustom metadataなしは、応答のundefined/空bagを同じ空集合へ正規化する。
   const canonicalMetadata = (value: Record<string, string> | undefined): string =>
     JSON.stringify(value === undefined ? [] : Object.entries(value).sort(([a], [b]) => a < b ? -1 : 1));
+  let readAttempted = false;
+  let readFinished = false;
   try {
     assertActive();
     if (expected.length === 0) throw error;
     const timeout = AbortSignal.timeout(30_000);
+    readAttempted = true;
     const current = await r2GetBytesVersion(key, sharedEnv.R2_BUCKET(), { singleAttempt: true,
       maxBytes: expected.length, abortSignal: opts?.abortSignal === undefined ? timeout : AbortSignal.any([timeout, opts.abortSignal]), beforeAttempt: assertActive });
+    readFinished = true;
+    try { logUnknownPriceReadback(key, expected, current); } catch { /* 計測だけ。一致判定には使わない。 */ }
     assertActive();
     if (current === null || !expected.equals(current.body) || current.contentType !== "application/json" ||
         canonicalMetadata(current.metadata) !== canonicalMetadata(metadata)) throw error;
@@ -90,7 +95,10 @@ export async function confirmUnknownPricePut(error: unknown, key: string, body: 
       etag: current.etag, bodyBytes: current.body.length, bodySha256: createHash("sha256").update(current.body).digest("hex"),
       metadataSha256: createHash("sha256").update(canonicalMetadata(current.metadata)).digest("hex"),
       contentType: "application/json", complete: true };
-  } catch {
+  } catch (caught) {
+    if (readAttempted && !readFinished && caught !== error) {
+      try { logUnknownPriceReadbackError(key, caught); } catch { /* 計測だけ。元unknownは変えない。 */ }
+    }
     throw error; // GET失敗や期限切れをPUT拒否/成功へ変えず、同じunknownを返す。
   }
 }
@@ -106,28 +114,330 @@ function r2CauseOf(e: unknown): { code: string; status: number | "none" } {
 
 const R2_PUT_FAILURE_LOG = "[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown]";
 
-/**
- * PUT 失敗の計測1行。分類・再送・投げる例外は変えない。
- * 本文が読めなくても、この関数から例外を出さない。
- */
-function logR2PutFailure(key: string, error: unknown, status: number | "none"): void {
-  const name = readOr("<unreadable>", () => readExceptionName(error));
-  const code = readOr("<unreadable>", () => readExceptionCode(error));
-  const requestId = readOr("<unreadable>", () => readRequestId(error) ?? "");
-  const body = readOr("<unreadable>", () => readPutFailureBodyHead(error));
+type PutOutcome = "ok" | "unknown" | "fail";
+type PutCond = "IfMatch" | "IfNoneMatch";
+type PutRecord = {
+  seq: number;
+  key: string;
+  status: string;
+  durMs: number;
+  outcome: PutOutcome;
+  startedMs: number;
+  neighborEmitted: boolean;
+};
+
+const putRecords: PutRecord[] = [];
+const unknownSeqs = new Map<string, number[]>();
+let putSeq = 0;
+let inflightPuts = 0;
+let fatalNote: { site: string; reason: string } | undefined;
+
+/** 1 run の計測を空にする。ingest の開始時とテストから呼ぶ。例外は出さない。 */
+export function beginR2PutDiagRun(): void {
   try {
+    putRecords.length = 0;
+    unknownSeqs.clear();
+    putSeq = 0;
+    inflightPuts = 0;
+    fatalNote = undefined;
+  } catch {
+    // 計測の初期化失敗は取込を止めない。
+  }
+}
+
+/** 最初に fatal になった分岐だけ残す。例外は出さない。 */
+export function noteR2PutFatal(site: string, reason: unknown): void {
+  try {
+    if (fatalNote !== undefined) return;
+    const raw = reason instanceof Error ? `${reason.name}: ${reason.message}` : String(reason);
+    fatalNote = { site: logToken(site), reason: logToken(redactDiagnostic(raw).slice(0, 200)) };
+  } catch {
+    // 計測の記録失敗は fatal 代入を止めない。
+  }
+}
+
+function takeUnknownSeq(key: string): number | "none" {
+  const queue = unknownSeqs.get(key);
+  if (queue === undefined || queue.length === 0) return "none";
+  const seq = queue.shift();
+  return seq === undefined ? "none" : seq;
+}
+
+function readCauseToken(error: unknown): string {
+  if (error === null || typeof error !== "object" || !("cause" in error)) return "none";
+  const cause = (error as { cause?: unknown }).cause;
+  if (cause === undefined) return "none";
+  if (typeof cause === "string") return cause.length > 0 ? cause : "none";
+  return readExceptionName(cause);
+}
+
+function headerValue(response: { headers?: unknown } | null | undefined, headerName: string): string | undefined {
+  if (response === null || response === undefined || typeof response !== "object") return undefined;
+  const headers = response.headers;
+  if (headers === null || typeof headers !== "object") return undefined;
+  for (const [name, value] of Object.entries(headers as Record<string, unknown>)) {
+    if (name.toLowerCase() === headerName && typeof value === "string" && value.length > 0) return value;
+  }
+  return undefined;
+}
+
+function pushId(parts: string[], name: string, value: string | undefined): void {
+  if (value === undefined || value === "") return;
+  parts.push(`${name}=${value === "<unreadable>" ? "<unreadable>" : logToken(value)}`);
+}
+
+/**
+ * PUT 1件の計測1行。成功も不明も明示拒否もここだけ。分類・再送・投げる例外は変えない。
+ * この関数から例外を出さない。
+ */
+function logR2PutMeasure(input: {
+  seq: number;
+  key: string;
+  startedMs: number;
+  endedMs: number;
+  bytes: number;
+  sha8: string;
+  cond: PutCond;
+  inflight: number;
+  status: number | "none";
+  source: unknown;
+  signal: AbortSignal | undefined;
+  outcome: PutOutcome;
+}): void {
+  try {
+    const durMs = input.endedMs - input.startedMs;
+    putRecords.push({
+      seq: input.seq,
+      key: input.key,
+      status: String(input.status),
+      durMs,
+      outcome: input.outcome,
+      startedMs: input.startedMs,
+      neighborEmitted: false,
+    });
+    if (input.outcome === "unknown") {
+      const queue = unknownSeqs.get(input.key) ?? [];
+      queue.push(input.seq);
+      unknownSeqs.set(input.key, queue);
+    }
+  } catch {
+    // 集計の失敗は PUT の例外に影響させない。
+  }
+  try {
+    const failure = input.outcome === "ok" ? undefined : input.source;
+    const name = failure === undefined ? "none" : readOr("<unreadable>", () => readExceptionName(failure));
+    const code = failure === undefined ? "none" : readOr("<unreadable>", () => readExceptionCode(failure));
+    const cause = failure === undefined ? "none" : readOr("<unreadable>", () => readCauseToken(failure));
+    const body = failure === undefined ? "none" : readOr("<unreadable>", () => readPutFailureBodyHead(failure));
+    const requestId = readOr("<unreadable>", () => readRequestId(input.source) ?? "");
+    const abort = input.signal?.aborted === true;
+    const abortReason = abort ? readOr("<unreadable>", () => readExceptionName(input.signal?.reason)) : "none";
     const parts = [
       R2_PUT_FAILURE_LOG,
-      `key=${logToken(key)}`,
-      `status=${logToken(String(status))}`,
+      "put",
+      `seq=${input.seq}`,
+      `key=${logToken(input.key)}`,
+      `startMs=${input.startedMs}`,
+      `endMs=${input.endedMs}`,
+      `durMs=${input.endedMs - input.startedMs}`,
+      `bytes=${input.bytes}`,
+      `sha8=${logToken(input.sha8)}`,
+      `cond=${input.cond}`,
+      `inflight=${input.inflight}`,
+      `status=${logToken(String(input.status))}`,
       `name=${logToken(name)}`,
       `code=${logToken(code)}`,
+      `cause=${logToken(cause)}`,
+      `abort=${abort ? "1" : "0"}`,
+      `abortReason=${logToken(abortReason)}`,
+      `attempts=${readAttempts(input.source)}`,
     ];
-    if (requestId !== "") parts.push(`requestId=${logToken(requestId)}`);
+    pushId(parts, "requestId", requestId);
+    pushId(parts, "extendedRequestId", readOr(undefined, () => readMetadataString(input.source, "extendedRequestId")));
+    pushId(parts, "cfId", readOr(undefined, () => readCfId(input.source)));
+    const httpStatusCode = readOr(undefined, () => readMetadataNumber(input.source, "httpStatusCode"));
+    if (httpStatusCode !== undefined) parts.push(`httpStatusCode=${httpStatusCode}`);
+    pushId(parts, "cfRay", readOr(undefined, () => headerValue(responseOf(input.source), "cf-ray")));
+    pushId(parts, "amzRequestId", readOr(undefined, () => headerValue(responseOf(input.source), "x-amz-request-id")));
     parts.push(`body=${body.replace(/[\r\n\u2028\u2029]/g, " ")}`);
     console.error(parts.join(" "));
   } catch {
     // 計測行の出力失敗は PUT の例外に影響させない。
+  }
+  try { flushNeighborLines(false); } catch {
+    // 前後要約の失敗は PUT の例外に影響させない。
+  }
+}
+
+function responseOf(source: unknown): { headers?: unknown } | null | undefined {
+  if (source === null || typeof source !== "object") return undefined;
+  return (source as { $response?: { headers?: unknown } | null }).$response;
+}
+
+function readMetadataString(source: unknown, field: "extendedRequestId"): string | undefined {
+  if (source === null || typeof source !== "object") return undefined;
+  const metadata = (source as { $metadata?: { extendedRequestId?: unknown } | null }).$metadata;
+  if (metadata === null || typeof metadata !== "object") return undefined;
+  const value = metadata[field];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function readMetadataNumber(source: unknown, field: "httpStatusCode" | "attempts"): number | undefined {
+  if (source === null || typeof source !== "object") return undefined;
+  const metadata = (source as { $metadata?: { httpStatusCode?: unknown; attempts?: unknown } | null }).$metadata;
+  if (metadata === null || typeof metadata !== "object") return undefined;
+  const value = metadata[field];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readAttempts(source: unknown): string {
+  const attempts = readOr(undefined, () => readMetadataNumber(source, "attempts"));
+  return attempts === undefined ? "none" : String(attempts);
+}
+
+function readCfId(source: unknown): string | undefined {
+  if (source !== null && typeof source === "object") {
+    const metadata = (source as { $metadata?: { cfId?: unknown } | null }).$metadata;
+    if (metadata !== null && typeof metadata === "object" && typeof metadata.cfId === "string" && metadata.cfId.length > 0) {
+      return metadata.cfId;
+    }
+  }
+  return headerValue(responseOf(source), "cf-id");
+}
+
+function logUnknownPriceReadback(key: string, expected: Buffer, current: { body: Uint8Array; etag: string; lastModified?: string } | null): void {
+  try {
+    const seq = takeUnknownSeq(key);
+    let sentSha8 = "none";
+    let gotSha8 = "none";
+    let shaMatch = "0";
+    try {
+      sentSha8 = createHash("sha256").update(expected).digest("hex").slice(0, 8);
+      if (current !== null) {
+        gotSha8 = createHash("sha256").update(current.body).digest("hex").slice(0, 8);
+        shaMatch = expected.equals(current.body) ? "1" : "0";
+      }
+    } catch {
+      shaMatch = "none";
+    }
+    console.error([
+      R2_PUT_FAILURE_LOG,
+      "confirm",
+      `seq=${seq}`,
+      `key=${logToken(key)}`,
+      `present=${current === null ? "0" : "1"}`,
+      `etag=${current === null ? "none" : logToken(current.etag)}`,
+      `bytes=${current === null ? "none" : String(current.body.byteLength)}`,
+      `lastModified=${current?.lastModified === undefined ? "none" : logToken(current.lastModified)}`,
+      `shaMatch=${shaMatch}`,
+      `sentSha8=${sentSha8}`,
+      `gotSha8=${gotSha8}`,
+    ].join(" "));
+  } catch {
+    // 読み戻しログの失敗は unknown の再送出に影響させない。
+  }
+}
+
+function logUnknownPriceReadbackError(key: string, readError: unknown): void {
+  try {
+    console.error([
+      R2_PUT_FAILURE_LOG,
+      "confirm",
+      `seq=${takeUnknownSeq(key)}`,
+      `key=${logToken(key)}`,
+      "present=none",
+      "etag=none",
+      "bytes=none",
+      "lastModified=none",
+      "shaMatch=none",
+      "read=error",
+      `name=${logToken(readOr("<unreadable>", () => readExceptionName(readError)))}`,
+    ].join(" "));
+  } catch {
+    // 読み戻し失敗ログの失敗は unknown の再送出に影響させない。
+  }
+}
+
+function neighborBrief(rec: PutRecord): string {
+  return `${logToken(rec.key)}:${logToken(rec.status)}:${rec.durMs}`;
+}
+
+function flushNeighborLines(final: boolean): void {
+  for (const [index, rec] of putRecords.entries()) {
+    if (rec.outcome !== "unknown" || rec.neighborEmitted) continue;
+    const afterCount = putRecords.length - index - 1;
+    if (!final && afterCount < 5) continue;
+    try {
+      const before = putRecords.slice(Math.max(0, index - 5), index).map(neighborBrief);
+      const after = putRecords.slice(index + 1, index + 6).map(neighborBrief);
+      console.error([
+        R2_PUT_FAILURE_LOG,
+        "neighbors",
+        `seq=${rec.seq}`,
+        `key=${logToken(rec.key)}`,
+        `before=${before.length === 0 ? "none" : before.join(";")}`,
+        `after=${after.length === 0 ? "none" : after.join(";")}`,
+      ].join(" "));
+      rec.neighborEmitted = true;
+    } catch {
+      // この1行の失敗で残りの要約を落とさない。
+    }
+  }
+}
+
+function percentileNearestRank(sorted: number[], p: number): number {
+  const rank = Math.ceil((p / 100) * sorted.length);
+  const idx = Math.min(sorted.length, Math.max(1, rank)) - 1;
+  return sorted[idx]!;
+}
+
+function minuteKey(ms: number): string {
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}Z`;
+}
+
+function diagGithub(which: "GITHUB_SHA" | "GITHUB_RUN_ID"): string {
+  try {
+    const value = which === "GITHUB_SHA" ? sharedEnv.GITHUB_SHA() : sharedEnv.GITHUB_RUN_ID();
+    if (value === undefined || value.trim() === "") return "none";
+    return logToken(value);
+  } catch {
+    return "none";
+  }
+}
+
+/** run 末の計測1行。fatal フラグは呼び出し側の値をそのまま書く。例外は出さない。 */
+export function logR2PutRunSummary(fatal: boolean): void {
+  try {
+    flushNeighborLines(true);
+    const total = putRecords.length;
+    const ok = putRecords.filter((rec) => rec.outcome === "ok").length;
+    const unknown = putRecords.filter((rec) => rec.outcome === "unknown").length;
+    const fail = putRecords.filter((rec) => rec.outcome === "fail").length;
+    const durs = putRecords.map((rec) => rec.durMs).sort((a, b) => a - b);
+    const minutes = new Map<string, number>();
+    for (const rec of putRecords) minutes.set(minuteKey(rec.startedMs), (minutes.get(minuteKey(rec.startedMs)) ?? 0) + 1);
+    const perMinute = minutes.size === 0 ? "none" : [...minutes.entries()].sort(([a], [b]) => a < b ? -1 : 1).map(([key, count]) => `${key}=${count}`).join(",");
+    console.error([
+      R2_PUT_FAILURE_LOG,
+      "summary",
+      `total=${total}`,
+      `ok=${ok}`,
+      `unknown=${unknown}`,
+      `fail=${fail}`,
+      `p50=${durs.length === 0 ? "none" : String(percentileNearestRank(durs, 50))}`,
+      `p95=${durs.length === 0 ? "none" : String(percentileNearestRank(durs, 95))}`,
+      `max=${durs.length === 0 ? "none" : String(durs[durs.length - 1])}`,
+      `perMinute=${perMinute}`,
+      `fatal=${fatal ? "1" : "0"}`,
+      `site=${fatal && fatalNote !== undefined ? fatalNote.site : "none"}`,
+      `reason=${fatal && fatalNote !== undefined ? fatalNote.reason : "none"}`,
+      `sha=${diagGithub("GITHUB_SHA")}`,
+      `runId=${diagGithub("GITHUB_RUN_ID")}`,
+    ].join(" "));
+  } catch {
+    // run 要約の失敗は終了コードに影響させない。
   }
 }
 
@@ -188,7 +498,7 @@ function readPutFailureBodyHead(error: unknown): string {
   if (read.kind === "absent") return "<absent>";
   const collapsed = read.text.replace(/[\r\n\u2028\u2029]+/g, " ");
   const redacted = redactDiagnostic(collapsed.length > 8192 ? collapsed.slice(0, 8192) : collapsed);
-  const head = Array.from(redacted).slice(0, 300).join("");
+  const head = Array.from(redacted).slice(0, 200).join("");
   return head.trim().length > 0 ? head : "<absent>";
 }
 
@@ -346,31 +656,59 @@ export async function r2PutBytes(key: string, body: Uint8Array, observedVersion:
   const putTimeout = AbortSignal.timeout(60_000);
   const putSignal = opts?.abortSignal === undefined ? putTimeout : AbortSignal.any([opts.abortSignal, putTimeout]);
   const putStartedAt = Date.now();
+  const cond: PutCond = observedVersion === null ? "IfNoneMatch" : "IfMatch";
+  let sha8 = "none";
+  try { sha8 = createHash("sha256").update(body).digest("hex").slice(0, 8); } catch { /* 計測だけ */ }
+  let putSeqForLog = 0;
+  let inflightForLog = 0;
+  let putCounted = false;
+  let endedMs = putStartedAt;
   try {
+    inflightPuts += 1;
+    putCounted = true;
+    putSeqForLog = ++putSeq;
+    inflightForLog = inflightPuts;
     res = await client().send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: contentType,
       ...(observedVersion === null ? { IfNoneMatch: "*" } : { IfMatch: observedVersion }),
       ...(metadata === undefined ? {} : { Metadata: metadata }),
     }), { abortSignal: putSignal });
+    endedMs = Date.now();
   } catch (e) {
+    endedMs = Date.now();
     logR2Abort({ key, error: e, phase: "ヘッダ受信前", timeout: putTimeout, budget: opts?.abortSignal, signal: putSignal, startedAt: putStartedAt });
     const { code, status } = r2CauseOf(e);
-    logR2PutFailure(key, e, status);
+    if (putCounted) {
+      try {
+        logR2PutMeasure({ seq: putSeqForLog, key, startedMs: putStartedAt, endedMs, bytes: body.byteLength, sha8, cond,
+          inflight: inflightForLog, status, source: e, signal: putSignal, outcome: isExplicitRejection(code, status) ? "fail" : "unknown" });
+      } catch { /* 計測だけ */ }
+    }
     if (isExplicitRejection(code, status)) throw new R2PutRejectedError(key, code, status, e);
     throw new R2PutUnknownError(key, code, status, e);
+  } finally {
+    if (putCounted) inflightPuts -= 1;
   }
   const r = res as { ETag?: unknown; $metadata?: { httpStatusCode?: unknown } } | null;
   const status = r?.$metadata?.httpStatusCode;
   const etag = r?.ETag;
   const statusOk = typeof status === "number" && Number.isFinite(status) && status >= 200 && status < 300;
   const etagOk = typeof etag === "string" && etag.length > 0;
+  const loggedStatus = typeof status === "number" && Number.isFinite(status) ? status : "none";
   if (!statusOk || !etagOk) {
-    logR2PutFailure(key, res, typeof status === "number" && Number.isFinite(status) ? status : "none");
+    try {
+      logR2PutMeasure({ seq: putSeqForLog, key, startedMs: putStartedAt, endedMs, bytes: body.byteLength, sha8, cond,
+        inflight: inflightForLog, status: loggedStatus, source: res, signal: putSignal, outcome: "unknown" });
+    } catch { /* 計測だけ */ }
     // 成功 schema を満たさない応答は結果不明 (known 失敗にしない)。
     throw new R2PutUnknownError(key, "bad-response", statusOk ? (status as number) : "none", {
       statusType: typeof status,
       hasETag: etagOk,
     });
   }
+  try {
+    logR2PutMeasure({ seq: putSeqForLog, key, startedMs: putStartedAt, endedMs, bytes: body.byteLength, sha8, cond,
+      inflight: inflightForLog, status: loggedStatus, source: res, signal: putSignal, outcome: "ok" });
+  } catch { /* 計測だけ */ }
 }
 
 export async function r2Get(key: string): Promise<string | null> {
@@ -405,7 +743,7 @@ function assertMetadata(metadata: unknown): asserts metadata is Record<string, s
 }
 
 /** 原本をUTF-8へ変換せず全bytesで読む。missing/unknown契約はJSON経路と共通。 */
-export async function r2GetBytesVersion(key: string, bucket: string | undefined, opts?: R2ReadOptions): Promise<{ body: Uint8Array; etag: string; metadata?: Record<string, string>; contentType?: string } | null> {
+export async function r2GetBytesVersion(key: string, bucket: string | undefined, opts?: R2ReadOptions): Promise<{ body: Uint8Array; etag: string; metadata?: Record<string, string>; contentType?: string; lastModified?: string } | null> {
   if (opts?.maxBytes !== undefined && (!Number.isSafeInteger(opts.maxBytes) || opts.maxBytes < 1)) throw new Error("R2 read byte budget is invalid");
   if (opts?.onRead !== undefined && opts.maxBytes === undefined) throw new Error("R2 observed read requires a byte budget");
   opts?.abortSignal?.throwIfAborted();
@@ -514,8 +852,14 @@ export async function r2GetBytesVersion(key: string, bucket: string | undefined,
       if (r.Metadata !== undefined) assertMetadata(r.Metadata);
       body = await r.Body.transformToByteArray();
     }
+    let lastModified: string | undefined;
+    try {
+      const lm = (r as { LastModified?: unknown }).LastModified;
+      if (lm instanceof Date && Number.isFinite(lm.getTime())) lastModified = lm.toISOString();
+    } catch { /* 計測フィールドだけ。読めなくても GET の戻り値は変えない。 */ }
     return { body, etag, ...(r.Metadata === undefined ? {} : { metadata: r.Metadata }),
-      ...(r.ContentType === undefined ? {} : { contentType: r.ContentType }) };
+      ...(r.ContentType === undefined ? {} : { contentType: r.ContentType }),
+      ...(lastModified === undefined ? {} : { lastModified }) };
   } catch (e) {
     // header中断はattempt内で記録済み。ここは本文読み取り中だけ（再試行の最終throwと二重に出さない）。
     if (abortDiag?.headersReceived === true) {

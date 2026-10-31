@@ -1138,7 +1138,10 @@ it("先頭5件以降のHOLD理由もsanitize・上限制限してsummary原本�
   expect(mockRawArchive).toHaveBeenCalledTimes(1);
   expect(mockRecord).toHaveBeenCalledTimes(1);
   expect(mockR2Put).not.toHaveBeenCalled();
-  expect(console.error).toHaveBeenCalledTimes(5);
+  expect(console.error).toHaveBeenCalledTimes(6);
+  const incidentSummaries = vi.mocked(console.error).mock.calls.map((call) => String(call[0])).filter((line) => line.startsWith("[INC-20261013-kabulab_tool_cloudflare-vwap-r2-put-unknown] summary "));
+  expect(incidentSummaries).toHaveLength(1);
+  expect(incidentSummaries[0]).toContain("fatal=0");
   expect(process.exitCode).toBe(1);
 });
 
