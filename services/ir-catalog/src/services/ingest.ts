@@ -311,6 +311,75 @@ function logUniverseGap(kind: string, reason: string, tdnetIds: readonly string[
   else console.info(line);
 }
 
+// diag(INC-20261026-kabulab_tool_cloudflare-tdnet-empty-success): 撤去予定
+const WATCH8_DIAG_TAG =
+  "[INC-20261026-kabulab_tool_cloudflare-tdnet-empty-success]";
+const WATCH8_CODES: ReadonlySet<string> = new Set([
+  "2989",
+  "5386",
+  "7950",
+  "3455",
+  "3468",
+  "525A",
+  "6225",
+  "8972",
+]);
+
+function matchesWatch8(code: string): boolean {
+  return WATCH8_CODES.has(code) || WATCH8_CODES.has(code.slice(0, 4));
+}
+
+function collectWatch8Lines(
+  bucket: "outside-universe" | "invalid-code",
+  entries: readonly { tdnetId: string; code: string }[]
+): string[] {
+  const idsByCode = new Map<string, string[]>();
+  for (const entry of entries) {
+    if (!matchesWatch8(entry.code)) continue;
+    const ids = idsByCode.get(entry.code);
+    if (ids === undefined) idsByCode.set(entry.code, [entry.tdnetId]);
+    else ids.push(entry.tdnetId);
+  }
+  const lines: string[] = [];
+  for (const [code, ids] of idsByCode) {
+    lines.push(
+      `${WATCH8_DIAG_TAG} watch8 bucket=${bucket} code=${code} tdnetIds=${ids.join(",")}`
+    );
+  }
+  return lines;
+}
+
+/** 計測専用。prepared の中身も件数も変えない。 */
+export function formatWatch8BucketLogs(
+  outsideUniverse: readonly { tdnetId: string; ticker: string }[],
+  invalidCode: readonly { tdnetId: string; companyCode: string }[]
+): string[] {
+  const lines = [
+    ...collectWatch8Lines(
+      "outside-universe",
+      outsideUniverse.map((row) => ({ tdnetId: row.tdnetId, code: row.ticker }))
+    ),
+    ...collectWatch8Lines(
+      "invalid-code",
+      invalidCode.map((row) => ({ tdnetId: row.tdnetId, code: row.companyCode }))
+    ),
+  ];
+  if (lines.length === 0) return [`${WATCH8_DIAG_TAG} watch8 none`];
+  return lines;
+}
+
+export function logWatch8Buckets(
+  outsideUniverse: readonly { tdnetId: string; ticker: string }[],
+  invalidCode: readonly { tdnetId: string; companyCode: string }[]
+): void {
+  const lines = formatWatch8BucketLogs(outsideUniverse, invalidCode);
+  if (lines.length === 1 && lines[0] === `${WATCH8_DIAG_TAG} watch8 none`) {
+    console.info(lines[0]);
+    return;
+  }
+  for (const line of lines) console.warn(line);
+}
+
 const JST_MS = 9 * 3600 * 1000;
 
 /** epoch ms の JST 壁時計。getUTC* が JST の年月日になる。 */
@@ -447,6 +516,7 @@ export async function ingestBatch(
     "銘柄コードを4文字ティッカーにできない",
     prepared.invalidCode.map((row) => row.tdnetId)
   );
+  logWatch8Buckets(prepared.outsideUniverse, prepared.invalidCode);
 
   const byPrimaryTag: Record<string, number> = {};
   let unclassified = 0;
