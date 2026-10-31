@@ -10,7 +10,7 @@ const COOLDOWN_READ_DIAG_TAG = "[INC-20261029-kabulab_tool_cloudflare-yahoo-cool
 const COOLDOWN_READ_ATTEMPT = 1;
 const COOLDOWN_READ_TEXT_CHARS = 200;
 const COOLDOWN_READ_BODY_BYTES = 4096;
-/** 失敗応答の本文待ちだけ。超えたら本文なしで、同じ停止例外を投げる。 */
+/** 失敗応答の本文待ちの合計。各 read は開始からの残り時間で打ち切る。 */
 const COOLDOWN_READ_BODY_WAIT_MS = 250;
 
 type CooldownReadStage = "fetch" | "http-status" | "json" | "shape";
@@ -103,40 +103,80 @@ function readKind(trace: CooldownReadTrace, error: unknown): string {
   return "exception";
 }
 
-function readWithCap(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<ReadableStreamReadResult<Uint8Array>> {
+function bodyPrefixDeadline(): {
+  promise: Promise<never>;
+  close: () => void;
+  exceeded: () => boolean;
+} {
+  let exceeded = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const promise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      exceeded = true;
+      reject(new Error("body prefix wait exceeded"));
+    }, COOLDOWN_READ_BODY_WAIT_MS);
+  });
+  return {
+    promise,
+    close() {
+      if (timer !== undefined) clearTimeout(timer);
+    },
+    exceeded: () => exceeded,
+  };
+}
+
+function readWithCap(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  deadline: Promise<never>,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  // 締め切り後の cancel が read を拒否しても、その拒否はここで受ける。
+  const pending = reader.read();
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("body prefix wait exceeded")), COOLDOWN_READ_BODY_WAIT_MS);
-    reader.read().then(
-      (result) => { clearTimeout(timer); resolve(result); },
-      (readError: unknown) => { clearTimeout(timer); reject(readError); },
-    );
+    pending.then(resolve, reject);
+    deadline.then(() => {}, reject);
   });
 }
 
 async function readBodyPrefix(response: Response): Promise<string> {
-  if (response.body === null) return await response.text();
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let received = 0;
+  const deadline = bodyPrefixDeadline();
   try {
-    while (received < COOLDOWN_READ_BODY_BYTES) {
-      const next = await readWithCap(reader);
-      if (next.done || !next.value) break;
-      if (next.value.byteLength === 0) continue;
-      const slice = next.value.subarray(0, COOLDOWN_READ_BODY_BYTES - received);
-      chunks.push(slice);
-      received += slice.byteLength;
+    if (response.body === null) return await Promise.race([response.text(), deadline.promise]);
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let received = 0;
+    let timedOut = false;
+    try {
+      while (received < COOLDOWN_READ_BODY_BYTES && !deadline.exceeded()) {
+        let next: ReadableStreamReadResult<Uint8Array>;
+        try {
+          next = await readWithCap(reader, deadline.promise);
+        } catch (error) {
+          if (error instanceof Error && error.message === "body prefix wait exceeded") {
+            timedOut = true;
+            break;
+          }
+          throw error;
+        }
+        if (next.done || !next.value) break;
+        if (next.value.byteLength === 0) continue;
+        const slice = next.value.subarray(0, COOLDOWN_READ_BODY_BYTES - received);
+        chunks.push(slice);
+        received += slice.byteLength;
+      }
+    } finally {
+      try { await reader.cancel(); } catch { /* 計測の打ち切りに失敗しても、取れた先頭は返す。 */ }
     }
+    if (timedOut && received === 0) throw new Error("body prefix wait exceeded");
+    const merged = new Uint8Array(received);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return new TextDecoder("utf-8", { fatal: false }).decode(merged);
   } finally {
-    try { await reader.cancel(); } catch { /* 計測の打ち切りに失敗しても、取れた先頭は返す。 */ }
+    deadline.close();
   }
-  const merged = new Uint8Array(received);
-  let offset = 0;
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return new TextDecoder("utf-8", { fatal: false }).decode(merged);
 }
 
 function cooldownReadDiagLine(

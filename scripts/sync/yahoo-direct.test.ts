@@ -41,7 +41,7 @@ beforeEach(() => {
     return Response.json({ success: true, result: [{ success: true, results, meta: { changes } }] });
   }));
 });
-afterEach(() => { d1.close(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { d1.close(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.useRealTimers(); });
 
 describe("Actions株式の明示direct transport", () => {
   it("現在の共有停止を読み、Yahooもproxyも取得しない", async () => {
@@ -293,5 +293,90 @@ describe("Actions株式の明示direct transport", () => {
     expect(JSON.parse(lines[0] ?? "")).toEqual({ event: "yahoo_stock_direct_cooldown_failed", operation: "persist", globalCooldownGuaranteed: false });
     expect(lines.join("\n")).not.toContain(secret);
     expect(lines.join("\n")).not.toContain("upsert failed");
+  });
+
+  it("細かいチャンクが続いても本文待ちは合計約250msで打ち切られ、同じSTOPを投げる", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const log = vi.spyOn(console, "error").mockImplementation(() => {});
+      const chunkEveryMs = 30;
+      let pulls = 0;
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(new ReadableStream({
+        pull(controller) {
+          pulls += 1;
+          return new Promise((resolve) => {
+            setTimeout(() => {
+              controller.enqueue(new Uint8Array([0x61]));
+              resolve();
+            }, chunkEveryMs);
+          });
+        },
+      }), { status: 502 })));
+      const before = vi.fn();
+      let settled = false;
+      const pending = createStockYahooDirectTransport()(target, before).then(
+        () => { settled = true; return undefined; },
+        (error: unknown) => { settled = true; return error; },
+      );
+      await vi.advanceTimersByTimeAsync(249);
+      expect(settled).toBe(false);
+      expect(before).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(true);
+      const error = await pending;
+      expect(error).toEqual(new YahooSharedCooldownError());
+      expect(error).not.toHaveProperty("cause");
+      expect(direct).not.toHaveBeenCalled();
+      const detail = cooldownReadDiag(log);
+      expect(detail.kind).toBe("http-non-ok");
+      expect(detail.http_status).toBe(502);
+      expect(detail.body_prefix).toBe("a".repeat(Math.floor(249 / chunkEveryMs)));
+      expect(detail.body_error_name).toBeUndefined();
+      expect(detail.body_error_message).toBeUndefined();
+      expect(detail.attempt).toBe(1);
+      expect(detail.elapsed_ms).toEqual(expect.any(Number));
+      expect(Number(detail.elapsed_ms)).toBeLessThan(1_000);
+      expect(pulls).toBe(Math.floor(249 / chunkEveryMs) + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bodyがnullでtext()が返らないときも合計約250msで同じSTOPとbody_errorになる", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const log = vi.spyOn(console, "error").mockImplementation(() => {});
+      const response = new Response(null, { status: 500 });
+      expect(response.body).toBeNull();
+      const text = vi.spyOn(response, "text").mockReturnValue(new Promise(() => {}));
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+      const before = vi.fn();
+      let settled = false;
+      const pending = createStockYahooDirectTransport()(target, before).then(
+        () => { settled = true; return undefined; },
+        (error: unknown) => { settled = true; return error; },
+      );
+      await vi.advanceTimersByTimeAsync(249);
+      expect(settled).toBe(false);
+      expect(before).toHaveBeenCalledTimes(2);
+      expect(text).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(true);
+      const error = await pending;
+      expect(error).toEqual(new YahooSharedCooldownError());
+      expect(error).not.toHaveProperty("cause");
+      expect(direct).not.toHaveBeenCalled();
+      const detail = cooldownReadDiag(log);
+      expect(detail.kind).toBe("http-non-ok");
+      expect(detail.http_status).toBe(500);
+      expect(detail.body_prefix).toBeUndefined();
+      expect(detail.body_error_name).toBe("Error");
+      expect(detail.body_error_message).toBe("body prefix wait exceeded");
+      expect(detail.attempt).toBe(1);
+      expect(detail.elapsed_ms).toEqual(expect.any(Number));
+      expect(Number(detail.elapsed_ms)).toBeLessThan(1_000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
