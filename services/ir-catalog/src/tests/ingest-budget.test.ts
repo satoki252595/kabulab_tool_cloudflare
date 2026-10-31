@@ -1,4 +1,4 @@
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type SQLOutputValue } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -429,6 +429,22 @@ describe("二次投入の対象", () => {
     expect(selected.excludedArchivedKeys).toEqual(["SAVED"]);
   });
 
+  it("同じ公開時刻は tdnetId 昇順", () => {
+    const same = "2026-10-01T00:00:00.000Z";
+    const older = "2026-09-01T00:00:00.000Z";
+    // olderUnsaved を先に積む。key 比較が無い安定ソートなら n-2 が n-10 より前に残る。
+    const selected = selectNotionArchiveRows({
+      batchRows: [
+        disclosureRow("n-10", same),
+        disclosureRow("n-9", older),
+      ],
+      archivedKeys: new Set(),
+      olderUnsaved: [disclosureRow("n-2", same)],
+      limitToUnsaved: true,
+    });
+    expect(selected.rows.map((row) => row.key)).toEqual(["n-9", "n-10", "n-2"]);
+  });
+
   it("再判定のないバックフィルは保存済みも渡す", () => {
     const selected = selectNotionArchiveRows({
       batchRows: [
@@ -535,4 +551,88 @@ describe("予算付き二次投入の D1 選択", () => {
       warn.mockRestore();
     }
   });
+
+  function insertEpoch(tdnetId: string, epochSeconds: number) {
+    sqlite.prepare(
+      `INSERT INTO ir_disclosures
+        (stock_id, tdnet_id, company_code, company_name, title, pubdate, document_url, tags, notion_page_id)
+       VALUES (1, ?, '10010', 'テスト1001', ?, ?, ?, '[]', NULL)`
+    ).run(tdnetId, tdnetId, epochSeconds, `https://example.test/${tdnetId}.pdf`);
+  }
+
+  function seedTiedPubdates() {
+    const same = Math.floor(Date.now() / 1000) - 10 * 86_400;
+    insertEpoch("n-2", same);
+    insertEpoch("n-9", same - 86_400);
+    insertEpoch("n-10", same);
+  }
+
+  async function runTiedLookback() {
+    const db = makeDb(createD1(sqlite));
+    await ingestBatch(db as never, [], {
+      batchKey: "same-pubdate",
+      source: "test",
+      archiveToNotion: false,
+      notionByStock: true,
+      notionByStockBudgetMs: 60_000,
+      unsavedLookbackDays: 40,
+      codeToId: new Map([["1001", 1]]),
+    });
+  }
+
+  it("同じ公開時刻の未保存クエリは pubdate の次に tdnetId 昇順", async () => {
+    seedTiedPubdates();
+    const queries: string[] = [];
+    const original = sqlite.prepare.bind(sqlite);
+    sqlite.prepare = (sql: string) => {
+      queries.push(sql);
+      return original(sql);
+    };
+    try {
+      await runTiedLookback();
+      const tails = queries.flatMap((sql) => {
+        const tail = orderByTail(sql);
+        return tail === undefined ? [] : [tail];
+      });
+      expect(tails).toContain(TIED_PUBDATE_ORDER);
+      expect(tails.every((tail) => tail === TIED_PUBDATE_ORDER)).toBe(true);
+      const source = queries.find((sql) => orderByTail(sql) === TIED_PUBDATE_ORDER);
+      if (source === undefined) throw new Error("並びの SQL が無い");
+      const raw = /order\s+by\s+([\s\S]+?)(?:\s+limit\b|\s+offset\b|$)/i.exec(source);
+      if (raw === null) throw new Error("order by を取り出せない");
+      const ordered = original(`SELECT tdnet_id FROM ir_disclosures ORDER BY ${raw[1].trim()}`).all();
+      expect(readTdnetIds(ordered)).toEqual(["n-9", "n-10", "n-2"]);
+    } finally {
+      sqlite.prepare = original;
+    }
+  });
+
+  it("同じ公開時刻の未保存は tdnetId 昇順で Notion に渡す", async () => {
+    seedTiedPubdates();
+    await runTiedLookback();
+    expect(upsertDisclosuresByStock).toHaveBeenCalledTimes(1);
+    const rows = vi.mocked(upsertDisclosuresByStock).mock.calls[0]![0]!.rows;
+    expect(rows.map((row) => row.key)).toEqual(["n-9", "n-10", "n-2"]);
+  });
 });
+
+const TIED_PUBDATE_ORDER = "pubdate asc, tdnet_id asc";
+
+function orderByTail(sql: string): string | undefined {
+  const matched = /order\s+by\s+([\s\S]+?)(?:\s+limit\b|\s+offset\b|$)/i.exec(sql);
+  if (matched === null) return undefined;
+  return matched[1]
+    .replace(/"/g, "")
+    .replace(/ir_disclosures\./gi, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function readTdnetIds(rows: ReadonlyArray<Record<string, SQLOutputValue>>): string[] {
+  return rows.map((row) => {
+    const id = row.tdnet_id;
+    if (typeof id !== "string" || id === "") throw new Error("tdnet_id が文字列ではありません");
+    return id;
+  });
+}

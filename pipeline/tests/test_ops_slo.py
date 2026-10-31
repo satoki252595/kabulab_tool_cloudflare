@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import UTC, date, datetime, timedelta
 
@@ -1257,6 +1258,56 @@ class TestIrPdfArchiveSlo:
         )
         _wire(monkeypatch, store, ops_check)
         assert ops_check.main([], env=dict(_D1_ENV)) == 1
+
+    def test_同じ公開時刻の未保管サンプルはtdnet_id昇順(self) -> None:
+        """公開時刻が同じ行は tdnet_id の辞書順。挿入順にも数値順にもしない。"""
+        store = _FakeStore()
+        same = self.NOW - 20 * self.DAY
+        older = self.NOW - 30 * self.DAY
+        for tdnet_id, pubdate in (("n-2", same), ("n-9", older), ("n-10", same)):
+            store.query(
+                "INSERT INTO ir_disclosures (tdnet_id, pubdate, notion_page_id)"
+                " VALUES (?, ?, NULL)",
+                [tdnet_id, pubdate],
+            )
+        problems: list[str] = []
+        ops_check._check_ir_pdf_archive(store, problems, now_epoch=self.NOW)
+        assert len(problems) == 1
+        matched = re.search(r"\(tdnetId=([^)]*)\)", problems[0])
+        assert matched is not None
+        assert matched.group(1).split(",") == ["n-9", "n-10", "n-2"]
+        assert ops_check.IR_PDF_GAP_SAMPLE_SQL.endswith(
+            " ORDER BY pubdate ASC, tdnet_id ASC LIMIT 30"
+        )
+
+    def test_サンプルクエリの失敗は未保管を成功にしない(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """COUNT のあと sample だけ失敗したら、欠測のまま失敗にする。
+
+        execute は problems が空のときだけ add_success する。ここが空だと
+        未保管件数を読めたのに tdnetId を落として緑になる。
+        """
+        store = _FakeStore()
+        store.query(
+            "INSERT INTO ir_disclosures (tdnet_id, pubdate, notion_page_id)"
+            " VALUES ('gap-sample', ?, NULL)",
+            [self.NOW - 20 * self.DAY],
+        )
+        store.fail_on_prefix = ("SELECT TDNET_ID",)
+        problems: list[str] = []
+        caplog.set_level(logging.INFO, logger=ops_check.logger.name)
+        ops_check._check_ir_pdf_archive(store, problems, now_epoch=self.NOW)
+        assert store.sql_log.index(ops_check.IR_PDF_GAP_COUNT_SQL) < store.sql_log.index(
+            ops_check.IR_PDF_GAP_SAMPLE_SQL
+        )
+        assert len(problems) == 1
+        text = problems[0]
+        assert "未保管 1 件の tdnetId を読めない: テスト: SELECT TDNET_ID を失敗させる" in text
+        assert "[INC-20261008-kabulab_tool_cloudflare-ir-pdf-502]" in text
+        assert "充足を読めない" not in text
+        assert "notion_page_id が NULL" not in text
+        assert all("未保管は 0 件" not in record.message for record in caplog.records)
 
 
 def _list_item(tdnet_id: str, code: str, when: datetime) -> ops_check.TdnetListItem:
