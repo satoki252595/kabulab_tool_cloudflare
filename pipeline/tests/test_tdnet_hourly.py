@@ -235,6 +235,61 @@ class TestProcessFinancialXbrlSavesDocId:
 class TestFinancialXbrlCommonStrict:
     """本番共通 strict: XBRL 原本の Notion 未保管で開示単位を中止する。"""
 
+    @pytest.mark.parametrize("failed_stage", ["parse", "write_tidy"])
+    @pytest.mark.parametrize("custody_unknown", [False, True])
+    def test_failed_conversion_preserves_raw_and_never_sends_financials(
+        self, monkeypatch, tmp_path, failed_stage, custody_unknown
+    ):
+        """既存writer境界のopaque bytesへ変換/保管faultを注入。金融値は作らない。"""
+        from unittest.mock import Mock
+
+        from jp_stock_pipeline.models import ConvertStatus
+        from jp_stock_pipeline.notion import file_upload
+
+        content = b"zip-bytes"  # 既存transport double。原本bytesの保全だけを検査。
+        monkeypatch.setattr(mod, "fetch", lambda *a, **kw: types.SimpleNamespace(content=content))
+        conversion_error = ValueError("declared conversion failure")
+        monkeypatch.setattr(
+            mod.xbrl_to_csv, "xbrl_zip_to_tidy",
+            Mock(side_effect=conversion_error) if failed_stage == "parse" else Mock(return_value=object()),
+        )
+        monkeypatch.setattr(
+            mod.xbrl_to_csv, "write_tidy",
+            Mock(side_effect=conversion_error) if failed_stage == "write_tidy" else Mock(),
+        )
+        built = Mock(side_effect=AssertionError("failed conversion cannot build financials"))
+        monkeypatch.setattr(mod.normalize, "tidy_to_financial_record", built)
+        ctx, uploaded = _ctx(str(tmp_path), dry_run=False), []
+        custody_error = file_upload.RawUploadUnknownResultError("declared unknown custody")
+
+        def upload(artifact, **kwargs):
+            uploaded.append((artifact, kwargs))
+            assert artifact.local_path.read_bytes() == content
+            assert artifact.convert_status is ConvertStatus.FAILED
+            if custody_unknown:
+                raise custody_error
+            return "raw-page-id"
+
+        ctx.upload_raw = upload
+        ctx.mirror_xbrl_facts = Mock()
+        ctx.persist = Mock()
+        ctx.cloud_financial_summary = Mock()
+        error = custody_error if custody_unknown else conversion_error
+        with pytest.raises(type(error)) as caught:
+            mod._process_financial_xbrl(
+                ctx, _record(), "https://example/xbrl.zip",
+                master_id="M1", master_resolved=True, sha_map={}, sha_map_date=date(2026, 9, 11),
+            )
+        assert caught.value is error and len(uploaded) == 1
+        artifact, kwargs = uploaded[0]
+        assert artifact.doc_id == _record().doc_id
+        assert artifact.qualified_master_page_id == "M1"
+        assert kwargs == {"sha_map": {}, "sha_map_date": date(2026, 9, 11)}
+        built.assert_not_called()
+        ctx.mirror_xbrl_facts.assert_not_called()
+        ctx.persist.assert_not_called()
+        ctx.cloud_financial_summary.assert_not_called()
+
     def test_production_custody_failure_stops_before_financial_record(self, monkeypatch, tmp_path):
         from jp_stock_pipeline.notion import file_upload
 

@@ -47,12 +47,13 @@ uv run pytest        # テスト
 SHA256を照合して共有parserで再生成します。既定は **Notion/D1 とも読み取りだけ**です。
 
 ```bash
-nix develop -c uv run --env-file .env --project pipeline python pipeline/scripts/reparse_financials_from_notion.py --journal /tmp/financial-audit.jsonl
-# 先行確認だけなら --code 8154 / --future-after 2026-09-28 / --limit N
-# を追加する。サンプルは全件合格として扱わない。
+nix develop -c uv run --env-file .env --project pipeline python pipeline/scripts/reparse_financials_from_notion.py --code 8154 --journal /tmp/financial-audit.jsonl
+# --code は複数指定可。--limit は処理行数だけを制限し、読取HTTP上限にはならない。
+# 通信量と絶対期限を固定するNULL分類は上の audit:financial:null を使う。
 ```
 
-⑤をsource/データ基準日/原本種別で一括queryし、Notion APIは既定2.5rps、
+選択した③の一意な原本relationだけを直接GETし、同じsource/データ基準日の重複GETを省く。
+同日の全市場原本は先読みしない。Notion APIは既定2.5rps、
 保存済みファイルは4接続を再利用して並列取得します。ファイルはstreamで圧縮64MiB、展開128MiBを
 上限とし、超過・ハッシュ不一致・期末/連結区分未確定は失敗をjournalへ残します。
 期限付きファイルURLはログやjournalへ出しません。原本をSHA名でcacheし、同じ
