@@ -473,7 +473,7 @@ describe("local summary generation/import boundary", () => {
     expect(rows()[0]).toMatchObject({ shortSummary: "QUOカード 3,000円分", estimatedValue: 3000 });
     const run = readdirSync(dir).find(name => name !== "progress.json")!;
     const pre = JSON.parse(gunzipSync(readFileSync(join(dir, run, "pre-import.json.gz"))).toString());
-    expect(pre).toMatchObject({ model: null, revision: null, protocol: "", deterministicRule: "simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v14" });
+    expect(pre).toMatchObject({ model: null, revision: null, protocol: "", deterministicRule: "simple-face-value-one-of-holding-record-tier-shipping-admission-point-exchange-v15" });
     expect(parseTaskFile(readFileSync(join(dir, run, "model-tasks.jsonl"), "utf8"))).toEqual([]);
   });
   it("全文1点選択はモデル0で通常PRE/原子取込/POSTへ通し、選択肢の掲載額を評価しない", async () => {

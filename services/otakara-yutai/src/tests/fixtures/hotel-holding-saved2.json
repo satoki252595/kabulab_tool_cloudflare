@@ -1,0 +1,31 @@
+{
+  "privateFixtureSha256": "54ab493ef703f8228bb402844805f03e511dd6ce02fef04efaa8af83eecf5091",
+  "sourceFileSha256": "190c66310fe3cf165796b8df4893cefd21169ccd7a9eeef7124f06472d15156e",
+  "historicalFixtureNotCurrentPendingCount": true,
+  "groups": [
+    {
+      "sourceSha256": "d5ff2d37414fce803d49b749c5aeaaa02c74fb293fc11643963528b148514914",
+      "recipients": [
+        {
+          "minShares": 200,
+          "recordMonth": 8,
+          "recordDate": null
+        }
+      ],
+      "expectedSummarySha256": "58fd332d74c348663db30c72f22421bdc8f89706e76e1875ee4f51c029ea0454",
+      "summaryCharacters": 120
+    },
+    {
+      "sourceSha256": "7ebe977949d4bebdedab8563275eda0a38476a4c300a2b783609711d1ba83ea8",
+      "recipients": [
+        {
+          "minShares": 4000,
+          "recordMonth": 8,
+          "recordDate": null
+        }
+      ],
+      "expectedSummarySha256": "74e9a0f3ecf580ada5f9de04af87745cc1351449d75753182d61046e33fe9a8e",
+      "summaryCharacters": 102
+    }
+  ]
+}

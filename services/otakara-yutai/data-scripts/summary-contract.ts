@@ -23,7 +23,7 @@
 
 import { createHash } from "node:crypto";
 import { HEADED_MARK, splitHeadedDescription } from "./estimated-value-guard.js";
-import { compileAnnualGiftHistoryLiteral, compileBankHoldingHistoryLiteral, compileDepartmentHoldingLiteral, compileHoldingPointCarryLiteral, compilePointExchangeLiteral, compilePremiumClubCarryLiteral, compileVenueAdmissionLiteral } from "./holding-structure.js";
+import { compileAnnualGiftHistoryLiteral, compileBankHoldingHistoryLiteral, compileDepartmentHoldingLiteral, compileHoldingPointCarryLiteral, compileHotelHoldingLiteral, compilePointExchangeLiteral, compilePremiumClubCarryLiteral, compileVenueAdmissionLiteral } from "./holding-structure.js";
 
 /**
  * 要約契約の版。タスクファイルと結果ファイルの各行に載り、取り込み時に
@@ -31,7 +31,7 @@ import { compileAnnualGiftHistoryLiteral, compileBankHoldingHistoryLiteral, comp
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-10-26.1";
+export const SUMMARY_CONTRACT_VERSION = "2026-10-26.2";
 
 /** 比較時だけ同じ月期間の表記を揃え、数値・比較条件・保存文面は変えない。 */
 function normalizeMonthPeriods(text: string): string {
@@ -126,6 +126,12 @@ export function isSummaryNumbersGrounded(
   context: { minShares: readonly number[]; recordMonths: readonly number[]; recordDates?: readonly (string | null)[] },
 ): boolean {
   const normalized = shortSummary.normalize("NFKC").trim();
+  const hotelHolding = compileHotelHoldingLiteral(description);
+  // 歴史100株・100株毎加算・初年度比は現在tierではない。全文/完全句/単一実recipientだけ。
+  if (hotelHolding !== null || normalized.includes("継続条件:毎年")) return hotelHolding !== null && normalized === hotelHolding.shortSummary &&
+    context.minShares.length === 1 && context.minShares[0] === hotelHolding.minShares &&
+    context.recordMonths.length === 1 && context.recordMonths[0] === 8 &&
+    context.recordDates?.length === 1 && context.recordDates[0] === null;
   const bankHistory = compileBankHoldingHistoryLiteral(description);
   // 全文1件・完全句・全recipientだけ。歴史1000株で現在3000株を置き換えない。
   if (bankHistory !== null || normalized.includes("継続条件:通常")) return bankHistory !== null && normalized === bankHistory.shortSummary &&

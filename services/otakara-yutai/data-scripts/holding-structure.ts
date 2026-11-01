@@ -2,6 +2,32 @@ import { createHash } from "node:crypto";
 import type { BenefitHoldingStructure } from "../src/public-facts.js";
 import { splitHeadedDescription } from "./estimated-value-guard.js";
 
+/** 保存全文2件だけ。期間別額・株数毎加算・倍率と歴史保有条件を現在tierから分離する。 */
+export function compileHotelHoldingLiteral(description: string): { shortSummary: string; minShares: number } | null {
+  const hash = createHash("sha256").update(description).digest("hex");
+  const minShares = hash === "d5ff2d37414fce803d49b749c5aeaaa02c74fb293fc11643963528b148514914" ? 200
+    : hash === "7ebe977949d4bebdedab8563275eda0a38476a4c300a2b783609711d1ba83ea8" ? 4000 : null;
+  if (minShares === null) return null;
+  const body = splitHeadedDescription(description).body;
+  const tiers = [...body.matchAll(/^【([1-4]年(?:未満|以上))保有】\n([^\n]+)/gm)];
+  if (tiers.length !== 5) return null;
+  // 末尾の4桁を「万」へ表記正規化するだけ。加算・倍率から金額を生成しない。
+  const yen = (text: string) => text.replaceAll(",", "").replace(/0{4}$/u, "万");
+  let benefit: string;
+  if (minShares === 200) {
+    const base = /^([0-9,]+)円相当分$/u.exec(tiers[0][2]);
+    const step = /^以降([0-9]+)株ごとに([0-9,]+)円相当を追加進呈$/mu.exec(body);
+    const multiples = tiers.slice(1).map(tier => /^初年度の ([0-9.]+) 倍$/u.exec(tier[2]));
+    if (base === null || step === null || multiples.some(value => value === null)) return null;
+    benefit = `${tiers[0][1]}${yen(base[1])}円相当、以降${step[1]}株毎${yen(step[2])}円相当追加。初年度比${tiers.slice(1).map((tier, i) => `${tier[1]}${multiples[i]![1]}倍`).join("/")}`;
+  } else {
+    const amounts = tiers.map(tier => /^([0-9,]+)円相当分$/u.exec(tier[2]));
+    if (amounts.some(value => value === null)) return null;
+    benefit = `保有${tiers.map((tier, i) => `${tier[1]}${yen(amounts[i]![1])}`).join("/")}円相当`;
+  }
+  return { minShares, shortSummary: `指定ホテル宿泊割引券:${benefit}。継続条件:毎年8月末まで同一株主番号100株以上継続保有。詳細はがき2026年11月上旬送付` };
+}
+
 /** 保存全文1件だけ。通常・特例の保有期間と歴史的名簿条件を現在tierへ転用しない。 */
 export function compileBankHoldingHistoryLiteral(description: string): { shortSummary: string; listedYen: number } | null {
   if (createHash("sha256").update(description).digest("hex") !== "4482e903938f82100c0e98e972f9da38c00858e4ff2544b3456de6d5970c67d4") return null;
