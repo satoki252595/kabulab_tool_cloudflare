@@ -38,6 +38,8 @@ uv run pytest        # テスト
 
 `pnpm audit:financial:null`はコードファイル全SHA・code/page/HTTP上限・絶対期限を必須にして、③をコード別に薄く読む。原本API・モデル・業務書込は0。既存再解析CLIの`--diagnose-capture`でexact原本snapshotとlocal全SHA原本を結び、共有normalizerの実分岐で項目別の理由を確認できる。原本不足・多値・key不成立はHOLD。[入力形式と手順](../docs/financial-null-audit.md)。`--limit`付き旧auditは読取HTTP上限の代用にしない。
 
+IFRSの主要経営指標に掲載された営業CF・財務CF・ROEも、当期・連結区分・全社範囲・単位が揃った実値だけを使う。税引前利益は経常利益と異なるため、実績・予想とも経常利益の代用にしない。既存の税前混入値を訂正する場合も、対象原本を固定した通常再解析journalとfresh正本guardを経て個別に判断する。コード変更だけで既存値を一括NULLへ書き換えない。
+
 ### 原本から財務の期末・連結区分・中間期を再検証
 
 2026-09-28 に、年度末 DEI を四半期末として使う経路、配当/メタ情報の既定連結が

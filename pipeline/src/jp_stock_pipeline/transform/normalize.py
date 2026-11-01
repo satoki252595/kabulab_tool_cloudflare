@@ -60,10 +60,10 @@ ELEMENT_CANDIDATES: dict[str, tuple[str, ...]] = {
         "OperatingProfitLossIFRS",
     ),
     "ordinary_income": (
+        # 税引前利益は経常利益と同義ではない。IFRSの実績/予想も代用しない。
         "OrdinaryIncome",
         "OrdinaryProfit",
         "OrdinaryProfitLoss",
-        "ProfitBeforeTaxIFRS",
     ),
     "net_income": (
         "ProfitAttributableToOwnersOfParent",
@@ -117,12 +117,14 @@ ELEMENT_CANDIDATES: dict[str, tuple[str, ...]] = {
     # TDnet短信の自己資本当期純利益率もpure小数で、同じ期・連結区分を守る。
     "roe_pct": (
         "RateOfReturnOnEquitySummaryOfBusinessResults",
+        "RateOfReturnOnEquityIFRSSummaryOfBusinessResults",
         "NetIncomeToShareholdersEquityRatio",
     ),
     "cf_operating": (
         "CashFlowsFromOperatingActivities",
         "NetCashProvidedByUsedInOperatingActivities",
         "CashFlowsFromUsedInOperatingActivitiesIFRS",
+        "CashFlowsFromUsedInOperatingActivitiesIFRSSummaryOfBusinessResults",
     ),
     "cf_investing": (
         "CashFlowsFromInvestingActivities",
@@ -139,6 +141,7 @@ ELEMENT_CANDIDATES: dict[str, tuple[str, ...]] = {
         "CashFlowsFromFinancingActivities",
         "NetCashProvidedByUsedInFinancingActivities",
         "CashFlowsFromUsedInFinancingActivitiesIFRS",
+        "CashFlowsFromUsedInFinancingActivitiesIFRSSummaryOfBusinessResults",
     ),
     "dps": (
         "DividendPerShare",

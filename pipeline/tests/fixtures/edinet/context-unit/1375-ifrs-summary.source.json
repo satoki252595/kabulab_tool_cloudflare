@@ -1,0 +1,18 @@
+{
+  "file": "1375-ifrs-summary.tsv",
+  "datatype": "csv",
+  "code": "1375",
+  "page_id": "38dd74ff-84cd-81cf-bf80-e14406034e16",
+  "raw_sha256": "5a5fd74ff9505e0147896193fe2e2cbbc26b0073fdd8628da73edcd4c1b59167",
+  "raw_url": "https://api.edinet-fsa.go.jp/api/v2/documents/S100YK0W?type=5",
+  "fiscal_period_end": "2026-03-31",
+  "disclosure_type": "本決算",
+  "accounting_standard": "IFRS",
+  "expected": {
+    "cf_operating": 4534000000,
+    "cf_financing": -2406000000,
+    "roe_pct": 21.8,
+    "ordinary_income": null,
+    "forecast_ordinary_income": null
+  }
+}

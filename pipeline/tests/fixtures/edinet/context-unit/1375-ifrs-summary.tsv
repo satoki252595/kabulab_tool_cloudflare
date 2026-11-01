@@ -1,0 +1,43 @@
+要素ID	項目名	コンテキストID	相対年度	連結・個別	期間・時点	ユニットID	単位	値
+jpcrp_cor:ProfitLossBeforeTaxIFRSSummaryOfBusinessResults	税引前利益又は税引前損失（△）（IFRS）、経営指標等	Prior4YearDuration	四期前	その他	期間	JPY	円	4564000000
+jpcrp_cor:ProfitLossBeforeTaxIFRSSummaryOfBusinessResults	税引前利益又は税引前損失（△）（IFRS）、経営指標等	Prior3YearDuration	三期前	その他	期間	JPY	円	1794000000
+jpcrp_cor:ProfitLossBeforeTaxIFRSSummaryOfBusinessResults	税引前利益又は税引前損失（△）（IFRS）、経営指標等	Prior2YearDuration	前々期	その他	期間	JPY	円	2227000000
+jpcrp_cor:ProfitLossBeforeTaxIFRSSummaryOfBusinessResults	税引前利益又は税引前損失（△）（IFRS）、経営指標等	Prior1YearDuration	前期	その他	期間	JPY	円	2175000000
+jpcrp_cor:ProfitLossBeforeTaxIFRSSummaryOfBusinessResults	税引前利益又は税引前損失（△）（IFRS）、経営指標等	CurrentYearDuration	当期	その他	期間	JPY	円	4195000000
+jpcrp_cor:RateOfReturnOnEquityIFRSSummaryOfBusinessResults	親会社所有者帰属持分利益率（IFRS）、経営指標等	Prior4YearDuration	四期前	その他	期間	pure		0.303
+jpcrp_cor:RateOfReturnOnEquityIFRSSummaryOfBusinessResults	親会社所有者帰属持分利益率（IFRS）、経営指標等	Prior3YearDuration	三期前	その他	期間	pure		0.113
+jpcrp_cor:RateOfReturnOnEquityIFRSSummaryOfBusinessResults	親会社所有者帰属持分利益率（IFRS）、経営指標等	Prior2YearDuration	前々期	その他	期間	pure		0.124
+jpcrp_cor:RateOfReturnOnEquityIFRSSummaryOfBusinessResults	親会社所有者帰属持分利益率（IFRS）、経営指標等	Prior1YearDuration	前期	その他	期間	pure		0.126
+jpcrp_cor:RateOfReturnOnEquityIFRSSummaryOfBusinessResults	親会社所有者帰属持分利益率（IFRS）、経営指標等	CurrentYearDuration	当期	その他	期間	pure		0.218
+jpcrp_cor:CashFlowsFromUsedInOperatingActivitiesIFRSSummaryOfBusinessResults	営業活動によるキャッシュ・フロー（IFRS）、経営指標等	Prior4YearDuration	四期前	その他	期間	JPY	円	5606000000
+jpcrp_cor:CashFlowsFromUsedInOperatingActivitiesIFRSSummaryOfBusinessResults	営業活動によるキャッシュ・フロー（IFRS）、経営指標等	Prior3YearDuration	三期前	その他	期間	JPY	円	3101000000
+jpcrp_cor:CashFlowsFromUsedInOperatingActivitiesIFRSSummaryOfBusinessResults	営業活動によるキャッシュ・フロー（IFRS）、経営指標等	Prior2YearDuration	前々期	その他	期間	JPY	円	5322000000
+jpcrp_cor:CashFlowsFromUsedInOperatingActivitiesIFRSSummaryOfBusinessResults	営業活動によるキャッシュ・フロー（IFRS）、経営指標等	Prior1YearDuration	前期	その他	期間	JPY	円	5519000000
+jpcrp_cor:CashFlowsFromUsedInOperatingActivitiesIFRSSummaryOfBusinessResults	営業活動によるキャッシュ・フロー（IFRS）、経営指標等	CurrentYearDuration	当期	その他	期間	JPY	円	4534000000
+jpcrp_cor:CashFlowsFromUsedInFinancingActivitiesIFRSSummaryOfBusinessResults	財務活動によるキャッシュ・フロー（IFRS）、経営指標等	Prior4YearDuration	四期前	その他	期間	JPY	円	-3107000000
+jpcrp_cor:CashFlowsFromUsedInFinancingActivitiesIFRSSummaryOfBusinessResults	財務活動によるキャッシュ・フロー（IFRS）、経営指標等	Prior3YearDuration	三期前	その他	期間	JPY	円	-2767000000
+jpcrp_cor:CashFlowsFromUsedInFinancingActivitiesIFRSSummaryOfBusinessResults	財務活動によるキャッシュ・フロー（IFRS）、経営指標等	Prior2YearDuration	前々期	その他	期間	JPY	円	-227000000
+jpcrp_cor:CashFlowsFromUsedInFinancingActivitiesIFRSSummaryOfBusinessResults	財務活動によるキャッシュ・フロー（IFRS）、経営指標等	Prior1YearDuration	前期	その他	期間	JPY	円	-2159000000
+jpcrp_cor:CashFlowsFromUsedInFinancingActivitiesIFRSSummaryOfBusinessResults	財務活動によるキャッシュ・フロー（IFRS）、経営指標等	CurrentYearDuration	当期	その他	期間	JPY	円	-2406000000
+jpigp_cor:RevenueIFRS	売上収益（IFRS）	Prior1YearDuration	前期	その他	期間	JPY	円	37102000000
+jpigp_cor:RevenueIFRS	売上収益（IFRS）	CurrentYearDuration	当期	その他	期間	JPY	円	37845000000
+jpigp_cor:ProfitLossBeforeTaxIFRS	継続事業からの税引前利益（△損失）（IFRS）	Prior1YearDuration	前期	その他	期間	JPY	円	2175000000
+jpigp_cor:ProfitLossBeforeTaxIFRS	継続事業からの税引前利益（△損失）（IFRS）	CurrentYearDuration	当期	その他	期間	JPY	円	4195000000
+jpigp_cor:ProfitLossBeforeTaxIFRS	継続事業からの税引前利益（△損失）（IFRS）	Prior1YearDuration	前期	その他	期間	JPY	円	2175000000
+jpigp_cor:ProfitLossBeforeTaxIFRS	継続事業からの税引前利益（△損失）（IFRS）	CurrentYearDuration	当期	その他	期間	JPY	円	4195000000
+jpigp_cor:RevenueIFRS	売上収益（IFRS）	Prior1YearDuration_jpcrp030000-asr_E00007-000MushroomBusinessReportableSegmentMember	前期	その他	期間	JPY	円	36779000000
+jpigp_cor:RevenueIFRS	売上収益（IFRS）	Prior1YearDuration_OperatingSegmentsNotIncludedInReportableSegmentsAndOtherRevenueGeneratingBusinessActivitiesMember	前期	その他	期間	JPY	円	322000000
+jpigp_cor:RevenueIFRS	売上収益（IFRS）	Prior1YearDuration_TotalOfReportableSegmentsAndOthersMember	前期	その他	期間	JPY	円	37102000000
+jpigp_cor:RevenueIFRS	売上収益（IFRS）	Prior1YearDuration_ReconcilingItemsMember	前期	その他	期間	JPY	円	－
+jpigp_cor:RevenueIFRS	売上収益（IFRS）	Prior1YearDuration	前期	その他	期間	JPY	円	37102000000
+jpigp_cor:ProfitLossBeforeTaxIFRS	継続事業からの税引前利益（△損失）（IFRS）	Prior1YearDuration	前期	その他	期間	JPY	円	2175000000
+jpigp_cor:RevenueIFRS	売上収益（IFRS）	CurrentYearDuration_jpcrp030000-asr_E00007-000MushroomBusinessReportableSegmentMember	当期	その他	期間	JPY	円	37471000000
+jpigp_cor:RevenueIFRS	売上収益（IFRS）	CurrentYearDuration_OperatingSegmentsNotIncludedInReportableSegmentsAndOtherRevenueGeneratingBusinessActivitiesMember	当期	その他	期間	JPY	円	373000000
+jpigp_cor:RevenueIFRS	売上収益（IFRS）	CurrentYearDuration_TotalOfReportableSegmentsAndOthersMember	当期	その他	期間	JPY	円	37845000000
+jpigp_cor:RevenueIFRS	売上収益（IFRS）	CurrentYearDuration_ReconcilingItemsMember	当期	その他	期間	JPY	円	－
+jpigp_cor:RevenueIFRS	売上収益（IFRS）	CurrentYearDuration	当期	その他	期間	JPY	円	37845000000
+jpigp_cor:ProfitLossBeforeTaxIFRS	継続事業からの税引前利益（△損失）（IFRS）	CurrentYearDuration	当期	その他	期間	JPY	円	4195000000
+jpdei_cor:AccountingStandardsDEI	会計基準、DEI	FilingDateInstant	提出日時点	その他	時点	－	－	IFRS
+jpdei_cor:WhetherConsolidatedFinancialStatementsArePreparedDEI	連結決算の有無、DEI	FilingDateInstant	提出日時点	その他	時点	－	－	true
+jpdei_cor:CurrentPeriodEndDateDEI	当会計期間終了日、DEI	FilingDateInstant	提出日時点	その他	時点	－	－	2026-03-31
+jpdei_cor:TypeOfCurrentPeriodDEI	当会計期間の種類、DEI	FilingDateInstant	提出日時点	その他	時点	－	－	FY
