@@ -96,8 +96,9 @@ describe("日本引け原本の翌朝持越し", () => {
     expect(vi.mocked(fetchChart).mock.calls.map(([symbol]) => symbol)).toEqual(["^N225", "^VIX", "^GSPC", "NIY=F"]);
     expect(fetchNikkeiVi).toHaveBeenCalledTimes(1);
     expect(fetchChart).toHaveBeenCalledTimes(4);
-    expect(writes).toHaveLength(1);
-    expect(writes[0].params[0]).toBe(date);
+    const inserts = writes.filter((row) => row.sql.includes("insert"));
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0].params[0]).toBe(date);
     const composite = vi.mocked(recordPrimaryData).mock.calls.at(-1)![0];
     expect(composite.files?.map((file) => file.filename).sort()).toEqual(["macro-GSPC-attempt0.json", "macro-NIY-attempt0.json", "macro-VIX-attempt0.json", "macro-manifest.json"]);
     expect(verifyArchivedAttachments).toHaveBeenCalledTimes(3);

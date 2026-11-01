@@ -64,10 +64,10 @@ import {
 import { sha256HexBytes } from "../shared/sha256.js";
 import type { StockCorporateDiagnostics } from "../shared/yahoo/stock-corporate-events.js";
 import { collectOfficialRightsCustody, type OfficialRightsCustody } from "./rights-official-custody.js";
-import { diagnoseConfirmedCloses, selectConfirmedCloses } from "./macro-session.js";
+import { confirmedCloseOnDate, diagnoseConfirmedCloses, selectConfirmedCloses } from "./macro-session.js";
 import { marketClosure } from "../shared/market-calendar.js";
 import { captureMacroJpLeg, loadMacroJpLeg, macroJpCacheKey, type MacroJpLeg, type MacroJpLegStore } from "./macro-jp-leg.js";
-import { formatConfirmedHoldDiag, formatNullBandHoldLog, formatStockSessionDiag } from "./inc-financials-stale-diag.js";
+import { INC_FINANCIALS_STALE_TAG, formatConfirmedHoldDiag, formatNullBandHoldLog, formatStockSessionDiag } from "./inc-financials-stale-diag.js";
 import { finishNullBarsSummaryLine, logFreshCloseNullBars, startNullBarsRun } from "./inc-stock-sync-null-bars-diag.js";
 
 // core スキーマ (共有。日次 sync が更新)
@@ -359,6 +359,11 @@ interface MarketContextDraft {
   nikkeiVi: number | null;
   /** VI の ZXD (データ日付)。行キーとの照合に使う。 */
   nikkeiViDate: string | null;
+}
+/** 定時 run が既に取得した 1mo chart。欠け日はここから日付 d の bar だけを使う。 */
+interface MacroChartCapture {
+  raw: Uint8Array;
+  ohlcv: DailyOhlcv[];
 }
 /** マクロ一次原本の run-local collector (1 target × attempt ごとに 1 件)。 */
 interface MacroRawAttempt {
@@ -1809,6 +1814,40 @@ async function runDailySyncAndRecord(
   };
 }
 
+/**
+ * 定時マクロが欠け日を探す暦日数（終端日を含む）。
+ *
+ * chart range は 1mo のまま。欠けた日 d の bar は、その取得済み応答に
+ * 日付 d が残っているときだけ証明できる。30 暦日はその応答に収まる範囲で、
+ * 2026-11-02 の定時から 2026-10-30 をまだ窓に含む。これより長い窓は、
+ * 1mo から落ちた日を別取得や別日の値で埋めることになる。
+ * ops_check の MACRO_CONTEXT_GAP_LOOKBACK_DAYS と同じ値。
+ */
+export const MACRO_CONTEXT_GAP_LOOKBACK_DAYS = 30;
+
+/** 終端日を含む直近 N 暦日のうち、JPX と NYSE が両方開いている日。昇順。 */
+export function macroContextGapDates(
+  endDate: string,
+  lookbackDays = MACRO_CONTEXT_GAP_LOOKBACK_DAYS
+): string[] {
+  if (!Number.isInteger(lookbackDays) || lookbackDays < 1) {
+    throw new Error(`マクロ欠け日の窓が不正です: ${lookbackDays}`);
+  }
+  const endMs = Date.parse(`${endDate}T00:00:00Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(endDate) || !Number.isFinite(endMs) ||
+      new Date(endMs).toISOString().slice(0, 10) !== endDate) {
+    throw new Error(`マクロ欠け日の終端日が不正です: ${endDate}`);
+  }
+  const dates: string[] = [];
+  for (let i = lookbackDays - 1; i >= 0; i--) {
+    const date = new Date(endMs - i * 86_400_000).toISOString().slice(0, 10);
+    if (marketClosure("JPX", date) === null && marketClosure("NYSE", date) === null) {
+      dates.push(date);
+    }
+  }
+  return dates;
+}
+
 /** 米国市場の取引終了後にマクロだけ同期。銘柄全量・株価同期完了記録は触らない。 */
 export async function runMarketContextSync(db: Db, jpLegStore?: MacroJpLegStore): Promise<boolean> {
   const startedAt = Date.now();
@@ -1824,6 +1863,8 @@ export async function runMarketContextSync(db: Db, jpLegStore?: MacroJpLegStore)
     if (Date.now() > Date.parse(`${targetDate}T22:00:00.000Z`)) {
       throw new Error("定時マクロの保存期限22:00 UTCを超過しました");
     }
+    // 不正なフラグは Yahoo を叩く前に止める。未設定は検出のみで、ここでは throw しない。
+    sharedEnv.MACRO_CONTEXT_GAP_FILL();
   }
   const nativeWindow = nativeJobExecutionWindow(startedAt, sharedEnv.BATCH_JOB_STARTED_AT(), 360, 10);
   let deadline = scheduled ? scheduledMacroWindow(targetDate).deadline : undefined;
@@ -1863,7 +1904,7 @@ export async function runMarketContextSync(db: Db, jpLegStore?: MacroJpLegStore)
   const context = await fetchMarketContextDraft(jpLeg, assertSource);
   const recovery = await recoverTransientDailyFailures(
     context.failures,
-    (target) => fetchMarketContextTarget(context.draft, target, context.collector, assertSource),
+    (target) => fetchMarketContextTarget(context.draft, target, context.collector, assertSource, context.captured),
     { retry: false, deadlineMs: startedAt + RECOVERY_TIME_BUDGET_MS },
   );
   for (const failure of recovery.failures) {
@@ -1873,6 +1914,9 @@ export async function runMarketContextSync(db: Db, jpLegStore?: MacroJpLegStore)
     scheduled ? targetDate : undefined,
     () => { if (nativeWindow !== undefined) assertActive(); if (context.sourceStop) throw context.sourceStop; }, jpLeg?.reference);
   if (context.sourceStop) throw context.sourceStop;
+  if (scheduled && saved && jpLegStore !== undefined) {
+    await reconcileMissingMarketContext(db, jpLegStore, targetDate, context.captured);
+  }
   return saved;
   } finally { restore?.(); }
 }
@@ -3200,7 +3244,8 @@ async function fetchMarketContextTarget(
   draft: MarketContextDraft,
   target: MarketContextTarget,
   collector: MacroRawAttempt[],
-  beforeSource?: () => void
+  beforeSource?: () => void,
+  captured?: Map<MarketContextChartSymbol, MacroChartCapture>
 ): Promise<void> {
   const requestedAt = new Date().toISOString();
   if (target === NIKKEI_VI_TARGET) {
@@ -3255,6 +3300,7 @@ async function fetchMarketContextTarget(
       );
       return;
     }
+    captured?.set(target, { raw: raw.bytes, ohlcv: chart.ohlcv });
     if (target === "NIY=F") {
       // NIY は confirmed helper の対象外。snapshot をそのまま使う
       // (確定日足扱いしない。日付は最新バー日で照合には使わない)。
@@ -3305,9 +3351,11 @@ async function fetchMarketContextDraft(jpLeg?: MacroJpLeg, beforeSource?: () => 
   failures: DailyRecoveryFailure<MarketContextTarget>[];
   collector: MacroRawAttempt[];
   sourceStop: Error | null;
+  captured: Map<MarketContextChartSymbol, MacroChartCapture>;
 }> {
   const draft = createMarketContextDraft();
   const collector: MacroRawAttempt[] = [];
+  const captured = new Map<MarketContextChartSymbol, MacroChartCapture>();
   const failures: DailyRecoveryFailure<MarketContextTarget>[] = [];
   if (jpLeg !== undefined) {
     draft.charts["^N225"] = { price: jpLeg.n225.value, prevClose: jpLeg.n225.prev, date: jpLeg.n225.date };
@@ -3322,7 +3370,7 @@ async function fetchMarketContextDraft(jpLeg?: MacroJpLeg, beforeSource?: () => 
   for (const target of targets) {
     try {
       beforeSource?.();
-      await fetchMarketContextTarget(draft, target, collector, beforeSource);
+      await fetchMarketContextTarget(draft, target, collector, beforeSource, captured);
       // 必須N225の確定日・終値・前日終値がHOLDなら、残り4取得元を叩いても保存できない。
       // 同一応答原本の保管・readbackは呼出側で続け、古値で補わず失敗を返す。
       if (target === "^N225" &&
@@ -3344,7 +3392,7 @@ async function fetchMarketContextDraft(jpLeg?: MacroJpLeg, beforeSource?: () => 
     }
   }
 
-  return { draft, failures, collector, sourceStop };
+  return { draft, failures, collector, sourceStop, captured };
 }
 
 interface MarketContextGate {
@@ -3410,6 +3458,45 @@ function decideMarketContextGate(draft: MarketContextDraft, expectedDate?: strin
   return { ok: true, key, reason: "確定日・必須値が一致" };
 }
 
+function marketContextValues(draft: MarketContextDraft, today: string) {
+  const n225 = draft.charts["^N225"];
+  const vix = draft.charts["^VIX"];
+  const gspc = draft.charts["^GSPC"];
+  const niy = draft.charts["NIY=F"];
+  const nikkeiVi = draft.nikkeiVi;
+  const nikkeiPct =
+    n225.price !== null && n225.prevClose !== null && n225.prevClose > 0
+      ? ((n225.price - n225.prevClose) / n225.prevClose) * 100
+      : null;
+  const sp500Pct =
+    gspc.price !== null && gspc.prevClose !== null && gspc.prevClose > 0
+      ? ((gspc.price - gspc.prevClose) / gspc.prevClose) * 100
+      : null;
+  const futuresGap =
+    niy.price !== null && n225.price !== null ? niy.price - n225.price : null;
+  // TOPIX 売買代金は Yahoo から取れない
+  const topixTurnoverRatio = null;
+  const result = judgeMacro({
+    nikkeiVi,
+    topixTurnoverRatio,
+    futuresGap,
+    vix: vix.price,
+    sp500Pct,
+  });
+  return {
+    date: today,
+    nikkeiClose: n225.price,
+    nikkeiPct,
+    nikkeiVi,
+    topixTurnoverRatio,
+    futuresGap,
+    vix: vix.price,
+    sp500Pct,
+    judgment: result.judgment,
+    judgmentReason: result.reason,
+  };
+}
+
 async function persistMarketContext(
   db: Db,
   draft: MarketContextDraft,
@@ -3428,48 +3515,10 @@ async function persistMarketContext(
   if (expectedDate !== undefined && Date.now() > Date.parse(`${expectedDate}T22:00:00.000Z`)) {
     throw new Error("定時マクロの保存期限22:00 UTCを超過しました");
   }
-  const n225 = draft.charts["^N225"];
-  const vix = draft.charts["^VIX"];
-  const gspc = draft.charts["^GSPC"];
-  const niy = draft.charts["NIY=F"];
-  const nikkeiVi = draft.nikkeiVi;
-
-  const nikkeiPct =
-    n225.price !== null && n225.prevClose !== null && n225.prevClose > 0
-      ? ((n225.price - n225.prevClose) / n225.prevClose) * 100
-      : null;
-  const sp500Pct =
-    gspc.price !== null && gspc.prevClose !== null && gspc.prevClose > 0
-      ? ((gspc.price - gspc.prevClose) / gspc.prevClose) * 100
-      : null;
-  const futuresGap =
-    niy.price !== null && n225.price !== null ? niy.price - n225.price : null;
-
-  // TOPIX 売買代金は Yahoo から取れない
-  const topixTurnoverRatio = null;
-
-  const result = judgeMacro({
-    nikkeiVi,
-    topixTurnoverRatio,
-    futuresGap,
-    vix: vix.price,
-    sp500Pct,
-  });
 
   await db
     .insert(swingSchema.marketContext)
-    .values({
-      date: today,
-      nikkeiClose: n225.price,
-      nikkeiPct,
-      nikkeiVi,
-      topixTurnoverRatio,
-      futuresGap,
-      vix: vix.price,
-      sp500Pct,
-      judgment: result.judgment,
-      judgmentReason: result.reason,
-    })
+    .values(marketContextValues(draft, today))
     .onConflictDoUpdate({
       target: swingSchema.marketContext.date,
       set: {
@@ -3489,6 +3538,111 @@ async function persistMarketContext(
   // ここまで来たら gate が必須値の完全性を保証済み。INSERT 後の
   // 部分行チェックは gate 前へ移動したので true を返す。
   return true;
+}
+
+function exactBarClose(bars: readonly DailyOhlcv[], date: string): number | null {
+  const hits = bars.filter((bar) => bar.date === date);
+  if (hits.length !== 1) return null;
+  return isUsableClose(hits[0].close) ? hits[0].close : null;
+}
+
+function emptyChartValue(): MarketContextChartValue {
+  return { price: null, prevClose: null, date: null };
+}
+
+function chartValueFromConfirmed(
+  close: { value: number; prev: number | null; date: string } | null
+): MarketContextChartValue {
+  if (close === null) return emptyChartValue();
+  return { price: close.value, prevClose: close.prev, date: close.date };
+}
+
+/** 欠けた日 d の draft。chart は取得済み 1mo の日付 d だけ。JP leg も d だけ。 */
+function draftForGapDay(
+  date: string,
+  captured: ReadonlyMap<MarketContextChartSymbol, MacroChartCapture>,
+  jp: MacroJpLeg | null
+): MarketContextDraft {
+  const gspc = captured.get("^GSPC");
+  const vix = captured.get("^VIX");
+  const niy = captured.get("NIY=F");
+  if (gspc === undefined || vix === undefined || niy === undefined) {
+    throw new Error("マクロ欠け日: 取得済みの ^GSPC・^VIX・NIY=F が揃っていません");
+  }
+  const gspcClose = confirmedCloseOnDate(gspc.raw, gspc.ohlcv, "^GSPC", date);
+  const vixClose = confirmedCloseOnDate(vix.raw, vix.ohlcv, "^VIX", date);
+  const niyClose = exactBarClose(niy.ohlcv, date);
+  return {
+    charts: {
+      "^N225": jp === null
+        ? emptyChartValue()
+        : { price: jp.n225.value, prevClose: jp.n225.prev, date: jp.n225.date },
+      "^VIX": chartValueFromConfirmed(vixClose),
+      "^GSPC": chartValueFromConfirmed(gspcClose),
+      "NIY=F": niyClose === null
+        ? emptyChartValue()
+        : { price: niyClose, prevClose: null, date },
+    },
+    nikkeiVi: jp === null ? null : jp.nikkeiVi,
+    nikkeiViDate: jp === null ? null : jp.nikkeiViDate,
+  };
+}
+
+async function loadMarketContextDates(db: Db, start: string, end: string): Promise<Set<string>> {
+  const rows = await db
+    .select({ date: swingSchema.marketContext.date })
+    .from(swingSchema.marketContext)
+    .where(and(
+      gte(swingSchema.marketContext.date, start),
+      lte(swingSchema.marketContext.date, end),
+    ));
+  const dates = new Set<string>();
+  for (const row of rows) {
+    if (typeof row.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(row.date)) {
+      throw new Error(`swing_market_context.date を読めません: ${String(row.date)}`);
+    }
+    dates.add(row.date);
+  }
+  return dates;
+}
+
+/**
+ * 予定日の行を書いたあと、窓内の欠け日を検出する。
+ * 書くのは MACRO_CONTEXT_GAP_FILL=1 のときだけで、INSERT は既存行を更新しない。
+ * 値が 1 つでも d のものでなければ HOLD。別の日の終値では埋めない。
+ */
+async function reconcileMissingMarketContext(
+  db: Db,
+  jpLegStore: MacroJpLegStore,
+  targetDate: string,
+  captured: ReadonlyMap<MarketContextChartSymbol, MacroChartCapture>
+): Promise<void> {
+  const fill = sharedEnv.MACRO_CONTEXT_GAP_FILL();
+  const window = macroContextGapDates(targetDate);
+  const start = window[0];
+  const end = window[window.length - 1];
+  if (start === undefined || end === undefined) {
+    throw new Error(`マクロ欠け日の窓が空です: ${targetDate}`);
+  }
+  const present = await loadMarketContextDates(db, start, end);
+  const missing = window.filter((date) => date !== targetDate && !present.has(date));
+  for (const date of missing) {
+    const note = fill ? "" : "（MACRO_CONTEXT_GAP_FILL は無効。書き込まない）";
+    console.warn(`${INC_FINANCIALS_STALE_TAG} マクロ欠け日 検出: ${date}${note}`);
+    const jp = await loadMacroJpLeg(jpLegStore, date);
+    const draft = draftForGapDay(date, captured, jp);
+    const gate = decideMarketContextGate(draft, date);
+    if (!gate.ok || gate.key !== date) {
+      console.warn(`${INC_FINANCIALS_STALE_TAG} マクロ欠け日 HOLD: ${date} ${gate.reason}`);
+      continue;
+    }
+    if (!fill) continue;
+    await db
+      .insert(swingSchema.marketContext)
+      .values(marketContextValues(draft, date))
+      .onConflictDoNothing({ target: swingSchema.marketContext.date });
+    console.info(`${INC_FINANCIALS_STALE_TAG} マクロ欠け日 書込: ${date}`);
+  }
 }
 
 async function persistMarketContextWithDiagnostics(

@@ -161,6 +161,86 @@ function proveGuardClose(
   return hits[0].close === rawClose ? rawClose : null;
 }
 
+interface PreparedSession {
+  ev: SessionEvidence;
+  localDates: string[];
+  utcDates: string[];
+  sessionDate: string;
+  ended: boolean;
+}
+
+/** selectConfirmedCloses と同じ session 検証。形成中判定の前まで。 */
+function prepareConfirmedSession(
+  raw: Uint8Array,
+  bars: DailyOhlcv[],
+  symbol: string
+): PreparedSession {
+  const ev = readSessionEvidence(raw, symbol, bars);
+  if (bars.length === 0) {
+    hold(symbol, "にバーが無い", bars);
+  }
+  const localDates = ev.timestamps.map((t) => localDateOf(ev.timeZone, t));
+  const sessionDate = localDateOf(ev.timeZone, ev.regularStart);
+  if (localDateOf(ev.timeZone, ev.regularEnd) !== sessionDate) {
+    hold(symbol, "の session が日跨ぎのため判定不能 (unknown)", bars);
+  }
+  const latestLocal = localDates[localDates.length - 1];
+  if (latestLocal > sessionDate) {
+    hold(symbol, "の原文が session より新しい (不整合)", bars);
+  }
+  const ended =
+    localDateOf(ev.timeZone, ev.regularMarketTime) === sessionDate &&
+    ev.regularMarketTime >= ev.regularEnd;
+  return {
+    ev,
+    localDates,
+    utcDates: ev.timestamps.map((t) => utcDateOf(t)),
+    sessionDate,
+    ended,
+  };
+}
+
+function isConfirmedIndex(prep: PreparedSession, index: number): boolean {
+  const local = prep.localDates[index];
+  const inSession = prep.ended
+    ? local <= prep.sessionDate
+    : local < prep.sessionDate;
+  return inSession && prep.ev.timestamps[index] <= prep.ev.regularMarketTime;
+}
+
+/**
+ * 指定 idx の確定 close。証明できないときは null（隣の idx へ進めない）。
+ * prev は candidate session day より前の直近 session day を 1 回だけ選ぶ。
+ */
+function proveConfirmedIndex(
+  prep: PreparedSession,
+  bars: DailyOhlcv[],
+  index: number
+): ConfirmedCloses | null {
+  const rawClose = prep.ev.closes[index];
+  const utcDate = prep.utcDates[index];
+  const proved = isUsableClose(rawClose)
+    ? proveGuardClose(bars, utcDate, rawClose)
+    : null;
+  if (proved === null) return null;
+  const candidateDay = prep.localDates[index];
+  let priorIdx = -1;
+  for (let i = index - 1; i >= 0; i--) {
+    if (prep.localDates[i] < candidateDay) {
+      priorIdx = i;
+      break;
+    }
+  }
+  let prev: number | null = null;
+  if (priorIdx >= 0) {
+    const priorClose = prep.ev.closes[priorIdx];
+    if (isUsableClose(priorClose)) {
+      prev = proveGuardClose(bars, prep.utcDates[priorIdx], priorClose);
+    }
+  }
+  return { value: proved, prev, date: utcDate };
+}
+
 /**
  * confirmed bar (形成中除外・実終値つき) の close + 直前 actual close。
  *
@@ -186,25 +266,12 @@ export function selectConfirmedCloses(
   bars: DailyOhlcv[],
   symbol: string
 ): ConfirmedCloses {
-  const ev = readSessionEvidence(raw, symbol, bars);
-  if (bars.length === 0) {
-    hold(symbol, "にバーが無い", bars);
-  }
-  const localDates = ev.timestamps.map((t) => localDateOf(ev.timeZone, t));
-  const sessionDate = localDateOf(ev.timeZone, ev.regularStart);
-  if (localDateOf(ev.timeZone, ev.regularEnd) !== sessionDate) {
-    hold(symbol, "の session が日跨ぎのため判定不能 (unknown)", bars);
-  }
-  const latestLocal = localDates[localDates.length - 1];
-  if (latestLocal > sessionDate) {
-    hold(symbol, "の原文が session より新しい (不整合)", bars);
-  }
-  const ended =
-    localDateOf(ev.timeZone, ev.regularMarketTime) === sessionDate &&
-    ev.regularMarketTime >= ev.regularEnd;
+  const prep = prepareConfirmedSession(raw, bars, symbol);
   let candidate = -1;
-  for (let i = localDates.length - 1; i >= 0; i--) {
-    if (ended ? localDates[i] <= sessionDate : localDates[i] < sessionDate) {
+  for (let i = prep.localDates.length - 1; i >= 0; i--) {
+    if (prep.ended
+      ? prep.localDates[i] <= prep.sessionDate
+      : prep.localDates[i] < prep.sessionDate) {
       candidate = i;
       break;
     }
@@ -212,38 +279,37 @@ export function selectConfirmedCloses(
   if (candidate < 0) {
     hold(symbol, "は形成中のみで確定候補が無い", bars);
   }
-  if (ev.timestamps[candidate] > ev.regularMarketTime) {
+  if (prep.ev.timestamps[candidate] > prep.ev.regularMarketTime) {
     hold(symbol, "の確定候補バーが quote 観測時刻より新しい (不整合)", bars);
   }
-  const rawClose = ev.closes[candidate];
-  const utcDate = utcDateOf(ev.timestamps[candidate]);
-  const proved =
-    isUsableClose(rawClose) ? proveGuardClose(bars, utcDate, rawClose) : null;
+  const proved = proveConfirmedIndex(prep, bars, candidate);
   if (proved === null) {
     hold(
       symbol,
-      `の確定日 ${utcDate} の実終値を証明できない (除去・重複曖昧・null・非正のいずれか)`,
+      `の確定日 ${prep.utcDates[candidate]} の実終値を証明できない (除去・重複曖昧・null・非正のいずれか)`,
       bars
     );
   }
-  const candidateDay = localDates[candidate];
-  // 直前 actual session の最新 idx を 1 回だけ選ぶ。null スキップ・
-  // older 代替はしない。証明できなければ explicit null。
-  let priorIdx = -1;
-  for (let i = candidate - 1; i >= 0; i--) {
-    if (localDates[i] < candidateDay) {
-      priorIdx = i;
-      break;
-    }
+  return proved;
+}
+
+/**
+ * UTC 日 `date` の確定バーだけを返す。その日が無い、形成中、終値を証明できない、
+ * 同じ UTC 日が複数あるときは null。別の日のバーは返さない。
+ */
+export function confirmedCloseOnDate(
+  raw: Uint8Array,
+  bars: DailyOhlcv[],
+  symbol: string,
+  date: string
+): ConfirmedCloses | null {
+  const prep = prepareConfirmedSession(raw, bars, symbol);
+  const matches: number[] = [];
+  for (let i = 0; i < prep.utcDates.length; i++) {
+    if (prep.utcDates[i] === date && isConfirmedIndex(prep, i)) matches.push(i);
   }
-  let prev: number | null = null;
-  if (priorIdx >= 0) {
-    const c = ev.closes[priorIdx];
-    if (isUsableClose(c)) {
-      prev = proveGuardClose(bars, utcDateOf(ev.timestamps[priorIdx]), c);
-    }
-  }
-  return { value: proved, prev, date: utcDate };
+  if (matches.length !== 1) return null;
+  return proveConfirmedIndex(prep, bars, matches[0]);
 }
 
 /** INC-20261008-kabulab_tool_cloudflare-financials-stale 計測用の HOLD 理由区分。 */

@@ -892,8 +892,11 @@ describe("定時マクロの予定日・開始窓・保存期限", () => {
     mockMacro(ALIGNED);
     const { db, calls, params } = recordingDb();
     expect(await runMarketContextSync(db, emptyJpStore)).toBe(true);
-    expect(calls).toHaveLength(1);
-    expect(params[0][0]).toBe("2026-09-29");
+    const contextInserts = calls.flatMap((sql, index) => (
+      sql.includes('insert into "swing_market_context"') ? [params[index]] : []
+    ));
+    expect(contextInserts).toHaveLength(1);
+    expect(contextInserts[0][0]).toBe("2026-09-29");
     expect(fetchStockRawData).not.toHaveBeenCalled();
     expect(recordPriceSyncLog).not.toHaveBeenCalled();
     expect(vi.mocked(fetchChart).mock.calls.map(([symbol]) => symbol)).toEqual(["^VIX", "^GSPC", "NIY=F"]);

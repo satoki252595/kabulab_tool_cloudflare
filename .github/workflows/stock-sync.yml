@@ -154,6 +154,9 @@ jobs:
           SCHEDULED_DATE: ${{ github.event.inputs.scheduled_date }}
           SCHEDULED_AT: ${{ github.event.inputs.scheduled_at }}
           STOCK_SYNC_TARGET: ${{ github.event.inputs.target }}
+          # 未設定・空・0 は欠け日を検出してログするだけ。1 のときだけ INSERT する。
+          # リポジトリ変数 MACRO_CONTEXT_GAP_FILL。コードやこのファイルに 1 を書かない。
+          MACRO_CONTEXT_GAP_FILL: ${{ vars.MACRO_CONTEXT_GAP_FILL }}
         run: pnpm sync:daily:core --context-only
 
       # 月次: 母集団 → 優待原文取得/物理照合 → 派生再計算。

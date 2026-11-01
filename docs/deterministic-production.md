@@ -35,6 +35,10 @@
 5. EDINET情報修正は、修正前後の主体・形式・期末、保存ZIP、通常parserの全factsと全文が完全一致した観測だけを追記台帳で解決する。取下げ・不開示・parser不一致はHOLD。
 6. `exit0`・未処理0・タグ判定済みだけで全データ充足とは扱わない。全no・要確認・候補0・原本なしを分け、予定日・対象集合・結果・欠測理由・receiptで検収する。
 
+## マクロ欠け日
+
+定時 `scheduled-context`（Actions の market context sync。火〜土 06:00 JST）は予定日の1行に加え、終端日から30暦日の日米共通営業日で `swing_market_context` に無い日を検出する。検出は予定日の chart（1mo、追加取得なし）と、その日の R2 JP leg だけを使う。値が欠けたらその日は HOLD で、別日の終値では埋めない。D1 への INSERT は環境変数 `MACRO_CONTEXT_GAP_FILL=1` のときだけ（既定は未設定で検出のみ。Actions はリポジトリ変数を渡す）。既存行は `ON CONFLICT DO NOTHING`。開始窓 21:00–21:30 UTC と保存期限 22:00 UTC は予定日の本行のまま変えない。ops_check は同じ30暦日の欠け日数を読み、`MAX(date)` との比較も残す。
+
 ## 必要原本だけを扱う
 
 歴史78,832件の全量R2コピー・独立全量再GETは停止した。最新shina等の本番が実際に読む原本は`raw:required`で対象を先に絞り、通常validator・本文SHA・索引を確認する。必要な過去原本だけ個別に補完し、原本不足を生成値で補わない。

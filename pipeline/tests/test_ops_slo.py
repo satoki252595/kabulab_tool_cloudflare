@@ -18,6 +18,7 @@ import pytest
 from _doubles import SqliteD1
 
 from jp_stock_pipeline.cloud_store import datasets, ops, slo
+from jp_stock_pipeline.contracts.market_calendar import is_session_day
 from jp_stock_pipeline.jobs import freshness_probe, ops_check, runner
 from jp_stock_pipeline.models import JST
 
@@ -832,13 +833,20 @@ class TestOpsCheck:
         rows.update(overrides or {})
         current = datetime.now(UTC)
         price_date = ops_check.expected_stock_date(current).isoformat()
-        macro_day = current.date() if current.hour >= 22 else current.date() - timedelta(days=1)
-        macro_date = ops_check.latest_session_date(macro_day, ("JPX", "NYSE")).isoformat()
+        macro_date = ops_check.expected_macro_date(current)
+        window_start = macro_date - timedelta(days=ops_check.MACRO_CONTEXT_GAP_LOOKBACK_DAYS - 1)
         store.query("INSERT OR IGNORE INTO core_stocks (id,code) VALUES (1,'7203')")
         store.query("INSERT OR REPLACE INTO core_stock_financials (stock_id,data_date,price) VALUES (1,?,100)", [price_date])
         store.query("INSERT OR REPLACE INTO swing_stock_indicators VALUES (1,?,100)", [price_date])
         store.query("INSERT OR REPLACE INTO p_momentum VALUES (1,?,?,90)", [price_date, price_date])
-        store.query("INSERT OR IGNORE INTO swing_market_context VALUES (?)", [macro_date])
+        day = window_start
+        while day <= macro_date:
+            if is_session_day(day, ("JPX", "NYSE")):
+                store.query(
+                    "INSERT OR IGNORE INTO swing_market_context (date) VALUES (?)",
+                    [day.isoformat()],
+                )
+            day += timedelta(days=1)
         for dataset, (latest, n, epoch) in rows.items():
             ops.record_freshness(
                 store, dataset=dataset, store_name="D1", location=dataset,
@@ -1471,3 +1479,84 @@ class TestStockCoverage:
         problems: list[str] = []
         ops_check._check_stock_coverage(store, problems, now=datetime(2026, 10, 13, 19, 0, tzinfo=JST))
         assert len(problems) == expected_failures
+
+
+def _expected_macro_date(now: datetime) -> date:
+    utc = now.astimezone(UTC)
+    macro_day = utc.date() if utc.hour >= 22 else utc.date() - timedelta(days=1)
+    return ops_check.latest_session_date(macro_day, ("JPX", "NYSE"))
+
+
+def _joint_session_dates(
+    end: date, lookback_days: int = ops_check.MACRO_CONTEXT_GAP_LOOKBACK_DAYS
+) -> list[date]:
+    start = end - timedelta(days=lookback_days - 1)
+    days: list[date] = []
+    day = start
+    while day <= end:
+        if is_session_day(day, ("JPX", "NYSE")):
+            days.append(day)
+        day += timedelta(days=1)
+    return days
+
+
+class TestMacroContextGaps:
+    """MAX(date) が予定日と一致しても、窓の途中の穴を見逃さない。"""
+
+    def test_窓は30暦日で休場日を含めない(self) -> None:
+        days = ops_check.joint_session_dates(date(2026, 11, 2))
+        assert ops_check.MACRO_CONTEXT_GAP_LOOKBACK_DAYS == 30
+        assert days[0] == date(2026, 10, 5)
+        assert days[-1] == date(2026, 11, 2)
+        assert date(2026, 10, 30) in days
+        assert date(2026, 10, 12) not in days
+        assert date(2026, 11, 1) not in days
+
+    def test_最新日が一致しても窓内の欠け日数を失敗にする(self, monkeypatch, caplog) -> None:
+        store = _FakeStore()
+        host = TestOpsCheck()
+        host._seed_freshness(store)
+        host._seed_probe_ok(store)
+        now = datetime.now(UTC)
+        expected = _joint_session_dates(_expected_macro_date(now))
+        assert len(expected) >= 2
+        missing = expected[-2]
+        store.query("DELETE FROM swing_market_context")
+        for day in expected:
+            if day == missing:
+                continue
+            store.query(
+                "INSERT INTO swing_market_context (date) VALUES (?)",
+                [day.isoformat()],
+            )
+        _wire(monkeypatch, store, ops_check)
+        with caplog.at_level(logging.WARNING):
+            code = ops_check.main([], env=dict(_D1_ENV))
+        assert code == 1
+        warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+        gap = [line for line in warnings if "マクロ欠け日" in line and missing.isoformat() in line]
+        assert gap
+        assert "1 日" in gap[0]
+        assert not any("マクロ基準日" in line for line in warnings)
+
+    def test_窓が埋まっていてもMAXが違えばマクロ基準日を落とす(self, monkeypatch, caplog) -> None:
+        store = _FakeStore()
+        host = TestOpsCheck()
+        host._seed_freshness(store)
+        host._seed_probe_ok(store)
+        now = datetime.now(UTC)
+        expected = _joint_session_dates(_expected_macro_date(now))
+        store.query("DELETE FROM swing_market_context")
+        for day in expected:
+            store.query(
+                "INSERT INTO swing_market_context (date) VALUES (?)",
+                [day.isoformat()],
+            )
+        store.query("INSERT INTO swing_market_context (date) VALUES ('2099-01-01')")
+        _wire(monkeypatch, store, ops_check)
+        with caplog.at_level(logging.WARNING):
+            code = ops_check.main([], env=dict(_D1_ENV))
+        assert code == 1
+        warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any("マクロ基準日" in line for line in warnings)
+        assert not any("swing_market_context に無い" in line for line in warnings)
