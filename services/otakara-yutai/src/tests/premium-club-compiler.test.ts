@@ -186,15 +186,15 @@ function holdingCarryFixture() {
   return JSON.parse(bytes.toString()) as { tasks: SummaryTask[]; rows: BenefitRow[]; expectedResults: SummaryResult[] };
 }
 
-it("未資格の保有/繰越条件namespaceを通常株数へ降格させず、120字でも数値・率・条件guardを維持する", () => {
+it("未資格の保有/繰越条件namespaceを通常株数へ降格させず、256字でも数値・率・条件guardを維持する", () => {
   const description = '【種別："プレミアム優待倶楽部ポイント"】\n【1年未満保有】\n100ポイント\n【1年以上保有】\n200ポイント\n合成の未資格条件';
   const context = { minShares: [600], recordMonths: [12] };
   expect(compileHoldingPointCarryLiteral(description)).toBeNull();
   expect(isSummaryNumbersGrounded(description, "100ポイント(繰越条件:600株)", context)).toBe(false);
   expect(isSummaryNumbersGrounded("合成商品券1000円", "600株:1000円", context)).toBe(true);
   expect(isSummaryNumbersGrounded("合成商品券1000円", "600株:1000円", { ...context, minShares: [900] })).toBe(false);
-  expect(checkSummary("あ".repeat(120))).toEqual([]);
-  expect(checkSummary("あ".repeat(121)).map(v => v.rule)).toEqual(["too_long"]);
+  expect(checkSummary("あ".repeat(SUMMARY_MAX_CHARS))).toEqual([]);
+  expect(checkSummary("あ".repeat(SUMMARY_MAX_CHARS + 1)).map(v => v.rule)).toEqual(["too_long"]);
   expect(missingSummaryConditions("1年以上保有で商品を選択", "商品")).toEqual(["choice_condition_missing", "holding_condition_missing"]);
 });
 

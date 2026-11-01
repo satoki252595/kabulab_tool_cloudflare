@@ -1,0 +1,16 @@
+{
+  "privateFixtureSha256": "435faf943de9799c74754848324aa04c719382ffb1a8cb3dd1d08fd1e37be8f7",
+  "sourceFileSha256": "190c66310fe3cf165796b8df4893cefd21169ccd7a9eeef7124f06472d15156e",
+  "historicalFixtureNotCurrentPendingCount": true,
+  "sourceSha256": "46692d4d1b2d2fde1726d52c92b2e2b59a25982940add4f8d398573e0113cabc",
+  "recipients": [
+    {
+      "minShares": 100,
+      "recordMonth": 7,
+      "recordDate": null
+    }
+  ],
+  "expectedSummarySha256": "cb8f9d43f0ab5be40d46b80f9c7b2db7a8400db4f4d222e92f46e6196e033232",
+  "summaryCharacters": 227,
+  "ticketKinds": 9
+}
