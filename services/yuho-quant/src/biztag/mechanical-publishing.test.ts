@@ -4,6 +4,7 @@ import { gunzipSync } from "node:zlib";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SupplementRow } from "../../../../src/shared/notion-archive/stock-supplement.js";
+import { loadStockMasterIndex } from "../../../../src/shared/notion-archive/index.js";
 import { SHARED_WRITER_KEY, withSharedPublishingWriter, type PublishingStore } from "../../../../scripts/mechanical-publishing/shared-writer.js";
 import { mechanicalSelection, mechanicalTextInput, publishingCursor, runMechanicalPublishing } from "./mechanical-publishing.js";
 import { planWork, withInputReceipt, withTextSyncReceipt } from "./plan.js";
@@ -73,10 +74,20 @@ it("finite full target verification qualifies source even when unchanged, and re
   Object.assign(saved, input); saved.texts = row().texts;
   io.rows.mockResolvedValue([saved]); io.full.mockResolvedValue(saved);
   const run = () => withSharedPublishingWriter(() => runMechanicalPublishing({ codes: ["6103"], limit: 1, budgetMs: 60_000 }), store());
-  expect(await run()).toMatchObject({ unchanged: 1, synced: 0, modelCalls: 0 });
+  const unchanged = await run();
+  expect(unchanged).toMatchObject({ unchanged: 1, synced: 0, modelCalls: 0, selectedCodes: ["6103"],
+    latestDocs: [{ stockCode: "6103", doc: latest.doc }], outcomes: [{ stockCode: "6103", outcome: "unchanged", holds: [] }] });
+  const receipt = JSON.parse(input.textSyncReceipt!);
+  expect(unchanged.outcomes[0].sourceReceipt).toEqual({ textsSha256: receipt.textsSha256, notionTextsSha256: receipt.notionTextsSha256 });
+  expect(unchanged.cursorAfter).toEqual(unchanged.cursorBefore);
+  expect(JSON.stringify(unchanged)).not.toContain(business);
+  expect(JSON.stringify(unchanged)).not.toContain(saved.evidenceText);
+  expect(unchanged.latestDocs[0]).not.toHaveProperty("companyName");
   expect(io.full).toHaveBeenCalledTimes(1); expect(io.qualified).toHaveBeenCalledTimes(1); expect(io.source).toHaveBeenCalledTimes(1);
   io.full.mockResolvedValue({ ...saved, texts: { ...saved.texts, "事業の内容": "" } });
-  expect(await run()).toMatchObject({ synced: 1, modelCalls: 0 });
+  const repaired = await run();
+  expect(repaired).toMatchObject({ synced: 1, modelCalls: 0, outcomes: [{ stockCode: "6103", outcome: "synced", holds: [] }] });
+  expect(repaired.outcomes[0].sourceReceipt).toEqual(unchanged.outcomes[0].sourceReceipt);
   expect(io.source).toHaveBeenCalledWith(latest.doc!.notionDocPageId, true);
   expect(io.replace.mock.calls[0][2]).not.toHaveProperty("tagDoc");
   expect(io.replace.mock.calls[0][2]).not.toHaveProperty("judgeInput");
@@ -86,7 +97,8 @@ it("finite full target verification qualifies source even when unchanged, and re
 it("reported-source HOLD and empty source cannot clear old body/tag", async () => {
   io.latest.mockResolvedValue([{ ...latest, reportedHoldReason: "reported-state qualification HOLD" }]);
   const run = () => withSharedPublishingWriter(() => runMechanicalPublishing({ codes: ["6103"], limit: 1, budgetMs: 60_000 }), store());
-  expect(await run()).toMatchObject({ synced: 0, processed: 1, modelCalls: 0 });
+  expect(await run()).toMatchObject({ synced: 0, processed: 1, modelCalls: 0,
+    outcomes: [{ stockCode: "6103", outcome: "held", sourceReceipt: null, holds: ["reported-state qualification HOLD"] }] });
   expect(io.source).not.toHaveBeenCalled(); expect(io.replace).not.toHaveBeenCalled();
   await expect(mechanicalTextInput(latest, row(), [], null)).rejects.toThrow("旧本文を消しません");
 });
@@ -115,12 +127,41 @@ it("one admitted body can close after soft; the next body never starts and both 
   io.source.mockImplementation(async () => { vi.setSystemTime(soft + 1); return sections; });
   const result = await withSharedPublishingWriter(() => runMechanicalPublishing({ codes: ["6103", "6104"], limit: 2,
     budgetMs: 600_000, sourceDeadlineMs: soft, deadlineMs: hard }), store());
-  expect(result).toMatchObject({ synced: 1, processed: 1, unstarted: 1 });
+  expect(result).toMatchObject({ synced: 1, processed: 1, unstarted: 1, selectedCodes: ["6103", "6104"],
+    latestDocs: [{ stockCode: "6103", doc: latest.doc }, { stockCode: "6104", doc: latest.doc }],
+    outcomes: [{ stockCode: "6103", outcome: "synced", holds: [] }, { stockCode: "6104", outcome: "unstarted", sourceReceipt: null, holds: [] }] });
   expect(io.source).toHaveBeenCalledTimes(1); expect(io.replace).toHaveBeenCalledTimes(1);
   vi.setSystemTime(hard);
   await expect(withSharedPublishingWriter(() => runMechanicalPublishing({ codes: ["6103"], limit: 1, budgetMs: 600_000,
     sourceDeadlineMs: soft, deadlineMs: hard }), store())).rejects.toThrow();
   expect(io.source).toHaveBeenCalledTimes(1);
+});
+
+it("relation HOLD coexists with a body sync, and explicit codes leave the saved cursor unchanged", async () => {
+  const saved = { ...row(), masterLinked: false };
+  io.rows.mockResolvedValue([saved]); io.full.mockResolvedValue(saved);
+  vi.mocked(loadStockMasterIndex).mockResolvedValueOnce({ index: new Map(), duplicates: new Map() });
+  const memory = store(), key = "mechanical-publishing/v1/cursors/supplement-texts.json";
+  const cursor = { version: 1, afterCode: "2152", changedAt: "2026-10-24T21:15:26.000Z", changedDoc: "" };
+  await memory.put(key, JSON.stringify(cursor) + "\n", null);
+  const put = vi.spyOn(memory, "put");
+  const result = await withSharedPublishingWriter(() => runMechanicalPublishing({ codes: ["6103"], limit: 1, budgetMs: 60_000 }), memory);
+  expect(result).toMatchObject({ synced: 1, held: [{ stockCode: "6103" }], cursorBefore: cursor, cursorAfter: cursor,
+    outcomes: [{ stockCode: "6103", outcome: "synced", holds: ["一意な銘柄マスタrelation先が未保管。本文同期とは区別して保持"] }] });
+  expect(result.outcomes[0].sourceReceipt?.textsSha256).toMatch(/^[a-f0-9]{64}$/);
+  expect(put.mock.calls.some(([actual]) => actual === key)).toBe(false);
+  expect(io.latest).toHaveBeenCalledTimes(1); expect(io.full).toHaveBeenCalledTimes(1); expect(io.source).toHaveBeenCalledTimes(1);
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+it("basic-only metadata keeps the missing-source HOLD and has no qualified body receipt", async () => {
+  io.latest.mockResolvedValue([{ ...latest, doc: null }]); io.rows.mockResolvedValue([]);
+  const result = await withSharedPublishingWriter(() => runMechanicalPublishing({ codes: ["6103"], limit: 1, budgetMs: 60_000 }), store());
+  expect(result).toMatchObject({ processed: 1, basicOnly: 1, synced: 0, latestDocs: [{ stockCode: "6103", doc: null }],
+    outcomes: [{ stockCode: "6103", outcome: "basic-only", sourceReceipt: null,
+      holds: ["最新有報の適格本文が未保管。基本メタ欠落だけを補い旧本文/タグを保持"] }] });
+  expect(io.create).toHaveBeenCalledTimes(1); expect(io.full).not.toHaveBeenCalled(); expect(io.source).not.toHaveBeenCalled();
+  expect(fetch).not.toHaveBeenCalled();
 });
 
 it("mechanical source metadata HOLD creates no publication or business write", async () => {
