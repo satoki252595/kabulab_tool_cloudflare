@@ -211,19 +211,19 @@ describe("aggregateMoneyflowSector", () => {
     expect(result.sectors[1]?.sector).toBe("小さい業種");
   });
 
-  it("as-of 日の実日足 coverage を返す (母集団=active かつ equity・実 close+volume)", async () => {
+  it("対象週の実日足 coverage を返す (母集団=active かつ equity・週内1本以上で被覆)", async () => {
     // 母集団 3 (id 1・2・4)。id 3 は非アクティブで母集団外。
     seedStock({ id: 1, sector: "電気機器" });
-    seedOhlcv(1, "2026-09-14", 100, 10); // as-of 実日足あり
+    seedOhlcv(1, "2026-09-18", 100, 10); // as-of 日に実日足あり (週・単日とも被覆)
     seedStock({ id: 2, sector: "電気機器" });
-    seedOhlcv(2, "2026-09-13", 100, 10); // 前日のみ (as-of は欠損)
+    seedOhlcv(2, "2026-09-15", 100, 10); // 週内のみ (as-of 日は無出来。週では被覆する)
     seedStock({ id: 3, sector: "電気機器", active: false });
-    seedOhlcv(3, "2026-09-14", 100, 10); // 非対象 (数えない)
+    seedOhlcv(3, "2026-09-18", 100, 10); // 非対象 (数えない)
     seedStock({ id: 4, sector: "銀行業" });
-    seedOhlcv(4, "2026-09-14", null, null); // NULL 日足 (covered に数えない)
+    seedOhlcv(4, "2026-09-18", null, null); // NULL 日足 (covered に数えない)
 
-    const result = await aggregateMoneyflowSector(db(), { from: "2026-09-14", to: "2026-09-14" });
-    expect(result.coverage).toEqual({ date: "2026-09-14", universe: 3, covered: 1 });
+    const result = await aggregateMoneyflowSector(db(), { from: "2026-09-14", to: "2026-09-18" });
+    expect(result.coverage).toEqual({ date: "2026-09-18", universe: 3, covered: 2, asOfDayCovered: 1 });
   });
 });
 

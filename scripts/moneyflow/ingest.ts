@@ -425,7 +425,7 @@ interface MoneyflowSectorApiResponse {
   from: string;
   to: string;
   sectors: MoneyflowSectorApiRow[];
-  coverage: { date: string; universe: number; covered: number };
+  coverage: { date: string; universe: number; covered: number; asOfDayCovered: number };
 }
 
 async function fetchSectorTurnoverFromWorker(from: string, to: string): Promise<MoneyflowSectorApiResponse> {
@@ -444,11 +444,19 @@ async function fetchSectorTurnoverFromWorker(from: string, to: string): Promise<
 }
 
 /**
+ * 対象週の被覆率の下限 (%)。週内に一度も取引が無い銘柄 (売買停止・上場廃止
+ * 直後等) は通常数銘柄規模のため、99% 未満は日次取込自体の不全とみなす。
+ */
+const MIN_WEEK_COVERAGE_PERCENT = 99;
+
+/**
  * sector-turnover の結果を厳密検証する純関数 (strict actual source coverage/result gate)。
- * 要求範囲の echo 照合 + endpoint の as-of 日実日足 coverage の exact 照合
- * (対象日一致・母集団非空・covered 全数一致) + 全業種の share 定義を要求し、
- * 部分週・未取込を 0 扱いで書かず失敗させる。週内寄与数 (stockCount) では
- * as-of 日の取得を証明できないため coverage で照合する。
+ * 要求範囲の echo 照合 + endpoint の対象週 coverage の被覆率照合
+ * (対象日一致・母集団非空・週被覆率が下限以上) + 全業種の share 定義を要求し、
+ * 部分週・未取込を 0 扱いで書かず失敗させる。被覆は週で測る: 無出来の日は
+ * 日足行が無く寄与0が実態のため、as-of 日単日の全数一致は現実に成立しない
+ * (旧条件では開始以来0件だった)。日次取込が週を通して失敗していれば
+ * 週被覆は大きく崩れるため、部分週の検出は保たれる。
  */
 export function verifySectorTurnoverResult(
   req: { from: string; to: string },
@@ -470,9 +478,10 @@ export function verifySectorTurnoverResult(
       `sector-turnover: 対象母集団が空です (universe=${coverage.universe}。証明にならないため書きません)`
     );
   }
-  if (coverage.covered !== coverage.universe) {
+  if (coverage.covered * 100 < coverage.universe * MIN_WEEK_COVERAGE_PERCENT) {
+    const pct = ((coverage.covered / coverage.universe) * 100).toFixed(1);
     throw new Error(
-      `sector-turnover: as-of 日の実日足が母集団に足りません covered=${coverage.covered}/${coverage.universe} (部分週のため書きません)`
+      `sector-turnover: 対象週の日足カバレッジ不足 covered=${coverage.covered}/${coverage.universe} (${pct}% < ${MIN_WEEK_COVERAGE_PERCENT}%。部分週のため書きません)`
     );
   }
   // 全業種の売買代金合計が 0 (= D1 に対象週の日足がまだ無い等) ならシェアが
@@ -553,7 +562,7 @@ async function runSectorTurnover(): Promise<RunOutcome> {
   return {
     source: "sector-turnover",
     ok: true,
-    detail: `${result.sectors.length}業種 × 4指標を記録 (${period}, ${result.from}〜${result.to}, asOf=${asOf} ${asOfProvenance})`,
+    detail: `${result.sectors.length}業種 × 4指標を記録 (${period}, ${result.from}〜${result.to}, asOf=${asOf} ${asOfProvenance}, 週カバレッジ ${result.coverage.covered}/${result.coverage.universe}・asOf日 ${result.coverage.asOfDayCovered})`,
   };
 }
 

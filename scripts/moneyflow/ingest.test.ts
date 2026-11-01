@@ -160,7 +160,7 @@ describe("normal mainのlane分離とqueue後の実期限", () => {
       ensureRunLogDb: vi.fn(async () => ({ dbId: "logs" })), recordRunLog: vi.fn(async () => ({ pageId: "log" })),
     }));
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
-      from: "2026-09-28", to: "2026-09-28", coverage: { date: "2026-09-28", universe: 3700, covered: 3700 },
+      from: "2026-09-28", to: "2026-09-28", coverage: { date: "2026-09-28", universe: 3700, covered: 3700, asOfDayCovered: 3650 },
       sectors: [{ sector: "電気機器", turnover: 100, turnoverShare: 0.5, upTurnover: 60, downTurnover: 40, stockCount: 10 }],
     })));
     vi.spyOn(console, "info").mockImplementation(() => undefined);
@@ -351,6 +351,7 @@ describe("verifySectorTurnoverResult", () => {
     date: "2026-09-28",
     universe: 3700,
     covered: 3700,
+    asOfDayCovered: 3650,
     ...overrides,
   });
   const res = (sectors: ReturnType<typeof row>[], cov: ReturnType<typeof coverage>) => ({
@@ -384,7 +385,16 @@ describe("verifySectorTurnoverResult", () => {
     ).toThrow(/売買代金合計が 0/);
   });
 
-  it("as-of 日 coverage の不一致・母集団空・不足は throw する", () => {
+  it("週被覆が下限以上なら as-of 日の欠けがあっても通る (無出来銘柄の実態)", () => {
+    // 3699/3700 = 99.97% (下限99%以上)。旧「全数一致」では開始以来0件だった形。
+    const out = verifySectorTurnoverResult(
+      { from: "2026-09-28", to: "2026-09-28" },
+      res([row()], coverage({ covered: 3699, asOfDayCovered: 3637 }))
+    );
+    expect(out).toHaveLength(1);
+  });
+
+  it("coverage の不一致・母集団空・週被覆不足は throw する", () => {
     expect(() =>
       verifySectorTurnoverResult(
         { from: "2026-09-28", to: "2026-09-28" },
@@ -400,9 +410,9 @@ describe("verifySectorTurnoverResult", () => {
     expect(() =>
       verifySectorTurnoverResult(
         { from: "2026-09-28", to: "2026-09-28" },
-        res([row()], coverage({ covered: 3699 }))
+        res([row()], coverage({ covered: 3600 }))
       )
-    ).toThrow(/実日足が母集団に足りません/);
+    ).toThrow(/日足カバレッジ不足/);
   });
 });
 
@@ -543,7 +553,7 @@ describe("main() の --dry-run 契約", () => {
         from: u.searchParams.get("from"),
         to: u.searchParams.get("to"),
         sectors: [],
-        coverage: { date: u.searchParams.get("to"), universe: 3700, covered: 3699 },
+        coverage: { date: u.searchParams.get("to"), universe: 3700, covered: 3000, asOfDayCovered: 2900 },
       };
       return { ok: true, status: 200, text: async () => JSON.stringify(body) } as Response;
     }) as typeof fetch;
@@ -575,7 +585,7 @@ describe("main() の --dry-run 契約", () => {
       expect(outcomes).toHaveLength(1);
       expect(outcomes?.[0]?.source).toBe("sector-turnover");
       expect(outcomes?.[0]?.ok).toBe(false);
-      expect(outcomes?.[0]?.detail).toMatch(/実日足が母集団に足りません/);
+      expect(outcomes?.[0]?.detail).toMatch(/日足カバレッジ不足/);
       expect(ensureObservationsDb).not.toHaveBeenCalled();
       expect(process.exitCode).toBe(1);
     } finally {
