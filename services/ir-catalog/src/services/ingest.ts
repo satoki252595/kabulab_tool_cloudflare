@@ -840,11 +840,17 @@ async function archiveDisclosuresByStock(
     }
     const sentKeys = new Set(selected.rows.map((row) => row.key));
     const recoverPdfTextPages = new Map([...recoverable].filter(([key]) => sentKeys.has(key)));
-    // ファイルプロキシ用に (tdnet_id → notion_page_id) を収集して Postgres
-    // に書き戻す。upsertDisclosuresByStock は行を create/PATCH した直後に
-    // onPagePersisted を呼ぶので、ここで Map に貯めて末尾でバルク UPDATE。
+    // ファイルプロキシ用に (tdnet_id → notion_page_id) と PDF 本文を集める。
+    // upsert は行の create/PATCH 直後に callback する。D1 への書き戻しは
+    // 成功時も、途中の 502 で例外になる時も、try/finally でやってから
+    // 元の例外を投げ直す。ループの後だけだと、作成済みの紐付けが消える
+    // (INC-20261028-kabulab_tool_cloudflare-catchup-notion-502)。
     const pageIdMap = new Map<string, string>();
     const pdfMap = new Map<string, PdfClassification>();
+    const flushConfirmedRows = async (): Promise<void> => {
+      if (pageIdMap.size > 0) await persistNotionPageIds(db, pageIdMap);
+      if (pdfMap.size > 0) await persistPdfTexts(db, pdfMap, recoverPdfTextPages);
+    };
     // 相対予算はこのフェーズ開始から測る (D1 フェーズの所要に依らない)。
     // 絶対 deadline 併用時は早い方を採用する。
     const phaseDeadline =
@@ -856,46 +862,57 @@ async function archiveDisclosuresByStock(
             )
           : Date.now() + opts.notionByStockBudgetMs
         : opts.notionByStockDeadlineMs;
-    const r = await upsertDisclosuresByStock({
-      service: "ir-catalog",
-      tagOptions: notionTagOptions(),
-      rows: selected.rows,
-      stockPageCache: irNotionStockPageCache(db),
-      deadlineMs: phaseDeadline,
-      onPagePersisted: (key, pageId) => {
-        if (currentByKey.get(key)?.pageId !== pageId) pageIdMap.set(key, pageId);
-      },
-      // PDF 本文を OSS 軽量実装 (数値ルール + 東北大極性辞書) で判定し、
-      // Notion 列 + PG 4 列に反映。失敗時は呼ばれた側で unknown を返す
-      // (バッチを止めない — ルール2)。抽出テキストも添えて返し、D1 の
-      // `ir_disclosure_texts` へ保存する (同じ bytes を使い回し二重取得なし)。
-      classifyPdf: async (bytes, primaryTag) => {
-        const { result, text } = await classifyPdfSentimentWithText(
-          bytes,
-          primaryTag
-        );
-        return { ...result, text };
-      },
-      onPdfClassified: (key, c) => pdfMap.set(key, c),
-      rejudgePdf: opts.rejudgePdfSentiment ?? false,
-      recoverPdfTextPages,
-    });
-    notionByStock = {
-      stocksTouched: r.stocksTouched,
-      created: r.created,
-      updated: r.updated,
-      skippedExisting: r.skippedExisting,
-      skippedNoFile: r.skippedNoFile,
-      rejudged: r.rejudged,
-      rowErrors: r.rowErrors,
-      reachedDeadline: r.reachedDeadline,
-    };
-    if (pageIdMap.size > 0) {
-      await persistNotionPageIds(db, pageIdMap);
+    let failure: unknown;
+    try {
+      const r = await upsertDisclosuresByStock({
+        service: "ir-catalog",
+        tagOptions: notionTagOptions(),
+        rows: selected.rows,
+        stockPageCache: irNotionStockPageCache(db),
+        deadlineMs: phaseDeadline,
+        onPagePersisted: (key, pageId) => {
+          if (currentByKey.get(key)?.pageId !== pageId) pageIdMap.set(key, pageId);
+        },
+        // PDF 本文を OSS 軽量実装 (数値ルール + 東北大極性辞書) で判定し、
+        // Notion 列 + PG 4 列に反映。失敗時は呼ばれた側で unknown を返す
+        // (バッチを止めない — ルール2)。抽出テキストも添えて返し、D1 の
+        // `ir_disclosure_texts` へ保存する (同じ bytes を使い回し二重取得なし)。
+        classifyPdf: async (bytes, primaryTag) => {
+          const { result, text } = await classifyPdfSentimentWithText(
+            bytes,
+            primaryTag
+          );
+          return { ...result, text };
+        },
+        onPdfClassified: (key, c) => pdfMap.set(key, c),
+        rejudgePdf: opts.rejudgePdfSentiment ?? false,
+        recoverPdfTextPages,
+      });
+      notionByStock = {
+        stocksTouched: r.stocksTouched,
+        created: r.created,
+        updated: r.updated,
+        skippedExisting: r.skippedExisting,
+        skippedNoFile: r.skippedNoFile,
+        rejudged: r.rejudged,
+        rowErrors: r.rowErrors,
+        reachedDeadline: r.reachedDeadline,
+      };
+    } catch (error) {
+      failure = error;
+    } finally {
+      try {
+        await flushConfirmedRows();
+      } catch (persistError) {
+        failure = failure === undefined
+          ? persistError
+          : new AggregateError(
+              [failure, persistError],
+              "作成済みの Notion ページと PDF 本文を D1 へ書き戻せず、元の例外も残っています"
+            );
+      }
     }
-    if (pdfMap.size > 0) {
-      await persistPdfTexts(db, pdfMap, recoverPdfTextPages);
-    }
+    if (failure !== undefined) throw failure;
   } else if (opts.notionByStock) {
     notionByStock = { ...EMPTY_NOTION_BY_STOCK };
   }
