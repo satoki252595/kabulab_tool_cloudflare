@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -21,6 +22,18 @@ def row(**changes):
 def qualify(rows, count=None):
     return clock.qualify_job_clock({"jobs": rows, "total_count": len(rows) if count is None else count},
                                    "39928733182", "1", "ingest-yahoo", "qualified-runner")
+
+
+_DIAG_AT = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\+00:00")
+
+
+def assert_diag_line(line, observation, detail):
+    prefix = ("[INC-20261030-kabulab_tool_cloudflare-job-clock-unassigned] "
+              f"observation={observation} at=")
+    assert line.startswith(prefix), line
+    stamp, rest = line[len(prefix):].split(" ", 1)
+    assert _DIAG_AT.fullmatch(stamp), stamp
+    assert rest == detail
 
 
 def test_reusable_and_direct_job_clock_are_exactly_qualified():
@@ -58,10 +71,85 @@ def test_unpublished_metadata_is_observed_without_replacing_original_clock(capsy
                                      sleep=lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds))
     assert result == "2026-10-23T09:00:00.000Z"
     assert remaining == [30.0, 20.0, 10.0]
-    log = capsys.readouterr().err
-    assert log == ("native_job_clock observation=1 reason=job_not_visible\n"
-                   "native_job_clock observation=2 reason=runner_unassigned\n")
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    log = captured.err
+    lines = log.splitlines()
+    assert len(lines) == 5
+    assert_diag_line(lines[0], 1, "candidates=0 ")
+    assert lines[1] == "native_job_clock observation=1 reason=job_not_visible"
+    assert_diag_line(lines[2], 2,
+                     "candidates=1 status=in_progress runner_name_empty=True started_at=2026-10-23T09:00:00Z")
+    assert lines[3] == "native_job_clock observation=2 reason=runner_unassigned"
+    assert_diag_line(lines[4], 3,
+                     "candidates=1 status=in_progress runner_name_empty=False started_at=2026-10-23T09:00:00Z")
     assert "qualified-runner" not in log and "39928733182" not in log
+
+
+def test_observation_diag_is_stderr_only_and_keeps_the_clock(capsys):
+    def read(timeout):
+        assert timeout == 30
+        return {"jobs": [
+            row(name="ingest-non-yahoo", runner_name="hidden-runner", started_at="2026-10-23T08:00:00Z"),
+            row(name="prefix ingest-yahoo", runner_name="also-hidden", started_at="2026-10-23T07:00:00Z"),
+            row(name="moneyflow / ingest-yahoo"),
+        ], "total_count": 3}
+
+    result = clock.observe_job_clock(read, "39928733182", "1", "ingest-yahoo", "qualified-runner",
+                                     monotonic=lambda: 0, sleep=lambda _: pytest.fail("unexpected wait"))
+    assert result == "2026-10-23T09:00:00.000Z"
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    lines = captured.err.splitlines()
+    assert len(lines) == 1
+    assert_diag_line(lines[0], 1,
+                     "candidates=1 status=in_progress runner_name_empty=False started_at=2026-10-23T09:00:00Z")
+    assert "hidden-runner" not in captured.err and "also-hidden" not in captured.err
+    assert "qualified-runner" not in captured.err and "39928733182" not in captured.err
+    assert "https://" not in captured.err and "gh " not in captured.err
+
+
+def test_diag_counts_only_the_same_run_attempt_and_job_name(capsys):
+    calls = []
+
+    def read(timeout):
+        calls.append(timeout)
+        return {"jobs": [row(run_attempt=2, runner_name="other-attempt"), row()], "total_count": 2}
+
+    with pytest.raises(clock.JobClockError) as caught:
+        clock.observe_job_clock(read, "39928733182", "1", "ingest-yahoo", "qualified-runner",
+                                monotonic=lambda: 0, sleep=lambda _: pytest.fail("unexpected wait"))
+    assert str(caught.value) == "job_identity_mismatch"
+    assert not isinstance(caught.value, clock.JobClockNotReady)
+    assert calls == [30]
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    lines = captured.err.splitlines()
+    assert len(lines) == 1
+    assert_diag_line(lines[0], 1,
+                     "candidates=1 status=in_progress runner_name_empty=False started_at=2026-10-23T09:00:00Z")
+    assert "other-attempt" not in captured.err and "39928733182" not in captured.err
+
+
+def test_diag_failure_does_not_change_qualification(capsys):
+    class Flaky(dict):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.job_reads = 0
+
+        def get(self, key, default=None):
+            if key == "jobs":
+                self.job_reads += 1
+                if self.job_reads == 1:
+                    raise RuntimeError("diag failed")
+            return super().get(key, default)
+
+    payload = Flaky({"jobs": [row()], "total_count": 1})
+    result = clock.observe_job_clock(lambda timeout: payload, "39928733182", "1", "ingest-yahoo", "qualified-runner",
+                                     monotonic=lambda: 0, sleep=lambda _: pytest.fail("unexpected wait"))
+    assert result == "2026-10-23T09:00:00.000Z"
+    assert payload.job_reads == 2
+    assert capsys.readouterr() == ("", "")
 
 
 @pytest.mark.parametrize("changes", [{"runner_name": None}, {"started_at": None}])

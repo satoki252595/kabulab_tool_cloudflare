@@ -73,6 +73,21 @@ def observe_job_clock(read_page, run_id, attempt, job, runner, *, monotonic=time
         if remaining <= 0:
             raise JobClockError("observation_timeout")
         payload = read_page(remaining)
+        # diag(INC-20261030-kabulab_tool_cloudflare-job-clock-unassigned)
+        try:
+            rows = [r for r in (payload.get("jobs") or []) if isinstance(r, dict)
+                    and type(r.get("run_id")) is int and r["run_id"] == int(run_id)
+                    and type(r.get("run_attempt")) is int and r["run_attempt"] == int(attempt)
+                    and isinstance(r.get("name"), str)
+                    and (r["name"] == job or r["name"].endswith(" / " + job))]
+            print("[INC-20261030-kabulab_tool_cloudflare-job-clock-unassigned] "
+                  f"observation={observation} at={datetime.now(timezone.utc).isoformat(timespec='milliseconds')} "
+                  f"candidates={len(rows)} "
+                  + " ".join(f"status={r.get('status')} runner_name_empty={r.get('runner_name') in (None, '')} "
+                             f"started_at={r.get('started_at')}" for r in rows),
+                  file=sys.stderr)
+        except Exception:
+            pass  # diag 出力の失敗で判定を変えない
         if monotonic() >= deadline:
             raise JobClockError("observation_timeout")
         try:
