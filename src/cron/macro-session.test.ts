@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { parseChartResponse } from "../shared/yahoo/client.js";
 import { guardChartBars } from "../shared/yahoo/bar-sanity.js";
 import type { DailyOhlcv } from "../shared/types.js";
-import { selectConfirmedCloses } from "./macro-session.js";
+import { confirmedCloseOnDate, selectConfirmedCloses } from "./macro-session.js";
 
 const FX = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -37,6 +37,20 @@ function prodBars(symbol: string, raw: Uint8Array): DailyOhlcv[] {
 function closeOf(bars: DailyOhlcv[], date: string): number | null {
   return bars.find((b) => b.date === date)?.close ?? null;
 }
+
+describe("confirmedCloseOnDate", () => {
+  it("指定日の確定バーだけを返し、隣の日では埋めない", () => {
+    const raw = fxBytes("gspc-20260930.json");
+    const bars = prodBars("^GSPC", raw);
+    const on28 = confirmedCloseOnDate(raw, bars, "^GSPC", "2026-09-28");
+    const latest = selectConfirmedCloses(raw, bars, "^GSPC");
+    expect(on28).not.toBeNull();
+    expect(on28?.date).toBe("2026-09-28");
+    expect(on28?.value).toBe(closeOf(bars, "2026-09-28"));
+    expect(on28?.value).not.toBe(latest.value);
+    expect(confirmedCloseOnDate(raw, bars, "^GSPC", "2026-09-27")).toBeNull();
+  });
+});
 
 describe("selectConfirmedCloses (actual)", () => {
   it.each([

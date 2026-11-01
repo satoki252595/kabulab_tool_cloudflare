@@ -36,7 +36,7 @@ from ..collectors.yanoshin_upstream import (
 from ..contracts.stock_code import source_code_to_ticker
 from ..http import FetchError, fetch
 from ..models import JST
-from ..contracts.market_calendar import latest_session_date
+from ..contracts.market_calendar import is_session_day, latest_session_date
 from .freshness_probe import CAPACITY_DATASET
 from .runner import STATUS_SUCCESS, JobContext, build_parser, main_exit, run_job
 
@@ -149,6 +149,18 @@ _INGEST_CODE_SQL = (
 _EXISTING_TDNET_SQL = "SELECT tdnet_id FROM ir_disclosures WHERE pubdate >= ?"
 
 
+# INC-20261008-kabulab_tool_cloudflare-financials-stale
+# 定時マクロは予定日の1行しか書かない。Yahoo 429 でその日が欠けると、
+# 次の run が新しい日を書くと MAX(date) だけでは穴が見えなくなる。
+# 窓は writer の MACRO_CONTEXT_GAP_LOOKBACK_DAYS と同じ 30 暦日
+# （終端日を含む。JPX と NYSE が両方開いている日だけ）。
+_MACRO_GAP_INCIDENT = "[INC-20261008-kabulab_tool_cloudflare-financials-stale]"
+MACRO_CONTEXT_GAP_LOOKBACK_DAYS = 30
+_MACRO_DATES_SQL = (
+    "SELECT date FROM swing_market_context WHERE date >= ? AND date <= ?"
+)
+
+
 # 小さな断面3表だけをPKで結合する。OHLCV全走査・R2列挙は行わない。
 # MAXが1銘柄だけ進んだ日に、残りの凍結/未登録を見逃さない。
 STOCK_COVERAGE_SQL = (
@@ -175,14 +187,37 @@ def expected_stock_date(now: datetime) -> date:
     return latest_session_date(day)
 
 
+def expected_macro_date(now: datetime) -> date:
+    """22:00 UTC の保存期限前は前日、以降は当日を起点に日米共通の直近営業日。"""
+    if now.tzinfo is None:
+        raise ValueError("マクロ基準日の現在時刻にタイムゾーンがありません")
+    utc = now.astimezone(UTC)
+    macro_day = utc.date() if utc.hour >= 22 else utc.date() - timedelta(days=1)
+    return latest_session_date(macro_day, ("JPX", "NYSE"))
+
+
+def joint_session_dates(
+    end: date, lookback_days: int = MACRO_CONTEXT_GAP_LOOKBACK_DAYS
+) -> list[date]:
+    """終端日を含む直近 lookback_days 暦日のうち、JPX と NYSE が両方開いている日。"""
+    if isinstance(lookback_days, bool) or not isinstance(lookback_days, int) or lookback_days < 1:
+        raise ValueError(f"マクロ欠け日の窓が不正です: {lookback_days}")
+    start = end - timedelta(days=lookback_days - 1)
+    days: list[date] = []
+    day = start
+    while day <= end:
+        if is_session_day(day, ("JPX", "NYSE")):
+            days.append(day)
+        day += timedelta(days=1)
+    return days
+
+
 def _check_stock_coverage(store: D1Store, problems: list[str], *, now: datetime | None = None) -> None:
     current = now or datetime.now(UTC)
     try:
         expected_date = expected_stock_date(current).isoformat()
         # contextは同日22:00 UTCが保存期限。JPX/NYSE共通取引日だけが対象。
-        utc = current.astimezone(UTC)
-        macro_day = utc.date() if utc.hour >= 22 else utc.date() - timedelta(days=1)
-        macro_date = latest_session_date(macro_day, ("JPX", "NYSE")).isoformat()
+        macro_date = expected_macro_date(current).isoformat()
         # 期限前に既に完了した当日分も受け入れる。未来の日付は受け入れない。
         today = latest_session_date(current.astimezone(JST).date()).isoformat()
         rows = store.query(STOCK_COVERAGE_SQL, [expected_date, today] * 4)
@@ -201,6 +236,50 @@ def _check_stock_coverage(store: D1Store, problems: list[str], *, now: datetime 
                             f"（価格欠測例={row.get('price_sample')}）")
     if row.get("macro_date") != macro_date:
         problems.append(f"マクロ基準日: 実保存={row.get('macro_date')} 予定={macro_date}")
+
+
+def _check_macro_context_gaps(
+    store: D1Store, problems: list[str], *, now: datetime | None = None
+) -> None:
+    """窓の中の日米共通営業日で、行が無い日を数える。MAX 比較は別関数のまま。"""
+    current = now or datetime.now(UTC)
+    try:
+        end = expected_macro_date(current)
+        expected = joint_session_dates(end)
+    except ValueError as exc:
+        problems.append(f"{_MACRO_GAP_INCIDENT} マクロ欠け日の暦を判定できない: {exc}")
+        return
+    if not expected:
+        problems.append(f"{_MACRO_GAP_INCIDENT} マクロ欠け日の窓が空です: {end.isoformat()}")
+        return
+    start = expected[0]
+    try:
+        rows = store.query(_MACRO_DATES_SQL, [start.isoformat(), end.isoformat()])
+    except D1Error as exc:
+        problems.append(
+            f"{_MACRO_GAP_INCIDENT} swing_market_context の窓内日付を読めない: {exc}"
+        )
+        return
+    present: set[str] = set()
+    for row in rows:
+        value = row.get("date")
+        if not isinstance(value, str) or value == "":
+            problems.append(f"{_MACRO_GAP_INCIDENT} swing_market_context.date を読めない")
+            return
+        present.add(value)
+    missing = [day.isoformat() for day in expected if day.isoformat() not in present]
+    if not missing:
+        logger.info(
+            "%s マクロ欠け日: 窓%s〜%sの日米共通営業日 %d 日は全て行がある",
+            _MACRO_GAP_INCIDENT, start.isoformat(), end.isoformat(), len(expected),
+        )
+        return
+    listed = ",".join(missing)
+    problems.append(
+        f"{_MACRO_GAP_INCIDENT} マクロ欠け日: 窓{start.isoformat()}〜{end.isoformat()}"
+        f"の日米共通営業日 {len(expected)} 日のうち {len(missing)} 日が"
+        f" swing_market_context に無い ({listed})"
+    )
 
 
 @dataclass(frozen=True)
@@ -634,6 +713,7 @@ def execute(ctx: JobContext) -> None:
     _check_idle_runs(store, problems)
     _check_capacity(store, problems)
     _check_stock_coverage(store, problems)
+    _check_macro_context_gaps(store, problems)
     _check_ir_pdf_archive(store, problems)
     _check_ir_universe_gap(store, problems)
 

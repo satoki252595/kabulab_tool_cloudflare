@@ -49,6 +49,9 @@ describe("stock-sync.yml target routing", () => {
     expect(yml).toContain("run: pnpm sync:daily:core --stocks-only --yahoo-direct");
     expect(yml.match(/--yahoo-direct/g)).toHaveLength(1);
     expect(yml).toContain("run: pnpm sync:daily:core --context-only");
+    expect(yml).toContain("MACRO_CONTEXT_GAP_FILL: ${{ vars.MACRO_CONTEXT_GAP_FILL }}");
+    expect(yml).not.toContain("MACRO_CONTEXT_GAP_FILL: 1");
+    expect(yml).not.toContain('MACRO_CONTEXT_GAP_FILL: "1"');
   });
 
   it("価格非依存の33業種は株式失敗後も実行し、skipと取消では実行しない", () => {

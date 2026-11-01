@@ -156,6 +156,19 @@ export const sharedEnv = {
    * schedule 起動・手動 dispatch (stocks 等) は未設定でもよい。
    */
   STOCK_SYNC_TARGET: () => optional("STOCK_SYNC_TARGET"),
+  /**
+   * 定時マクロの欠け日を swing_market_context へ INSERT するか。
+   * 未設定・空・`0` は検出してログするだけ。`1` のときだけ書く。
+   * それ以外は throw する。未設定を 1 とは読まない。
+   */
+  MACRO_CONTEXT_GAP_FILL: (): boolean => {
+    const value = optional("MACRO_CONTEXT_GAP_FILL");
+    if (value === undefined || value === "0") return false;
+    if (value === "1") return true;
+    throw new Error(
+      "環境変数 MACRO_CONTEXT_GAP_FILL は未設定、0、1 のいずれかです。1 のときだけ欠けた日を書き込みます。"
+    );
+  },
 };
 
 /**
