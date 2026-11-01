@@ -4,18 +4,96 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 import { ROOT } from "../../../../src/shared/db/tests/source-scan.js";
 import { headedDescription, splitHeadedDescription, trustedCompanyYieldValue } from "../../data-scripts/estimated-value-guard.js";
-import { checkSummary, isSummaryNumbersGrounded, SUMMARY_CONTRACT_VERSION } from "../../data-scripts/summary-contract.js";
+import { checkSummary, isSummaryNumbersGrounded, missingSummaryConditions, SUMMARY_CONTRACT_VERSION } from "../../data-scripts/summary-contract.js";
 import { planSummaryImport, type SummaryResult } from "../../data-scripts/summary-import.js";
 import { selectSummaryTasks, type BenefitRow, type SummaryTask } from "../../data-scripts/summary-tasks.js";
-import { carryKey, planCarry } from "../../data-scripts/yutai-full-import.js";
+import { benefitRowsOf, carryKey, planCarry } from "../../data-scripts/yutai-full-import.js";
 import { extractBenefitRegistryStructure } from "../../data-scripts/registry-structure.js";
 import { companyValue, compileSimpleSummary } from "../../data-scripts/summary-local.js";
-import { compileAnnualGiftHistoryLiteral } from "../../data-scripts/holding-structure.js";
+import { compileAnnualGiftHistoryLiteral, compileBankHoldingHistoryLiteral } from "../../data-scripts/holding-structure.js";
 import annualGiftSaved from "./fixtures/annual-gift-history-saved2.json";
 
 const context = { minShares: [300], recordMonths: [12] };
 const privatePath = join(ROOT, "tmp/yutai-holding-definition-scope-proof-v1/saved2932.private.json");
 const digest = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+
+const bankHistoryPrivatePath = join(ROOT, "tmp/yutai-bank-history-8370-proof-v1/saved1.private.json");
+it("未資格の銀行履歴scopeを一般株数へ降格せず、通常の現在tier照合を維持する", () => {
+  const source = headedDescription("合成文法試験", "商品5000円相当、1年以上保有、1000株以上3回以上記録");
+  expect(compileBankHoldingHistoryLiteral(source)).toBeNull();
+  expect(isSummaryNumbersGrounded(source, "継続条件:通常1年以上保有・1000株以上3回以上記録", {
+    minShares: [1000], recordMonths: [3], recordDates: [null],
+  })).toBe(false);
+  expect(isSummaryNumbersGrounded("合成商品5000円相当", "3000株:合成商品5000円相当", { minShares: [3000], recordMonths: [3] })).toBe(true);
+  expect(isSummaryNumbersGrounded("合成商品5000円相当", "1000株:合成商品5000円相当", { minShares: [3000], recordMonths: [3] })).toBe(false);
+});
+
+it.skipIf(!existsSync(bankHistoryPrivatePath))("保存1群1行の歴史1000株・現在3000株・2027年特例を通常生成/取込/再取込で保持する", () => {
+  const bytes = readFileSync(bankHistoryPrivatePath);
+  expect(digest(bytes)).toBe("1fd40e9dceff443de1c3f818a4f515e8b9decd644f32a0504a3f40cc5f8217ac");
+  const saved = JSON.parse(bytes.toString()) as { rows: BenefitRow[] };
+  const tasks = selectSummaryTasks(saved.rows);
+  expect(tasks.length).toBe(1); expect(saved.rows.length).toBe(1);
+  const task = tasks[0], context = { minShares: [3000], recordMonths: [3], recordDates: [null] };
+  expect(digest(task.description)).toBe("4482e903938f82100c0e98e972f9da38c00858e4ff2544b3456de6d5970c67d4");
+  expect(digest(JSON.stringify(task.recipients))).toBe("840275444893fdcb2d674c439863f15088f3c7f44d98867ba615e3be50c895c3");
+  expect(companyValue(task)).toEqual({ value: 5000, reason: "qualified_company_per_grant" });
+  const result = compileSimpleSummary(task);
+  if (result === null) throw new Error("bank_history_literal_missing");
+  expect(digest(result.shortSummary)).toBe("c1d7b5b2ac47092d301ed514a593739d633a742fcc6c45c43c02778d40c35880");
+  expect(checkSummary(result.shortSummary)).toEqual([]);
+  expect(isSummaryNumbersGrounded(task.description, result.shortSummary, context)).toBe(true);
+  expect(missingSummaryConditions(task.description, result.shortSummary)).toEqual([]);
+  expect(result.estimatedValue).toBe(5000);
+  const plan = planSummaryImport({ tasks, currentRows: saved.rows, resultsText: JSON.stringify(result) });
+  expect(plan.rejections.map(r => r.reason)).toEqual([]); expect(plan.updates.length).toBe(1);
+  const row = { ...saved.rows[0], ...plan.updates[0] };
+  expect(selectSummaryTasks([row]).length).toBe(0);
+  expect(trustedCompanyYieldValue(row, context)).toBe(5000);
+  const source = splitHeadedDescription(task.description);
+  if (source.heading === null) throw new Error("bank_history_heading_missing");
+  const planned = benefitRowsOf({ code: task.stockCode, name: null, market: null, category: null,
+    benefits: [{ minShares: row.minShares, localRecordMonths: [row.recordMonth], heading: source.heading, description: source.body, notes: "" }] });
+  expect(planned.heldBenefits).toBe(0); expect(planned.rows.length).toBe(1);
+  expect(digest(planned.rows[0].description)).toBe(digest(task.description));
+  const key = carryKey(row.stockCode, source.body, row.minShares, row.recordMonth);
+  const groups = new Map([[row.stockCode, new Map([[source.body, context]])]]);
+  const carry = (headings: string[]) => planCarry([{ ...row, code: row.stockCode }], new Map([[key, headings]]), groups).carried.get(key);
+  expect(digest(carry([planned.rows[0].heading])!.shortSummary!)).toBe(digest(result.shortSummary));
+  expect(carry([planned.rows[0].heading])?.estimatedValue).toBe(5000);
+  expect(carry([planned.rows[0].heading])?.estimateValueSource).toBe("company");
+  for (const headings of [["別見出し"], [source.heading, "別見出し"], ["別見出し", source.heading], []])
+    expect(carry(headings)?.shortSummary === null).toBe(true);
+  const lines = task.description.split("\n");
+  const changed = [task.description + "\n追加条件", task.description.replace("1,000", "3,000"),
+    task.description.replace("2027", "2028"), task.description.replace("３回以上", "３回")];
+  for (let line = 0; line < lines.length; line++) changed.push(lines.filter((_, i) => i !== line).join("\n"));
+  for (const description of changed) {
+    expect(description !== task.description).toBe(true);
+    expect(compileSimpleSummary({ ...task, description }) === null).toBe(true);
+    expect(isSummaryNumbersGrounded(description, result.shortSummary, context)).toBe(false);
+  }
+  for (const minShares of [[], [1000], [2999], [4000], [3000, 1000], [3000.5], [Number.NaN]])
+    expect(isSummaryNumbersGrounded(task.description, result.shortSummary, { ...context, minShares })).toBe(false);
+  for (const recordMonths of [[], [0], [9], [3, 9], [3.5]])
+    expect(isSummaryNumbersGrounded(task.description, result.shortSummary, { ...context, recordMonths })).toBe(false);
+  for (const recordDates of [undefined, [], ["2027-03-31"], [null, null]])
+    expect(isSummaryNumbersGrounded(task.description, result.shortSummary, { ...context, recordDates })).toBe(false);
+  for (const recipient of [{ minShares: 1000, recordMonth: 3, recordDate: null }, { minShares: 3000, recordMonth: 9, recordDate: null },
+    { minShares: 3000, recordMonth: 3, recordDate: "2027-03-31" }])
+    expect(compileSimpleSummary({ ...task, recipients: [recipient] }) === null).toBe(true);
+  for (const shortSummary of [result.shortSummary + "・3000株", result.shortSummary.replace("1000株", "3000株"),
+    result.shortSummary.replace("3回以上", "3回"), result.shortSummary.replace("2027", "2028"),
+    result.shortSummary.replace("半年以上", "1年以上"), result.shortSummary.replace("5000円", "5001円"),
+    result.shortSummary.replace("継続条件:通常", "通常"), result.shortSummary.replace("円相当", "%")])
+    expect(isSummaryNumbersGrounded(task.description, shortSummary, context)).toBe(false);
+  for (const estimatedValue of [5001, 10000])
+    expect(planSummaryImport({ tasks, currentRows: saved.rows, resultsText: JSON.stringify({ ...result, estimatedValue }) }).updates.length).toBe(0);
+  expect(planSummaryImport({ tasks, currentRows: saved.rows, resultsText: JSON.stringify({ ...result, contractVersion: "2026-10-25.9" }) }).rejections.map(r => r.reason)).toEqual(["contract_version"]);
+  const dated = saved.rows.map(r => ({ ...r, recordDate: "2027-03-31" }));
+  expect(planSummaryImport({ tasks: selectSummaryTasks(dated), currentRows: dated, resultsText: JSON.stringify(result) }).rejections.map(r => r.reason)).toEqual(["summary_ungrounded"]);
+});
+
 function fixture() {
   const bytes = readFileSync(privatePath);
   expect(digest(bytes)).toBe("a7676d5ec0692275aa51c999e516b1bec89cb5ca08eefc6b4af38009ec2c834f");

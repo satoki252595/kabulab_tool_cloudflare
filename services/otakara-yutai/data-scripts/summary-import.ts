@@ -297,7 +297,7 @@ export function planSummaryImport(input: {
     }
     // 要約の単位付き数値も原文・受取条件で裏づける。金額列NULLでも架空額は不可。
     if (!isSummaryPercentGrounded(row.description, summary) || !isSummaryNumbersGrounded(row.description, summary, {
-      minShares: row.minShares, recordMonths: row.recordMonths,
+      minShares: row.minShares, recordMonths: row.recordMonths, recordDates: row.recordDates,
     })) {
       reject("summary_ungrounded", "要約の単位付き数値が掲載文・実受取条件に無い");
       continue;

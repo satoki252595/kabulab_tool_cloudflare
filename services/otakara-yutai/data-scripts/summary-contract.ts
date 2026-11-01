@@ -23,7 +23,7 @@
 
 import { createHash } from "node:crypto";
 import { HEADED_MARK, splitHeadedDescription } from "./estimated-value-guard.js";
-import { compileAnnualGiftHistoryLiteral, compileDepartmentHoldingLiteral, compileHoldingPointCarryLiteral, compilePointExchangeLiteral, compilePremiumClubCarryLiteral, compileVenueAdmissionLiteral } from "./holding-structure.js";
+import { compileAnnualGiftHistoryLiteral, compileBankHoldingHistoryLiteral, compileDepartmentHoldingLiteral, compileHoldingPointCarryLiteral, compilePointExchangeLiteral, compilePremiumClubCarryLiteral, compileVenueAdmissionLiteral } from "./holding-structure.js";
 
 /**
  * 要約契約の版。タスクファイルと結果ファイルの各行に載り、取り込み時に
@@ -31,7 +31,7 @@ import { compileAnnualGiftHistoryLiteral, compileDepartmentHoldingLiteral, compi
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-10-25.9";
+export const SUMMARY_CONTRACT_VERSION = "2026-10-26.1";
 
 /** 比較時だけ同じ月期間の表記を揃え、数値・比較条件・保存文面は変えない。 */
 function normalizeMonthPeriods(text: string): string {
@@ -123,9 +123,15 @@ export function isSummaryPercentGrounded(description: string, shortSummary: stri
 export function isSummaryNumbersGrounded(
   description: string,
   shortSummary: string,
-  context: { minShares: readonly number[]; recordMonths: readonly number[] },
+  context: { minShares: readonly number[]; recordMonths: readonly number[]; recordDates?: readonly (string | null)[] },
 ): boolean {
   const normalized = shortSummary.normalize("NFKC").trim();
+  const bankHistory = compileBankHoldingHistoryLiteral(description);
+  // 全文1件・完全句・全recipientだけ。歴史1000株で現在3000株を置き換えない。
+  if (bankHistory !== null || normalized.includes("継続条件:通常")) return bankHistory !== null && normalized === bankHistory.shortSummary &&
+    context.minShares.length > 0 && context.minShares.every(value => value === 3000) &&
+    context.recordMonths.length === context.minShares.length && context.recordMonths.every(value => value === 3) &&
+    context.recordDates?.length === context.minShares.length && context.recordDates.every(value => value === null);
   const annualGift = compileAnnualGiftHistoryLiteral(description);
   // 明示scopeだけを新しい全文資格で読む。通常100株の旧要約は従来の照合を維持する。
   if (annualGift !== null && normalized.includes("継続条件")) return normalized === annualGift.shortSummary &&

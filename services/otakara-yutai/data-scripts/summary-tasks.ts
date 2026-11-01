@@ -146,6 +146,7 @@ export function selectSummaryTasks(
       !isSummaryNumbersGrounded(g.description, summary as string, {
         minShares: [g.recipients[index].minShares],
         recordMonths: [g.recipients[index].recordMonth],
+        recordDates: [g.recipients[index].recordDate],
       }))) reason = "rework";
     if (reason === null && opts.retaskKeys?.has(taskId)) reason = "rework";
     if (reason === null) continue;

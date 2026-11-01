@@ -332,7 +332,7 @@ export function planCarry(
       : headings.map(heading => headedDescription(heading, carryBody(row.description)));
     if (missingSummaryConditions(conditions, shortSummary === null ? "" : shortSummary).length > 0 ||
         (shortSummary !== null && (numericSources.length === 0 || numericSources.some(source => !isSummaryNumbersGrounded(source, shortSummary!, {
-          minShares: [row.minShares], recordMonths: [row.recordMonth],
+          minShares: [row.minShares], recordMonths: [row.recordMonth], recordDates: [row.recordDate],
         }))))) {
       shortSummary = null;
       estimatedValue = null;
