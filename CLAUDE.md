@@ -326,6 +326,54 @@ import して使う（各サービスで `.tip` を再定義しない）。利�
 
 ---
 
+## 🧹 ルール8: 作業場所は main 一本化を維持する
+
+正本は **リモート (GitHub) の `main` のみ**。ローカル (Mac の
+`~/projects/kabulab-cf`)、SSH接続先 (`nipogi` の `~/projects/kabulab-cf`)、
+リモートの三面は常に `main` で一致させる。作業の置き場を散らかさない。
+
+### 原則
+
+- 変更はルール5 の feature ブランチ + PR が唯一の経路。`main` 直 push 禁止
+  (ルール5) は変わらない。「main にマージして綺麗にする」とは、全ての
+  成果が PR 経由で `main` に入り、余分なブランチ・worktree・stash が
+  三面のどこにも残っていない状態を指す。
+- worktree は作業単位の一時場所。PR マージ (または作業終了) の時点で
+  除去する。週を跨いで放置しない。
+- stash は一時退避専用。作業の保存先として使わない (残すなら
+  ブランチ化する)。
+
+### 棚卸し手順 (散らかったらこの手順で main 一本化に戻す)
+
+1. `git fetch --all --prune` し、ローカル `main` を `origin/main` へ
+   fast-forward する。
+2. 各 worktree の取り込み判定は **祖先判定 + `git cherry`** の両方で
+   行う (squash マージ運用のため「祖先でない」≠「未取り込み」。
+   patch-id が main にあれば取り込み済み)。
+3. main に無いコミット・未コミット変更は、捨てずに
+   `archive/<YYYYMMDD>/<slug>` ブランチとしてリモートへ push して
+   保全してから撤去する。dirty 分は保全コミットを1つ作る。
+   **`.env*` は保全コミットに絶対に含めない** (ルール3)。
+4. stash は各エントリを `archive/<YYYYMMDD>/stash-*` ブランチ化し、
+   push を検証してから `git stash clear` する。
+5. リモートの取り込み済みブランチは削除する (`main` と
+   `archive/*` のみが恒常ブランチ)。
+6. SSH接続先でも同じ棚卸しを行う。接続先の detached HEAD が
+   リモート到達可能 (= 固有コミット無し) であることを確認してから
+   worktree を撤去し、`main` を fast-forward する。
+7. 撤去後、三面とも `git worktree list` がメイン1件・`git status`
+   clean・`main` == `origin/main` であることを確認する。
+
+### 付随ルール
+
+- `.env` の世代退避コピーは git 外の `~/kabulab-cf-env-archive/`
+  (ディレクトリ 700 / ファイル 600) に置く。worktree 内に置かない。
+- worktree 内の ignored 生成物 (`tmp/` 等) は正本ではない
+  (一次データの正本はルール6 の Notion/DB)。worktree 撤去で消える
+  前提で運用し、残すべき成果は正本側へ寄せる。
+
+---
+
 ## このルールが効く範囲
 
 - 新規コードを書くとき

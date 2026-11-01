@@ -19,6 +19,7 @@ CLAUDE.md が定める絶対ルールの見出しのみ列挙する (本文は C
 5. ルール5: 修正完了後は PR を作る (main 直 push 禁止)
 6. ルール6: 一次データは Notion に必ずアーカイブする (`src/shared/notion-archive/` 経由)
 7. ルール7: UI の専門用語には投資初心者向けバルーンヘルプを必ず付ける (`src/shared/term-tip.ts`)
+8. ルール8: 作業場所は main 一本化を維持する (ローカル/SSH接続先/リモートの三面を main で一致させ、棚卸しは archive ブランチ保全→撤去)
 
 個別サービスのコーディング規約は各 [`services/<slug>/CLAUDE.md`](./services/) を参照
 (サービス別 AGENTS.md は置かない)。
