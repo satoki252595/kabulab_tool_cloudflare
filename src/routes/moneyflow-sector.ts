@@ -52,8 +52,15 @@ export interface MoneyflowSectorCoverage {
   date: string;
   /** 対象母集団の銘柄数 (active かつ equity。集計と同一述語)。 */
   universe: number;
-  /** 対象日に実 close+volume の日足を持つ銘柄数。 */
+  /**
+   * 対象週 [from, to] に実 close+volume の日足を1本以上持つ銘柄数。
+   * 無出来の日は日足行自体が存在せず、その日の売買代金寄与は実際に0のため、
+   * 被覆は as-of 日単日ではなく週で測る (単日の全数一致は出来高の小さい
+   * 銘柄の無出来で現実に成立せず、この集計は開始以来0件だった)。
+   */
   covered: number;
+  /** as-of 日 (to) 単日に実 close+volume の日足を持つ銘柄数 (内訳の開示用)。 */
+  asOfDayCovered: number;
 }
 
 export interface MoneyflowSectorResult {
@@ -62,7 +69,7 @@ export interface MoneyflowSectorResult {
   /** 時価総額は取得時点のスナップショット (対象期間の値ではない)。 */
   marketCapAsOf: "snapshot_at_fetch";
   sectors: SectorTurnoverRow[];
-  /** as-of 日の実日足 coverage (CLI が exact 照合する)。 */
+  /** 対象週の実日足 coverage (CLI が被覆率で照合する)。 */
   coverage: MoneyflowSectorCoverage;
 }
 
@@ -206,14 +213,15 @@ export async function aggregateMoneyflowSector(
     }))
     .sort((x, y) => y.turnover - x.turnover);
 
-  // as-of 日 (to) の実日足 coverage。対象母集団のうち対象日に実 close+volume を
-  // 持つ銘柄 (ohlcvRows は集計と同じ active かつ equity 述語済みのため、
-  // 日付と非 NULL だけ数える。追加クエリなし)。
+  // 対象週 [from, to] の実日足 coverage。母集団のうち週内に実 close+volume の
+  // 日足を1本以上持つ銘柄を covered、as-of 日単日の分を asOfDayCovered に数える
+  // (ohlcvRows は集計と同じ active かつ equity 述語済み。追加クエリなし)。
   const coveredIds = new Set<number>();
+  const asOfDayIds = new Set<number>();
   for (const row of ohlcvRows) {
-    if (row.date === range.to && row.close !== null && row.volume !== null) {
-      coveredIds.add(row.stockId);
-    }
+    if (row.close === null || row.volume === null) continue;
+    if (row.date >= range.from && row.date <= range.to) coveredIds.add(row.stockId);
+    if (row.date === range.to) asOfDayIds.add(row.stockId);
   }
 
   return {
@@ -221,6 +229,6 @@ export async function aggregateMoneyflowSector(
     to: range.to,
     marketCapAsOf: "snapshot_at_fetch",
     sectors,
-    coverage: { date: range.to, universe, covered: coveredIds.size },
+    coverage: { date: range.to, universe, covered: coveredIds.size, asOfDayCovered: asOfDayIds.size },
   };
 }
