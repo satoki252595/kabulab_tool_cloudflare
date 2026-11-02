@@ -340,6 +340,17 @@ class TestR2Store:
             _store(fake).put_json_guarded("margin/weeks.json", {"weeks": []})
         assert fake.puts == []
 
+    def test_get_bytes_returns_raw_and_none_on_404(self):
+        """原本読み戻し用。404 は None、500 は R2Error (不在に潰さない)。"""
+        from jp_stock_pipeline.cloud_store.r2 import R2Error
+
+        fake = _FakeS3({"raw/x.zip": b"PK\x03\x04zip-bytes"})
+        assert _store(fake).get_bytes("raw/x.zip") == b"PK\x03\x04zip-bytes"
+        assert _store(fake).get_bytes("raw/missing.zip") is None
+        failing = _FakeS3(get_error=_make_client_error("InternalError", 500))
+        with pytest.raises(R2Error):
+            _store(failing).get_bytes("raw/x.zip")
+
     def test_exists_is_false_on_404_and_raises_on_other_errors(self):
         from jp_stock_pipeline.cloud_store.r2 import R2Error
 
