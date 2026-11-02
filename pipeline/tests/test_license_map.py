@@ -219,12 +219,14 @@ class TestDoesNotScanRows:
             assert any(name in sql for name in allowed), sql
 
     def test_日次で_DDL_を流さない(self, monkeypatch) -> None:
-        """`apply_schema` の 16 文を毎日 no-op で投げると往復時間だけ増える。
+        """`apply_schema` の 19 文を毎日 no-op で投げると往復時間だけ増える。
 
         2026-09-25 に `jss_xbrl_documents` / `jss_xbrl_elements` の CREATE TABLE
         2 文 + CREATE INDEX 2 文を退役させ、20 文から 16 文になった。
+        2026-11-02 に `jss_per_share_facts` (#651) の CREATE TABLE 1 文 +
+        CREATE INDEX 2 文を足し、19 文になった。
         """
-        assert len(S.SCHEMA_STATEMENTS) == 16, len(S.SCHEMA_STATEMENTS)
+        assert len(S.SCHEMA_STATEMENTS) == 19, len(S.SCHEMA_STATEMENTS)
         store = _FakeStore()
         _wire(monkeypatch, store)
         assert license_map.main([], env=dict(_D1_ENV)) == 0

@@ -80,6 +80,10 @@
       "kind": "operational",
       "tag": "commercial-ok"
     },
+    "jss_per_share_facts": {
+      "kind": "row-tag",
+      "tag": null
+    },
     "jss_raw_files": {
       "kind": "row-tag",
       "tag": null
@@ -220,6 +224,12 @@
     },
     {
       "dataset": "jss_notion_pages",
+      "column_group": "all",
+      "writer": "stockStock",
+      "declared": "2026-09-13"
+    },
+    {
+      "dataset": "jss_per_share_facts",
       "column_group": "all",
       "writer": "stockStock",
       "declared": "2026-09-13"

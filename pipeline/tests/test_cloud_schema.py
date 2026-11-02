@@ -44,6 +44,7 @@ class TestSchemaShape:
         assert _tables() == {
             "jss_raw_files",
             "jss_financials",
+            "jss_per_share_facts",
             "jss_supply_latest",
             "jss_index_symbols",
             "jss_job_runs",

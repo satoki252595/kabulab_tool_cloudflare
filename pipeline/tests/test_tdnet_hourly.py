@@ -219,7 +219,7 @@ class TestProcessFinancialXbrlSavesDocId:
         monkeypatch.setattr(
             mod.normalize,
             "tidy_to_financial_record",
-            lambda tidy, code, prov, *, disclosed_at: types.SimpleNamespace(code="7203"),  # noqa: ARG005
+            lambda tidy, code, prov, *, disclosed_at, diagnostics=None: types.SimpleNamespace(code="7203"),  # noqa: ARG005
         )
 
         ctx = _ctx(str(tmp_path))

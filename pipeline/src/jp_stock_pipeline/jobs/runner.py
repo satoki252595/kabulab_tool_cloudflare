@@ -192,6 +192,23 @@ class JobContext:
             f"③{doc_id or record.code}",
         )
 
+    def cloud_per_share_facts(
+        self, record, diagnostics, *, doc_id: str | None, raw_sha256: str | None
+    ) -> bool | None:
+        """1株当たり指標の出典 fact を D1 `jss_per_share_facts` へ書く (#651)。
+
+        ③とは独立のベストエフォート (`_cloud` が握って cloud_failed に計上)。
+        fact の失敗で③や取得単位を落とさない。
+        """
+        if record is None:
+            raise ValueError("cloud_per_share_facts に None を渡している")
+        return self._cloud(
+            lambda c: c.upsert_per_share_facts(
+                record, diagnostics, doc_id=doc_id, raw_sha256=raw_sha256
+            ),
+            f"per-share-facts:{doc_id or record.code}",
+        )
+
     def _persist(self, notion_write, local_write, label: str) -> bool:
         """Notion とローカルへ独立に書き、少なくとも一方に残せたかを返す。
 
