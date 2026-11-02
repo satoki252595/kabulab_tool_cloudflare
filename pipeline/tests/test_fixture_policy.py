@@ -166,6 +166,8 @@ SKIP_ALLOWED: frozenset[str] = frozenset(
         "tdnet/yanoshin_list_20260610.json",
         "tdnet/yanoshin_list_recent.json",
         "tdnet/context-unit/{…}.zip",
+        # 6532 ベイカレント第2四半期短信 (#651 fact テスト用、SHA固定)
+        "tdnet/context-unit/6532.zip",
     }
 )
 
