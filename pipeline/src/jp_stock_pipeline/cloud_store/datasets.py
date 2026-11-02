@@ -16,7 +16,7 @@ writer の自己申告は「今さっき更新した」になる（実際には1
 - 1 データセット = **1 文の集約**。latest_date / source_epoch / n の3列だけを返す。
 - **UNION を使わない**。D1 の compound SELECT 上限は
   `d1.MAX_COMPOUND_SELECT_TERMS = 5`（本番実測。素の SQLite の 500 ではない）で、
-  「7 データセットを1文で数える」は構造的に上限へ抵触する。1文ずつ7回投げる。
+  「8 データセットを1文で数える」は構造的に上限へ抵触する。1文ずつ8回投げる。
 - epoch 列から日付を作るときは必ず `date(x,'unixepoch','+9 hours')`。UTC の
   ままだと他データセットの JST 営業日文字列と 1 日ずれ、同じ表の中で基準が
   2 つになる。
@@ -233,15 +233,16 @@ DATASET_SOURCES: tuple[DatasetSource, ...] = (
         # 契約違反であり、この宣言が二重 writer 検知の根拠になる。
         writer="tdnet_hourly",
         sql=(
-            "SELECT NULL AS latest_date,"
-            " MAX(fetched_at) AS source_epoch,"
+            "SELECT date(MAX(disclosed_at),'unixepoch','+9 hours') AS latest_date,"
+            " MAX(disclosed_at) AS source_epoch,"
             " COUNT(*) AS n FROM jss_financial_forecasts"
         ),
         license_tag=LicenseTag.FACTUAL_CITE.value,
         note=(
             "TDnet 短信のみが書く表なのでタグは factual-cite 固定。"
-            "鮮度は writer の生存 = `fetched_at` の最大値で見る"
-            "（予想が黙って止まる #652 型の故障を検知するのが主目的）。"
+            "鮮度は取得時刻ではなく最新行の開示日で見る（`fetched_at` は"
+            "バックフィルでも進むため、writer が止まっても緑になる）。"
+            "予想が黙って止まる #652 型の故障を検知するのが主目的"
         ),
     ),
     DatasetSource(
