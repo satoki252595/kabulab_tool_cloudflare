@@ -21,7 +21,9 @@ import {
 } from "./supply";
 import {
   MAX_BATCH_CODES,
+  classifyForecastMissingCodes,
   classifyMissingCodes,
+  fetchForecastLatestByCodes,
   fetchIndicatorsByCodes,
   fetchLatestJobRuns,
   fetchValuationByCodes,
@@ -124,6 +126,32 @@ export const TOOLS = [
       "一次情報（財務サマリ）の代替ではない概況値として扱うこと。codes は最大 " + MAX_BATCH_CODES + " 件。" +
       "見つからない code は data.not_found に列挙し、理由 (unknown_code=未知コード / " +
       "not_collected=実在するが未取得) を data.not_found_reasons に出す。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        codes: {
+          type: "array",
+          items: { type: "string" },
+          minItems: 1,
+          maxItems: MAX_BATCH_CODES,
+          description: "4桁の銘柄コードの配列",
+        },
+      },
+      required: ["codes"],
+    },
+  },
+  {
+    name: "jp_forecast_latest",
+    description:
+      "日本株の会社業績予想を銘柄コードで返す（TDnet 決算短信の会社予想）。" +
+      "銘柄ごとに最新開示1行だけを返し、その開示が述べた通期予想（売上・営業利益・" +
+      "経常利益・純利益・EPS）と予想配当、対象期末 (target_period_end)、開示時刻 " +
+      "(disclosed_at) を含む。列ごとの最新値合成はしないため、最新開示が予想未定なら" +
+      "値は null のまま返る（古い開示の予想で埋めない）。対象期末は短信の文脈から" +
+      "読めた場合だけ入る。codes は最大 " + MAX_BATCH_CODES + " 件。見つからない code は " +
+      "data.not_found に列挙し、理由 (unknown_code=未知コード / " +
+      "no_forecast_in_store=実在するが予想行が無い) を data.not_found_reasons に出す。" +
+      "TDnet 由来 (factual-cite) のため内部面のみ。",
     inputSchema: {
       type: "object",
       properties: {
@@ -243,6 +271,20 @@ async function callTool(
       return envelope(
         { results: rows, not_found: notFound, not_found_reasons: reasons },
         { sources: ["Yahoo"], licenses: ["personal-only"] },
+      );
+    }
+    case "jp_forecast_latest": {
+      const codes = parseCodes(args.codes);
+      const rows = await fetchForecastLatestByCodes(env.DB, codes);
+      const found = new Set(rows.map((r) => String(r.code)));
+      const notFound = codes.filter((c) => !found.has(c));
+      const reasons = await classifyForecastMissingCodes(env.DB, notFound);
+      return envelope(
+        { results: rows, not_found: notFound, not_found_reasons: reasons },
+        {
+          sources: rows.map((r) => String(r.source ?? "")),
+          licenses: rows.map((r) => String(r.license_tag ?? "")),
+        },
       );
     }
     case "jp_job_runs": {

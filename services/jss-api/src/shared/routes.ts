@@ -138,6 +138,34 @@ export async function fetchValuationByCodes(
   return results;
 }
 
+/**
+ * 会社業績予想の最新開示1行 (#652)。`jss_financial_forecasts` は
+ * TDnet 短信 1 開示 = 1 行で、銘柄ごとに開示時刻が最大の行だけを返す。
+ *
+ * 列ごとの最新値合成は**しない**。最新開示が予想未定 (全値 NULL) なら
+ * その行がそのまま返り、古い開示の予想で埋めることはない (ルール2)。
+ * 同一開示時刻の決着は fetched_at → doc_id の順で決定的にする
+ * (doc_id は (code, doc_id) で一意)。
+ */
+export async function fetchForecastLatestByCodes(
+  db: D1Database,
+  codes: string[],
+): Promise<Record<string, unknown>[]> {
+  const { results } = await db.prepare(
+    "SELECT code, name, doc_id, disclosed_at, target_period_end, forecast_scope," +
+      " consolidated, forecast_net_sales, forecast_operating_income," +
+      " forecast_ordinary_income, forecast_net_income, forecast_eps, dps_forecast," +
+      " dps_target_period_end, source_period_end, source_disclosure_type," +
+      " raw_sha256, source, license_tag, fetched_at" +
+      " FROM (SELECT f.*, s.name AS name, ROW_NUMBER() OVER (PARTITION BY f.code" +
+      " ORDER BY (f.disclosed_at IS NULL), f.disclosed_at DESC, f.fetched_at DESC," +
+      " f.doc_id DESC) AS rn" +
+      " FROM jss_financial_forecasts f LEFT JOIN core_stocks s ON s.code = f.code" +
+      ` WHERE f.code IN (${inPlaceholders(codes.length)})) WHERE rn = 1 ORDER BY code`,
+  ).bind(...codes).all<Record<string, unknown>>();
+  return results;
+}
+
 /** not_found の理由。未知コードと、実在するが未収録を区別する (#652)。 */
 export type MissingCodeReason = "unknown_code" | "not_collected";
 
@@ -176,6 +204,35 @@ async function missingCodeError(
   return m?.reason === "unknown_code"
     ? errorBody("見つからない（未知コード）", "unknown_code")
     : errorBody(`見つからない（${notCollectedLabel}）`, "not_collected");
+}
+
+export interface ForecastMissingCode {
+  code: string;
+  reason: "unknown_code" | "no_forecast_in_store";
+}
+
+/**
+ * 予想の欠落理由。実在するが予想行が1つも無い場合は、汎用の
+ * not_collected ではなく `no_forecast_in_store` と名指しする
+ * (未収録なのか予想を開示していないのかは、行が無いことからは
+ * 区別できないため、どちらとも断定しない名前)。未知コードは共通。
+ */
+export async function classifyForecastMissingCodes(
+  db: D1Database,
+  missing: string[],
+): Promise<ForecastMissingCode[]> {
+  const base = await classifyMissingCodes(db, missing);
+  return base.map((m) => ({
+    code: m.code,
+    reason: m.reason === "unknown_code" ? "unknown_code" : "no_forecast_in_store",
+  }));
+}
+
+async function forecastMissingError(db: D1Database, code: string) {
+  const [m] = await classifyForecastMissingCodes(db, [code]);
+  return m?.reason === "unknown_code"
+    ? errorBody("見つからない（未知コード）", "unknown_code")
+    : errorBody("見つからない（会社予想が未収録）", "no_forecast_in_store");
 }
 
 /**
@@ -407,6 +464,22 @@ export function mountPrivate(app: Hono<{ Bindings: PrivateEnv }>) {
     const [row] = await fetchValuationByCodes(c.env.DB, [code]);
     if (!row) return c.json(await missingCodeError(c.env.DB, code, "未取得"), 404);
     return c.json(envelope(row, { sources: ["Yahoo"], licenses: ["personal-only"] }));
+  });
+
+  // 会社業績予想の最新開示1行 (#652)。TDnet 由来 (factual-cite) のため内部面のみ。
+  app.get("/v1/forecast/:code", async (c) => {
+    const code = c.req.param("code");
+    if (!isValidCode(code)) {
+      return c.json(errorBody("銘柄コードは4桁", "invalid_code"), 400);
+    }
+    const [row] = await fetchForecastLatestByCodes(c.env.DB, [code]);
+    if (!row) return c.json(await forecastMissingError(c.env.DB, code), 404);
+    return c.json(
+      envelope(row, {
+        sources: [String(row.source ?? "")],
+        licenses: [String(row.license_tag ?? "")],
+      }),
+    );
   });
 
   app.get("/v1/yutai/:code", async (c) => {
