@@ -135,8 +135,10 @@ def _process_financial_xbrl(
         fetched_at=now_jst(),
         raw_page_id=raw_page_id,
     )
+    diagnostics: dict[str, dict] = {}
     fin = normalize.tidy_to_financial_record(
-        tidy, record.code or "", prov, disclosed_at=record.disclosed_at
+        tidy, record.code or "", prov,
+        disclosed_at=record.disclosed_at, diagnostics=diagnostics,
     )
     if fin is None:
         logger.info("③レコード生成不可 (決算期末を導出できず): %s", record.doc_id)
@@ -169,6 +171,11 @@ def _process_financial_xbrl(
     assert_scheduled_io(ctx.args, now_jst())
     ctx.cloud_financial_summary(
         fin, doc_id=record.doc_id, raw_sha256=artifact.sha256
+    )
+    # 1株当たり指標の出典 fact (#651)。③本体とは独立のベストエフォート。
+    assert_scheduled_io(ctx.args, now_jst())
+    ctx.cloud_per_share_facts(
+        fin, diagnostics, doc_id=record.doc_id, raw_sha256=artifact.sha256
     )
 
 

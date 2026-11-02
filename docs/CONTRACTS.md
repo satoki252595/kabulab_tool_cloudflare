@@ -174,6 +174,7 @@ value          : str  値（**原文の文字列をそのまま**。数値化は
 ```
 
 財務サマリの金額は円、EPS/BPS/配当は円/株、比率はpureのみ採用する。
+EPS/BPS/DPS の採用factは、出典要素・context・連結区分を D1 `jss_per_share_facts` に書類単位で残す（#651）。分割調整の basis は一次根拠を資格化できるまで `unknown` とし、分割イベントの存在だけで調整済みと断定しない。保存値は原本の公表値のままで、分割係数の再適用はしない。
 中間期のBPS/自己資本比率にInterimInstantがある場合はその当中間期末を採用し、同一原本のCurrentYearInstant年度末値と混ぜない。同じ当中間期末に異なる値があれば欠損を維持する。
 セグメント/地域/商品のdimensionを会社全体へ混ぜず、年間配当はAnnualMemberだけを採用する。
 forecast_*はCurrent/NextYearDurationの通期予想だけを採用する。四半期/半期予想を代用しない。

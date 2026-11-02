@@ -244,6 +244,36 @@ CREATE TABLE IF NOT EXISTS jss_notion_pages (
 )
 """
 
+# 1株当たり指標の出典 fact (#651)。③財務サマリは最新開示への完全置換で
+# 出典 (要素・文脈・書類) が残らないため、EPS/BPS/DPS の採用factだけを
+# 書類単位で別に残す。値は原本のまま持ち、分割調整の再適用はしない。
+# split_basis は一次根拠を資格化できるまで 'unknown'、check_status は
+# Phase 1 では全行 'not_checkable' (未実施を合格と書かない)。
+_PER_SHARE_FACTS = """CREATE TABLE IF NOT EXISTS jss_per_share_facts (
+  code                TEXT NOT NULL,
+  fiscal_period_end   TEXT NOT NULL,
+  disclosure_type     TEXT NOT NULL,
+  consolidated        TEXT NOT NULL,
+  metric              TEXT NOT NULL,
+  doc_id              TEXT NOT NULL,
+  value               REAL,
+  element             TEXT,
+  element_scope       TEXT NOT NULL,
+  context_refs        TEXT,
+  source_context_kind TEXT NOT NULL,
+  split_basis         TEXT NOT NULL,
+  check_status        TEXT NOT NULL,
+  check_reason        TEXT,
+  diagnostic_status   TEXT,
+  diagnostic_reason   TEXT,
+  disclosed_at        INTEGER,
+  raw_sha256          TEXT,
+  source              TEXT NOT NULL,
+  license_tag         TEXT NOT NULL,
+  fetched_at          INTEGER NOT NULL,
+  PRIMARY KEY (code, fiscal_period_end, disclosure_type, consolidated, metric, doc_id)
+)"""
+
 # ③財務サマリの PK。`cloud_store/financials.py` の ON CONFLICT はこれを読む。
 #
 # `_FINANCIALS` の DDL 側は同じ内容を**リテラルで別に持つ**（導出にしない）。
@@ -268,6 +298,10 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_jss_fin_stock "
     "ON jss_financials(stock_id, fiscal_period_end DESC)",
     "CREATE INDEX IF NOT EXISTS idx_jss_fin_disclosed ON jss_financials(disclosed_at DESC)",
+    _PER_SHARE_FACTS,
+    "CREATE INDEX IF NOT EXISTS idx_jss_psf_code_metric"
+    " ON jss_per_share_facts(code, metric, fiscal_period_end DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_jss_psf_doc ON jss_per_share_facts(doc_id)",
     _SUPPLY_LATEST,
     "CREATE INDEX IF NOT EXISTS idx_jss_supply_date "
     "ON jss_supply_latest(data_type, data_date DESC)",

@@ -461,10 +461,12 @@ def _process_document(
             fetched_at=tidy_artifact.fetched_at,
             raw_page_id=tidy_artifact.notion_page_id,
         )
+        diagnostics: dict[str, dict] = {}
         fin = normalize.tidy_to_financial_record(
             tidy, code, prov,
             disclosure_type="本決算" if doc_type_code in ("120", "130") else None,
             disclosed_at=record.disclosed_at,
+            diagnostics=diagnostics,
         )
         # `fin is not None` は明示ガードにする。`if fin is not None and not
         # ctx.persist(...)` の形だと、Cloudflare への書き込みを「raise の次の行」に
@@ -484,6 +486,11 @@ def _process_document(
             assert_scheduled_io(ctx.args, now_jst())
             ctx.cloud_financial_summary(
                 fin, doc_id=doc_id, raw_sha256=tidy_artifact.sha256
+            )
+            # 1株当たり指標の出典 fact (#651)。③本体とは独立のベストエフォート。
+            assert_scheduled_io(ctx.args, now_jst())
+            ctx.cloud_per_share_facts(
+                fin, diagnostics, doc_id=doc_id, raw_sha256=tidy_artifact.sha256
             )
 
     if tidy_artifact is not None:

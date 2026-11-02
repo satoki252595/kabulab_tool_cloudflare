@@ -13,7 +13,7 @@ from datetime import date
 from typing import TYPE_CHECKING
 
 from ..config import CloudStoreSettings
-from . import financials, keys
+from . import financials, keys, per_share_facts
 from .d1 import D1Error, D1Store
 from .r2 import R2Error, R2Store
 
@@ -246,6 +246,37 @@ class CloudSink:
             logger.warning(
                 "D1 %s への ③ 書き込みに失敗: %s %s: %s",
                 financials.TABLE, record.code, record.fiscal_period_end, exc,
+            )
+            return False
+        return True
+
+    def upsert_per_share_facts(
+        self,
+        record: "FinancialSummaryRecord",
+        diagnostics: dict[str, dict],
+        *,
+        doc_id: str | None,
+        raw_sha256: str | None,
+    ) -> bool | None:
+        """1株当たり指標の出典 fact を D1 `jss_per_share_facts` へ書く (#651)。
+
+        ③財務サマリ本体とは独立のベストエフォート。fact 書込の失敗で
+        ③の成功を巻き戻さない (呼び出し側の `_cloud` が cloud_failed に
+        計上する)。doc_id が無い場合は書類を特定できないため書かない。
+        """
+        if not self.enabled:
+            return None
+        if not self.settings.d1_enabled():
+            return None
+        try:
+            rows = per_share_facts.build_rows(
+                record, diagnostics, doc_id=doc_id, raw_sha256=raw_sha256
+            )
+            per_share_facts.write(self.d1, rows)
+        except D1Error as exc:
+            logger.warning(
+                "D1 %s への fact 書き込みに失敗: %s %s: %s",
+                per_share_facts.TABLE, record.code, doc_id, exc,
             )
             return False
         return True
