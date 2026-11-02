@@ -21,6 +21,7 @@ import {
 } from "./supply";
 import {
   MAX_BATCH_CODES,
+  classifyMissingCodes,
   fetchIndicatorsByCodes,
   fetchLatestJobRuns,
   fetchValuationByCodes,
@@ -96,8 +97,9 @@ export const TOOLS = [
     description:
       "日本株の株価テクニカルの最新断面を銘柄コードで返す（旧 Notion『②株価テクニカル』の代替）。" +
       "終値・出来高・前日比・移動平均(5/20/25/60/75)・RSI(14)・MACD・ATR(14)・出来高比率・20日レンジを含む。" +
-      "codes は最大 " + MAX_BATCH_CODES + " 件。見つからない code は data.not_found に列挙する" +
-      "（未知コードか未計算かは区別しない。欠損値を埋めて返すことはしない）。",
+      "codes は最大 " + MAX_BATCH_CODES + " 件。見つからない code は data.not_found に列挙し、" +
+      "理由 (unknown_code=未知コード / not_collected=実在するが未計算) を data.not_found_reasons に出す" +
+      "（欠損値を埋めて返すことはしない）。",
     inputSchema: {
       type: "object",
       properties: {
@@ -117,8 +119,11 @@ export const TOOLS = [
     description:
       "日本株のバリュエーションの最新断面を銘柄コードで返す（旧 Notion『②株価テクニカル』の" +
       "バリュエーション欄の代替）。株価・PER・PBR・配当利回り・EPS・BPS・ROE・ROA・時価総額と、" +
-      "その基準日(data_date)・取得時刻(fetched_at)を含む。codes は最大 " + MAX_BATCH_CODES + " 件。" +
-      "見つからない code は data.not_found に列挙する。",
+      "その基準日(data_date)・取得時刻(fetched_at)を含む。値は Yahoo 由来の日次断面で、" +
+      "PER/EPS は実績TTM (trailing。予想PERではない)。分母の basis は Yahoo 定義であり、" +
+      "一次情報（財務サマリ）の代替ではない概況値として扱うこと。codes は最大 " + MAX_BATCH_CODES + " 件。" +
+      "見つからない code は data.not_found に列挙し、理由 (unknown_code=未知コード / " +
+      "not_collected=実在するが未取得) を data.not_found_reasons に出す。",
     inputSchema: {
       type: "object",
       properties: {
@@ -223,8 +228,9 @@ async function callTool(
       const rows = await fetchIndicatorsByCodes(env.DB, codes);
       const found = new Set(rows.map((r) => String(r.code)));
       const notFound = codes.filter((c) => !found.has(c));
+      const reasons = await classifyMissingCodes(env.DB, notFound);
       return envelope(
-        { results: rows, not_found: notFound },
+        { results: rows, not_found: notFound, not_found_reasons: reasons },
         { sources: ["Yahoo"], licenses: ["personal-only"] },
       );
     }
@@ -233,8 +239,9 @@ async function callTool(
       const rows = await fetchValuationByCodes(env.DB, codes);
       const found = new Set(rows.map((r) => String(r.code)));
       const notFound = codes.filter((c) => !found.has(c));
+      const reasons = await classifyMissingCodes(env.DB, notFound);
       return envelope(
-        { results: rows, not_found: notFound },
+        { results: rows, not_found: notFound, not_found_reasons: reasons },
         { sources: ["Yahoo"], licenses: ["personal-only"] },
       );
     }

@@ -99,8 +99,7 @@ function inPlaceholders(count: number): string {
  * `core_stocks.code` で引く。1銘柄1行 upsert なので、行があれば最新断面。
  *
  * 見つからなかった code は結果に含めない（呼び出し側が `not_found` として
- * 明示する。未知コードか、コードは実在するが未計算かは区別しない — どちらも
- * 「今この時点で技術指標を返せない」という点では同じ事実）。
+ * 明示し、理由は classifyMissingCodes で未知/未収録に分ける。#652）。
  */
 export async function fetchIndicatorsByCodes(
   db: D1Database,
@@ -120,7 +119,11 @@ export async function fetchIndicatorsByCodes(
 
 /**
  * 旧 Notion「②株価テクニカル」のバリュエーション欄の代替。
- * `otakara_stock_financials` を `core_stocks.code` で引く。
+ * 日次・全銘柄の `core_stock_financials` を `core_stocks.code` で引く。
+ * `otakara_stock_financials` は優待銘柄限定の月次コピー (母集団の約46%)
+ * のため、汎用バリュエーションの引先には使わない (#652)。
+ * 値は Yahoo 由来の断面 (PER/EPS は trailing)。分母の basis は Yahoo 定義に
+ * 従い、一次情報 (財務サマリ) の代替ではない。
  */
 export async function fetchValuationByCodes(
   db: D1Database,
@@ -129,10 +132,50 @@ export async function fetchValuationByCodes(
   const { results } = await db.prepare(
     "SELECT s.code, s.name, f.price, f.per, f.pbr, f.dividend_yield, f.eps, f.bps," +
       " f.roe, f.roa, f.market_cap, f.data_date, f.fetched_at" +
-      " FROM otakara_stock_financials f JOIN core_stocks s ON s.id = f.stock_id" +
+      " FROM core_stock_financials f JOIN core_stocks s ON s.id = f.stock_id" +
       ` WHERE s.code IN (${inPlaceholders(codes.length)}) ORDER BY s.code`,
   ).bind(...codes).all<Record<string, unknown>>();
   return results;
+}
+
+/** not_found の理由。未知コードと、実在するが未収録を区別する (#652)。 */
+export type MissingCodeReason = "unknown_code" | "not_collected";
+
+export interface MissingCode {
+  code: string;
+  reason: MissingCodeReason;
+}
+
+/**
+ * 結果に無かった code を、銘柄マスタに存在するかで分類する。
+ * マスタに無いものは unknown_code、あるが断面行が無いものは not_collected。
+ * personal-only 列の値は引かず、code の存在だけを見る。
+ */
+export async function classifyMissingCodes(
+  db: D1Database,
+  missing: string[],
+): Promise<MissingCode[]> {
+  if (missing.length === 0) return [];
+  const { results } = await db.prepare(
+    `SELECT code FROM core_stocks WHERE code IN (${inPlaceholders(missing.length)})`,
+  ).bind(...missing).all<{ code: string }>();
+  const known = new Set(results.map((r) => String(r.code)));
+  return missing.map((code) => ({
+    code,
+    reason: known.has(code) ? "not_collected" : "unknown_code",
+  }));
+}
+
+/** 単銘柄 REST の 404 理由を、未知コード/未収録で分けた errorBody にする。 */
+async function missingCodeError(
+  db: D1Database,
+  code: string,
+  notCollectedLabel: string,
+) {
+  const [m] = await classifyMissingCodes(db, [code]);
+  return m?.reason === "unknown_code"
+    ? errorBody("見つからない（未知コード）", "unknown_code")
+    : errorBody(`見つからない（${notCollectedLabel}）`, "not_collected");
 }
 
 /**
@@ -351,7 +394,7 @@ export function mountPrivate(app: Hono<{ Bindings: PrivateEnv }>) {
       return c.json(errorBody("銘柄コードは4桁", "invalid_code"), 400);
     }
     const [row] = await fetchIndicatorsByCodes(c.env.DB, [code]);
-    if (!row) return c.json(errorBody("見つからない（未知コード、または未計算）", "not_found"), 404);
+    if (!row) return c.json(await missingCodeError(c.env.DB, code, "未計算"), 404);
     return c.json(envelope(row, { sources: ["Yahoo"], licenses: ["personal-only"] }));
   });
 
@@ -362,7 +405,7 @@ export function mountPrivate(app: Hono<{ Bindings: PrivateEnv }>) {
       return c.json(errorBody("銘柄コードは4桁", "invalid_code"), 400);
     }
     const [row] = await fetchValuationByCodes(c.env.DB, [code]);
-    if (!row) return c.json(errorBody("見つからない（未知コード、または未取得）", "not_found"), 404);
+    if (!row) return c.json(await missingCodeError(c.env.DB, code, "未取得"), 404);
     return c.json(envelope(row, { sources: ["Yahoo"], licenses: ["personal-only"] }));
   });
 
