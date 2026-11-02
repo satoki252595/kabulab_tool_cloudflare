@@ -62,9 +62,13 @@ kabuMCP の `edinet_*` とは分けてある（クライアントに両方登録
 | `jp_raw_file` | ⑤原本のメタを SHA256 で引く |
 
 `jp_indicators_latest` / `jp_valuation` は `codes` (配列、最大50件) で複数銘柄を
-まとめて引ける。見つからない銘柄コードは結果を捏造せず `data.not_found` に列挙する
+まとめて引ける。見つからない銘柄コードは結果を捏造せず `data.not_found` に列挙し、
+理由を `data.not_found_reasons` で `unknown_code`（銘柄マスタに無い）/
+`not_collected`（実在するが未計算・未取得）に分ける
 (ルール2: 欠損は欠損のまま返す)。REST 側は1銘柄ずつ `GET /v1/indicators/:code` /
-`GET /v1/valuation/:code`（いずれも内部面のみ、Yahoo 由来＝personal-only）。
+`GET /v1/valuation/:code`（いずれも内部面のみ、Yahoo 由来＝personal-only）で、
+404 の `error.code` でも同じ理由を分ける。`jp_valuation` の引先は日次・全銘柄の
+`core_stock_financials`（PER/EPS は Yahoo trailing の概況値で、一次情報の代替ではない）。
 
 `jp_job_runs` は `/v1/meta/jobs`（直近N件の履歴列挙）と違い、ジョブ名ごとに
 最新1件へ畳んで返す。頻度の高いジョブに埋もれて低頻度ジョブの最新行が見えなくなる

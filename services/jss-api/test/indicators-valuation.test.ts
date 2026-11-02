@@ -1,7 +1,9 @@
 /**
- * 旧 Notion「②株価テクニカル」(swing_stock_indicators / otakara_stock_financials)
+ * 旧 Notion「②株価テクニカル」(swing_stock_indicators / core_stock_financials)
  * と「⑦収集ジョブログ」(jss_job_runs) の代替エンドポイント／MCP ツールのテスト。
  *
+ * valuation の引先は日次・全銘柄の core_stock_financials
+ * (otakara_stock_financials は優待銘柄限定の月次コピーのため使わない。#652)。
  * D1 はスタブで、実通信はしない。stubD1 は sql テキストと bind パラメータの両方を
  * 見て、実際の D1 の `WHERE code IN (...)` に近い絞り込みを模する
  * （そうしないと not_found の検証ができない）。
@@ -61,7 +63,26 @@ const VALUATION_ROWS: Record<string, unknown>[] = [
     data_date: "2026-09-25",
     fetched_at: 1_758_700_000,
   },
+  {
+    // 優待の無い銘柄 (旧 otakara 母集団では返らなかった代表。#652)
+    code: "6532",
+    name: "ベイカレント",
+    price: 8000,
+    per: 24.7,
+    pbr: 10.4,
+    dividend_yield: 1.6,
+    eps: 323.8,
+    bps: 770.7,
+    roe: 42.0,
+    roa: 30.0,
+    market_cap: 1_200_000_000_000,
+    data_date: "2026-09-25",
+    fetched_at: 1_758_700_000,
+  },
 ];
+
+/** core_stocks に存在するコード (未知/未収録の区別用スタブ)。 */
+const KNOWN_CODES = ["7203", "6532", "6088"];
 
 const JOB_RUN_ROWS: Record<string, unknown>[] = [
   { job_name: "stock-sync", status: "success", processed: 3800, failed: 0, run_url: null, duration_secs: 120.5, finished_at: 1_758_700_000 },
@@ -74,6 +95,26 @@ function codeFilteredD1(rows: Record<string, unknown>[], marker: string) {
     if (!sql.includes(marker)) return [];
     const codes = params.map(String);
     return rows.filter((r) => codes.includes(String(r.code)));
+  });
+}
+
+/**
+ * valuation / indicators / 既知コード確認の3クエリを SQL で振り分けるスタブ。
+ * valuation の SQL は JOIN で core_stocks も含むため、判定順序が重要。
+ */
+function snapshotD1() {
+  return stubD1((sql, params) => {
+    const codes = params.map(String);
+    if (sql.includes("core_stock_financials")) {
+      return VALUATION_ROWS.filter((r) => codes.includes(String(r.code)));
+    }
+    if (sql.includes("swing_stock_indicators")) {
+      return INDICATOR_ROWS.filter((r) => codes.includes(String(r.code)));
+    }
+    if (sql.includes("core_stocks")) {
+      return KNOWN_CODES.filter((c) => codes.includes(c)).map((code) => ({ code }));
+    }
+    return [];
   });
 }
 
@@ -130,7 +171,7 @@ describe("REST /v1/indicators/:code", () => {
 
 describe("REST /v1/valuation/:code", () => {
   it("見つかれば data_date / fetched_at を含めて返す", async () => {
-    const env = privateEnv(codeFilteredD1(VALUATION_ROWS, "otakara_stock_financials"));
+    const env = privateEnv(snapshotD1());
     const res = await privateApp.request("/v1/valuation/7203", AUTH, env);
     expect(res.status).toBe(200);
     const body = await res.json() as { data: { per: number; data_date: string; fetched_at: number } };
@@ -139,10 +180,29 @@ describe("REST /v1/valuation/:code", () => {
     expect(body.data.fetched_at).toBe(1_758_700_000);
   });
 
-  it("未知コード・未取得コードは 404", async () => {
-    const env = privateEnv(codeFilteredD1(VALUATION_ROWS, "otakara_stock_financials"));
+  it("優待の無い銘柄も core 断面から返る (#652)", async () => {
+    const env = privateEnv(snapshotD1());
+    const res = await privateApp.request("/v1/valuation/6532", AUTH, env);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { data: { code: string; bps: number } };
+    expect(body.data.code).toBe("6532");
+    expect(body.data.bps).toBe(770.7);
+  });
+
+  it("実在するが未収録のコードは 404 not_collected", async () => {
+    const env = privateEnv(snapshotD1());
+    const res = await privateApp.request("/v1/valuation/6088", AUTH, env);
+    expect(res.status).toBe(404);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe("not_collected");
+  });
+
+  it("未知コードは 404 unknown_code", async () => {
+    const env = privateEnv(snapshotD1());
     const res = await privateApp.request("/v1/valuation/9999", AUTH, env);
     expect(res.status).toBe(404);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe("unknown_code");
   });
 
   it("公開面には存在しない", async () => {
@@ -197,18 +257,47 @@ describe("MCP jp_indicators_latest / jp_valuation / jp_job_runs", () => {
     expect(body.result.isError).toBe(true);
   });
 
-  it("jp_valuation は複数銘柄をまとめて返す", async () => {
-    const env = privateEnv(codeFilteredD1(VALUATION_ROWS, "otakara_stock_financials"));
+  it("jp_valuation は複数銘柄をまとめて返し、欠落理由を区別する", async () => {
+    const env = privateEnv(snapshotD1());
     const res = await handleMcp(
-      rpc("tools/call", { name: "jp_valuation", arguments: { codes: ["7203", "9999"] } }),
+      rpc("tools/call", { name: "jp_valuation", arguments: { codes: ["7203", "6532", "6088", "9999"] } }),
       env,
     );
     const body = await res.json() as { result: { content: { text: string }[] } };
     const parsed = JSON.parse(body.result.content[0]!.text) as {
-      data: { results: { code: string }[]; not_found: string[] };
+      data: {
+        results: { code: string }[];
+        not_found: string[];
+        not_found_reasons: { code: string; reason: string }[];
+      };
+    };
+    expect(parsed.data.results.map((r) => r.code).sort()).toEqual(["6532", "7203"]);
+    expect(parsed.data.not_found).toEqual(["6088", "9999"]);
+    expect(parsed.data.not_found_reasons).toEqual([
+      { code: "6088", reason: "not_collected" },
+      { code: "9999", reason: "unknown_code" },
+    ]);
+  });
+
+  it("jp_indicators_latest も欠落理由を区別する", async () => {
+    const env = privateEnv(snapshotD1());
+    const res = await handleMcp(
+      rpc("tools/call", { name: "jp_indicators_latest", arguments: { codes: ["7203", "6088", "9999"] } }),
+      env,
+    );
+    const body = await res.json() as { result: { content: { text: string }[] } };
+    const parsed = JSON.parse(body.result.content[0]!.text) as {
+      data: {
+        results: { code: string }[];
+        not_found: string[];
+        not_found_reasons: { code: string; reason: string }[];
+      };
     };
     expect(parsed.data.results.map((r) => r.code)).toEqual(["7203"]);
-    expect(parsed.data.not_found).toEqual(["9999"]);
+    expect(parsed.data.not_found_reasons).toEqual([
+      { code: "6088", reason: "not_collected" },
+      { code: "9999", reason: "unknown_code" },
+    ]);
   });
 
   it("jp_job_runs はジョブごとの最新1件を返す", async () => {
