@@ -64,6 +64,10 @@
       "kind": "operational",
       "tag": "commercial-ok"
     },
+    "jss_financial_forecasts": {
+      "kind": "row-tag",
+      "tag": null
+    },
     "jss_financials": {
       "kind": "row-tag",
       "tag": null
@@ -200,6 +204,12 @@
     },
     {
       "dataset": "jss_dataset_freshness",
+      "column_group": "all",
+      "writer": "stockStock",
+      "declared": "2026-09-13"
+    },
+    {
+      "dataset": "jss_financial_forecasts",
       "column_group": "all",
       "writer": "stockStock",
       "declared": "2026-09-13"

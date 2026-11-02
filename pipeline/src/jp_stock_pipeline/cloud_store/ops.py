@@ -148,7 +148,7 @@ def safe_record_job_run(store: D1Store | None, **kwargs) -> bool:
 def safe_record_freshness(store: D1Store | None, **kwargs) -> bool:
     """鮮度の記録に失敗してもジョブを落とさない。記録できたかを返す。
 
-    `safe_record_job_run` と同形。ここで例外を投げると「1 表の欠損で 7 件全滅」に
+    `safe_record_job_run` と同形。ここで例外を投げると「1 表の欠損で 8 件全滅」に
     なるため、呼び出し側が返り値で当該データセットだけを失敗扱いにできるようにする
     （`jobs/freshness_probe.py` はそれを受けてジョブ全体を失敗させる）。
 

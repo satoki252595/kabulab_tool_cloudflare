@@ -177,6 +177,11 @@ def _process_financial_xbrl(
     ctx.cloud_per_share_facts(
         fin, diagnostics, doc_id=record.doc_id, raw_sha256=artifact.sha256
     )
+    # 会社予想の開示単位レコード (#652)。予想の writer はここだけ。
+    assert_scheduled_io(ctx.args, now_jst())
+    ctx.cloud_financial_forecast(
+        fin, diagnostics, doc_id=record.doc_id, raw_sha256=artifact.sha256
+    )
 
 
 def _load_map_guarded(loader, label: str):

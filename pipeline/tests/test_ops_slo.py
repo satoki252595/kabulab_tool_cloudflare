@@ -28,7 +28,7 @@ from jp_stock_pipeline.models import JST
 #
 # 限界: ここは本番の DDL のコピーではないので、本番側の列名変更や列名のタイプミスは
 # このテストでは検出できない（検出できるのは本番で実クエリを投げたときだけ）。
-# だから PR では「マージ後に freshness_probe を手動実行して 8 行入ることを確認する」
+# だから PR では「マージ後に freshness_probe を手動実行して 9 行入ることを確認する」
 # を必須手順にしている。
 _LEGACY_DDL: tuple[str, ...] = (
     "CREATE TABLE core_stock_financials"
@@ -345,8 +345,9 @@ class TestDatasetManifest:
 
     def test_epoch列の日付化はJSTへ寄せる(self) -> None:
         """UTC のままだと他データセットの JST 営業日文字列と 1 日ずれる。"""
-        sql = datasets.DATASET_SOURCE_BY_NAME["tdnet_disclosures"].sql
-        assert "'unixepoch','+9 hours'" in sql
+        for name in ("tdnet_disclosures", "financial_forecasts"):
+            sql = datasets.DATASET_SOURCE_BY_NAME[name].sql
+            assert "'unixepoch','+9 hours'" in sql, name
 
 
 class TestJudgeObservation:
@@ -355,6 +356,26 @@ class TestJudgeObservation:
         assert slo.judge_observation(
             "financials", latest_data_date=None, source_epoch=None, row_count=0, now=NOW
         ) == "red"
+
+    def test_会社予想は開示日で判定する(self) -> None:
+        """取得時刻 (fetched_at) はバックフィルでも進むので判定に使わない。
+
+        source_epoch は今日でも、最新の開示日が古ければ赤。逆に開示日が
+        新しければ緑。latest_date が無い行だけなら unknown のままにする。
+        """
+        recent_epoch = _epoch_days_ago(0.1)
+        assert slo.judge_observation(
+            "financial_forecasts", latest_data_date="2026-09-11",
+            source_epoch=recent_epoch, row_count=10, now=NOW,
+        ) == "green"
+        assert slo.judge_observation(
+            "financial_forecasts", latest_data_date="2026-08-01",
+            source_epoch=recent_epoch, row_count=10, now=NOW,
+        ) == "red"
+        assert slo.judge_observation(
+            "financial_forecasts", latest_data_date=None,
+            source_epoch=recent_epoch, row_count=10, now=NOW,
+        ) == "unknown"
 
     def test_測れていないならunknown(self) -> None:
         assert slo.judge_observation(
@@ -661,7 +682,7 @@ class TestFreshnessProbe:
         )
 
     def _seed_all(self, store: _FakeStore, *, prices_fetched_at: int) -> None:
-        """7 データセットぶんの実表に 1 行ずつ置く。"""
+        """8 データセットぶんの実表に 1 行ずつ置く (financials だけ 0 行)。"""
         today = _jst_today().isoformat()
         store.query(
             "INSERT INTO core_stock_financials (stock_id, data_date, fetched_at)"
@@ -692,6 +713,14 @@ class TestFreshnessProbe:
             "  size_bytes, license_tag, convert_status, first_fetched_at, last_fetched_at)"
             " VALUES ('s', 'b', 'k', 'EDINET', 'xbrl', 'x', ?, 'zip', 1,"
             "  'commercial-ok', '完了', ?, ?)",
+            [today, prices_fetched_at, prices_fetched_at],
+        )
+        store.query(
+            "INSERT INTO jss_financial_forecasts"
+            " (code, doc_id, forecast_scope, consolidated, source_period_end,"
+            "  source_disclosure_type, disclosed_at, source, license_tag, fetched_at)"
+            " VALUES ('7203', 'd1', 'current_year', '連結', ?, '本決算', ?,"
+            "  'TDnet', 'factual-cite', ?)",
             [today, prices_fetched_at, prices_fetched_at],
         )
         # financials (jss_financials) は本番同様 0 行のままにしておく
@@ -764,8 +793,8 @@ class TestFreshnessProbe:
             row_count=row["n"],
         ) == "red"
 
-    def test_8件すべて記録される(self, monkeypatch) -> None:
-        """7 鮮度 + 1 容量。容量行は鮮度データセットではないので等号から分ける。"""
+    def test_9件すべて記録される(self, monkeypatch) -> None:
+        """8 鮮度 + 1 容量。容量行は鮮度データセットではないので等号から分ける。"""
         store = _FakeStore()
         self._seed_all(store, prices_fetched_at=_epoch_days_ago(0.1))
         _wire(monkeypatch, store, freshness_probe)
@@ -781,7 +810,7 @@ class TestFreshnessProbe:
             if r["dataset"] == freshness_probe.CAPACITY_DATASET
         ] == [None]
 
-    def test_母集団表が壊れると依存観測も失敗し他6件は記録する(self, monkeypatch) -> None:
+    def test_母集団表が壊れると依存観測も失敗し他7件は記録する(self, monkeypatch) -> None:
         """runner は failed>0 & processed>0 を exit 0 にするので、素直に書くと
 
         表名のタイプミスで 1 件落ちても Issue が立たず、凍結した行が SLO を
@@ -818,7 +847,7 @@ class TestOpsCheck:
     """判定ジョブ。何も書かず、異常だけを報告する。"""
 
     def _seed_freshness(self, store: _FakeStore, *, overrides=None) -> None:
-        """全7データセットを緑で置く。古い原本と0行は個別に試す。"""
+        """全8データセットを緑で置く。古い原本と0行は個別に試す。"""
         today = _jst_today().isoformat()
         recent = int(datetime.now(UTC).timestamp()) - 3600
         rows = {
@@ -828,6 +857,7 @@ class TestOpsCheck:
             "jsf_supply": (today, 4351, recent),
             "core_stocks": (None, 4445, recent),
             "financials": (today, 12000, recent),
+            "financial_forecasts": (today, 100, recent),
             "yutai_benefits": (None, 8314, recent),
         }
         rows.update(overrides or {})
@@ -1123,8 +1153,8 @@ class TestD1Capacity:
         assert row["b"] == 871_886_848
         assert row["n"] == 32
 
-    def test_容量が測れなくても7鮮度は記録されジョブは失敗する(self, monkeypatch) -> None:
-        """容量の欠測で 7 件全滅させない。ただし黙らない (exit 1)。"""
+    def test_容量が測れなくても8鮮度は記録されジョブは失敗する(self, monkeypatch) -> None:
+        """容量の欠測で 8 件全滅させない。ただし黙らない (exit 1)。"""
         from jp_stock_pipeline.cloud_store.d1 import D1Error
 
         probe = TestFreshnessProbe()

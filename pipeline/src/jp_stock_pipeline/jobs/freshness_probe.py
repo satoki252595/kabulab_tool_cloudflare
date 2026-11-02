@@ -24,7 +24,7 @@ processed=0 で「成功」していた）。だから**観測ジョブが実表
   `D1Store(ctx.settings.cloud_store, writer=JOB_NAME)` を直接作る。
 - **1 件でも測れなければジョブ全体を失敗させる。** `runner._status` は
   failed>0 かつ processed>0 を「一部失敗」＝ **exit 0** にするので、素直に書くと
-  表名のタイプミスで 8 件中 1 件が落ちても Issue が立たない。凍結した 1 行が SLO を
+  表名のタイプミスで 9 件中 1 件が落ちても Issue が立たない。凍結した 1 行が SLO を
   超えるまで（優待なら最長 50 日）気づけないので、最後に例外を投げて
   STATUS_FAILURE へ落とす。
 - **`updated_at` に記録時刻を入れない。** 入れると翌日から恒久的に緑になる
@@ -62,7 +62,7 @@ CAPACITY_DATASET = "d1_capacity"
 # テスト `test_記録が無ければ緑にしない` もその前提で書かれている。
 #
 # ここを NULL のまま書こうとすると、0 行の jss_financials で毎回 INSERT が
-# 失敗し、observed 7 件中 1 件が常に落ちてジョブが毎日赤になる（= 直したい
+# 失敗し、observed 8 件中 1 件が常に落ちてジョブが毎日赤になる（= 直したい
 # 「毎日鳴る」状態に自分で戻る）。
 UNKNOWN_EPOCH = 0
 
@@ -210,7 +210,7 @@ def execute(ctx: JobContext) -> None:
 
     if ctx.failed:
         # 共有 runner は failed>0 (一部失敗も含め) を exit 1 にする。ここでは
-        # 例外を投げて失敗を明示的に可視化する (落とさないと「8 件中 1 件だけ
+        # 例外を投げて失敗を明示的に可視化する (落とさないと「9 件中 1 件だけ
         # 凍結」が誰にも見えない §3-2)。
         raise ProbeIncomplete(
             f"{ctx.failed}/{len(DATASET_SOURCES) + 1} 件を測れなかった:"

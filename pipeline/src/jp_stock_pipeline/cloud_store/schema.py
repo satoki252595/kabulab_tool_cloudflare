@@ -274,6 +274,32 @@ _PER_SHARE_FACTS = """CREATE TABLE IF NOT EXISTS jss_per_share_facts (
   PRIMARY KEY (code, fiscal_period_end, disclosure_type, consolidated, metric, doc_id)
 )"""
 
+# 会社業績予想の開示単位レコード (#652)。予想は TDnet 短信にしか無く、
+# ③の同 PK 完全上書き (EDINET) で NULL 化されるため別表に分離する。
+# 1 行 = 1 開示が述べた予想で、対象期末は文脈から単一に定まるときだけ入る。
+_FINANCIAL_FORECASTS = """CREATE TABLE IF NOT EXISTS jss_financial_forecasts (
+  code                      TEXT NOT NULL,
+  doc_id                    TEXT NOT NULL,
+  target_period_end         TEXT,
+  forecast_scope            TEXT NOT NULL,
+  consolidated              TEXT NOT NULL,
+  forecast_net_sales        REAL,
+  forecast_operating_income REAL,
+  forecast_ordinary_income  REAL,
+  forecast_net_income       REAL,
+  forecast_eps              REAL,
+  dps_forecast              REAL,
+  dps_target_period_end     TEXT,
+  source_period_end         TEXT NOT NULL,
+  source_disclosure_type    TEXT NOT NULL,
+  disclosed_at              INTEGER,
+  raw_sha256                TEXT,
+  source                    TEXT NOT NULL,
+  license_tag               TEXT NOT NULL,
+  fetched_at                INTEGER NOT NULL,
+  PRIMARY KEY (code, doc_id)
+)"""
+
 # ③財務サマリの PK。`cloud_store/financials.py` の ON CONFLICT はこれを読む。
 #
 # `_FINANCIALS` の DDL 側は同じ内容を**リテラルで別に持つ**（導出にしない）。
@@ -302,6 +328,10 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_jss_psf_code_metric"
     " ON jss_per_share_facts(code, metric, fiscal_period_end DESC)",
     "CREATE INDEX IF NOT EXISTS idx_jss_psf_doc ON jss_per_share_facts(doc_id)",
+    _FINANCIAL_FORECASTS,
+    "CREATE INDEX IF NOT EXISTS idx_jss_fc_code_disclosed"
+    " ON jss_financial_forecasts(code, disclosed_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_jss_fc_doc ON jss_financial_forecasts(doc_id)",
     _SUPPLY_LATEST,
     "CREATE INDEX IF NOT EXISTS idx_jss_supply_date "
     "ON jss_supply_latest(data_type, data_date DESC)",

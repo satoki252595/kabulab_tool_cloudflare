@@ -368,7 +368,9 @@ def _pick_value(
                 if diagnostic is not None:
                     diagnostic.update(element=cand, consolidated=consolidated,
                                       context_refs=sorted(set(sel["context_ref"])),
-                                      selected_rows=len(sel))
+                                      selected_rows=len(sel),
+                                      period_ends=sorted(set(sel["period_end"]) - {""}),
+                                      instant_dates=sorted(set(sel["instant_date"]) - {""}))
                 return finish(numbers.pop(), "selected_single_numeric_value")
             if len(numbers) > 1:
                 logger.warning("財務値が複数あり採用しない (field=%s element=%s)", field, cand)
