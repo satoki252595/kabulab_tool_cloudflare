@@ -209,6 +209,22 @@ class JobContext:
             f"per-share-facts:{doc_id or record.code}",
         )
 
+    def cloud_financial_forecast(
+        self, record, diagnostics, *, doc_id: str | None, raw_sha256: str | None
+    ) -> bool | None:
+        """会社予想を D1 `jss_financial_forecasts` へ書く (#652)。
+
+        TDnet 由来の開示だけが呼ぶ。③とは独立のベストエフォート。
+        """
+        if record is None:
+            raise ValueError("cloud_financial_forecast に None を渡している")
+        return self._cloud(
+            lambda c: c.upsert_financial_forecast(
+                record, diagnostics, doc_id=doc_id, raw_sha256=raw_sha256
+            ),
+            f"financial-forecast:{doc_id or record.code}",
+        )
+
     def _persist(self, notion_write, local_write, label: str) -> bool:
         """Notion とローカルへ独立に書き、少なくとも一方に残せたかを返す。
 

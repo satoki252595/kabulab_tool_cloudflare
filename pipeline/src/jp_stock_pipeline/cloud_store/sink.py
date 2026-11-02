@@ -13,7 +13,7 @@ from datetime import date
 from typing import TYPE_CHECKING
 
 from ..config import CloudStoreSettings
-from . import financials, keys, per_share_facts
+from . import financial_forecasts, financials, keys, per_share_facts
 from .d1 import D1Error, D1Store
 from .r2 import R2Error, R2Store
 
@@ -277,6 +277,37 @@ class CloudSink:
             logger.warning(
                 "D1 %s への fact 書き込みに失敗: %s %s: %s",
                 per_share_facts.TABLE, record.code, doc_id, exc,
+            )
+            return False
+        return True
+
+    def upsert_financial_forecast(
+        self,
+        record: "FinancialSummaryRecord",
+        diagnostics: dict[str, dict],
+        *,
+        doc_id: str | None,
+        raw_sha256: str | None,
+    ) -> bool | None:
+        """会社予想を D1 `jss_financial_forecasts` へ書く (#652)。
+
+        ③本体とは独立のベストエフォート。予想要素が書類に無い場合は
+        正常な 0 行 (True)。書くのは tdnet_hourly だけ — EDINET の
+        ③上書きで予想が消える構造 (#648) をここで断つ。
+        """
+        if not self.enabled:
+            return None
+        if not self.settings.d1_enabled():
+            return None
+        try:
+            rows = financial_forecasts.build_rows(
+                record, diagnostics, doc_id=doc_id, raw_sha256=raw_sha256
+            )
+            financial_forecasts.write(self.d1, rows)
+        except D1Error as exc:
+            logger.warning(
+                "D1 %s への予想書き込みに失敗: %s %s: %s",
+                financial_forecasts.TABLE, record.code, doc_id, exc,
             )
             return False
         return True

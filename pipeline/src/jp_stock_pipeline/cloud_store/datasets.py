@@ -226,6 +226,25 @@ DATASET_SOURCES: tuple[DatasetSource, ...] = (
         ),
     ),
     DatasetSource(
+        dataset="financial_forecasts",
+        store="D1",
+        location="jss_financial_forecasts",
+        # 会社予想の writer は TDnet 単独 (#652)。EDINET が書くようになったら
+        # 契約違反であり、この宣言が二重 writer 検知の根拠になる。
+        writer="tdnet_hourly",
+        sql=(
+            "SELECT NULL AS latest_date,"
+            " MAX(fetched_at) AS source_epoch,"
+            " COUNT(*) AS n FROM jss_financial_forecasts"
+        ),
+        license_tag=LicenseTag.FACTUAL_CITE.value,
+        note=(
+            "TDnet 短信のみが書く表なのでタグは factual-cite 固定。"
+            "鮮度は writer の生存 = `fetched_at` の最大値で見る"
+            "（予想が黙って止まる #652 型の故障を検知するのが主目的）。"
+        ),
+    ),
+    DatasetSource(
         dataset="yutai_benefits",
         store="D1",
         location="yutai_benefits",

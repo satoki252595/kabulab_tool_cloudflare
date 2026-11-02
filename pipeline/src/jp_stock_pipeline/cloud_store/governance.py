@@ -242,6 +242,10 @@ TABLE_LICENSE: dict[str, TableLicense] = {
         "③と同じく EDINET（commercial-ok）と TDnet 短信（factual-cite）が行ごとに違う",
         "license_tag NOT NULL。本PRで新設し、writer は edinet_daily / tdnet_hourly",
     ),
+    "jss_financial_forecasts": _row_tag(
+        "TDnet 短信（factual-cite）のみ。会社予想は EDINET に無い",
+        "license_tag NOT NULL。#652 で新設し、writer は tdnet_hourly のみ",
+    ),
     # `jss_xbrl_documents` / `jss_xbrl_elements` は 2026-09-25 に地図から外した
     # (writer 不在・本番 0 行を実測。設計書 B-3/B-4 の想定実装は着手されなかった)。
     # 表そのものの DROP は物理側の手順 (drizzle 相当の SQL) を PR 本文で示す。
