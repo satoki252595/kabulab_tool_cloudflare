@@ -57,6 +57,7 @@ kabuMCP の `edinet_*` とは分けてある（クライアントに両方登録
 | `jp_ohlcv_range` | 日足 OHLCV（提供元の OHLCV（分割調整済み）。adj_* は配当込 total-return 価格 (adj_volume は常に null)。係数不明は null。出来高の現株数補正なし。REST と束ねた edge キャッシュ、TTL 6h） |
 | `jp_indicators_latest` | 株価テクニカルの最新断面（複数銘柄可、旧 Notion「②株価テクニカル」の代替） |
 | `jp_valuation` | バリュエーションの最新断面（複数銘柄可、旧 Notion「②株価テクニカル」バリュエーション欄の代替） |
+| `jp_forecast_latest` | 会社業績予想の最新開示1行（複数銘柄可、TDnet 短信由来） |
 | `jp_dataset_freshness` | 各データセットの鮮度 |
 | `jp_job_runs` | 収集ジョブの最新実行状況（ジョブごとに1件、旧 Notion「⑦収集ジョブログ」の代替） |
 | `jp_raw_file` | ⑤原本のメタを SHA256 で引く |
@@ -69,6 +70,13 @@ kabuMCP の `edinet_*` とは分けてある（クライアントに両方登録
 `GET /v1/valuation/:code`（いずれも内部面のみ、Yahoo 由来＝personal-only）で、
 404 の `error.code` でも同じ理由を分ける。`jp_valuation` の引先は日次・全銘柄の
 `core_stock_financials`（PER/EPS は Yahoo trailing の概況値で、一次情報の代替ではない）。
+
+`jp_forecast_latest` も `codes` でまとめて引ける。引先は TDnet 短信 1 開示 = 1 行の
+`jss_financial_forecasts` で、銘柄ごとに開示時刻が最大の**1行だけ**を返す
+（列ごとの最新値合成はしない。最新開示が予想未定なら値は null のまま）。
+見つからない理由は `unknown_code` / `no_forecast_in_store`（実在するが予想行が無い）。
+REST 側は `GET /v1/forecast/:code`（内部面のみ、TDnet 由来＝factual-cite）で、
+404 の `error.code` でも同じ理由を分ける。
 
 `jp_job_runs` は `/v1/meta/jobs`（直近N件の履歴列挙）と違い、ジョブ名ごとに
 最新1件へ畳んで返す。頻度の高いジョブに埋もれて低頻度ジョブの最新行が見えなくなる
