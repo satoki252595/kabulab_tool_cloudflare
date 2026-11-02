@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildStockCorporateDiagnostics, extractStockCorporateEvents } from "./stock-corporate-events.js";
 import { parseChartResponse } from "./client.js";
 import { buildPriceSyncBatch } from "../../cron/daily.js";
@@ -101,5 +101,163 @@ describe("株式報告権利と実使用窓 (保存実原本projection・価格�
       failures: [], failureCollection: "complete", originalError: null, corporateDiagnostics: entries });
     expect(JSON.parse(new TextDecoder().decode(batch.file.bytes)).corporateDiagnostics).toEqual(entries);
     expect(JSON.stringify(d)).not.toContain('"numerator"'); // 原値の再コピーではなくraw内参照
+  });
+
+  it("正常な原本では計測行を出さない", () => {
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((part) => String(part)).join(" "));
+    });
+    try {
+      const source = fixture["4374"];
+      const events = extractStockCorporateEvents(source.json, source.receivedAt);
+      const bars = parseChartResponse(source.json, "4374").bars;
+      buildStockCorporateDiagnostics({
+        events, code: "4374", bodySha256: sha(JSON.stringify(source.json)), receivedAt: source.receivedAt,
+        suppliedBars: bars, qualifiedBars: bars,
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(lines.filter((line) => line.includes("INC-20261014"))).toEqual([]);
+  });
+
+  it("計測出力が失敗しても STOP の Error と文言は変わらない", () => {
+    const spy = vi.spyOn(console, "warn").mockImplementation(() => {
+      throw new Error("log failed");
+    });
+    let caught: unknown;
+    try {
+      extractStockCorporateEvents(null, fixture["4374"].receivedAt);
+    } catch (error) {
+      caught = error;
+    } finally {
+      spy.mockRestore();
+    }
+    expect(caught).toBeInstanceOf(Error);
+    if (!(caught instanceof Error)) throw new Error("STOP 以外の結果です");
+    expect(caught.constructor).toBe(Error);
+    expect(caught.message).toBe("株式Chartの報告権利イベント/原本時計/窓構造が不正です。STOP");
+  });
+
+  it("STOP の検査名と件数だけを出し、時刻・価格・receivedAt・本文は出さない", () => {
+    const INCIDENT = "[INC-20261014-kabulab_tool_cloudflare-stock-sync-null-bars]";
+    const STOP_MESSAGE = "株式Chartの報告権利イベント/原本時計/窓構造が不正です。STOP";
+    const source = fixture["4374"];
+    const result0 = chart(source.json) as {
+      meta: { regularMarketPrice: number };
+      timestamp: number[];
+      indicators: { quote: { close: number[] }[] };
+    };
+    const split = extractStockCorporateEvents(source.json, source.receivedAt).reported.find((event) => event.kind === "splits");
+    if (split === undefined || split.kind !== "splits") throw new Error("fixture 4374 に分割がありません");
+    const splitRaw = (chart(source.json).events as { splits: Record<string, Record<string, unknown>> }).splits[split.dictionaryKey];
+    if (splitRaw === undefined) throw new Error("fixture 4374 の分割原本がありません");
+    const tsLen = result0.timestamp.length;
+    const badSha = "g".repeat(64);
+    const leaks = [
+      source.receivedAt, "2000-01-01", "not-a-date", "2000000000", "4000000000",
+      String(result0.meta.regularMarketPrice), String(result0.timestamp[0]), String(result0.timestamp[tsLen - 1]),
+      String(result0.indicators.quote[0].close[0]), String(split.epoch), String(Number.MAX_VALUE), String(Number.MIN_VALUE),
+      "2:1", "1:1", "1.5", "1mo", "1wk", "wrongKey", "nope", "note", "true", "NaN", "-1", "YYYY", "gggg", "7203",
+    ];
+    const lineOf = (name: string, run: () => void): string => {
+      const lines: string[] = [];
+      const spy = vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => {
+        lines.push(args.map((part) => String(part)).join(" "));
+      });
+      let caught: unknown;
+      try {
+        run();
+      } catch (error) {
+        caught = error;
+      } finally {
+        spy.mockRestore();
+      }
+      expect(caught, name).toBeInstanceOf(Error);
+      if (!(caught instanceof Error)) throw new Error(`${name}: STOP 以外`);
+      expect(caught.constructor, name).toBe(Error);
+      expect(caught.message, name).toBe(STOP_MESSAGE);
+      const incident = lines.filter((line) => line.startsWith(INCIDENT));
+      expect(incident, name).toHaveLength(1);
+      const line = incident[0];
+      if (line === undefined) throw new Error(`${name}: 計測行がありません`);
+      expect(line, name).not.toMatch(/[\r\n]/);
+      for (const token of line.slice(INCIDENT.length).trim().split(" ")) {
+        expect(token, `${name}: ${line}`).toMatch(/^(reason=[a-z0-9_]+|symbol=[0-9A-Za-z.]{1,16}|[a-z0-9_]+=\d+)$/);
+      }
+      for (const leak of leaks) expect(line, `${name}: ${line}`).not.toContain(leak);
+      return line;
+    };
+    const cloned = (): { json: unknown; result: Record<string, unknown> } => {
+      const json = structuredClone(source.json);
+      return { json, result: chart(json) as Record<string, unknown> };
+    };
+    const withEvents = (events: unknown): unknown => {
+      const row = cloned();
+      row.result.events = events;
+      return row.json;
+    };
+    const at = (json: unknown, receivedAt = source.receivedAt) => extractStockCorporateEvents(json, receivedAt);
+    const P = `${INCIDENT} `;
+    const sym = "symbol=4374.T";
+    const cases: { name: string; run: () => void; exact: string }[] = [
+      { name: "received_at_not_iso", run: () => at(source.json, "invalid"), exact: `${P}reason=received_at_not_iso received_at_len=${"invalid".length}` },
+      { name: "json_not_object null", run: () => at(null), exact: `${P}reason=json_not_object clause=1` },
+      { name: "json_not_object number", run: () => at(1), exact: `${P}reason=json_not_object clause=2` },
+      { name: "json_not_object array", run: () => at([]), exact: `${P}reason=json_not_object clause=3` },
+      { name: "chart_not_object", run: () => at({ chart: null }), exact: `${P}reason=chart_not_object clause=1` },
+      { name: "chart_result_len empty", run: () => { const row = cloned(); (row.json as { chart: { result: unknown } }).chart.result = []; at(row.json); }, exact: `${P}reason=chart_result_len is_array=1 result_len=0` },
+      { name: "chart_result_len not array", run: () => { const row = cloned(); (row.json as { chart: { result: unknown } }).chart.result = null; at(row.json); }, exact: `${P}reason=chart_result_len is_array=0` },
+      { name: "result_not_object", run: () => { const row = cloned(); (row.json as { chart: { result: unknown[] } }).chart.result = [null]; at(row.json); }, exact: `${P}reason=result_not_object clause=1` },
+      { name: "meta_not_object", run: () => { const row = cloned(); row.result.meta = []; at(row.json); }, exact: `${P}reason=meta_not_object clause=3` },
+      { name: "timestamp_empty", run: () => { const row = cloned(); row.result.timestamp = []; at(row.json); }, exact: `${P}reason=timestamp_empty ${sym} is_array=1 timestamps_len=0` },
+      { name: "timestamp_not_array", run: () => { const row = cloned(); row.result.timestamp = null; at(row.json); }, exact: `${P}reason=timestamp_not_array ${sym} is_array=0` },
+      { name: "timestamp_not_positive_int zero", run: () => { const row = cloned(); (row.result.timestamp as number[])[0] = 0; at(row.json); }, exact: `${P}reason=timestamp_not_positive_int ${sym} index=0 timestamps_len=${tsLen} clause=3` },
+      { name: "timestamp_not_positive_int fractional", run: () => { const row = cloned(); (row.result.timestamp as number[])[0] = 1.5; at(row.json); }, exact: `${P}reason=timestamp_not_positive_int ${sym} index=0 timestamps_len=${tsLen} clause=2` },
+      { name: "timestamp_not_positive_int string", run: () => { const row = cloned(); (row.result.timestamp as unknown[])[0] = "x"; at(row.json); }, exact: `${P}reason=timestamp_not_positive_int ${sym} index=0 timestamps_len=${tsLen} clause=1` },
+      { name: "timestamp_future", run: () => at(source.json, "2000-01-01T00:00:00.000Z"), exact: `${P}reason=timestamp_future ${sym} index=0 timestamps_len=${tsLen}` },
+      { name: "timestamp_dup", run: () => { const row = cloned(); const ts = row.result.timestamp as number[]; ts[1] = ts[0]; at(row.json); }, exact: `${P}reason=timestamp_dup_or_reverse ${sym} index=1 timestamps_len=${tsLen} duplicate=1` },
+      { name: "timestamp_reverse", run: () => { const row = cloned(); (row.result.timestamp as number[]).reverse(); at(row.json); }, exact: `${P}reason=timestamp_dup_or_reverse ${sym} index=1 timestamps_len=${tsLen} duplicate=0` },
+      { name: "meta_string_empty symbol", run: () => { const row = cloned(); (row.result.meta as Record<string, unknown>).symbol = " "; at(row.json); }, exact: `${P}reason=meta_string_empty field_index=0 clause=2 value_len=1` },
+      { name: "meta_string_empty range", run: () => { const row = cloned(); (row.result.meta as Record<string, unknown>).range = ""; at(row.json); }, exact: `${P}reason=meta_string_empty ${sym} field_index=1 clause=2 value_len=0` },
+      { name: "range_mismatch", run: () => { const row = cloned(); const meta = row.result.meta as Record<string, unknown>; meta.range = "1mo"; meta.dataGranularity = "1wk"; at(row.json); }, exact: `${P}reason=range_mismatch ${sym}` },
+      { name: "granularity_mismatch", run: () => { const row = cloned(); (row.result.meta as Record<string, unknown>).dataGranularity = "1wk"; at(row.json); }, exact: `${P}reason=granularity_mismatch ${sym}` },
+      { name: "meta_epoch_invalid string", run: () => { const row = cloned(); (row.result.meta as Record<string, unknown>).firstTradeDate = "x"; at(row.json); }, exact: `${P}reason=meta_epoch_invalid ${sym} field_index=0 clause=1` },
+      { name: "meta_epoch_invalid fractional", run: () => { const row = cloned(); (row.result.meta as Record<string, unknown>).firstTradeDate = 1.5; at(row.json); }, exact: `${P}reason=meta_epoch_invalid ${sym} field_index=0 clause=2` },
+      { name: "meta_epoch_invalid future", run: () => { const row = cloned(); (row.result.meta as Record<string, unknown>).regularMarketTime = 4_000_000_000; at(row.json); }, exact: `${P}reason=meta_epoch_invalid ${sym} field_index=1 clause=4` },
+      { name: "indicators_not_object", run: () => { const row = cloned(); delete row.result.indicators; at(row.json); }, exact: `${P}reason=indicators_not_object ${sym} clause=2` },
+      { name: "quote_len", run: () => { const row = cloned(); (row.result.indicators as { quote: unknown }).quote = []; at(row.json); }, exact: `${P}reason=quote_len ${sym} is_array=1 quote_len=0` },
+      { name: "quote_not_object", run: () => { const row = cloned(); (row.result.indicators as { quote: unknown }).quote = [null]; at(row.json); }, exact: `${P}reason=quote_not_object ${sym} clause=1` },
+      { name: "quote_field_len_mismatch length", run: () => { const row = cloned(); (row.result.indicators as { quote: { close: number[] }[] }).quote[0].close.pop(); at(row.json); }, exact: `${P}reason=quote_field_len_mismatch ${sym} is_array=1 field_len=${tsLen - 1} field_index=3 timestamps_len=${tsLen}` },
+      { name: "quote_field_len_mismatch null", run: () => { const row = cloned(); (row.result.indicators as { quote: { close: unknown }[] }).quote[0].close = null; at(row.json); }, exact: `${P}reason=quote_field_len_mismatch ${sym} is_array=0 field_index=3 timestamps_len=${tsLen}` },
+      { name: "adjclose_len", run: () => { const row = cloned(); (row.result.indicators as { adjclose: unknown }).adjclose = [{}, {}]; at(row.json); }, exact: `${P}reason=adjclose_len ${sym} is_array=1 adjclose_len=2` },
+      { name: "adjclose_not_object", run: () => { const row = cloned(); (row.result.indicators as { adjclose: unknown }).adjclose = [null]; at(row.json); }, exact: `${P}reason=adjclose_not_object ${sym} clause=1` },
+      { name: "adjclose_series_len", run: () => { const row = cloned(); (row.result.indicators as { adjclose: { adjclose: number[] }[] }).adjclose[0].adjclose.pop(); at(row.json); }, exact: `${P}reason=adjclose_series_len ${sym} is_array=1 series_len=${tsLen - 1} timestamps_len=${tsLen}` },
+      { name: "currency_invalid long", run: () => { const row = cloned(); (row.result.meta as Record<string, unknown>).currency = "Y".repeat(17); at(row.json); }, exact: `${P}reason=currency_invalid ${sym} currency_len=17 clause=3` },
+      { name: "currency_invalid blank", run: () => { const row = cloned(); (row.result.meta as Record<string, unknown>).currency = "   "; at(row.json); }, exact: `${P}reason=currency_invalid ${sym} currency_len=3 clause=2` },
+      { name: "currency_invalid number", run: () => { const row = cloned(); (row.result.meta as Record<string, unknown>).currency = 1; at(row.json); }, exact: `${P}reason=currency_invalid ${sym} clause=1` },
+      { name: "events_state_not_object", run: () => at(withEvents([])), exact: `${P}reason=events_state_not_object ${sym} clause=3` },
+      { name: "events_extra_key", run: () => at(withEvents({ other: {} })), exact: `${P}reason=events_extra_key ${sym} key_count=1 extra_key_count=1` },
+      { name: "split_state_not_object", run: () => at(withEvents({ splits: [] })), exact: `${P}reason=split_state_not_object ${sym} clause=3` },
+      { name: "split_entry_not_object", run: () => at(withEvents({ splits: { "1": null } })), exact: `${P}reason=split_entry_not_object ${sym} entry_index=0 clause=1` },
+      { name: "split_date_not_positive", run: () => at(withEvents({ splits: { "1": { date: 0, numerator: 2, denominator: 1 } } })), exact: `${P}reason=split_date_not_positive ${sym} entry_index=0 clause=3` },
+      { name: "split_epoch_not_safe_integer", run: () => at(withEvents({ splits: { "1.5": { date: 1.5, numerator: 2, denominator: 1 } } })), exact: `${P}reason=split_epoch_not_safe_integer ${sym} entry_index=0` },
+      { name: "split_dictionary_key_mismatch", run: () => at(withEvents({ splits: { wrongKey: { ...splitRaw } } })), exact: `${P}reason=split_dictionary_key_mismatch ${sym} entry_index=0 key_len=${"wrongKey".length}` },
+      { name: "split_epoch_future", run: () => at(withEvents({ splits: { "2000000000": { date: 2_000_000_000, numerator: 2, denominator: 1 } } })), exact: `${P}reason=split_epoch_future ${sym} entry_index=0` },
+      { name: "split_extra_key", run: () => at(withEvents({ splits: { [split.dictionaryKey]: { ...splitRaw, note: true } } })), exact: `${P}reason=split_extra_key ${sym} key_count=5 extra_key_count=1 entry_index=0` },
+      { name: "split_numerator_not_positive", run: () => at(withEvents({ splits: { [split.dictionaryKey]: { ...splitRaw, numerator: "x" } } })), exact: `${P}reason=split_numerator_not_positive ${sym} entry_index=0 clause=1` },
+      { name: "split_denominator_not_positive", run: () => at(withEvents({ splits: { [split.dictionaryKey]: { ...splitRaw, denominator: 0 } } })), exact: `${P}reason=split_denominator_not_positive ${sym} entry_index=0 clause=3` },
+      { name: "split_ratio_not_positive", run: () => at(withEvents({ splits: { [split.dictionaryKey]: { ...splitRaw, numerator: Number.MAX_VALUE, denominator: Number.MIN_VALUE } } })), exact: `${P}reason=split_ratio_not_positive ${sym} entry_index=0 clause=2` },
+      { name: "split_ratio_format", run: () => at(withEvents({ splits: { [split.dictionaryKey]: { ...splitRaw, splitRatio: "nope" } } })), exact: `${P}reason=split_ratio_format ${sym} entry_index=0 clause=2 split_ratio_len=${"nope".length}` },
+      { name: "split_ratio_parts_mismatch", run: () => at(withEvents({ splits: { [split.dictionaryKey]: { ...splitRaw, splitRatio: "1:1" } } })), exact: `${P}reason=split_ratio_parts_mismatch ${sym} entry_index=0 parts_len=2 numerator_mismatch=1 denominator_mismatch=0` },
+      { name: "dividend_extra_key", run: () => at(withEvents({ dividends: { [split.dictionaryKey]: { date: split.epoch, amount: 1, note: true } } })), exact: `${P}reason=dividend_extra_key ${sym} key_count=3 extra_key_count=1 entry_index=0` },
+      { name: "dividend_amount_invalid", run: () => at(withEvents({ dividends: { [split.dictionaryKey]: { date: split.epoch, amount: -1 } } })), exact: `${P}reason=dividend_amount_invalid ${sym} entry_index=0 clause=3` },
+      { name: "capital_gains_amount_invalid", run: () => at(withEvents({ capitalGains: { [split.dictionaryKey]: { date: split.epoch, amount: Number.NaN } } })), exact: `${P}reason=capital_gains_amount_invalid ${sym} entry_index=0 clause=2` },
+      { name: "diag_body_sha_invalid", run: () => buildStockCorporateDiagnostics({ events: extractStockCorporateEvents(source.json, source.receivedAt), code: "4374", bodySha256: badSha, receivedAt: "not-a-date", suppliedBars: [], qualifiedBars: [] }), exact: `${P}reason=diag_body_sha_invalid symbol=4374 body_sha_len=${badSha.length}` },
+      { name: "diag_body_sha_invalid unsafe code", run: () => buildStockCorporateDiagnostics({ events: extractStockCorporateEvents(source.json, source.receivedAt), code: "4374\n7203", bodySha256: badSha, receivedAt: source.receivedAt, suppliedBars: [], qualifiedBars: [] }), exact: `${P}reason=diag_body_sha_invalid body_sha_len=${badSha.length}` },
+      { name: "diag_received_at_not_iso", run: () => buildStockCorporateDiagnostics({ events: extractStockCorporateEvents(source.json, source.receivedAt), code: "4374", bodySha256: sha(JSON.stringify(source.json)), receivedAt: "not-a-date", suppliedBars: [], qualifiedBars: [] }), exact: `${P}reason=diag_received_at_not_iso symbol=4374 received_at_len=${"not-a-date".length}` },
+    ];
+    for (const item of cases) expect(lineOf(item.name, item.run), item.name).toBe(item.exact);
   });
 });
