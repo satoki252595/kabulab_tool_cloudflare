@@ -116,6 +116,22 @@ class R2Store:
         except ValueError as exc:
             raise R2Error(f"R2 の既存オブジェクトが JSON でない {self.bucket}/{key}") from exc
 
+    def get_bytes(self, key: str) -> bytes | None:
+        """オブジェクトの生 bytes を返す。404 は None。
+
+        原本 (zip 等) の読み戻し用。404 以外のエラーは R2Error で、
+        「取れなかった」を「無かった」に潰さない (get_json と同じ約束)。
+        """
+        try:
+            resp = self._send("get_object", Bucket=self.bucket, Key=key)
+        except RequestNotStartedError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - botocore の例外型に依存しない
+            if _is_not_found(exc):
+                return None
+            raise R2Error(f"R2 GET 失敗 {self.bucket}/{key}: {exc}") from exc
+        return resp["Body"].read()
+
     def put_bytes(self, key: str, body: bytes, *, content_type: str) -> None:
         """immutable キー用の素の PUT（原本など。後退禁止ガードは適用しない）。"""
         try:
