@@ -54,7 +54,7 @@ export function prepareCandidateInputs(rows: SupplementRow[], calibration: Compe
     excluded: excluded.sort((a,b) => a.stockCode.localeCompare(b.stockCode)) };
   const corpus: CompanyProfile[] = eligible.map(r => ({ stockCode: r.stockCode,
     companyName: r.companyName, pageId: r.pageId, sector33: r.sector33,
-    tags: [...r.upstream, ...r.downstream, ...r.distribution], businessText: r.texts["事業の内容"], docId: r.docId }));
+    tags: [...r.businessTags], businessText: r.texts["事業の内容"], docId: r.docId }));
   const built = buildCandidates(corpus, { topK: calibration.candidateTopK, weights: calibration.candidateWeights,
     postingCaps: calibration.candidatePostingCaps, genericTagLabels: GENERIC_TAG_LABELS });
   const candidates = Object.fromEntries(codes.map(code => [code, built.get(code) ?? null]));
@@ -102,7 +102,9 @@ export function qualifyPreparedCompany(latest: LatestDoc | undefined, corpusRow:
     return { status: "qualified" as const, docId: doc.docId, periodEnd: doc.periodEnd, textPageId: doc.notionDocPageId,
       textsSha256, fullTextValuesSha256: hash(fullRow.texts), businessSha256, currentTagSectionsSha256,
       textSyncRepresentation: sync.notionTextsSha256 === undefined ? "legacy-raw-exact" as const : "verified-notion-representation" as const,
-      tagsSha256: hash([fullRow.upstream, fullRow.downstream, fullRow.distribution]), textSyncReceipt: sync,
+      // 1列化 (2026-11-03) でハッシュ入力は統合列の配列へ。旧3配列形式とは
+      // 値が一致しないため、既存の準備済み入力は再 prepare が必要。
+      tagsSha256: hash(fullRow.businessTags), textSyncReceipt: sync,
       historicalTagInput: judgment, historicalTagInputStatus: judgment === null ? "unverified-legacy" as const : "stored-receipt" as const };
   } catch {
     return hold("tag-or-text-receipt-invalid");

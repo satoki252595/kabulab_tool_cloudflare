@@ -77,6 +77,7 @@ function rowOf(overrides: Partial<SupplementRow> = {}): SupplementRow {
     upstream: [],
     downstream: [],
     distribution: [],
+    businessTags: [...(overrides.upstream ?? []), ...(overrides.downstream ?? []), ...(overrides.distribution ?? [])],
     themes: [],
     uncertain: null,
     evidenceText: null,
@@ -176,7 +177,7 @@ describe("processStock", () => {
     const outcome = await processStock(itemOf({ kind: "retag", row, emptyTagRepair: true }), deps);
     expect(outcome.emptyTagRepairResult).toEqual({ tagged: expected.tagged, uncertain: expected.uncertain, noCandidates: false });
     expect(ask).toHaveBeenCalledOnce(); expect(updated).toHaveLength(1);
-    expect(updated[0].input.upstream).toEqual(expected.tagged ? ["工作機械"] : []);
+    expect(updated[0].input.businessTags).toEqual(expected.tagged ? ["工作機械"] : []);
     expect(updated[0].input.judgeInput).toMatch(/^Clef-Flash空事業タグの明示再確認/);
     expect(updated[0].input.judgedAt).toBe("2026-10-18");
     expect(readInputReceipt(updated[0].input.judgeInput)?.stateSha256).toMatch(/^[a-f0-9]{64}$/);
@@ -198,7 +199,7 @@ describe("processStock", () => {
     const outcome = await processStock(itemOf({ kind: "retag", stockCode: "1301", companyName: "極洋", row,
       doc: docOf({ docId: "S100YE8K" }), emptyTagRepair: true }), deps);
     expect(outcome.emptyTagRepairResult).toEqual({ tagged: false, uncertain: false, noCandidates: true });
-    expect(ask).not.toHaveBeenCalled(); expect(updated[0].input.upstream).toEqual([]);
+    expect(ask).not.toHaveBeenCalled(); expect(updated[0].input.businessTags).toEqual([]);
   });
   it("直接processも非空タグを空タグ再確認として上書きしない", async () => {
     const read = vi.fn(async () => []), { deps, updated } = makeDeps({ readStockTextRow: read });
@@ -254,7 +255,7 @@ describe("processStock", () => {
       notionTextsSha256: hash(TEXT_SECTIONS.map(({ title }) => [title, null])), emptySectionKeys: TEXT_SECTIONS.map(({ key }) => key) });
     expect(repaired.textObservation!.notionTextsSha256).not.toBe(hash(raw)); // 修復後POSTや原39のSHAへ差し替えない。
     expect(repaired.textEmptySections).toEqual(TEXT_SECTIONS.filter(({ key }) => key !== "business").map(({ title }) => title));
-    expect(updated[0].input.texts?.["事業の内容"]).toBe(OKUMA_BUSINESS_TEXT); expect(evidenceCalls[0].block).toBeUndefined(); expect(updated[0].input.upstream).toBeUndefined(); expect(ask).not.toHaveBeenCalled();
+    expect(updated[0].input.texts?.["事業の内容"]).toBe(OKUMA_BUSINESS_TEXT); expect(evidenceCalls[0].block).toBeUndefined(); expect(updated[0].input.businessTags).toBeUndefined(); expect(ask).not.toHaveBeenCalled();
     target = { ...target, judgeInput: updated[0].input.judgeInput!, texts: Object.fromEntries(raw.map(([title, text]) => [title, text === null ? "" : text])) };
     updated.length = 0;
     expect(await processStock({ ...item, row: target }, deps)).toMatchObject({ textChecked: true, textMismatch: false, outcome: "skipped" }); expect(updated).toHaveLength(0); expect(source).toHaveBeenCalledOnce();
@@ -439,7 +440,7 @@ describe("processStock", () => {
       expect(outcome.jevCalls).toBe(1);
       const write = created[0]?.input;
       expect(write?.tagStatus).toBe("判定済");
-      expect(write?.upstream).toEqual(["工作機械"]);
+      expect(write?.businessTags).toEqual(["工作機械"]);
       expect(write?.themes).toEqual(["工作機械・産業用ロボット"]);
       expect(write?.tagDoc).toBe("S100YFQC 2026年3月期");
       expect(write?.vocabVersion).toBe(MINI_VOCAB.version);
@@ -486,7 +487,7 @@ describe("processStock", () => {
       const outcome = await processStock(item, deps);
       expect(outcome.tagStatus).toBe("判定済");
       expect(outcome.candidateCount).toBe(0);
-      expect(created[0]?.input).toMatchObject({ upstream: [], downstream: [], themes: [], uncertain: null });
+      expect(created[0]?.input).toMatchObject({ businessTags: [], themes: [], uncertain: null });
       expect(evidenceCalls).toEqual([{ pageId: "new-page-id", block: null }]);
     });
 
@@ -510,8 +511,7 @@ describe("processStock", () => {
       expect(outcome.outcome).toBe("updated");
       const write = updated.find((u) => u.pageId === oldRow.pageId)?.input;
       expect(write?.docId).toBe("S100YFQC");
-      expect(write?.downstream).toEqual([]); // 古い「小火器・火砲」は残らない
-      expect(write?.upstream).toEqual(["工作機械"]);
+      expect(write?.businessTags).toEqual(["工作機械"]); // 統合列だけが正 (古い「小火器・火砲」は含まない)
       expect(write?.tagDoc).toBe("S100YFQC 2026年3月期");
       // 既存行は根拠ブロックを先に置き換えてから (中断されても「判定済なのに
       // 根拠は古い書類のまま」を作らない)、プロパティを更新する。
@@ -547,7 +547,7 @@ describe("processStock", () => {
       expect(write?.attempts).toBe(1);
       expect(write?.nextRetryAt).toBe("2026-09-26"); // 2^(1-1)=1日後
       expect(write?.candidateCount).toBe(1); // 絞り込みまでは成功した事実を残す
-      expect(write?.upstream).toEqual([]);
+      expect(write?.businessTags).toEqual([]);
       expect(write?.error).toContain("SemIf 判定に失敗");
       expect(write?.judgeInput).toMatch(/^SemIf新規銘柄の初回判定/);
       expect(outcome.error).toContain("SemIf 判定に失敗");
@@ -621,7 +621,7 @@ describe("processStock (spy 呼び出し回数)", () => {
     const outcome = await processStock(itemOf({ kind, row: rowOf({ attempts: 5, error: "status=402" }) }), deps);
     expect(askSpy).not.toHaveBeenCalled();
     expect(outcome.jevCalls).toBe(0);
-    expect(updated[0].input.upstream).toEqual(["工作機械"]);
+    expect(updated[0].input.businessTags).toEqual(["工作機械"]);
     expect(updated[0].input.judgeInput).toContain("機械照合");
     expect(updated[0].input.evidenceText).toContain("キーワード一致");
     expect(updated[0].input.evidenceText).not.toContain("0.95");
@@ -717,7 +717,7 @@ describe("input-change local rejudgment", () => {
     }
     await processStock(itemOf({ kind: "retag", row, sourceChangedLocalJudge: true, checkSourceInput: true }), deps);
     expect(ask).not.toHaveBeenCalled(); expect(evidenceCalls).toEqual([{ pageId: row.pageId, block: undefined }]);
-    expect(updated[0].input.upstream).toBeUndefined(); expect(updated[0].input.tagDoc).toBeUndefined();
+    expect(updated[0].input.businessTags).toBeUndefined(); expect(updated[0].input.tagDoc).toBeUndefined();
     expect(updated[0].input.vocabVersion).toBeUndefined(); expect(updated[0].input.judgedAt).toBeUndefined();
     expect(Object.keys(updated[0].input.texts ?? {})).toHaveLength(39);
     expect(updated[0].input.judgeInput).toContain('"textPageId":"notion-page-okuma"');

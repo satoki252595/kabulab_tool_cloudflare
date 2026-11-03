@@ -12,6 +12,7 @@ import { gunzipSync } from "node:zlib";
 import zeroWidthNative from "./fixtures/9273-s100z2z6-notion-zero-width.json";
 import {
   BUSINESS_TAGS_DESCRIPTION,
+  LEGACY_TAG_COLUMN_DESCRIPTION,
   buildEvidenceBlock,
   buildSupplementProperties,
   chunkPropertiesByBytes,
@@ -535,11 +536,13 @@ describe("stock-supplement (Notion 通信)", () => {
       fullSchema["事業タグ（素材・部品・装置）"] = {
         id: "up-id",
         type: "multi_select",
+        description: LEGACY_TAG_COLUMN_DESCRIPTION,
         multi_select: { options: [{ name: "半導体パッケージ・基板材料" }] },
       };
       fullSchema["事業タグ（製品・サービス）"] = {
         id: "down-id",
         type: "multi_select",
+        description: LEGACY_TAG_COLUMN_DESCRIPTION,
         multi_select: { options: [{ name: "自動車" }] },
       };
       fullSchema["投資テーマ"] = {
@@ -633,25 +636,15 @@ describe("stock-supplement (Notion 通信)", () => {
       expect(new URL(calls[0].url).searchParams.getAll("filter_properties")).toContain("判定入力-id");
     });
 
-    it("統合列が無いDBでは businessTags が undefined になる (移行期の任意読み)", async () => {
-      const page = {
-        id: "row-1",
-        properties: {
-          銘柄名: { title: [{ plain_text: "テスト株式会社" }] },
-          銘柄コード: { rich_text: [{ plain_text: "1234" }] },
-          "事業タグ（素材・部品・装置）": { multi_select: [{ name: "半導体パッケージ・基板材料" }] },
-        },
-      };
+    it("統合列が無いDBでは読みを止める (1列化後の正は統合列)", async () => {
       route("POST", "/v1/databases/db-1/query", [
-        { results: [page], has_more: false, next_cursor: null },
+        { results: [], has_more: false, next_cursor: null },
       ]);
       const { loadSupplementRows } = await load();
       const idsWithoutUnified = { ...propertyIds };
       delete idsWithoutUnified["事業タグ"];
-      const [row] = await loadSupplementRows("db-1", idsWithoutUnified);
-      expect(row.businessTags).toBeUndefined();
-      expect(row.upstream).toEqual(["半導体パッケージ・基板材料"]);
-      expect(new URL(calls[0].url).searchParams.getAll("filter_properties")).not.toContain("事業タグ-id");
+      await expect(loadSupplementRows("db-1", idsWithoutUnified)).rejects.toThrow("事業タグ");
+      expect(calls).toHaveLength(0);
     });
 
     it.each([[], undefined])("判定入力がクリア/欠落ならreaderは明示nullを返す (%s)", async (rich) => {
@@ -829,6 +822,7 @@ function buildFullSchema(extraTextColumns: string[] = []): Record<string, TestPr
     description: BUSINESS_TAGS_DESCRIPTION,
     multi_select: { options: [] },
   };
+
   out["事業タグと現在本文の対応"] = { id: "tag-current-id", type: "formula" };
   out["銘柄名"] = { id: "name-id", type: "title" };
   out["銘柄マスタ"] = { id: "master-id", type: "relation" };

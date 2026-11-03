@@ -23,7 +23,7 @@
 
 ```sh
 cd /Users/satoki252595/projects/kabulab-cf
-nix develop --offline --no-write-lock-file --command env -u NODE_PATH pnpm biztag:monthly --runtime .runtime/mac-publishing-20261025 --preflight
+nix develop --offline --no-write-lock-file --command env -u NODE_PATH pnpm biztag:monthly --runtime .runtime/mac-unified-20261103 --preflight
 ```
 
 preflightが成功した場合だけ実行する。出力には原本・判定の診断が含まれるためprivateログへ保存する。
@@ -31,10 +31,10 @@ preflightが成功した場合だけ実行する。出力には原本・判定�
 ```sh
 umask 077
 monthly_log="tmp/biztag-local/monthly-$(date +%Y%m%dT%H%M%S)-$$.log"
-nix develop --offline --no-write-lock-file --command env -u NODE_PATH pnpm biztag:monthly --runtime .runtime/mac-publishing-20261025 >"$monthly_log" 2>&1
+nix develop --offline --no-write-lock-file --command env -u NODE_PATH pnpm biztag:monthly --runtime .runtime/mac-unified-20261103 >"$monthly_log" 2>&1
 ```
 
-上記runtimeは`45629c8`で受入済み。[初回移行](mechanical-publishing.md)でcanonical state・原本・旧journalを保全し、acceptedRevision一致と旧runtimeの版不一致停止、新runtimeの月次preflightを確認した。Calendarもこのruntimeへ更新済み。これは本モデルの実行成功とは別である。root側の月次driverはCIが通ったmainから実行する。ログを確認する際もファイル全体を公開しない。
+上記runtimeの受入revisionの正は `.env` の `BIZTAG_LOCAL_ACCEPTED_REVISION`（preflight が一致を検証する）。旧runtime `.runtime/mac-publishing-20261025` は 2026-11-03 に `.runtime/mac-unified-20261103` へ切替済み。[初回移行](mechanical-publishing.md)でcanonical state・原本・旧journalを保全し、acceptedRevision一致と旧runtimeの版不一致停止、新runtimeの月次preflightを確認した。Calendarもこのruntimeへ更新済み。これは本モデルの実行成功とは別である。root側の月次driverはCIが通ったmainから実行する。ログを確認する際もファイル全体を公開しない。
 
 runtimeのHEAD・acceptedRevision・main包含・clean・env権限・Nix依存をpreflightで確認する。受入済みruntimeを勝手にpull/resetせず、変更時はCI確認と未完状態保全を先に行う。実行ログはprivateな既存stateへ保存し、本文・判断入力・秘密値をメールやGitへ貼らない。
 

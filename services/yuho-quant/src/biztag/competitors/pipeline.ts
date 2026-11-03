@@ -136,7 +136,7 @@ export async function runCompetitors(opts: RunCompetitorsOptions): Promise<RunCo
       companyName: r.companyName,
       pageId: r.pageId,
       sector33: r.sector33,
-      tags: [...r.upstream, ...r.downstream, ...r.distribution],
+      tags: [...r.businessTags],
       businessText: r.texts["事業の内容"] ?? "",
       docId: r.docId,
     }));

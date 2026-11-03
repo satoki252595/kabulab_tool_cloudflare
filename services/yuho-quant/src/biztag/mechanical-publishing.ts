@@ -70,7 +70,7 @@ export async function mechanicalTextInput(latest: LatestDoc, row: SupplementRow 
     docId: latest.doc.docId, docType: docTypeLabelOf(latest.doc.docTypeCode), periodEnd: latest.doc.periodEnd, submittedAt: latest.doc.submittedAt,
     textStatus: "取得済", texts, textSyncReceipt: JSON.stringify(receipt), textInputSha256: fourSha, tagInputSha256 };
   if (masterPageId !== null && (row === null || !row.masterLinked)) input.masterPageId = masterPageId;
-  if (row === null) Object.assign(input, { tagStatus: "未判定", upstream: [], downstream: [], distribution: [], businessTags: [], themes: [],
+  if (row === null) Object.assign(input, { tagStatus: "未判定", businessTags: [], themes: [],
     uncertain: null, evidenceText: null, tagDoc: null, vocabVersion: null, judgedAt: null, candidateCount: null, judgeInput: null,
     error: null, attempts: 0, nextRetryAt: null });
   return input;
