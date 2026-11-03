@@ -52,10 +52,7 @@ function rowOf(overrides: Partial<SupplementRow> = {}): SupplementRow {
     nextRetryAt: null,
     error: null,
     judgeInput: null,
-    upstream: [],
-    downstream: [],
-    distribution: [],
-    businessTags: [...(overrides.upstream ?? []), ...(overrides.downstream ?? []), ...(overrides.distribution ?? [])],
+    businessTags: [],
     themes: [],
     uncertain: null,
     evidenceText: null,
@@ -84,7 +81,7 @@ describe("planWork (保存タグを再利用し、不足だけ補完)", () => {
     expect(planWork([latestOf({ doc })], [row], TODAY, undefined, true)[0].sourceChangedLocalJudge).toBeUndefined();
   });
   it.each([
-    { upstream: ["工作機械"], evidenceText: "保存済み根拠" },
+    { businessTags: ["工作機械"], evidenceText: "保存済み根拠" },
     { tagStatus: "本文なし" as const }, { companyName: "不同会社" }, { docId: "S100OLD", tagDoc: "S100OLD 2025年3月期" },
   ])("空タグ限定scopeの非適格行はmetadata/text等の別writerへ流さずHOLD (%j)", overrides => {
     const doc = latestDocOf({ docId: "S100YFQC" });
@@ -143,7 +140,7 @@ describe("planWork (保存タグを再利用し、不足だけ補完)", () => {
     latestDocOf({ notionDocPageId: null, textParseStatus: "no_text_sections" }),
     latestDocOf({ notionDocPageId: "" }),
   ])("本文資格が不足している場合は保存済み結果を保持して HOLD", (doc) => {
-    const row = rowOf({ docId: "S100OLD", textStatus: "取得済", tagStatus: "判定済", upstream: ["シリコンウエハ"] });
+    const row = rowOf({ docId: "S100OLD", textStatus: "取得済", tagStatus: "判定済", businessTags: ["シリコンウエハ"] });
     const item = planSingle(latestOf({ doc }), row);
     expect(item).toMatchObject({ kind: "skip", qualificationHeld: true });
     expect(item.row).toBe(row);
@@ -151,9 +148,9 @@ describe("planWork (保存タグを再利用し、不足だけ補完)", () => {
 
   it.each([
     { docId: "S100AAAA", vocabVersion: "v1" },
-    { upstream: ["シリコンウエハ"], evidenceText: "保存済みの根拠文" },
+    { businessTags: ["シリコンウエハ"], evidenceText: "保存済みの根拠文" },
     { uncertain: "保存済み要確認", evidenceText: "保存済みの根拠文" },
-    { distribution: ["保存済み流通タグ"], evidenceText: "保存済みの根拠文", texts: {} },
+    { businessTags: ["保存済み流通タグ"], evidenceText: "保存済みの根拠文", texts: {} },
   ])("保存根拠が揃う判定済みなら新有報・語彙との差 %j でも code の保存結果を再利用", (override) => {
     const row = rowOf({ docId: "S100AAAA", tagDoc: "S100AAAA 2026年3月期", vocabVersion: "v0", tagStatus: "判定済", ...override });
     const item = planSingle(latestOf(), row);
@@ -177,9 +174,9 @@ describe("planWork (保存タグを再利用し、不足だけ補完)", () => {
     { tagDoc: "S100OTHER 2026年3月期" },
     { vocabVersion: null },
     { vocabVersion: "" },
-    { upstream: ["シリコンウエハ"], evidenceText: null },
-    { downstream: ["保存済み下流タグ"], evidenceText: "" },
-    { distribution: ["保存済み流通タグ"], evidenceText: " " },
+    { businessTags: ["シリコンウエハ"], evidenceText: null },
+    { businessTags: ["保存済み下流タグ"], evidenceText: "" },
+    { businessTags: ["保存済み流通タグ"], evidenceText: " " },
     { uncertain: "保存済み要確認", evidenceText: null },
   ])("判定済みでも保存根拠の欠落・不整合 %j は上書きせず HOLD", (override) => {
     const row = rowOf({ docId: "S100OLD", tagDoc: "S100OLD 2025年3月期", vocabVersion: "v0", tagStatus: "判定済", ...override });
@@ -192,9 +189,9 @@ describe("planWork (保存タグを再利用し、不足だけ補完)", () => {
   it.each([
     { tagDoc: "S100OLD" },
     { judgedAt: "2026-09-24" },
-    { upstream: ["シリコンウエハ"] },
-    { downstream: ["保存済み下流タグ"] },
-    { distribution: ["保存済み流通タグ"] },
+    { businessTags: ["シリコンウエハ"] },
+    { businessTags: ["保存済み下流タグ"] },
+    { businessTags: ["保存済み流通タグ"] },
     { themes: ["保存済みテーマ"] },
     { uncertain: "保存済み要確認" },
     { evidenceText: "保存済みの根拠文" },
@@ -263,7 +260,7 @@ describe("新規上場の初回だけ SemIf を許可する計画", () => {
   it.each([
     { tagDoc: "保存済みの根拠書類" },
     { judgedAt: "2026-09-24" },
-    { upstream: ["シリコンウエハ"] },
+    { businessTags: ["シリコンウエハ"] },
     { uncertain: "保存済み要確認" },
     { evidenceText: "保存済みの根拠文だけ残った行" },
     { attempts: null },
@@ -322,7 +319,7 @@ describe("新規上場の初回だけ SemIf を許可する計画", () => {
   it("既に同一有報/語彙で判定済みなら新規資格があっても skip のまま", () => {
     const item = planSingle(latestOf(), rowOf({
       docId: latestDocOf().docId, tagDoc: `${latestDocOf().docId} 2026年3月期`, tagStatus: "判定済", vocabVersion: "v1",
-      upstream: ["シリコンウエハ"], evidenceText: "保存済みの根拠文",
+      businessTags: ["シリコンウエハ"], evidenceText: "保存済みの根拠文",
     }), { eligibility: eligible });
     expect(item.kind).toBe("sync_text");
     expect(item.initialSemif).not.toBe(true);

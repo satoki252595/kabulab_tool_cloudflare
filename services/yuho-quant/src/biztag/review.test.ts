@@ -25,10 +25,7 @@ function rowOf(overrides: Partial<SupplementRow>): SupplementRow {
     attempts: null,
     nextRetryAt: null,
     error: null,
-    upstream: [],
-    downstream: [],
-    distribution: [],
-    businessTags: [...(overrides.upstream ?? []), ...(overrides.downstream ?? []), ...(overrides.distribution ?? [])],
+    businessTags: [],
     themes: [],
     uncertain: null,
     evidenceText: null,
@@ -46,7 +43,7 @@ describe("buildReviewPacket", () => {
         sector33: "機械",
         tagStatus: "判定済",
         candidateCount: 1,
-        upstream: ["工作機械"],
+        businessTags: ["工作機械"],
         themes: ["工作機械・産業用ロボット"],
       }),
       rowOf({
@@ -54,7 +51,7 @@ describe("buildReviewPacket", () => {
         sector33: "機械",
         tagStatus: "判定済",
         candidateCount: 2,
-        upstream: ["工作機械", "産業用ロボット"],
+        businessTags: ["工作機械", "産業用ロボット"],
         uncertain: "水素製造装置・燃料電池（0.55）",
       }),
       // 未判定行は集計対象外
@@ -79,8 +76,8 @@ describe("buildReviewPacket", () => {
     const rows = [
       rowOf({ stockCode: "1", sector33: "水産・農林業", tagStatus: "判定済", candidateCount: 0 }),
       rowOf({ stockCode: "2", sector33: "水産・農林業", tagStatus: "判定済", candidateCount: 0 }),
-      rowOf({ stockCode: "3", sector33: "水産・農林業", tagStatus: "判定済", candidateCount: 1, upstream: ["工作機械"] }),
-      rowOf({ stockCode: "4", sector33: "機械", tagStatus: "判定済", candidateCount: 1, upstream: ["工作機械"] }),
+      rowOf({ stockCode: "3", sector33: "水産・農林業", tagStatus: "判定済", candidateCount: 1, businessTags: ["工作機械"] }),
+      rowOf({ stockCode: "4", sector33: "機械", tagStatus: "判定済", candidateCount: 1, businessTags: ["工作機械"] }),
     ];
     const packet = buildReviewPacket(rows, MINI_VOCAB, "2026-08-01");
     const fishery = packet.noHitSectors.find((s) => s.sector33 === "水産・農林業");

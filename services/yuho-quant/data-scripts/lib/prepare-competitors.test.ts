@@ -37,7 +37,7 @@ beforeEach(() => {
   for (const page of pages) for (const [i, name] of ["本文同期根拠", "本文の事業タグ入力SHA256", "事業タグの判定入力SHA256"].entries())
     page.properties[name] = { id: `protocol-new-lineage-${i}`, type: "rich_text", rich_text: [] };
   // 事業タグ1列化 (2026-11-03) の本番移行と同じ決定的和集合を投影する
-  // (移行CLI migrate-unified-tags と同じ定義。値の捏造ではない)。
+  // (2026-11-03 本番移行と同じ定義。値の捏造ではない)。
   for (const page of pages) {
     const union = ["素材・部品・装置", "製品・サービス", "流通・サービス"].flatMap(name =>
       (page.properties[name]?.multi_select as unknown[] | undefined) ?? []);

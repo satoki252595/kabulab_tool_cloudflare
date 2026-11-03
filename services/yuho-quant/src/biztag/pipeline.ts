@@ -159,15 +159,6 @@ export function isBillingBlockedError(error: string | null): boolean {
 export function buildSchemaSpec(vocab: Vocabulary, sector33Options: string[]): SupplementSchemaSpec {
   return {
     textColumns: TEXT_SECTIONS.map((t) => t.title),
-    upstreamOptions: vocab.business
-      .filter((t) => !t.deprecated && t.notionColumn === "upstream")
-      .map((t) => t.labelJa),
-    downstreamOptions: vocab.business
-      .filter((t) => !t.deprecated && t.notionColumn === "downstream")
-      .map((t) => t.labelJa),
-    distributionOptions: vocab.business
-      .filter((t) => !t.deprecated && t.notionColumn === "distribution")
-      .map((t) => t.labelJa),
     themeOptions: vocab.themes.filter((t) => !t.deprecated).map((t) => t.labelJa),
     versionOptions: [vocab.version],
     sector33Options,
