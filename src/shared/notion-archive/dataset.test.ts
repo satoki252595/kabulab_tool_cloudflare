@@ -191,6 +191,201 @@ describe("適時開示の未知送信は次行の取得を停止", () => {
     expect(vi.mocked(fetch).mock.calls.every(([, options]) => options?.redirect === "manual")).toBe(true);
   });
 
+  function notionTerminalPage(pageId: string, tdnetId: string, status: "uploaded" | "unavailable") {
+    return {
+      id: pageId,
+      properties: {
+        "TDnet ID": { rich_text: [{ plain_text: tdnetId }] },
+        "IR資料状態": { select: { name: status } },
+        "IR資料": { files: status === "uploaded" ? [{ name: "real.pdf" }] : [] },
+        "開示表題": { title: [{ plain_text: row.title }] },
+        "IR発表日": { date: { start: row.pubdate } },
+      },
+    };
+  }
+
+  it("1回目の処理で既存ページはあるが本文が未保存のまま残り、2回目の再処理で本文が戻る", async () => {
+    const pageId = "title-page";
+    const classification = { sentiment: "unknown" as const, method: null, score: null, text: "保存済み本文" };
+    const base = vi.mocked(notionRequest).getMockImplementation()!;
+    vi.mocked(notionRequest).mockImplementation(async (method, path, body) => {
+      if (path.endsWith("/query")) {
+        return { results: [notionTerminalPage(pageId, "LEGACY", "uploaded")], has_more: false } as never;
+      }
+      if (method === "GET" && path === `/pages/${pageId}`) {
+        return { properties: { "IR資料": { type: "files", files: [
+          { name: "real.pdf", type: "file", file: { url: "https://archive.test/real.pdf" } },
+        ] } } } as never;
+      }
+      return base(method, path, body);
+    });
+    const classifier = vi.fn(async (bytes: Uint8Array) => {
+      expect(new TextDecoder().decode(bytes)).toBe("%PDF-test");
+      return classification;
+    });
+    const { upsertDisclosuresByStock } = await import("./dataset.js");
+    const persisted = vi.fn();
+    const firstClassified = vi.fn();
+    const first = await upsertDisclosuresByStock({
+      service: "title-alias-first",
+      tagOptions: [],
+      rows: [row],
+      classifyPdf: classifier,
+      onPagePersisted: persisted,
+      onPdfClassified: firstClassified,
+    });
+    expect(first.skippedExisting).toBe(1);
+    expect(first.created).toBe(0);
+    expect(persisted).toHaveBeenCalledWith(row.key, pageId);
+    expect(firstClassified).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(uploadFile).not.toHaveBeenCalled();
+
+    const secondClassified = vi.fn();
+    const second = await upsertDisclosuresByStock({
+      service: "title-alias-first",
+      tagOptions: [],
+      rows: [row],
+      classifyPdf: classifier,
+      onPdfClassified: secondClassified,
+      recoverPdfTextPages: new Map([[row.key, pageId]]),
+      pendingPdfTextKeys: new Set([row.key]),
+    });
+    expect(second.skippedExisting).toBe(1);
+    expect(second.created).toBe(0);
+    expect(secondClassified).toHaveBeenCalledWith(row.key, classification);
+    expect(secondClassified).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fetch).mock.calls.map(([url]) => String(url))).toEqual(["https://archive.test/real.pdf"]);
+    expect(vi.mocked(fetch).mock.calls.every(([, options]) => options?.redirect === "manual")).toBe(true);
+    expect(uploadFile).not.toHaveBeenCalled();
+    expect(vi.mocked(notionRequest).mock.calls.some(([method, path]) =>
+      (method === "POST" && path === "/pages") || method === "PATCH")).toBe(false);
+  });
+
+  it("D1にページIDが無く本文未保存の表題一致は、同じ回で保管済みPDFから本文が戻る", async () => {
+    const pageId = "title-page";
+    const classification = { sentiment: "positive" as const, method: "rule_v1", score: 1, text: "同じ回の本文" };
+    const base = vi.mocked(notionRequest).getMockImplementation()!;
+    vi.mocked(notionRequest).mockImplementation(async (method, path, body) => {
+      if (path.endsWith("/query")) {
+        return { results: [notionTerminalPage(pageId, "LEGACY", "uploaded")], has_more: false } as never;
+      }
+      if (method === "GET" && path === `/pages/${pageId}`) {
+        return { properties: { "IR資料": { type: "files", files: [
+          { name: "real.pdf", type: "file", file: { url: "https://archive.test/same-run.pdf" } },
+        ] } } } as never;
+      }
+      return base(method, path, body);
+    });
+    const classifier = vi.fn(async (bytes: Uint8Array) => {
+      expect(new TextDecoder().decode(bytes)).toBe("%PDF-test");
+      return classification;
+    });
+    const persisted = vi.fn();
+    const classified = vi.fn();
+    const { upsertDisclosuresByStock } = await import("./dataset.js");
+    const result = await upsertDisclosuresByStock({
+      service: "title-alias-same-run",
+      tagOptions: [],
+      rows: [row],
+      classifyPdf: classifier,
+      onPagePersisted: persisted,
+      onPdfClassified: classified,
+      pendingPdfTextKeys: new Set([row.key]),
+    });
+    expect(result.skippedExisting).toBe(1);
+    expect(result.created).toBe(0);
+    expect(persisted).toHaveBeenCalledWith(row.key, pageId);
+    expect(classified).toHaveBeenCalledWith(row.key, classification);
+    expect(vi.mocked(fetch).mock.calls.map(([url]) => String(url))).toEqual(["https://archive.test/same-run.pdf"]);
+    expect(uploadFile).not.toHaveBeenCalled();
+    expect(vi.mocked(notionRequest).mock.calls.some(([method, path]) => method === "POST" && path === "/pages")).toBe(false);
+  });
+
+  it("TDnet IDが一致する既存終端も、ページIDが無く本文未保存なら同じ回で本文が戻る", async () => {
+    const pageId = "keyed-page";
+    const classification = { sentiment: "unknown" as const, method: null, score: null, text: "ID一致の本文" };
+    const base = vi.mocked(notionRequest).getMockImplementation()!;
+    vi.mocked(notionRequest).mockImplementation(async (method, path, body) => {
+      if (path.endsWith("/query")) {
+        return { results: [notionTerminalPage(pageId, row.key, "uploaded")], has_more: false } as never;
+      }
+      if (method === "GET" && path === `/pages/${pageId}`) {
+        return { properties: { "IR資料": { type: "files", files: [
+          { name: "real.pdf", type: "file", file: { url: "https://archive.test/keyed.pdf" } },
+        ] } } } as never;
+      }
+      return base(method, path, body);
+    });
+    const classified = vi.fn();
+    const { upsertDisclosuresByStock } = await import("./dataset.js");
+    const result = await upsertDisclosuresByStock({
+      service: "keyed-same-run",
+      tagOptions: [],
+      rows: [row],
+      classifyPdf: vi.fn(async () => classification),
+      onPdfClassified: classified,
+      pendingPdfTextKeys: new Set([row.key]),
+    });
+    expect(result.skippedExisting).toBe(1);
+    expect(classified).toHaveBeenCalledWith(row.key, classification);
+    expect(vi.mocked(fetch).mock.calls.map(([url]) => String(url))).toEqual(["https://archive.test/keyed.pdf"]);
+    expect(uploadFile).not.toHaveBeenCalled();
+  });
+
+  it("表題一致でも回復対象と別ページなら上流取得へ進まず停止する", async () => {
+    const base = vi.mocked(notionRequest).getMockImplementation()!;
+    vi.mocked(notionRequest).mockImplementation(async (method, path, body) => {
+      if (path.endsWith("/query")) {
+        return { results: [notionTerminalPage("title-page", "LEGACY", "uploaded")], has_more: false } as never;
+      }
+      return base(method, path, body);
+    });
+    const classified = vi.fn();
+    const { upsertDisclosuresByStock } = await import("./dataset.js");
+    await expect(upsertDisclosuresByStock({
+      service: "title-alias-mismatch",
+      tagOptions: [],
+      rows: [row],
+      classifyPdf: vi.fn(),
+      onPdfClassified: classified,
+      recoverPdfTextPages: new Map([[row.key, "other-page"]]),
+      pendingPdfTextKeys: new Set([row.key]),
+    })).rejects.toThrow("ir_pdf_recovery_source_unqualified");
+    expect(fetch).not.toHaveBeenCalled();
+    expect(uploadFile).not.toHaveBeenCalled();
+    expect(classified).not.toHaveBeenCalled();
+    expect(vi.mocked(notionRequest).mock.calls.some(([method, path]) =>
+      (method === "POST" && path === "/pages") || method === "PATCH")).toBe(false);
+  });
+
+  it("表題一致の原本なし終端は本文を作らず発行元を取りに行かない", async () => {
+    const base = vi.mocked(notionRequest).getMockImplementation()!;
+    vi.mocked(notionRequest).mockImplementation(async (method, path, body) => {
+      if (path.endsWith("/query")) {
+        return { results: [notionTerminalPage("title-page", "LEGACY", "unavailable")], has_more: false } as never;
+      }
+      return base(method, path, body);
+    });
+    const persisted = vi.fn();
+    const classified = vi.fn();
+    const { upsertDisclosuresByStock } = await import("./dataset.js");
+    const result = await upsertDisclosuresByStock({
+      service: "title-alias-unavailable",
+      tagOptions: [],
+      rows: [row],
+      classifyPdf: vi.fn(),
+      onPagePersisted: persisted,
+      onPdfClassified: classified,
+      pendingPdfTextKeys: new Set([row.key]),
+    });
+    expect(result.skippedExisting).toBe(1);
+    expect(persisted).toHaveBeenCalledWith(row.key, "title-page");
+    expect(classified).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(uploadFile).not.toHaveBeenCalled();
+  });
+
   it("既知の PDF 不在は明示 skippedNoFile で保持する", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 404 })));
     const { upsertDisclosuresByStock } = await import("./dataset.js");
