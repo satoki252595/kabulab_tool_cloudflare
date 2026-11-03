@@ -33,6 +33,7 @@ import { fetchYahooWithSpacing } from "./request-spacing.js";
 import { YahooSharedCooldownError } from "./shared-cooldown.js";
 import { parseCorporateEvents, yahooChartSourceUrl, type CorporateEvents } from "./corporate-events.js";
 import { buildStockCorporateDiagnostics, extractStockCorporateEvents, type StockCorporateDiagnostics } from "./stock-corporate-events.js";
+import { logYahooHttp429, symbolFromYahooUrl } from "./yahoo-429-diag.js";
 
 /**
  * 日本株銘柄コード。
@@ -207,7 +208,12 @@ function rememberYahooRateLimit(error: YahooRateLimitError): YahooRateLimitError
 }
 
 /** Yahoo 実通信と Node のプロキシ送信を同じ間隔・停止境界へ通す。 */
-async function pacedYahooFetch(url: string, init: RequestInit, beforeRequest?: () => void): Promise<Response> {
+async function pacedYahooFetch(
+  url: string,
+  init: RequestInit,
+  beforeRequest?: () => void,
+  diagSymbol?: string,
+): Promise<Response> {
   const assertNotRateLimited = () => {
     if (credentialRateLimitError !== null && Date.now() < credentialRateLimitedUntil) {
       throw credentialRateLimitError;
@@ -216,6 +222,10 @@ async function pacedYahooFetch(url: string, init: RequestInit, beforeRequest?: (
   };
   assertNotRateLimited();
   const response = await fetchYahooWithSpacing(url, init, assertNotRateLimited);
+  // 計測のみ (INC-20261103)。Yahoo の 429 だけ。期限・再送・例外はここより下の既存分岐のまま。
+  if (response.status === 429) {
+    await logYahooHttp429(response, url, diagSymbol);
+  }
   if (response.status === 429 || response.status === 503) {
     const retryAt = rateLimitRetryAt(response);
     if (retryAt === null) throw new Error("Yahoo 制限応答の停止期限がありません");
@@ -301,7 +311,8 @@ function expireCredentialRefresh(refreshAttempt: number): void {
 async function bootstrapYahooCredential(
   refreshAttempt: number,
   signal: AbortSignal,
-  beforeRequest?: () => void
+  beforeRequest?: () => void,
+  diagSymbol?: string,
 ): Promise<{
   crumb: string;
   cookie: string;
@@ -314,7 +325,7 @@ async function bootstrapYahooCredential(
     },
     redirect: "manual",
     signal,
-  }, beforeRequest);
+  }, beforeRequest, diagSymbol);
   assertCredentialRefreshOwner(refreshAttempt);
   if (pageRes.status === 429 || pageRes.status === 503) {
     ensureOk(pageRes, "auth-page");
@@ -333,7 +344,8 @@ async function bootstrapYahooCredential(
       },
       signal,
     },
-    beforeRequest
+    beforeRequest,
+    diagSymbol,
   );
   assertCredentialRefreshOwner(refreshAttempt);
 
@@ -360,7 +372,7 @@ async function bootstrapYahooCredential(
  * Yahoo Finance の認証値を取得する (30 分キャッシュ + isolate 内 single-flight)。
  * 待機側は自 request の timer だけを await し、bootstrap の I/O Promise を共有しない。
  */
-async function getYahooCredential(beforeRequest?: () => void): Promise<YahooCredential> {
+async function getYahooCredential(beforeRequest?: () => void, diagSymbol?: string): Promise<YahooCredential> {
   const cached = currentYahooCredential();
   if (cached) return cached;
 
@@ -392,7 +404,7 @@ async function getYahooCredential(beforeRequest?: () => void): Promise<YahooCred
       }
       const refreshError = credentialRefreshErrors[joinedAttempt];
       if (refreshError !== undefined) throw refreshError;
-      return getYahooCredential(beforeRequest);
+      return getYahooCredential(beforeRequest, diagSymbol);
     } finally {
       removeCredentialRefreshWaiter(joinedAttempt);
     }
@@ -405,7 +417,8 @@ async function getYahooCredential(beforeRequest?: () => void): Promise<YahooCred
     const bootstrap = await bootstrapYahooCredential(
       refreshAttempt,
       AbortSignal.timeout(MAX_CREDENTIAL_REFRESH_MS),
-      beforeRequest
+      beforeRequest,
+      diagSymbol,
     );
     assertCredentialRefreshOwner(refreshAttempt);
     const credential: YahooCredential = {
@@ -455,7 +468,8 @@ function invalidateYahooCredential(used: YahooCredential): void {
  * 取込プロキシルート (/api/ingest/yahoo) からも直接呼ばれる (export)。
  */
 export async function yahooFetchDirect(url: string, beforeRequest?: () => void): Promise<Response> {
-  const credential = await getYahooCredential(beforeRequest);
+  const diagSymbol = symbolFromYahooUrl(url);
+  const credential = await getYahooCredential(beforeRequest, diagSymbol);
   const separator = url.includes("?") ? "&" : "?";
   const authUrl = `${url}${separator}crumb=${encodeURIComponent(credential.crumb)}`;
 
@@ -465,11 +479,11 @@ export async function yahooFetchDirect(url: string, beforeRequest?: () => void):
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
       Cookie: credential.cookie,
     },
-  }, beforeRequest);
+  }, beforeRequest, diagSymbol);
 
   if (res.status === 401) {
     invalidateYahooCredential(credential);
-    const fresh = await getYahooCredential(beforeRequest);
+    const fresh = await getYahooCredential(beforeRequest, diagSymbol);
     const retryUrl = `${url}${separator}crumb=${encodeURIComponent(fresh.crumb)}`;
     return pacedYahooFetch(retryUrl, {
       headers: {
@@ -477,7 +491,7 @@ export async function yahooFetchDirect(url: string, beforeRequest?: () => void):
           "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
         Cookie: fresh.cookie,
       },
-    }, beforeRequest);
+    }, beforeRequest, diagSymbol);
   }
 
   return res;
