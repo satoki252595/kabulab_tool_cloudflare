@@ -1,11 +1,11 @@
 ---
 name: biztag-ops
-description: kabulab-cfの事業タグをApple Silicon Mac/Nixから運用する。定時・手動run、実行サマリ、排他、rollbackの確認に使う。タグ判定ロジックの変更は通常の実装作業。
+description: kabulab-cfの事業タグをApple Silicon Mac/Nixから手動運用する。手動run、実行サマリ、排他、rollbackの確認に使う（定時実行は2026-11-03に撤去済み）。タグ判定ロジックの変更は通常の実装作業。
 ---
 
 # biztag-ops — Macの事業タグ運用
 
-2026-10-03に定時writerをMacへ移管した。正本は
+2026-10-03にwriterをMacへ移管し、2026-11-03に定時実行（LaunchAgent）は撤去した。正本は
 [`docs/005-biztag-local-runtime.md`](../../../docs/005-biztag-local-runtime.md)、
 判定契約は[`docs/005-yuho-quant-business-tags.md`](../../../docs/005-yuho-quant-business-tags.md)。
 リポジトリの`CLAUDE.md`とサービスの`CLAUDE.md`も従う。
@@ -31,9 +31,9 @@ nix develop --command pnpm biztag run --limit=20
 nix develop --command pnpm biztag stats
 ```
 
-定時経路はLaunchAgentの20:00現地時刻/RunAtLoad→Nix→同じCLI。
-installはplist作成までで、bootstrapは実runを起動する。bootstrap前に旧GitHub jobと
-共有Notion writerが空いていることを確認する。詳細は上記runtime正本を読む。
+定時実行は無い（2026-11-03にLaunchAgent 2labelのplistを削除し、
+`install`/`install-next` サブコマンドも撤去した）。実行は手動のみで、
+新規install/bootstrapは行わない。月次は[手動手順](../../../docs/mac-monthly-manual.md)に従う。
 
 サマリの判定済/本文なし/読込失敗/判定不能、失敗・HOLD、Notion429、実model/call数を
 確認する。時刻・件数・終了statusと保存後確認を証跡に残し、予定時刻を実行clockに置換しない。

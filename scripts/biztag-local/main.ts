@@ -1,10 +1,10 @@
 /**
- * Mac専用の事業タグ・優待要約定時処理。
- * Nix shell内から preflight / install / install-next / run を呼ぶ。自動更新・再試行はしない。
+ * Mac専用の事業タグ・優待要約の手動処理入口。
+ * Nix shell内から preflight / run を呼ぶ。定時実行 (LaunchAgent) は
+ * 2026-11-03 に撤去済みで、自動更新・再試行はしない。
  */
-import { spawn, execFileSync, type ChildProcess } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { spawn, type ChildProcess } from "node:child_process";
+import { closeSync, mkdirSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { preflight } from "./runtime.js";
@@ -36,41 +36,6 @@ function jobState(state: string, kind: string | undefined): string {
   const path = kind === "yutai-summary" ? join(dirname(state), "yutai-local") : state;
   mkdirSync(path, { recursive: true, mode: 0o700 });
   return path;
-}
-
-function xml(value: string): string {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&apos;");
-}
-
-function install(kind: string | undefined, runAtLoad: boolean): void {
-  const { label, hour } = localJob(kind);
-  const flight = preflight(root);
-  const revision = flight.revision;
-  const state = jobState(flight.state, kind);
-  const nix = execFileSync("which", ["nix"], { encoding: "utf8" }).trim();
-  if (!nix.startsWith("/nix/")) throw new Error("Nix管理のnix実行ファイルが必要です。");
-  const plist = join(homedir(), "Library/LaunchAgents", `${label}.plist`);
-  if (existsSync(plist)) throw new Error("既存LaunchAgentがあります。停止・内容確認後に更新してください。");
-  const args = [nix, "develop", "--offline", "--command", "pnpm", "exec", "tsx", "scripts/biztag-local/main.ts", "run"];
-  if (kind !== undefined) args.push(kind);
-  const content = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-<key>Label</key><string>${label}</string>
-<key>ProgramArguments</key><array>${args.map((v) => `<string>${xml(v)}</string>`).join("")}</array>
-<key>WorkingDirectory</key><string>${xml(root)}</string>
-<key>RunAtLoad</key><${runAtLoad ? "true" : "false"}/>
-<key>StartCalendarInterval</key><dict><key>Hour</key><integer>${hour}</integer><key>Minute</key><integer>0</integer></dict>
-<key>StandardOutPath</key><string>${xml(join(state, "launchd.log"))}</string>
-<key>StandardErrorPath</key><string>${xml(join(state, "launchd-error.log"))}</string>
-<key>Umask</key><integer>63</integer>
-</dict></plist>
-`;
-  mkdirSync(dirname(plist), { recursive: true });
-  writeFileSync(plist, content, { mode: 0o600, flag: "wx" });
-  execFileSync("plutil", ["-lint", plist], { stdio: "ignore" });
-  // RunAtLoad=trueならbootstrapが実処理を始める。installerでは作成だけに留める。
-  console.info(JSON.stringify({ status: "prepared", revision, label, localTime: `${hour}:00`, runAtLoad, bootstrapped: false }));
 }
 
 async function run(kind: string | undefined): Promise<void> {
@@ -176,9 +141,8 @@ async function run(kind: string | undefined): Promise<void> {
 export async function main(mode: string | undefined, kind?: string): Promise<void> {
   localJob(kind);
   if (mode === "preflight") console.info(JSON.stringify({ status: "preflight_pass", revision: preflight(root).revision, networkRequests: 0, writesToData: 0 }));
-  else if (mode === "install" || mode === "install-next") install(kind, mode === "install");
   else if (mode === "run") await run(kind);
-  else throw new Error("preflight / install / install-next / run のいずれかを指定してください。");
+  else throw new Error("preflight / run のいずれかを指定してください。(install 系は 2026-11-03 に撤去)");
 }
 
 if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.argv[1]) {
