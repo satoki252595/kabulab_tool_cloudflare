@@ -39,6 +39,7 @@ export interface UnifiedMigrationOptions {
 
 export interface UnifiedMigrationSummary {
   apply: boolean;
+  limited: boolean;
   columnPresentBefore: boolean;
   rowsScanned: number;
   plannedWrites: number;
@@ -47,6 +48,7 @@ export interface UnifiedMigrationSummary {
   failed: number;
   verifiedRows: number;
   mismatchedAfter: number;
+  fatalError: string | null;
 }
 
 /** 3列の和集合 (upstream→downstream→distribution の順、重複は単語帳上あり得ない)。 */
@@ -103,8 +105,14 @@ function journal(journalPath: string | undefined, entry: Record<string, unknown>
   appendFileSync(journalPath, JSON.stringify(entry) + "\n");
 }
 
-export async function runUnifiedTagsMigration(
-  opts: UnifiedMigrationOptions
+/**
+ * 移行本体。例外は呼び出し側 (runUnifiedTagsMigration) が summary へ畳む。
+ * ここで throw すると共有publisher の owner が未閉鎖のまま残るため、
+ * 通常の失敗は summary / journal に記録して戻ること。
+ */
+async function runUnifiedTagsMigrationInner(
+  opts: UnifiedMigrationOptions,
+  summary: UnifiedMigrationSummary
 ): Promise<UnifiedMigrationSummary> {
   if (opts.apply && (opts.journalPath === undefined || opts.journalPath.trim() === "")) {
     throw new Error("migrate-unified-tags の --apply には --journal が必須です (監査証跡)");
@@ -139,17 +147,12 @@ export async function runUnifiedTagsMigration(
   const targets = (opts.limit !== undefined
     ? planned.filter((i) => i.action === "write").slice(0, opts.limit)
     : planned.filter((i) => i.action === "write"));
-  const summary: UnifiedMigrationSummary = {
-    apply: opts.apply,
+  Object.assign(summary, {
     columnPresentBefore: before.columnPresent,
     rowsScanned: rows.length,
     plannedWrites: planned.filter((i) => i.action === "write").length,
     skippedEqual: planned.filter((i) => i.action === "skip-equal").length,
-    written: 0,
-    failed: 0,
-    verifiedRows: 0,
-    mismatchedAfter: 0,
-  };
+  });
   journal(opts.journalPath, {
     kind: "plan",
     apply: opts.apply,
@@ -185,4 +188,41 @@ export async function runUnifiedTagsMigration(
   summary.mismatchedAfter = planUnifiedTags(after).filter((i) => i.action === "write").length;
   journal(opts.journalPath, { kind: "verified", ...summary });
   return summary;
+}
+
+/**
+ * 共有publisher の owner 内で呼ばれるため、例外を外へ投げない。
+ * throw すると owner が未閉鎖のまま残り、全publisherが止まる
+ * (2026-11-03 の限定実行で実際に発生し、個別照合で明示解消した)。
+ * 失敗は summary.fatalError と journal に残し、終了コードは呼び出し側が
+ * owner 解放後に決める。移行の書込は冪等なので再実行で回復できる。
+ */
+export async function runUnifiedTagsMigration(
+  opts: UnifiedMigrationOptions
+): Promise<UnifiedMigrationSummary> {
+  const summary: UnifiedMigrationSummary = {
+    apply: opts.apply,
+    limited: opts.limit !== undefined,
+    columnPresentBefore: false,
+    rowsScanned: 0,
+    plannedWrites: 0,
+    skippedEqual: 0,
+    written: 0,
+    failed: 0,
+    verifiedRows: 0,
+    mismatchedAfter: 0,
+    fatalError: null,
+  };
+  try {
+    return await runUnifiedTagsMigrationInner(opts, summary);
+  } catch (cause) {
+    summary.fatalError =
+      cause instanceof Error ? cause.message.slice(0, 300) : String(cause).slice(0, 300);
+    try {
+      journal(opts.journalPath, { kind: "fatal", error: summary.fatalError, ...summary });
+    } catch {
+      // journal 書込自体の失敗で owner を残さない。fatalError は summary にある。
+    }
+    return summary;
+  }
 }

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { SupplementRow } from "../../../../src/shared/notion-archive/stock-supplement.js";
-import { expectedBusinessTags, planUnifiedTags } from "./migrate-unified-tags.js";
+import {
+  expectedBusinessTags,
+  planUnifiedTags,
+  runUnifiedTagsMigration,
+} from "./migrate-unified-tags.js";
 
 function row(over: Partial<SupplementRow>): SupplementRow {
   return {
@@ -60,5 +64,15 @@ describe("planUnifiedTags", () => {
     const [item] = planUnifiedTags([row({ upstream: ["U1"], businessTags: ["旧タグ"] })]);
     expect(item.action).toBe("write");
     expect(item.expected).toEqual(["U1"]);
+  });
+});
+
+describe("runUnifiedTagsMigration (owner 安全)", () => {
+  it("例外を投げず fatalError として返す (共有ownerを未閉鎖で残さないため)", async () => {
+    const summary = await runUnifiedTagsMigration({ apply: true });
+    expect(summary.fatalError).toContain("--journal が必須");
+    expect(summary.written).toBe(0);
+    expect(summary.apply).toBe(true);
+    expect(summary.limited).toBe(false);
   });
 });
