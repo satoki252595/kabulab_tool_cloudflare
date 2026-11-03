@@ -30,7 +30,7 @@ const receipt: TextSyncReceipt = { docId: document.docId, textPageId: document.n
 const row: SupplementRow = { pageId: saved.item.archivePageId, stockCode: latest.stockCode, companyName: latest.companyName,
   sector33: null, docId: document.docId, docType: "有報", periodEnd: document.periodEnd, submittedAt: document.submittedAt.toISOString(),
   textStatus: "取得済", tagStatus: null, tagDoc: null, vocabVersion: null, judgedAt: null, candidateCount: null,
-  judgeInput: withTextSyncReceipt(null, receipt), attempts: null, nextRetryAt: null, error: null, upstream: [], downstream: [], distribution: [], businessTags: [], themes: [],
+  judgeInput: withTextSyncReceipt(null, receipt), attempts: null, nextRetryAt: null, error: null, businessTags: [], themes: [],
   uncertain: null, evidenceText: null, masterLinked: false, texts: Object.fromEntries(TEXT_SECTIONS.map(s => {
     const value = parsed.texts[s.title]; return [s.title, value === null ? "" : value];
   })) };
