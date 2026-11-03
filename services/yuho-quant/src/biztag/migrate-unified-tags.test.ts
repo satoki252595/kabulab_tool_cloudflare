@@ -39,6 +39,11 @@ describe("planUnifiedTags", () => {
     expect(item.current).toBeUndefined();
   });
 
+  it("3列も統合列も空なら未読でも書かない (空PATCHを全行に打たない)", () => {
+    const [item] = planUnifiedTags([row({})]);
+    expect(item.action).toBe("skip-equal");
+  });
+
   it("集合一致なら順序が違っても書かない", () => {
     const [item] = planUnifiedTags([
       row({ upstream: ["U1"], downstream: ["D1"], businessTags: ["D1", "U1"] }),

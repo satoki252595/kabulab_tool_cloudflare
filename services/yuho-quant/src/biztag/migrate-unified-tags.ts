@@ -64,7 +64,9 @@ export function planUnifiedTags(rows: readonly SupplementRow[]): UnifiedMigratio
   return rows.map((row) => {
     const expected = expectedBusinessTags(row);
     const current = row.businessTags;
-    const equal = current !== undefined && sameSet(expected, current);
+    // 期待値の正は3列 (移行元) なので、統合列が未読/空で期待値も空なら
+    // 書く意味が無い (空PATCHで全行の更新時刻だけ進めない)。
+    const equal = sameSet(expected, current ?? []);
     return {
       code: row.stockCode,
       pageId: row.pageId,
