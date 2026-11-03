@@ -70,7 +70,7 @@ describe("validateVocabulary", () => {
     expect(codes(v)).toContain("label_too_long");
   });
 
-  it("1 列の非廃止 business が上限を超えると notion_option_limit を検出する", () => {
+  it("business は統合1列の自動作成のため notion_option_limit を出さない (テーマ列のみ上限)", () => {
     const v = structuredClone(MINI_VOCAB);
     const template = v.business.find((t) => t.notionColumn === "upstream");
     if (!template) throw new Error("fixture に upstream の語が無い");
@@ -84,7 +84,7 @@ describe("validateVocabulary", () => {
     );
     v.business = [...v.business, ...extra];
     const issues = validateVocabulary(v);
-    expect(issues.some((i) => i.code === "notion_option_limit")).toBe(true);
+    expect(issues.some((i) => i.code === "notion_option_limit")).toBe(false);
   });
 
   it("非廃止テーマが上限を超えると notion_option_limit を検出する", () => {

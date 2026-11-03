@@ -469,7 +469,7 @@ async function competitorsEvalCommand(): Promise<void> {
       stockCode: r.stockCode,
       companyName: r.companyName,
       sector33: r.sector33,
-      tags: [...r.upstream, ...r.downstream, ...r.distribution],
+      tags: [...r.businessTags],
       businessText: r.texts["事業の内容"] ?? "",
     };
   };

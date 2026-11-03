@@ -123,6 +123,9 @@ describe("supplement evidence two-phase replacement", () => {
     const page = structuredClone(saved.pages[0]), dbId = page.parent.database_id;
     // Committed native projection omits the transport clock; declared protocol-only metadata.
     page.last_edited_time = "2026-10-17T00:00:00.000Z";
+    // 事業タグ1列化 (2026-11-03) の本番移行と同じ決定的和集合を投影する
+    // (fixture は移行前の保存値のため、統合列は3列から機械的に導く)。
+    page.properties["事業タグ"] = { type: "multi_select", multi_select: ["事業タグ（素材・部品・装置）", "事業タグ（製品・サービス）", "事業タグ（流通・サービス）"].flatMap(name => page.properties[name]?.multi_select ?? []) };
     const text = page.properties["事業の内容"].rich_text.map((v: { plain_text: string }) => v.plain_text).join("");
     const width = Math.ceil(text.length / 26), parts = Array.from({ length: Math.ceil(text.length / width) }, (_, i) => ({ plain_text: text.slice(i * width, (i + 1) * width) }));
     expect(parts.length).toBeGreaterThanOrEqual(25);

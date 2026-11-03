@@ -184,7 +184,7 @@ export const VocabularySchema = z.strictObject({
 });
 export type Vocabulary = z.infer<typeof VocabularySchema>;
 
-/** Notion 1 列あたりの選択肢の上限（公式上限を安全側で守る） */
+/** Notion schema 一括同期 (選択肢のまとめて送信) が受理する 1 列あたりの選択肢上限。テーマ列のように schema 同期を使う列の保護に用いる。事業タグの統合列は書き込み時自動作成のためこの上限を適用しない。 */
 export const NOTION_OPTIONS_PER_COLUMN_MAX = 100;
 /** 選択肢名の上限文字数 */
 export const LABEL_MAX_CHARS = 40;

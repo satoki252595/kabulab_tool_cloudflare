@@ -55,6 +55,7 @@ function rowOf(overrides: Partial<SupplementRow> = {}): SupplementRow {
     upstream: [],
     downstream: [],
     distribution: [],
+    businessTags: [...(overrides.upstream ?? []), ...(overrides.downstream ?? []), ...(overrides.distribution ?? [])],
     themes: [],
     uncertain: null,
     evidenceText: null,

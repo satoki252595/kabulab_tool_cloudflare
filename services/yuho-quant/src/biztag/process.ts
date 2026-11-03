@@ -124,7 +124,7 @@ export function savedRowGuard(row: NonNullable<WorkItem["row"]>): Record<string,
   return {
     ...buildSupplementProperties({ companyName: row.companyName, stockCode: row.stockCode, sector33: row.sector33,
       docId: row.docId, docType: row.docType, periodEnd: row.periodEnd, submittedAt: row.submittedAt,
-      upstream: row.upstream, downstream: row.downstream, distribution: row.distribution, themes: row.themes,
+      businessTags: row.businessTags, themes: row.themes,
       uncertain: row.uncertain, evidenceText: row.evidenceText, tagDoc: row.tagDoc, vocabVersion: row.vocabVersion,
       judgedAt: row.judgedAt, candidateCount: row.candidateCount, judgeInput: row.judgeInput,
       textSyncReceipt: row.textSyncReceipt, textInputSha256: row.textInputSha256, tagInputSha256: row.tagInputSha256,
@@ -400,9 +400,6 @@ export async function processStock(item: WorkItem, deps: ProcessDeps): Promise<P
           periodEnd: null,
           submittedAt: null,
           textStatus: "本文なし",
-          upstream: [],
-          downstream: [],
-          distribution: [],
           businessTags: [],
           themes: [],
           uncertain: null,
@@ -449,11 +446,7 @@ export async function processStock(item: WorkItem, deps: ProcessDeps): Promise<P
         throw new Error(`processStock: version_bump に必要な行/書類が無い (${item.stockCode})`);
       }
       if (item.row.docId !== item.doc.docId) throw new SupplementWriteHeldError("版だけの更新で別有報へ付け替えません。旧タグを保持してHOLD");
-      const tagIds = idsFromActiveLabels(deps.vocab, [
-        ...item.row.upstream,
-        ...item.row.downstream,
-        ...item.row.distribution,
-      ]);
+      const tagIds = idsFromActiveLabels(deps.vocab, item.row.businessTags);
       const themes = deriveThemes(deps.vocab, tagIds).map((t) => t.labelJa);
       await writeRowWithEvidence(item, deps, {
         docId: item.doc.docId,
@@ -484,7 +477,7 @@ export async function processStock(item: WorkItem, deps: ProcessDeps): Promise<P
 
 async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<ProcessOutcome> {
   if (item.emptyTagRepair && (item.kind !== "retag" || item.row?.tagStatus !== "判定済" ||
-      item.row.docId !== doc.docId || item.row.upstream.length + item.row.downstream.length + item.row.distribution.length !== 0 ||
+      item.row.docId !== doc.docId || item.row.businessTags.length !== 0 ||
       item.sourceChangedLocalJudge || item.checkSourceInput)) {
     throw new Error("空事業タグの再確認対象が不正です。旧値を保持してHOLD");
   }
@@ -593,9 +586,6 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
       deps,
       {
         ...baseInput,
-        upstream: [],
-        downstream: [],
-        distribution: [],
         businessTags: [],
         themes: [],
         uncertain: null,
@@ -674,9 +664,6 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
       deps,
       {
         ...baseInput,
-        upstream: tagOutcome.upstream,
-        downstream: tagOutcome.downstream,
-        distribution: tagOutcome.distribution,
         businessTags: tagOutcome.businessTags,
         themes: tagOutcome.themes,
         uncertain: tagOutcome.uncertainText,
@@ -703,7 +690,7 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
       tagStatus: "判定済",
       candidateCount,
       ...(item.emptyTagRepair ? { emptyTagRepairResult: {
-        tagged: tagOutcome.upstream.length + tagOutcome.downstream.length + tagOutcome.distribution.length > 0,
+        tagged: tagOutcome.businessTags.length > 0,
         uncertain: tagOutcome.uncertainText !== null, noCandidates: false,
       } } : {}),
       ...(!deps.dryRun ? { textEmptySections: emptySectionsOf(textsByColumn) } : {}),
@@ -764,9 +751,6 @@ async function recordFailure(item: WorkItem, deps: ProcessDeps, args: FailureArg
     periodEnd: args.periodEnd,
     submittedAt: args.submittedAt,
     textStatus: args.textStatus,
-    upstream: [],
-    downstream: [],
-    distribution: [],
     businessTags: [],
     themes: [],
     uncertain: null,

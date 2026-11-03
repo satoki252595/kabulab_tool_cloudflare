@@ -73,6 +73,13 @@ export const TAG_TEXT_FRESHNESS_COLUMN = "事業タグと現在本文の対応";
 export const BUSINESS_TAGS_DESCRIPTION =
   "事業タグ全区分の和集合。川上（素材・部品・装置）／川下（製品・サービス）／流通・サービスの別は単語帳（語彙）の notionColumn が正本。この列の選択肢は書込時に自動作成される。";
 
+/**
+ * 旧3列 (素材・部品・装置 / 製品・サービス / 流通・サービス) の列説明文。
+ * 1列化 (2026-11-03) で凍結し、新しい判定では更新されないことを列自体に明記する。
+ */
+export const LEGACY_TAG_COLUMN_DESCRIPTION =
+  "旧列（2026-11-03で凍結）。事業タグの正は『事業タグ』列。川上・川下・流通の別は単語帳の notionColumn が正本。";
+
 export type TextStatus = "取得済" | "本文なし" | "読込失敗";
 export type TagStatus = "判定済" | "本文なし" | "読込失敗" | "判定不能" | "未判定";
 export type DocTypeLabel = "有報" | "訂正有報";
@@ -142,12 +149,15 @@ function buildDbProperties(spec: SupplementSchemaSpec): Record<string, unknown> 
     [SUPPLEMENT_PROPS.textStatus]: { select: { options: TEXT_STATUS_OPTIONS } },
     [SUPPLEMENT_PROPS.upstream]: {
       multi_select: { options: toOptions(spec.upstreamOptions) },
+      description: LEGACY_TAG_COLUMN_DESCRIPTION,
     },
     [SUPPLEMENT_PROPS.downstream]: {
       multi_select: { options: toOptions(spec.downstreamOptions) },
+      description: LEGACY_TAG_COLUMN_DESCRIPTION,
     },
     [SUPPLEMENT_PROPS.distribution]: {
       multi_select: { options: toOptions(spec.distributionOptions) },
+      description: LEGACY_TAG_COLUMN_DESCRIPTION,
     },
     // 統合列「事業タグ」は選択肢をスキーマで一括定義しない。全語彙(212種)は
     // スキーマ定義リクエストの上限 (options.length ≤ 100、2026-11-03 実証) を
@@ -371,14 +381,12 @@ export interface SupplementRow {
   attempts: number | null;
   nextRetryAt: string | null;
   error: string | null;
+  /** 旧3列 (2026-11-03 で凍結。新規判定では更新されない。参照は監査用のみ)。 */
   upstream: string[];
   downstream: string[];
   distribution: string[];
-  /**
-   * 統合列「事業タグ」の値 (3列の和集合を書く列)。列が無い/未読の旧行では
-   * undefined であり、「タグ無し」の証明ではない (移行期の読み分け用)。
-   */
-  businessTags?: string[];
+  /** 統合列「事業タグ」の値 (1列化後の正)。 */
+  businessTags: string[];
   themes: string[];
   uncertain: string | null;
   evidenceText: string | null;
@@ -471,9 +479,7 @@ function parseSupplementRow(page: NotionPage, textColumns: string[]): Supplement
     upstream: readMultiSelect(p[SUPPLEMENT_PROPS.upstream]),
     downstream: readMultiSelect(p[SUPPLEMENT_PROPS.downstream]),
     distribution: readMultiSelect(p[SUPPLEMENT_PROPS.distribution]),
-    ...(p[SUPPLEMENT_PROPS.businessTags] !== undefined
-      ? { businessTags: readMultiSelect(p[SUPPLEMENT_PROPS.businessTags]) }
-      : {}),
+    businessTags: readMultiSelect(p[SUPPLEMENT_PROPS.businessTags]),
     themes: readMultiSelect(p[SUPPLEMENT_PROPS.themes]),
     uncertain: readRich(p[SUPPLEMENT_PROPS.uncertain]) || null,
     evidenceText: readRich(p[SUPPLEMENT_PROPS.evidenceText]) || null,
@@ -510,12 +516,7 @@ export async function loadSupplementRows(
   opts?: { textColumns?: string[]; codes?: string[]; strictNative?: boolean; beforeRequest?: () => void }
 ): Promise<SupplementRow[]> {
   const textColumns = opts?.textColumns ?? [];
-  // 統合列「事業タグ」は移行期のみ任意: 列が無い DB (ensure 未実行) でも
-  // 読めるようにし、欠けは businessTags=undefined として返す。正の切替
-  // (PR-2) で必須に戻す。
-  const columnNames = [...Object.values(SUPPLEMENT_PROPS), ...textColumns].filter(
-    (name) => name !== SUPPLEMENT_PROPS.businessTags || propertyIds[name] !== undefined
-  );
+  const columnNames = [...Object.values(SUPPLEMENT_PROPS), ...textColumns];
   const qs = buildFilterPropertiesQs(propertyIds, columnNames);
 
   const rows: SupplementRow[] = [];
@@ -580,7 +581,7 @@ export function assertCompleteSupplementPage(page: NotionPage, dbId: string, tex
   }
   const title = page.properties[SUPPLEMENT_PROPS.name];
   if (title?.type !== "title" || title.has_more === true || !Array.isArray(title.title) || title.title.some(v => typeof v.plain_text !== "string")) stop();
-  for (const name of [SUPPLEMENT_PROPS.upstream, SUPPLEMENT_PROPS.downstream, SUPPLEMENT_PROPS.distribution, SUPPLEMENT_PROPS.themes]) {
+  for (const name of [SUPPLEMENT_PROPS.upstream, SUPPLEMENT_PROPS.downstream, SUPPLEMENT_PROPS.distribution, SUPPLEMENT_PROPS.businessTags, SUPPLEMENT_PROPS.themes]) {
     const p = page.properties[name];
     if (p?.type !== "multi_select" || !Array.isArray(p.multi_select) || p.multi_select.some(v => typeof v.name !== "string")) stop();
   }

@@ -185,7 +185,7 @@ export function hasUsableText(doc: LatestDoc["doc"]): doc is Doc & { notionDocPa
 function hasPreviousJudgment(row: SupplementRow | null): boolean {
   return row !== null && (
     row.tagStatus === "判定済" || row.tagDoc !== null || row.judgedAt !== null ||
-    row.upstream.length > 0 || row.downstream.length > 0 || row.distribution.length > 0 ||
+    row.businessTags.length > 0 ||
     row.themes.length > 0 || (row.uncertain !== null && row.uncertain.length > 0) ||
     (row.evidenceText !== null && row.evidenceText.length > 0)
   );
@@ -262,8 +262,8 @@ function planOne(
   if (row.tagStatus === "判定済") {
     // 保存形式は「docId 会計期末」。最新有報ではなく、保存済みの書類同士を照合する。
     const savedTagDocId = row.tagDoc === null ? null : row.tagDoc.split(" ", 1)[0];
-    const hasTagOrUncertain = row.upstream.length > 0 || row.downstream.length > 0 ||
-      row.distribution.length > 0 || (row.uncertain !== null && row.uncertain.length > 0);
+    const hasTagOrUncertain = row.businessTags.length > 0 ||
+      (row.uncertain !== null && row.uncertain.length > 0);
     if (row.docId === null || row.docId.trim().length === 0 || savedTagDocId === null || savedTagDocId.trim().length === 0 ||
         row.vocabVersion === null || row.vocabVersion.trim().length === 0 ||
         (hasTagOrUncertain && (row.evidenceText === null || row.evidenceText.trim().length === 0))) {
@@ -376,7 +376,7 @@ export function planWork(
     const row = item.row;
     if (!item.qualificationHeld && !item.sourceChangedLocalJudge && !item.refreshCompanyName && hasUsableText(item.doc) &&
         row?.tagStatus === "判定済" && row.docId === item.doc.docId &&
-        row.upstream.length + row.downstream.length + row.distribution.length === 0) {
+        row.businessTags.length === 0) {
       return { ...item, kind: "retag", emptyTagRepair: true,
         reason: "明示finite scopeの空3familyを現有報で再確認。旧no/uncertainをキーワードだけで覆さない" };
     }

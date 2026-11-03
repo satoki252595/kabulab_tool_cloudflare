@@ -12,7 +12,6 @@
 import {
   BUSINESS_ID_PATTERN,
   LABEL_MAX_CHARS,
-  NOTION_COLUMNS,
   NOTION_OPTIONS_PER_COLUMN_MAX,
   VocabularySchema,
   type BusinessTerm,
@@ -129,15 +128,9 @@ export function validateVocabulary(v: Vocabulary): VocabIssue[] {
   }
 
   // 4. Notion 選択肢数の上限 (非廃止のみ)。
-  for (const column of NOTION_COLUMNS) {
-    const count = v.business.filter((t) => t.notionColumn === column && !t.deprecated).length;
-    if (count > NOTION_OPTIONS_PER_COLUMN_MAX) {
-      issues.push({
-        code: "notion_option_limit",
-        message: `列 "${column}" の非廃止語が上限 ${NOTION_OPTIONS_PER_COLUMN_MAX} を超えています (${count} 件)`,
-      });
-    }
-  }
+  //    事業タグは統合1列「事業タグ」が書き込み時自動作成で選択肢が増えるため
+  //    上限を置かない (schema 一括同期の上限 100 は適用されない)。
+  //    テーマ列は schema 同期 (選択肢一括 PATCH) の対象のため上限を守る。
   const activeThemeCount = v.themes.filter((t) => !t.deprecated).length;
   if (activeThemeCount > NOTION_OPTIONS_PER_COLUMN_MAX) {
     issues.push({

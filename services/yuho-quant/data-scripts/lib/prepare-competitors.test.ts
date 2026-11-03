@@ -36,6 +36,13 @@ beforeEach(() => {
   // no historical body/judgment receipt or SHA is fabricated.
   for (const page of pages) for (const [i, name] of ["本文同期根拠", "本文の事業タグ入力SHA256", "事業タグの判定入力SHA256"].entries())
     page.properties[name] = { id: `protocol-new-lineage-${i}`, type: "rich_text", rich_text: [] };
+  // 事業タグ1列化 (2026-11-03) の本番移行と同じ決定的和集合を投影する
+  // (移行CLI migrate-unified-tags と同じ定義。値の捏造ではない)。
+  for (const page of pages) {
+    const union = ["素材・部品・装置", "製品・サービス", "流通・サービス"].flatMap(name =>
+      (page.properties[name]?.multi_select as unknown[] | undefined) ?? []);
+    page.properties["事業タグ"] = { id: "protocol-business-tags", type: "multi_select", multi_select: union };
+  }
   vi.stubEnv("NOTION_TOKEN", "test-protocol-only"); vi.stubEnv("NOTION_STOCK_SUPPLEMENT_DB_ID", fixture.dbId);
   vi.stubEnv("NOTION_MAX_RPS", "2.0"); // 実pacingを通すがtransportは置換。実運用所要の測定ではない。
   model.latest.mockResolvedValue(structuredClone(fixture.latest));

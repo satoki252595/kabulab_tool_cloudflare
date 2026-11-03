@@ -41,10 +41,7 @@ export async function prepareCompetitors(opts: PrepareCompetitorsOptions) {
     "GET", `/databases/${dbId}`, undefined, { beforeRequest: assertReadActive });
   if (schema.object !== "database" || schema.id.replaceAll("-", "") !== dbId.replaceAll("-", "")) throw new NotionConfigError("補足DBのnative所属が不正です");
   const propertyIds = Object.fromEntries(Object.entries(schema.properties).map(([name, p]) => [name, p.id]));
-  // 統合列「事業タグ」は1列化の移行期のみ任意 (列追加は ensureSupplementDb の責務。
-  // ここは schema を作らない読取専用経路のため、未追加の DB でも止めない)。
   for (const name of [...Object.values(SUPPLEMENT_PROPS), ...TEXT_SECTIONS.map(s => s.title)]) {
-    if (name === SUPPLEMENT_PROPS.businessTags) continue;
     if (typeof propertyIds[name] !== "string" || propertyIds[name].length === 0) throw new NotionConfigError("競合準備の既存schemaが未完です。変更せず停止します");
   }
   const calibration = loadCompetitorCalibration("semif");

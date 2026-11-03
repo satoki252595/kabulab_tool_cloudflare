@@ -84,7 +84,7 @@ async function prepare(targetPath: string, dir: string, baselinePath?: string): 
     excludedCorpus.push({ code: r.stockCode, reason }); return false;
   }).map((r) => {
     return { stockCode: r.stockCode, companyName: r.companyName, pageId: r.pageId, sector33: r.sector33,
-      tags: [...r.upstream, ...r.downstream, ...r.distribution], businessText: r.texts["事業の内容"], docId: r.docId };
+      tags: [...r.businessTags], businessText: r.texts["事業の内容"], docId: r.docId };
   });
   const baseline = baselinePath === undefined ? await loadCompetitorMeta(dbId, propertyIds, SUPPLEMENT_PROPS.code) : (() => {
     const cached = load<{ dbId: string; rows: CompetitorMeta[] }>(baselinePath);
