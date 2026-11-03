@@ -1,6 +1,8 @@
 # 旧事業タグ・優待要約のMac定時運用（廃止済み）
 
-更新: 2026-10-20。**Mac定期方式は廃止し、2labelをdisable＋bootout済み。Clef専用分は[月次の手動スクリプト](mac-monthly-manual.md)、本文39/基本補足/優待機械要約は[Linux定期同期](mechanical-publishing.md)へ分離（初回共有状態移行が先）。** 以下は旧実装と復元用の記録で、新規install/bootstrapは行わない。[全件一覧と移設境界](batch-data-inventory.md)を参照。
+更新: 2026-10-20。**Mac定期方式は廃止し、2labelをdisable＋bootout済み。Clef専用分は[月次の手動スクリプト](mac-monthly-manual.md)、本文39/基本補足/優待機械要約は[Linux定期同期](mechanical-publishing.md)へ分離（初回共有状態移行が先）。** 以下は旧実装の記録で、新規install/bootstrapは行わない。[全件一覧と移設境界](batch-data-inventory.md)を参照。
+
+2026-11-03 のユーザー指定で撤去を完了した。`~/Library/LaunchAgents` の2 plist (`com.kabulab-cf.biztag` / `com.kabulab-cf.yutai-summary`) を削除し、`scripts/biztag-local/main.ts` の `install` / `install-next` サブコマンドを削除した。Mac上の定時実行の仕組みは存在しない（実行は手動のみ）。復元にはコードの revert と再受入が必要。
 
 旧事業タグのwriterはApple Silicon Macに固定されていた。
 適格新規の初回と、最新有報IDまたは既知の実入力SHAが変わった対象だけClef-Flash/MPSを使う。
