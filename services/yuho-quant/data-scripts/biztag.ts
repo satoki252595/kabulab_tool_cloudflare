@@ -55,10 +55,6 @@ import {
 import { loadCompetitorEvalSet } from "../src/biztag/competitors/evalset.js";
 import { runCompetitors } from "../src/biztag/competitors/pipeline.js";
 import { prepareCompetitors } from "./lib/prepare-competitors.js";
-import {
-  runUnifiedTagsMigration,
-  type UnifiedMigrationSummary,
-} from "../src/biztag/migrate-unified-tags.js";
 
 const [, , subcommand, ...rest] = process.argv;
 
@@ -442,13 +438,6 @@ async function competitorsEvalCommand(): Promise<void> {
   const { vocab } = await resolveActiveVocabulary(todayJst());
   const { dbId, propertyIds } = await ensureSupplementDb({
     textColumns: TEXT_SECTIONS.map((t) => t.title),
-    upstreamOptions: vocab.business.filter((t) => !t.deprecated && t.notionColumn === "upstream").map((t) => t.labelJa),
-    downstreamOptions: vocab.business
-      .filter((t) => !t.deprecated && t.notionColumn === "downstream")
-      .map((t) => t.labelJa),
-    distributionOptions: vocab.business
-      .filter((t) => !t.deprecated && t.notionColumn === "distribution")
-      .map((t) => t.labelJa),
     themeOptions: vocab.themes.filter((t) => !t.deprecated).map((t) => t.labelJa),
     versionOptions: [vocab.version],
     sector33Options: [],
@@ -521,13 +510,6 @@ async function packetCommand(): Promise<void> {
   const { vocab } = await resolveActiveVocabulary(todayJst());
   const { dbId, propertyIds } = await ensureSupplementDb({
     textColumns: TEXT_SECTIONS.map((t) => t.title),
-    upstreamOptions: vocab.business.filter((t) => !t.deprecated && t.notionColumn === "upstream").map((t) => t.labelJa),
-    downstreamOptions: vocab.business
-      .filter((t) => !t.deprecated && t.notionColumn === "downstream")
-      .map((t) => t.labelJa),
-    distributionOptions: vocab.business
-      .filter((t) => !t.deprecated && t.notionColumn === "distribution")
-      .map((t) => t.labelJa),
     themeOptions: vocab.themes.filter((t) => !t.deprecated).map((t) => t.labelJa),
     versionOptions: [vocab.version],
     sector33Options: [],
@@ -565,22 +547,6 @@ async function statsCommand(): Promise<void> {
   );
 }
 
-/** migrate-unified-tags の結果。終了コードは owner 解放後に top-level で決める。 */
-let migrateSummary: UnifiedMigrationSummary | undefined;
-
-async function migrateUnifiedTagsCommand(): Promise<void> {
-  const limitRaw = arg("limit");
-  migrateSummary = await runUnifiedTagsMigration({
-    apply: hasFlag("apply"),
-    journalPath: arg("journal"),
-    limit: limitRaw === undefined ? undefined : Number(limitRaw),
-    codes: arg("codes")?.split(",").filter((c) => c.length > 0),
-  });
-  console.info(JSON.stringify(migrateSummary, null, 2));
-  // ここで throw すると共有publisher の owner が未閉鎖で残るため、
-  // 成否判定は withBiztagWriter の外 (top-level) で行う。
-}
-
 async function main(): Promise<void> {
   if (
     ["gate", "golden"].includes(subcommand) ||
@@ -600,8 +566,6 @@ async function main(): Promise<void> {
     }
     case "reconcile-applied":
       return reconcileAppliedCommand();
-    case "migrate-unified-tags":
-      return migrateUnifiedTagsCommand();
     case "run":
       return runCommand();
     case "gate":
@@ -620,7 +584,7 @@ async function main(): Promise<void> {
       return competitorsEvalCommand();
     default:
       console.error(
-        "usage: pnpm biztag <run|acknowledge-clef-error|reconcile-applied|migrate-unified-tags|gate|golden|rollback|packet|stats|competitors|competitors-eval> [options] " +
+        "usage: pnpm biztag <run|acknowledge-clef-error|reconcile-applied|gate|golden|rollback|packet|stats|competitors|competitors-eval> [options] " +
           "(docs/005-yuho-quant-business-tags.md §11・「競合他社」節)"
       );
       process.exit(2);
@@ -637,33 +601,10 @@ if (subcommand === "run" && rest.some(flag => !["--mechanical-only", "--dry-run"
     !/^--(codes|limit|budget-min|reconcile-pre-archive|reconcile-proof-sha256|context-upgrade)=/.test(flag))) {
   throw new Error("biztag runの未知の引数/モデル許可は受け付けません");
 }
-// 引数検証は writer 取得前 (owner を掴む前に失敗させる。run と同じ規律)。
-if (subcommand === "migrate-unified-tags") {
-  const allowed = /^--(apply|journal=.+|limit=\d+|codes=[0-9A-Z,]+)$/;
-  if (rest.some((flag) => !allowed.test(flag))) {
-    throw new Error("migrate-unified-tags の未知の引数は受け付けません");
-  }
-  if (hasFlag("apply") && arg("journal") === undefined) {
-    throw new Error("migrate-unified-tags の --apply には --journal が必須です (監査証跡)");
-  }
-}
 await withBiztagWriter(main, subcommand === "run" && hasFlag("mechanical-only") && !hasFlag("allow-model"),
   subcommand === "run" && !hasFlag("mechanical-only") ? assertClefJournalReady : undefined);
 // `--judge=semif` は常駐 Python プロセス (services/yuho-quant/scripts/semif_server.py)
 // を子プロセスとして持ち続ける。標準出力は上の各コマンドで既に同期的に
 // flush 済みのため、ここで明示的に終了してよい (child プロセスは標準入力の
 // EOF で自発的に終了する)。
-// migrate の成否は owner 解放後にだけ終了コードへ反映する (限定実行では
-// 未移行が残るのが正常なので、不一致は失敗扱いにしない)。
-const migrateResult = migrateSummary;
-const migrateFailed =
-  migrateResult !== undefined &&
-  (migrateResult.fatalError !== null ||
-    migrateResult.failed > 0 ||
-    (migrateResult.apply && !migrateResult.limited && migrateResult.mismatchedAfter > 0));
-if (migrateFailed && migrateResult !== undefined) {
-  console.error(
-    `migrate-unified-tags: failed=${migrateResult.failed} mismatchedAfter=${migrateResult.mismatchedAfter} fatalError=${migrateResult.fatalError}`
-  );
-}
-process.exit(migrateFailed ? 1 : 0);
+process.exit(0);

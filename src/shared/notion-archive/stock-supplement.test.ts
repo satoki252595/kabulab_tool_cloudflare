@@ -12,7 +12,6 @@ import { gunzipSync } from "node:zlib";
 import zeroWidthNative from "./fixtures/9273-s100z2z6-notion-zero-width.json";
 import {
   BUSINESS_TAGS_DESCRIPTION,
-  LEGACY_TAG_COLUMN_DESCRIPTION,
   buildEvidenceBlock,
   buildSupplementProperties,
   chunkPropertiesByBytes,
@@ -78,20 +77,13 @@ describe("stock-supplement (純粋関数)", () => {
 
     it("multi_select は名前配列に変換する", () => {
       const props = buildSupplementProperties({
-        upstream: ["半導体パッケージ・基板材料"],
+        businessTags: ["半導体パッケージ・基板材料"],
         themes: [],
       });
-      expect(props["事業タグ（素材・部品・装置）"]).toEqual({
+      expect(props["事業タグ"]).toEqual({
         multi_select: [{ name: "半導体パッケージ・基板材料" }],
       });
       expect(props["投資テーマ"]).toEqual({ multi_select: [] });
-    });
-
-    it("事業タグ（流通・サービス）列も multi_select として書ける (第3列)", () => {
-      const props = buildSupplementProperties({ distribution: ["人材紹介・派遣"] });
-      expect(props["事業タグ（流通・サービス）"]).toEqual({
-        multi_select: [{ name: "人材紹介・派遣" }],
-      });
     });
 
     it("統合列「事業タグ」も multi_select として書ける", () => {
@@ -116,7 +108,7 @@ describe("stock-supplement (純粋関数)", () => {
 
     it("multi_select が 100 件を超えると throw", () => {
       const many = Array.from({ length: 101 }, (_, i) => `語${i}`);
-      expect(() => buildSupplementProperties({ upstream: many })).toThrow("100 件");
+      expect(() => buildSupplementProperties({ businessTags: many })).toThrow("100 件");
     });
 
     it("選択肢名にカンマがあると throw (select)", () => {
@@ -135,7 +127,7 @@ describe("stock-supplement (純粋関数)", () => {
     });
 
     it("選択肢名にカンマがあると throw (multi_select)", () => {
-      expect(() => buildSupplementProperties({ upstream: ["A,B"] })).toThrow("カンマ");
+      expect(() => buildSupplementProperties({ businessTags: ["A,B"] })).toThrow("カンマ");
     });
 
     it("rich_text が 100 要素を超える (200,000字超) と throw", () => {
@@ -162,7 +154,7 @@ describe("stock-supplement (純粋関数)", () => {
           事業等のリスク: bigText,
           研究開発活動: bigText,
         },
-        upstream: ["半導体パッケージ・基板材料"],
+        businessTags: ["半導体パッケージ・基板材料"],
         docId: "S100NEW",
         docType: "有報",
         periodEnd: "2026-03-31",
@@ -341,9 +333,6 @@ describe("stock-supplement (Notion 通信)", () => {
 
   const spec = {
     textColumns: ["事業の内容", "対処すべき課題"],
-    upstreamOptions: ["半導体パッケージ・基板材料"],
-    downstreamOptions: ["自動車"],
-    distributionOptions: ["人材紹介・派遣"],
     themeOptions: ["半導体サプライチェーン"],
     versionOptions: ["v1"],
     sector33Options: ["輸送用機器"],
@@ -533,18 +522,6 @@ describe("stock-supplement (Notion 通信)", () => {
         type: "select",
         select: { options: [{ name: "輸送用機器" }] },
       };
-      fullSchema["事業タグ（素材・部品・装置）"] = {
-        id: "up-id",
-        type: "multi_select",
-        description: LEGACY_TAG_COLUMN_DESCRIPTION,
-        multi_select: { options: [{ name: "半導体パッケージ・基板材料" }] },
-      };
-      fullSchema["事業タグ（製品・サービス）"] = {
-        id: "down-id",
-        type: "multi_select",
-        description: LEGACY_TAG_COLUMN_DESCRIPTION,
-        multi_select: { options: [{ name: "自動車" }] },
-      };
       fullSchema["投資テーマ"] = {
         id: "theme-id",
         type: "multi_select",
@@ -580,9 +557,6 @@ describe("stock-supplement (Notion 通信)", () => {
           会計期末: { date: { start: "2025-03-31" } },
           提出日: { date: { start: "2025-06-27" } },
           本文の状態: { select: { name: "取得済" } },
-          "事業タグ（素材・部品・装置）": { multi_select: [{ name: "半導体パッケージ・基板材料" }] },
-          "事業タグ（製品・サービス）": { multi_select: [] },
-          "事業タグ（流通・サービス）": { multi_select: [{ name: "人材紹介・派遣" }] },
           事業タグ: {
             multi_select: [{ name: "半導体パッケージ・基板材料" }, { name: "人材紹介・派遣" }],
           },
@@ -626,8 +600,6 @@ describe("stock-supplement (Notion 通信)", () => {
         nextRetryAt: null,
         masterLinked: true,
         masterPageIds: ["master-page-1"],
-        upstream: ["半導体パッケージ・基板材料"],
-        distribution: ["人材紹介・派遣"],
         businessTags: ["半導体パッケージ・基板材料", "人材紹介・派遣"],
         evidenceText: "核酸医薬（はい 0.93）：「テスト引用文」— 事業の内容",
         texts: { 事業の内容: "自動車を製造する。" },
@@ -846,9 +818,6 @@ function allColumnNames(): string[] {
     "会計期末",
     "提出日",
     "本文の状態",
-    "事業タグ（素材・部品・装置）",
-    "事業タグ（製品・サービス）",
-    "事業タグ（流通・サービス）",
     "事業タグ",
     "投資テーマ",
     "要確認タグ",

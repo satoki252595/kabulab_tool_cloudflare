@@ -55,6 +55,11 @@ conductor/
 
 # Temporary files
 tmp/
+
+# TOOL の生成物 (個人利用限定データ由来の集計結果。再生成可能。手順は TOOL/README.md)
+/TOOL/*.html
+/TOOL/mf-biztag-heatmap.json
+/TOOL/mf-vocab-divisions.json
 temp/
 .vercel
 # VWAP summary 原本の archive 前 durable 保持 (CI failure artifact が回収)

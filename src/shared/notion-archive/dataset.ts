@@ -23,6 +23,8 @@
  *
  * 冪等: 親=ticker、子行=TDnet ID で既存判定。uploaded/unavailable/
  * too_large は終端 skip、error/未添付は PATCH 更新で再実行収束。
+ * 本文が未保存の終端は、同じ回で保管済み PDF から本文を戻す
+ * （表題+発表日だけで一致するページも含む。発行元には取りに行かない）。
  * 捏造・既定値埋めはしない (ルール2)。
  */
 import {
@@ -161,6 +163,12 @@ export interface ByStockInput {
   rejudgePdf?: boolean;
   /** 本文未完の TDnet ID → D1で既知のNotion pageId。同じ終端保存PDFだけを再抽出する。 */
   recoverPdfTextPages?: ReadonlyMap<string, string>;
+  /**
+   * 本文が未保存の TDnet ID。D1 に notion_page_id が無くても、Notion の
+   * 既存終端ページ（TDnet ID 一致、または表題+発表日一致）から、同じ回で
+   * 保管済み PDF の本文を戻す。保存済みの ID は入れない。
+   */
+  pendingPdfTextKeys?: ReadonlySet<string>;
   /**
    * 銘柄 → Notion 会社ページの写し。あるときは銘柄解決の検索/取得を省く。
    * 未指定は従来どおり毎回 Notion で解決する（プロセス内キャッシュのみ）。
@@ -822,6 +830,48 @@ async function fetchArchivedIrPdf(pageId: string): Promise<Uint8Array> {
   return bytes;
 }
 
+/**
+ * 保管済みの単一 PDF から本文判定を取る。発行元へは切り替えない。
+ * 添付の矛盾・取得失敗・判定例外は握りつぶさず、呼出元の page ID 書き戻しより前で止める。
+ */
+async function readArchivedPdfClassification(
+  pageId: string,
+  primaryTag: string | null,
+  classifyPdf: NonNullable<ByStockInput["classifyPdf"]>,
+  rejudge: boolean,
+): Promise<PdfClassification> {
+  const archivedStarted = performance.now();
+  let bytes: Uint8Array;
+  try {
+    bytes = await fetchArchivedIrPdf(pageId);
+  } finally {
+    recordIrPdfPdfFetch(performance.now() - archivedStarted);
+  }
+  const cls = await classifyPdf(bytes, primaryTag);
+  if (rejudge) {
+    await notionRequest("PATCH", `/pages/${pageId}`, {
+      properties: { PDF判定: { select: { name: cls.sentiment } } },
+    });
+  }
+  return cls;
+}
+
+/**
+ * 保管済み PDF から本文を読むか。
+ * 再判定、D1 が指す終端ページの本文回復、ページ ID がまだ無く本文も未保存、のどれか。
+ * 本文が保存済みの行は再判定のとき以外は読まない。
+ */
+function shouldReadArchivedPdfText(
+  input: ByStockInput,
+  key: string,
+  pageId: string,
+  recoverPageId: string | undefined,
+): boolean {
+  if (input.classifyPdf === undefined) return false;
+  if (input.rejudgePdf === true) return true;
+  if (recoverPageId !== undefined) return recoverPageId === pageId;
+  return input.pendingPdfTextKeys?.has(key) === true;
+}
 
 interface QueryPage {
   id: string;
@@ -1044,27 +1094,31 @@ async function runUpsertDisclosuresByStock(
     const { childDbId, existing } = session;
       const ex = existing.byKey.get(row.key);
       const recoverPageId = input.recoverPdfTextPages?.get(row.key);
-      if (recoverPageId !== undefined && (!ex || ex.pageId !== recoverPageId || !isTerminal(ex))) {
-        throw new Error("ir_pdf_recovery_source_unqualified");
+      // TDnet ID が違う再公開でも、表題+発表日が同じ終端ページは同じ原本。
+      // 回復対象の pageId と一致するときだけ、そのページを回復元にする。
+      const titleHit = ex
+        ? undefined
+        : existing.byTitlePubdate.get(titlePubdateKey(row.title, row.pubdate));
+      if (recoverPageId !== undefined) {
+        let source: ExistingRow | undefined;
+        if (ex !== undefined) source = ex;
+        else if (titleHit !== undefined && titleHit.pageId === recoverPageId) source = titleHit;
+        if (source === undefined || source.pageId !== recoverPageId || !isTerminal(source)) {
+          throw new Error("ir_pdf_recovery_source_unqualified");
+        }
       }
       if (ex && isTerminal(ex)) {
         // 本文保存の中断と再判定は、既に物理保管した同じ PDF から再開する。
+        // D1 に pageId が無く本文も未保存のときは、同じ回で保管済み PDF から戻す。
         if (ex.status === "uploaded" && ex.hasFile && input.classifyPdf &&
-          (input.rejudgePdf || recoverPageId !== undefined)) {
-          const archivedStarted = performance.now();
-          let bytes: Uint8Array;
-          try {
-            bytes = await fetchArchivedIrPdf(ex.pageId);
-          } finally {
-            recordIrPdfPdfFetch(performance.now() - archivedStarted);
-          }
-          const cls = await input.classifyPdf(bytes, row.primaryTag);
-          if (input.rejudgePdf) {
-            await notionRequest("PATCH", `/pages/${ex.pageId}`, {
-              properties: { PDF判定: { select: { name: cls.sentiment } } },
-            });
-            rejudged++;
-          }
+          shouldReadArchivedPdfText(input, row.key, ex.pageId, recoverPageId)) {
+          const cls = await readArchivedPdfClassification(
+            ex.pageId,
+            row.primaryTag,
+            input.classifyPdf,
+            input.rejudgePdf === true,
+          );
+          if (input.rejudgePdf === true) rejudged++;
           input.onPdfClassified?.(row.key, cls);
         }
         // 終端の既存行も D1 の参照へ戻す。再開時の未観測と区別する。
@@ -1075,18 +1129,26 @@ async function runUpsertDisclosuresByStock(
       // (表題, 発表日) 一致の既存行があれば挿入不要 (TDnet ID が異なる
       // 再公開/補正で同一開示が二重登録されるのを防ぐ — ユーザ指示)。
       // TDnet ID で既に同一行が引けている場合 (ex) はそちらを正とする。
-      if (!ex) {
-        const tpHit = existing.byTitlePubdate.get(
-          titlePubdateKey(row.title, row.pubdate)
-        );
-        if (tpHit) {
-          // 新しい TDnet ID も既存ページに紐づける (ファイルプロキシが
-          // disclosures.notion_page_id 経由で最新 signed URL を引けるよう
-          // にする — 紐づけないと過渡的に新 ID 側だけ page_id 空になる)。
-          input.onPagePersisted?.(row.key, tpHit.pageId);
-          skippedExisting++;
-          continue;
+      // ページを見つけただけで終わらせず、本文が未保存なら同じ回で保管済み
+      // PDF から戻す。発行元の再取得や新規ページの作成には進まない。
+      if (!ex && titleHit) {
+        if (titleHit.status === "uploaded" && titleHit.hasFile && input.classifyPdf &&
+          shouldReadArchivedPdfText(input, row.key, titleHit.pageId, recoverPageId)) {
+          const cls = await readArchivedPdfClassification(
+            titleHit.pageId,
+            row.primaryTag,
+            input.classifyPdf,
+            input.rejudgePdf === true,
+          );
+          if (input.rejudgePdf === true) rejudged++;
+          input.onPdfClassified?.(row.key, cls);
         }
+        // 新しい TDnet ID も既存ページに紐づける (ファイルプロキシが
+        // disclosures.notion_page_id 経由で最新 signed URL を引けるよう
+        // にする — 紐づけないと過渡的に新 ID 側だけ page_id 空になる)。
+        input.onPagePersisted?.(row.key, titleHit.pageId);
+        skippedExisting++;
+        continue;
       }
       // 発表日の古さでは取得を省かない。TDnet の原本保持は固定日数ではなく
       // (2026-10-08 実測: 公開後 37 日は残存、41 日は 404)、未取得のまま

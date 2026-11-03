@@ -74,10 +74,7 @@ function rowOf(overrides: Partial<SupplementRow> = {}): SupplementRow {
     attempts: null,
     nextRetryAt: null,
     error: null,
-    upstream: [],
-    downstream: [],
-    distribution: [],
-    businessTags: [...(overrides.upstream ?? []), ...(overrides.downstream ?? []), ...(overrides.distribution ?? [])],
+    businessTags: [],
     themes: [],
     uncertain: null,
     evidenceText: null,
@@ -204,7 +201,7 @@ describe("processStock", () => {
   it("直接processも非空タグを空タグ再確認として上書きしない", async () => {
     const read = vi.fn(async () => []), { deps, updated } = makeDeps({ readStockTextRow: read });
     await expect(processStock(itemOf({ kind: "retag", emptyTagRepair: true,
-      row: rowOf({ docId: "S100YFQC", tagStatus: "判定済", upstream: ["工作機械"] }) }), deps)).rejects.toThrow("再確認対象が不正");
+      row: rowOf({ docId: "S100YFQC", tagStatus: "判定済", businessTags: ["工作機械"] }) }), deps)).rejects.toThrow("再確認対象が不正");
     expect(read).not.toHaveBeenCalled(); expect(updated).toEqual([]);
   });
   it("法人格/幅の表示差では旧非空titleを送信せず、coreの厳密な書込前資格を維持", async () => {
@@ -342,7 +339,7 @@ describe("processStock", () => {
     const legacy = withInputReceipt("SemIf入力変更の再判定：保存済み説明", { docId: "S100YFQC", textPageId: "old-pointer", businessSha256: null,
       sectionsSha256: "a".repeat(64), stateSha256: null, vocabVersion: "v1", model: "Qwen3.5-4B@851bf6e/semif-mlx" });
     const row = rowOf({ docId: "S100YFQC", docType: "有報", periodEnd: "2026-03-31", submittedAt: "2026-06-25T00:00:00.000Z", textStatus: "取得済", tagDoc: "S100YFQC 2026年3月期", tagStatus: "判定済", vocabVersion: "v1",
-      judgedAt: "2026-09-24", upstream: ["工作機械"], evidenceText: "保存済み根拠", judgeInput: legacy });
+      judgedAt: "2026-09-24", businessTags: ["工作機械"], evidenceText: "保存済み根拠", judgeInput: legacy });
     const ask = vi.fn(), latest = vi.fn(async () => {});
     const { deps, updated, evidenceCalls } = makeDeps({ jevClient: { askNoul: ask }, assertLatestDocCurrent: latest,
       readStockTextRow: async () => [{ sectionKey: "business", itemName: "事業の内容", text: OKUMA_BUSINESS_TEXT }] });
@@ -417,7 +414,7 @@ describe("processStock", () => {
 
   it("no_text: 既存書類・タグ・根拠を保持して保留する", async () => {
     const { deps, updated, evidenceCalls, callOrder } = makeDeps();
-    const row = rowOf({ docId: "S100OLD", tagStatus: "判定済", upstream: ["工作機械"] });
+    const row = rowOf({ docId: "S100OLD", tagStatus: "判定済", businessTags: ["工作機械"] });
     const outcome = await processStock(itemOf({ kind: "no_text", doc: null, row }), deps);
     expect(outcome.outcome).toBe("skipped");
     expect(outcome.tagStatus).toBe("判定済");
@@ -502,8 +499,7 @@ describe("processStock", () => {
       const oldRow = rowOf({
         docId: "S100OLD",
         tagStatus: "判定済",
-        upstream: [],
-        downstream: ["小火器・火砲"],
+        businessTags: ["小火器・火砲"],
         vocabVersion: "v1",
         tagDoc: "S100OLD 2025年3月期",
       });
@@ -572,7 +568,7 @@ describe("processStock", () => {
       docId: "S100YFQC",
       tagStatus: "判定済",
       vocabVersion: "v0",
-      upstream: ["工作機械"],
+      businessTags: ["工作機械"],
     });
     const outcome = await processStock(itemOf({ kind: "version_bump", row }), deps);
     expect(outcome.outcome).toBe("updated");
@@ -591,7 +587,7 @@ describe("processStock", () => {
 
   it("version_bump: 今の単語帳に無いラベルなら不変条件違反として throw する", async () => {
     const { deps } = makeDeps();
-    const row = rowOf({ docId: "S100YFQC", tagStatus: "判定済", upstream: ["もう無いラベル"] });
+    const row = rowOf({ docId: "S100YFQC", tagStatus: "判定済", businessTags: ["もう無いラベル"] });
     await expect(processStock(itemOf({ kind: "version_bump", row }), deps)).rejects.toThrow(/不変条件違反/);
   });
 
@@ -651,7 +647,7 @@ describe("processStock (spy 呼び出し回数)", () => {
 
 describe("input-change local rejudgment", () => {
   const saved = () => rowOf({ docId: "S100OLD", tagStatus: "判定済", tagDoc: "S100OLD 2025年3月期",
-    upstream: ["保存済みタグ"], evidenceText: "保存済み根拠", vocabVersion: "v0", judgedAt: "2025-06-25", judgeInput: "旧入力SHA未記録" });
+    businessTags: ["保存済みタグ"], evidenceText: "保存済み根拠", vocabVersion: "v0", judgedAt: "2025-06-25", judgeInput: "旧入力SHA未記録" });
   const sections = [{ itemName: "事業の内容", sectionKey: "business", text: OKUMA_BUSINESS_TEXT }];
   it("uses local judge, synchronizes all39 canonical columns, and saves actual input SHA/doc/pointer/model", async () => {
     const ask = vi.fn(jevAnswering({ "bt.B.MACH.MACHINE_TOOL": 0.95 }).askNoul);

@@ -104,8 +104,8 @@ export async function runMechanicalPublishing(options: { limit: number; budgetMs
   const done = new Set<string>(), held: Array<{ stockCode: string; reason: string }> = [];
   let synced = 0, unchanged = 0, basicOnly = 0;
   if (latest.length > 0) {
-    const supplement = await ensureSupplementDb({ textColumns: TEXT_SECTIONS.map(s => s.title), upstreamOptions: [], downstreamOptions: [],
-      distributionOptions: [], themeOptions: [], versionOptions: [], sector33Options: [...new Set(latest.flatMap(row => row.sector33 === null ? [] : [row.sector33]))] });
+    const supplement = await ensureSupplementDb({ textColumns: TEXT_SECTIONS.map(s => s.title),
+      themeOptions: [], versionOptions: [], sector33Options: [...new Set(latest.flatMap(row => row.sector33 === null ? [] : [row.sector33]))] });
     const rows = await publishingReadOnly(() => loadSupplementRows(supplement.dbId, supplement.propertyIds, { codes: selection.codes }));
     const master = await publishingReadOnly(() => loadStockMasterIndex(selection.codes));
     for (const item of latest) {

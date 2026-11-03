@@ -17,12 +17,12 @@ vi.mock("./archive.js", async (original) => ({ ...await original<typeof import("
 vi.mock("./readback.js", () => ({ verifyArchivedAttachments: io.verify }));
 
 const journal = { assertReady() {}, reserve() { return { complete() {} }; } }; // Isolated protocol dependency; real durable state is exercised below.
-const input = { docId: "S100YFQC", tagStatus: "判定済" as const, tagDoc: "S100YFQC 2026年3月期", upstream: ["工作機械"], texts: { "事業の内容": "保存原文" } };
+const input = { docId: "S100YFQC", tagStatus: "判定済" as const, tagDoc: "S100YFQC 2026年3月期", businessTags: ["工作機械"], texts: { "事業の内容": "保存原文" } };
 const block = buildEvidenceBlock({ vocabVersion: "v1", docId: "S100YFQC", periodLabel: "2026年3月期", items: [
   { labelJa: "工作機械", band: "yes", probability: 0.95, sentences: [{ text: "保存原文", sectionTitle: "事業の内容" }] },
 ] });
 const expected = buildSupplementProperties({ docId: "S100OLD", tagStatus: "判定済", tagDoc: "S100OLD 2025年3月期",
-  vocabVersion: "v0", judgedAt: "2025-06-25", upstream: ["旧タグ"], judgeInput: "旧判定入力", evidenceText: "旧根拠" });
+  vocabVersion: "v0", judgedAt: "2025-06-25", businessTags: ["旧タグ"], judgeInput: "旧判定入力", evidenceText: "旧根拠" });
 const guard = vi.fn(async () => {});
 let requestNonce = 0;
 const old = { id: "old", type: "heading_3", has_children: false,
