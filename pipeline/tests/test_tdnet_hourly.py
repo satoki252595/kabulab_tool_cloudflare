@@ -125,7 +125,9 @@ def test_empty_items_require_closed_custody_and_do_not_hide_unparsed_items(
     ctx.args = argparse.Namespace(date=date(2026, 9, 11), limit=None)
     monkeypatch.setattr(mod, "_collect", lambda *a: [(artifact, [], {})])
     # このテストは保管境界。上流が生きていることは別テストで見る。
+    # 公式件数の突き合わせも対象外（時刻と保管の期待は変えない）。
     monkeypatch.setattr(mod, "probe_yanoshin_newest", lambda *a, **k: datetime.now(JST))
+    monkeypatch.setattr(mod, "_gate_official_list", lambda *a, **k: None)
     def read_map(*a, **kw):
         if items == []:
             pytest.fail("検証済み空一覧後の全件map読取")
@@ -162,7 +164,9 @@ def test_verified_dedup_counts_as_processed_only_after_persist(monkeypatch, tmp_
     record = _record()  # 既存のwriter境界double。原本の金融値は生成しない。
     monkeypatch.setattr(mod, "_collect", lambda *a: [(object(), [record], {})])
     # 非空一覧は鮮度を見る。このテストは同値 skip の件数で、上流時刻は対象外。
+    # 公式件数の突き合わせも対象外（同値 skip の期待は変えない）。
     monkeypatch.setattr(mod, "probe_yanoshin_newest", lambda *a, **k: datetime.now(JST))
+    monkeypatch.setattr(mod, "_gate_official_list", lambda *a, **k: None)
     monkeypatch.setattr(mod, "_load_master_map", lambda _: ({record.code: "master"}, True))
     monkeypatch.setattr(mod.upsert, "load_disclosure_page_entries", lambda *a, **kw: {record.doc_id: ("existing", {})})
     monkeypatch.setattr(mod.upsert, "disclosure_matches_page", lambda *a: True)
@@ -186,6 +190,8 @@ def test_financial_unknown_stops_before_next_disclosure(monkeypatch, tmp_path):
     ctx.args = argparse.Namespace(date=date(2026, 9, 11), limit=None)
     monkeypatch.setattr(mod, "_collect", lambda *a: [(object(), [record, record], {record.doc_id: "https://declared-not-called.invalid/xbrl"})])
     monkeypatch.setattr(mod, "probe_yanoshin_newest", lambda *a, **k: datetime.now(JST))
+    # 公式件数の突き合わせはこのテストの対象外（③ 中断の期待は変えない）。
+    monkeypatch.setattr(mod, "_gate_official_list", lambda *a, **k: None)
     monkeypatch.setattr(mod, "_load_master_map", lambda _: ({}, True))
     monkeypatch.setattr(mod.upsert, "load_disclosure_page_entries", lambda *a, **kw: {})
     monkeypatch.setattr(mod.file_upload, "load_raw_page_map", lambda *a, **kw: {})

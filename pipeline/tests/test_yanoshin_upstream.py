@@ -104,6 +104,8 @@ def test_fresh_upstream_empty_day_stays_verified_zero(monkeypatch, tmp_path, cap
     path.write_text('{"items":[]}', encoding="utf-8")
     artifact = type("A", (), {"local_path": path})()
     monkeypatch.setattr(hourly, "_collect", lambda *a: [(artifact, [], {})])
+    # 公式件数の突き合わせはこのテストの対象外。時刻判定の期待は変えない。
+    monkeypatch.setattr(hourly, "_gate_official_list", lambda *a, **k: None)
     ctx = _ctx(str(tmp_path), datetime.fromisoformat(target).date())
     with caplog.at_level(logging.INFO):
         hourly.execute(ctx)
