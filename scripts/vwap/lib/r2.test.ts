@@ -1072,6 +1072,8 @@ describe("R2 PUT measurement", () => {
       expect(confirms[0]).toContain(`bytes=${bytes.length}`);
       expect(confirms[0]).toContain("lastModified=2026-10-13T00:00:00.000Z");
       expect(confirms[0]).toContain(`shaMatch=1 sentSha8=${sha8(body)} gotSha8=${sha8(body)}`);
+      expect(confirms[0]).not.toContain("maxBytes=");
+      expect(confirms[0]).not.toContain("sentEtag=");
       const brief = (line: string) => {
         const key = line.match(/key=(\S+)/)?.[1];
         const status = line.match(/ status=(\S+)/)?.[1];
@@ -1132,8 +1134,84 @@ describe("R2 PUT measurement", () => {
     await expect(confirmUnknownPricePut(error, "daily/7203.json", '{"a":1}', undefined, () => {})).rejects.toBe(error);
     expect(send).toHaveBeenCalledTimes(2);
     const confirm = incidentLines(logged).find((line) => line.includes(" confirm "));
-    expect(confirm).toMatch(/present=none etag=none bytes=none lastModified=none shaMatch=none read=error name=TimeoutError/);
+    expect(confirm).toMatch(/present=none etag=none bytes=none lastModified=none shaMatch=none read=error name=TimeoutError maxBytes=7 contentLength=none receivedBytes=none sentEtag=IfNoneMatch readEtag=none msg=TimeoutError$/);
     expect(confirm).not.toContain("https://");
     expect(confirm).not.toContain("test-secret");
+  });
+
+  it.each([
+    ["exceeds", 170235, "170235"],
+    ["unknown", undefined, "none"],
+  ] as const)("logs a %s readback length with message, budget, received bytes, and both etags", async (_kind, contentLength, loggedLength) => {
+    beginR2PutDiagRun();
+    const body = '{"code":"3931"}';
+    const sent = '"observed-etag"';
+    const sdk = svcError("InternalError", 500);
+    const send = vi.spyOn(S3Client.prototype, "send").mockRejectedValueOnce(sdk);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const error = await r2Put("daily/3931.json", body, sent).catch((caught: unknown) => caught);
+    const stream = Readable.from([Buffer.from("x")]);
+    send.mockImplementationOnce(async () => ({
+      ETag: '"server-etag"', ...(contentLength === undefined ? {} : { ContentLength: contentLength }),
+      ContentType: "application/json", Body: stream, $metadata: { httpStatusCode: 200 },
+    }));
+    await expect(confirmUnknownPricePut(error, "daily/3931.json", body, undefined, () => {})).rejects.toBe(error);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(stream.destroyed).toBe(true);
+    expect((send.mock.calls[0]![0] as PutObjectCommand).input.IfMatch).toBe(sent);
+    expect((send.mock.calls[0]![0] as PutObjectCommand).input.IfNoneMatch).toBeUndefined();
+    expect((send.mock.calls[1]![0] as GetObjectCommand).input).toEqual({ Bucket: "test-bucket", Key: "daily/3931.json" });
+    expect(error).toBeInstanceOf(R2PutUnknownError);
+    expect((error as Error).message).toBe("R2 PUT 結果不明 (適用有無が確定しません。再送なし): daily/3931.json cause=InternalError/500");
+    expect((error as Error).cause).toBe(sdk);
+    expect("observedVersion" in (error as object)).toBe(false);
+    const confirm = incidentLines(logged).find((line) => line.includes(" confirm "));
+    expect(confirm).toBe(`${INCIDENT} confirm seq=1 key=daily/3931.json present=none etag=none bytes=none lastModified=none shaMatch=none read=error name=Error maxBytes=${Buffer.byteLength(body)} contentLength=${loggedLength} receivedBytes=0 sentEtag=${sent} readEtag="server-etag" msg=R2objectlengthisunknownorexceedsreadbytebudget`);
+  });
+
+  it("redacts the readback message and sent etag, and caps the message at 200 characters", async () => {
+    beginR2PutDiagRun();
+    const body = '{"a":1}';
+    const sent = "https://acct.r2.cloudflarestorage.com/k?X-Amz-Signature=deadbeef";
+    const message = `${"a".repeat(50)} https://acct.r2.cloudflarestorage.com/b?X-Amz-Signature=deadbeef Authorization: Bearer test-secret ${"b".repeat(300)}`;
+    const send = vi.spyOn(S3Client.prototype, "send").mockRejectedValueOnce(svcError("InternalError", 500));
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const error = await r2Put("daily/3931.json", body, sent).catch((caught: unknown) => caught);
+    send.mockRejectedValueOnce(Object.assign(new Error(message), { name: "InternalError" }));
+    await expect(confirmUnknownPricePut(error, "daily/3931.json", body, undefined, () => {})).rejects.toBe(error);
+    expect(send).toHaveBeenCalledTimes(2);
+    const confirm = incidentLines(logged).find((line) => line.includes(" confirm "));
+    const msg = `${"a".repeat(50)}<url><redacted><redacted>${"b".repeat(121)}`;
+    expect(confirm).toMatch(new RegExp(` maxBytes=7 contentLength=none receivedBytes=none sentEtag=<url> readEtag=none msg=${msg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
+    expect(Array.from(msg)).toHaveLength(196);
+    for (const secret of ["https://", "deadbeef", "Bearer", "test-secret", "test-access", "private-value"]) {
+      expect(confirm).not.toContain(secret);
+    }
+  });
+
+  it("logs an unreadable readback message without a sent etag when the unknown was not produced by r2Put", async () => {
+    beginR2PutDiagRun();
+    const readError = new Error("hidden");
+    readError.name = "TimeoutError";
+    Object.defineProperty(readError, "message", { get() { throw new Error("message boom"); } });
+    const error = new R2PutUnknownError("daily/7203.json", "InternalError", 500, null);
+    vi.spyOn(S3Client.prototype, "send").mockRejectedValueOnce(readError);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(confirmUnknownPricePut(error, "daily/7203.json", '{"a":1}', undefined, () => {})).rejects.toBe(error);
+    const confirm = incidentLines(logged).find((line) => line.includes(" confirm "));
+    expect(confirm).toMatch(/seq=none key=daily\/7203\.json present=none etag=none bytes=none lastModified=none shaMatch=none read=error name=TimeoutError maxBytes=7 contentLength=none receivedBytes=none sentEtag=none readEtag=none msg=<unreadable>$/);
+  });
+
+  it("a failing confirm log does not replace the original unknown error", async () => {
+    beginR2PutDiagRun();
+    const send = vi.spyOn(S3Client.prototype, "send").mockRejectedValueOnce(svcError("InternalError", 500));
+    const error = await r2Put("daily/3931.json", '{"a":1}', '"observed-etag"').catch((caught: unknown) => caught);
+    send.mockImplementationOnce(async () => ({
+      ETag: '"server-etag"', ContentLength: 170235, ContentType: "application/json",
+      Body: Readable.from([Buffer.from("x")]), $metadata: { httpStatusCode: 200 },
+    }));
+    vi.spyOn(console, "error").mockImplementation(() => { throw new Error("log failed"); });
+    await expect(confirmUnknownPricePut(error, "daily/3931.json", '{"a":1}', undefined, () => {})).rejects.toBe(error);
+    expect(send).toHaveBeenCalledTimes(2);
   });
 });

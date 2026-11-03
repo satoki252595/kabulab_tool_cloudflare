@@ -52,6 +52,17 @@ export class R2PutUnknownError extends Error {
   }
 }
 
+/**
+ * 計測専用。PUT の IfMatch / IfNoneMatch に使った observedVersion を
+ * 例外の message・cause・own property に足さない。confirm の失敗ログだけが読む。
+ */
+const putUnknownObservedVersion = new WeakMap<R2PutUnknownError, string | null>();
+
+function notePutUnknownVersion(error: R2PutUnknownError, observedVersion: string | null): R2PutUnknownError {
+  try { putUnknownObservedVersion.set(error, observedVersion); } catch { /* 計測だけ。throw する例外は変えない。 */ }
+  return error;
+}
+
 /** PUTのACKはunknownのまま、同じ価格POST状態を完全GETで確認した証拠。 */
 export interface PricePutReadback {
   putAcknowledgement: "unknown";
@@ -79,13 +90,21 @@ export async function confirmUnknownPricePut(error: unknown, key: string, body: 
     JSON.stringify(value === undefined ? [] : Object.entries(value).sort(([a], [b]) => a < b ? -1 : 1));
   let readAttempted = false;
   let readFinished = false;
+  let readProbe: { etag: string; contentLength: number | undefined; receivedBytes: number } | undefined;
   try {
     assertActive();
     if (expected.length === 0) throw error;
     const timeout = AbortSignal.timeout(30_000);
     readAttempted = true;
+    // onRead は計測値のコピーだけ。singleAttempt なので retry 述語
+    // （onRead が無いときだけ header timeout を再試行する）は評価されない。
     const current = await r2GetBytesVersion(key, sharedEnv.R2_BUCKET(), { singleAttempt: true,
-      maxBytes: expected.length, abortSignal: opts?.abortSignal === undefined ? timeout : AbortSignal.any([timeout, opts.abortSignal]), beforeAttempt: assertActive });
+      maxBytes: expected.length, abortSignal: opts?.abortSignal === undefined ? timeout : AbortSignal.any([timeout, opts.abortSignal]), beforeAttempt: assertActive,
+      onRead: (read) => {
+        try {
+          readProbe = { etag: read.etag, contentLength: read.contentLength, receivedBytes: read.receivedBytes };
+        } catch { /* 計測だけ。GET の throw / 戻り値は変えない。 */ }
+      } });
     readFinished = true;
     try { logUnknownPriceReadback(key, expected, current); } catch { /* 計測だけ。一致判定には使わない。 */ }
     assertActive();
@@ -97,7 +116,7 @@ export async function confirmUnknownPricePut(error: unknown, key: string, body: 
       contentType: "application/json", complete: true };
   } catch (caught) {
     if (readAttempted && !readFinished && caught !== error) {
-      try { logUnknownPriceReadbackError(key, caught); } catch { /* 計測だけ。元unknownは変えない。 */ }
+      try { logUnknownPriceReadbackError(key, caught, error, expected.length, readProbe); } catch { /* 計測だけ。元unknownは変えない。 */ }
     }
     throw error; // GET失敗や期限切れをPUT拒否/成功へ変えず、同じunknownを返す。
   }
@@ -338,8 +357,15 @@ function logUnknownPriceReadback(key: string, expected: Buffer, current: { body:
   }
 }
 
-function logUnknownPriceReadbackError(key: string, readError: unknown): void {
+function logUnknownPriceReadbackError(key: string, readError: unknown, putError: unknown, maxBytes: number,
+  probe: { etag: string; contentLength: number | undefined; receivedBytes: number } | undefined): void {
   try {
+    const observed = putError instanceof R2PutUnknownError && putUnknownObservedVersion.has(putError)
+      ? putUnknownObservedVersion.get(putError) : undefined;
+    const sentEtag = observed === undefined ? "none" : observed === null ? "IfNoneMatch" : logToken(observed);
+    const contentLength = probe === undefined ? "none" : observedCount(probe.contentLength);
+    const receivedBytes = probe === undefined ? "none" : observedCount(probe.receivedBytes);
+    const readEtag = probe === undefined ? "none" : logToken(probe.etag);
     console.error([
       R2_PUT_FAILURE_LOG,
       "confirm",
@@ -352,10 +378,20 @@ function logUnknownPriceReadbackError(key: string, readError: unknown): void {
       "shaMatch=none",
       "read=error",
       `name=${logToken(readOr("<unreadable>", () => readExceptionName(readError)))}`,
+      `maxBytes=${observedCount(maxBytes)}`,
+      `contentLength=${contentLength}`,
+      `receivedBytes=${receivedBytes}`,
+      `sentEtag=${sentEtag}`,
+      `readEtag=${readEtag}`,
+      `msg=${logToken(readOr("<unreadable>", () => readExceptionMessageHead(readError)))}`,
     ].join(" "));
   } catch {
     // 読み戻し失敗ログの失敗は unknown の再送出に影響させない。
   }
+}
+
+function observedCount(value: number | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) ? String(value) : "none";
 }
 
 function neighborBrief(rec: PutRecord): string {
@@ -500,6 +536,17 @@ function readPutFailureBodyHead(error: unknown): string {
   const redacted = redactDiagnostic(collapsed.length > 8192 ? collapsed.slice(0, 8192) : collapsed);
   const head = Array.from(redacted).slice(0, 200).join("");
   return head.trim().length > 0 ? head : "<absent>";
+}
+
+/** 例外 message だけ。応答 body には落とさない。先頭200字は PUT 失敗本文と同じ切り方。 */
+function readExceptionMessageHead(error: unknown): string {
+  if (error === null || typeof error !== "object") return "none";
+  const message = (error as { message?: unknown }).message;
+  if (typeof message !== "string" || message.length === 0) return "none";
+  const collapsed = message.replace(/[\r\n\u2028\u2029]+/g, " ");
+  const redacted = redactDiagnostic(collapsed.length > 8192 ? collapsed.slice(0, 8192) : collapsed);
+  const head = Array.from(redacted).slice(0, 200).join("");
+  return head.trim().length > 0 ? head : "none";
 }
 
 /** `$response.body` → 例外の raw body → message。各読み取りの例外は次のソースへ進め、全部失敗したときだけ unreadable。 */
@@ -684,7 +731,7 @@ export async function r2PutBytes(key: string, body: Uint8Array, observedVersion:
       } catch { /* 計測だけ */ }
     }
     if (isExplicitRejection(code, status)) throw new R2PutRejectedError(key, code, status, e);
-    throw new R2PutUnknownError(key, code, status, e);
+    throw notePutUnknownVersion(new R2PutUnknownError(key, code, status, e), observedVersion);
   } finally {
     if (putCounted) inflightPuts -= 1;
   }
@@ -700,10 +747,10 @@ export async function r2PutBytes(key: string, body: Uint8Array, observedVersion:
         inflight: inflightForLog, status: loggedStatus, source: res, signal: putSignal, outcome: "unknown" });
     } catch { /* 計測だけ */ }
     // 成功 schema を満たさない応答は結果不明 (known 失敗にしない)。
-    throw new R2PutUnknownError(key, "bad-response", statusOk ? (status as number) : "none", {
+    throw notePutUnknownVersion(new R2PutUnknownError(key, "bad-response", statusOk ? (status as number) : "none", {
       statusType: typeof status,
       hasETag: etagOk,
-    });
+    }), observedVersion);
   }
   try {
     logR2PutMeasure({ seq: putSeqForLog, key, startedMs: putStartedAt, endedMs, bytes: body.byteLength, sha8, cond,
