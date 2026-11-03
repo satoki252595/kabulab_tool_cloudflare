@@ -633,6 +633,27 @@ describe("stock-supplement (Notion 通信)", () => {
       expect(new URL(calls[0].url).searchParams.getAll("filter_properties")).toContain("判定入力-id");
     });
 
+    it("統合列が無いDBでは businessTags が undefined になる (移行期の任意読み)", async () => {
+      const page = {
+        id: "row-1",
+        properties: {
+          銘柄名: { title: [{ plain_text: "テスト株式会社" }] },
+          銘柄コード: { rich_text: [{ plain_text: "1234" }] },
+          "事業タグ（素材・部品・装置）": { multi_select: [{ name: "半導体パッケージ・基板材料" }] },
+        },
+      };
+      route("POST", "/v1/databases/db-1/query", [
+        { results: [page], has_more: false, next_cursor: null },
+      ]);
+      const { loadSupplementRows } = await load();
+      const idsWithoutUnified = { ...propertyIds };
+      delete idsWithoutUnified["事業タグ"];
+      const [row] = await loadSupplementRows("db-1", idsWithoutUnified);
+      expect(row.businessTags).toBeUndefined();
+      expect(row.upstream).toEqual(["半導体パッケージ・基板材料"]);
+      expect(new URL(calls[0].url).searchParams.getAll("filter_properties")).not.toContain("事業タグ-id");
+    });
+
     it.each([[], undefined])("判定入力がクリア/欠落ならreaderは明示nullを返す (%s)", async (rich) => {
       const properties = {
         銘柄名: { title: [{ plain_text: "テスト株式会社" }] },

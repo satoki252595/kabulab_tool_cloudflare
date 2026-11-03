@@ -510,7 +510,12 @@ export async function loadSupplementRows(
   opts?: { textColumns?: string[]; codes?: string[]; strictNative?: boolean; beforeRequest?: () => void }
 ): Promise<SupplementRow[]> {
   const textColumns = opts?.textColumns ?? [];
-  const columnNames = [...Object.values(SUPPLEMENT_PROPS), ...textColumns];
+  // 統合列「事業タグ」は移行期のみ任意: 列が無い DB (ensure 未実行) でも
+  // 読めるようにし、欠けは businessTags=undefined として返す。正の切替
+  // (PR-2) で必須に戻す。
+  const columnNames = [...Object.values(SUPPLEMENT_PROPS), ...textColumns].filter(
+    (name) => name !== SUPPLEMENT_PROPS.businessTags || propertyIds[name] !== undefined
+  );
   const qs = buildFilterPropertiesQs(propertyIds, columnNames);
 
   const rows: SupplementRow[] = [];
