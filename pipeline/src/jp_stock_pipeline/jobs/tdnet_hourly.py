@@ -205,9 +205,11 @@ def _nonempty_upstream_stopped(judgement) -> bool:
     """非空一覧を上流停止にする。
 
     空一覧の共有判定は経過が 4 時間を超えたときだけ停止で、ちょうど 4 時間は fresh。
-    非空は同じ秒数で、ちょうど 4 時間も停止にする。2026-04-01 から 10-23 の JPX
-    セッション 138 日（やのしん日次一覧、limit=1000）では、監視窓の開示間隔と
-    19:00 までの末尾沈黙の最大がどちらも 5400 秒で、4 時間以上は 0 日だった。
+    非空は同じ秒数で、ちょうど 4 時間も停止にする。この 14400 秒は緩めない。
+    ここで fresh でも、公式一覧の件数を確定できるまで成功にはしない
+    （``_gate_official_list``）。2026-04-01 から 10-23 の JPX セッション 138 日
+    （やのしん日次一覧、limit=1000）では、監視窓の開示間隔と 19:00 までの
+    末尾沈黙の最大がどちらも 5400 秒で、4 時間以上は 0 日だった。
     """
     if judgement.judgement == "upstream_stopped":
         return True
@@ -215,6 +217,49 @@ def _nonempty_upstream_stopped(judgement) -> bool:
     if elapsed is None:
         return False
     return elapsed >= MAX_WATCH_SILENCE_SECONDS
+
+
+class OfficialListNotFresh(RuntimeError):
+    """公式一覧の件数を確定できない。fresh にも 0 件成功にもしない。"""
+
+
+def _gate_official_list(ctx: JobContext, target_date: date, expected_count: int, judgement) -> None:
+    """時間判定が fresh のときだけ、公式一覧の件数と突き合わせる。
+
+    追加 GET は census の上限（40）まで。14400 秒の比較はここでは変えない。
+    再試行は足さない。読めない件数を 0 で埋めない。
+    """
+    if expected_count < 0:
+        raise ValueError("公式一覧と突き合わせる件数は 0 以上が必要です")
+
+    def before() -> None:
+        assert_scheduled_source(ctx.args, now_jst())
+
+    def keep(raw: RawArtifact) -> None:
+        ctx.upload_raw(raw, sha_map_date=target_date)
+
+    census = tdnet_official_fallback.census_official_list(
+        ctx.settings, target_date, before_fetch=before, on_raw=keep
+    )
+    status = census.status
+    detail = census.detail
+    count = census.count
+    if status in {"confirmed", "holiday"} and count != expected_count:
+        status = "count_mismatch"
+        detail = f"{detail}; official={count} expected={expected_count}"
+    line = (
+        f"tdnet_official_list status={status} count={count} expected={expected_count}"
+        f" skipped={census.skipped_rows} gets={census.gets} detail={detail}"
+    )
+    if status in {"confirmed", "holiday"} and count == expected_count:
+        logger.info("%s", line)
+        return
+    logger.info(
+        "%s",
+        format_yanoshin_upstream_log(judgement, judgement_name="official_unconfirmed"),
+    )
+    logger.info("%s", line)
+    raise OfficialListNotFresh(line)
 
 
 def default_target_date(now: datetime) -> date:
@@ -244,6 +289,9 @@ def execute(ctx: JobContext) -> None:
         shown = judgement.judgement
         if newest is not None and newest.astimezone(JST).date() == target_date:
             shown = "upstream_stopped"
+        # 14400 秒以内の fresh でも、公式一覧が 0 件と確定するまで 0 件成功にしない。
+        if shown == "fresh":
+            _gate_official_list(ctx, target_date, 0, judgement)
         line = format_yanoshin_upstream_log(judgement, judgement_name=shown)
         logger.info("%s", line)
         if shown == "upstream_stopped":
@@ -263,6 +311,14 @@ def execute(ctx: JobContext) -> None:
     judgement = judge_yanoshin_upstream(newest, started)
     stopped = _nonempty_upstream_stopped(judgement)
     shown = "upstream_stopped" if stopped else judgement.judgement
+    unparsed = item_count is not None and item_count >= 1
+    if shown == "fresh" and not unparsed:
+        try:
+            _gate_official_list(ctx, target_date, record_count, judgement)
+        except OfficialListNotFresh:
+            for artifact, _records, _urls in batches:
+                ctx.upload_raw(artifact, sha_map_date=target_date)
+            raise
     line = format_yanoshin_upstream_log(judgement, judgement_name=shown)
     logger.info("%s", line)
     if stopped:

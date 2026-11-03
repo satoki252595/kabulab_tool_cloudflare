@@ -64,6 +64,8 @@ def _install_listing(monkeypatch, tmp_path, body: bytes, *, records_empty: bool)
 
 def _run(monkeypatch, tmp_path, caplog, *, now: datetime, body: bytes, records_empty: bool):
     monkeypatch.setattr(mod, "now_jst", lambda: now)
+    # 公式件数の突き合わせはこのファイルの時刻ケースの対象外。期待する成否は変えない。
+    monkeypatch.setattr(mod, "_gate_official_list", lambda *a, **k: None)
     _install_listing(monkeypatch, tmp_path, body, records_empty=records_empty)
     with caplog.at_level(logging.INFO):
         code = mod.main(
