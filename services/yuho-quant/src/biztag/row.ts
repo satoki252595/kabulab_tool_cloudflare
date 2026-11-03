@@ -16,6 +16,8 @@ export interface TagOutcome {
   upstream: string[];
   downstream: string[];
   distribution: string[];
+  /** 統合列「事業タグ」用に upstream+downstream+distribution をこの順で連結した和集合。 */
+  businessTags: string[];
   themes: string[];
   uncertainText: string | null;
   evidence: EvidenceBlockInput["items"];
@@ -98,10 +100,16 @@ export function summarizeKeywordMatches(
     sentences: evidenceSentences(hitsByTermId.get(term.id)!),
   }));
   const { text: evidenceText, truncated: evidenceTextTruncated } = buildEvidenceText(evidence);
+  const byColumn = (column: string) =>
+    matched.filter((term) => term.notionColumn === column).map((term) => term.labelJa);
+  const upstream = byColumn("upstream");
+  const downstream = byColumn("downstream");
+  const distribution = byColumn("distribution");
   return {
-    upstream: matched.filter((term) => term.notionColumn === "upstream").map((term) => term.labelJa),
-    downstream: matched.filter((term) => term.notionColumn === "downstream").map((term) => term.labelJa),
-    distribution: matched.filter((term) => term.notionColumn === "distribution").map((term) => term.labelJa),
+    upstream,
+    downstream,
+    distribution,
+    businessTags: [...upstream, ...downstream, ...distribution],
     themes: deriveThemes(vocab, matched.map((term) => term.id)).map((term) => term.labelJa),
     uncertainText: null,
     evidence,
@@ -167,6 +175,7 @@ export function summarizeJudgments(
     upstream,
     downstream,
     distribution,
+    businessTags: [...upstream, ...downstream, ...distribution],
     themes,
     uncertainText: uncertainParts.length > 0 ? uncertainParts.join(" / ") : null,
     evidence,

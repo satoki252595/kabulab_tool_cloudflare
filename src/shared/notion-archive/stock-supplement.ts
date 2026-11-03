@@ -46,6 +46,7 @@ export const SUPPLEMENT_PROPS = {
   upstream: "事業タグ（素材・部品・装置）",
   downstream: "事業タグ（製品・サービス）",
   distribution: "事業タグ（流通・サービス）",
+  businessTags: "事業タグ",
   themes: "投資テーマ",
   uncertain: "要確認タグ",
   evidenceText: "事業タグの根拠文",
@@ -63,6 +64,14 @@ export const SUPPLEMENT_PROPS = {
   tagInputSha256: "事業タグの判定入力SHA256",
 } as const;
 export const TAG_TEXT_FRESHNESS_COLUMN = "事業タグと現在本文の対応";
+
+/**
+ * 統合列「事業タグ」の列説明文 (Notion property description)。
+ * 川上/川下/流通の別は列では表現せず、単語帳の notionColumn が正本である
+ * ことを列自体に明記する (利用者が列だけ見て区分情報が消えたと誤解しないため)。
+ */
+export const BUSINESS_TAGS_DESCRIPTION =
+  "事業タグ全区分の和集合。川上（素材・部品・装置）／川下（製品・サービス）／流通・サービスの別は単語帳（語彙）の notionColumn が正本。この列の選択肢は書込時に自動作成される。";
 
 export type TextStatus = "取得済" | "本文なし" | "読込失敗";
 export type TagStatus = "判定済" | "本文なし" | "読込失敗" | "判定不能" | "未判定";
@@ -140,6 +149,13 @@ function buildDbProperties(spec: SupplementSchemaSpec): Record<string, unknown> 
     [SUPPLEMENT_PROPS.distribution]: {
       multi_select: { options: toOptions(spec.distributionOptions) },
     },
+    // 統合列「事業タグ」は選択肢をスキーマで一括定義しない。全語彙(212種)は
+    // スキーマ定義リクエストの上限 (options.length ≤ 100、2026-11-03 実証) を
+    // 超えるため、選択肢はページ書込時の自動作成に委ねる (同日実証で累計212種可)。
+    [SUPPLEMENT_PROPS.businessTags]: {
+      multi_select: { options: [] },
+      description: BUSINESS_TAGS_DESCRIPTION,
+    },
     [SUPPLEMENT_PROPS.themes]: {
       multi_select: { options: toOptions(spec.themeOptions) },
     },
@@ -174,6 +190,7 @@ function buildDbProperties(spec: SupplementSchemaSpec): Record<string, unknown> 
 interface NotionPropertyDef {
   id: string;
   type: string;
+  description?: string | null;
   select?: { options?: Array<{ name: string }> };
   multi_select?: { options?: Array<{ name: string }> };
 }
@@ -245,6 +262,7 @@ function buildMissingPatch(
       const wantOptions = optionsOf(wantDef, kind);
       const curNames = new Set(curOptions.map((o) => o.name));
       const missingOptions = wantOptions.filter((o) => !curNames.has(o.name));
+      const entry: Record<string, unknown> = {};
       if (missingOptions.length > 0) {
         const cumulative = curOptions.length + missingOptions.length;
         if (cumulative > SELECT_OPTIONS_CUMULATIVE_MAX) {
@@ -255,8 +273,17 @@ function buildMissingPatch(
               `Notion 側の不要な選択肢を手動整理するか、単語帳の廃止方針を見直してください。`
           );
         }
-        patch[name] = { [kind]: { options: [...curOptions, ...missingOptions] } };
+        entry[kind] = { options: [...curOptions, ...missingOptions] };
       }
+      // 列説明文 (description) は want 側が宣言した列だけ追随させる。
+      // 統合列「事業タグ」は選択肢をスキーマ同期しない (wantOptions が空)
+      // ため、説明文の差分だけでもパッチを送る。
+      const wantDescription = (wantDef as { description?: unknown }).description;
+      if (typeof wantDescription === "string" && cur.description !== wantDescription) {
+        entry.description = wantDescription;
+        if (entry[kind] === undefined) entry[kind] = {};
+      }
+      if (Object.keys(entry).length > 0) patch[name] = entry;
     }
   }
   return patch;
@@ -347,6 +374,11 @@ export interface SupplementRow {
   upstream: string[];
   downstream: string[];
   distribution: string[];
+  /**
+   * 統合列「事業タグ」の値 (3列の和集合を書く列)。列が無い/未読の旧行では
+   * undefined であり、「タグ無し」の証明ではない (移行期の読み分け用)。
+   */
+  businessTags?: string[];
   themes: string[];
   uncertain: string | null;
   evidenceText: string | null;
@@ -439,6 +471,9 @@ function parseSupplementRow(page: NotionPage, textColumns: string[]): Supplement
     upstream: readMultiSelect(p[SUPPLEMENT_PROPS.upstream]),
     downstream: readMultiSelect(p[SUPPLEMENT_PROPS.downstream]),
     distribution: readMultiSelect(p[SUPPLEMENT_PROPS.distribution]),
+    ...(p[SUPPLEMENT_PROPS.businessTags] !== undefined
+      ? { businessTags: readMultiSelect(p[SUPPLEMENT_PROPS.businessTags]) }
+      : {}),
     themes: readMultiSelect(p[SUPPLEMENT_PROPS.themes]),
     uncertain: readRich(p[SUPPLEMENT_PROPS.uncertain]) || null,
     evidenceText: readRich(p[SUPPLEMENT_PROPS.evidenceText]) || null,
@@ -659,6 +694,8 @@ export interface SupplementRowInput {
   upstream?: string[];
   downstream?: string[];
   distribution?: string[];
+  /** 統合列「事業タグ」への値 (3列の和集合)。移行期は3列と二重に書く。 */
+  businessTags?: string[];
   themes?: string[];
   uncertain?: string | null;
   /** 「はい」「要確認」タグごとの根拠文 (§3.1)。タグが空/再判定でクリアされる時は null。 */
@@ -808,6 +845,12 @@ export function buildSupplementProperties(
     props[SUPPLEMENT_PROPS.distribution] = multiSelectValue(
       SUPPLEMENT_PROPS.distribution,
       input.distribution
+    );
+  }
+  if (input.businessTags !== undefined) {
+    props[SUPPLEMENT_PROPS.businessTags] = multiSelectValue(
+      SUPPLEMENT_PROPS.businessTags,
+      input.businessTags
     );
   }
   if (input.themes !== undefined) {

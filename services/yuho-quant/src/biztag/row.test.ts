@@ -60,7 +60,7 @@ describe("summarizeKeywordMatches", () => {
   it("実本文の境界不一致はタグ/テーマ/根拠なしの機械結果になる", () => {
     const noMatch = prefilter(vocab, { mda: fx("8364-shimizu-bank-mda-boundary.txt") });
     expect(summarizeKeywordMatches(vocab, noMatch.candidates)).toEqual({
-      upstream: [], downstream: [], distribution: [], themes: [], uncertainText: null,
+      upstream: [], downstream: [], distribution: [], businessTags: [], themes: [], uncertainText: null,
       evidence: [], evidenceText: null, evidenceTextTruncated: false,
     });
   });
@@ -76,6 +76,8 @@ describe("summarizeJudgments", () => {
 
     expect(outcome.upstream).toEqual([]);
     expect(outcome.downstream.sort()).toEqual(["医療用医薬品(新薬・先発品)", "核酸医薬"].sort());
+    // 統合列用は upstream→downstream→distribution の順の和集合 (ソート前の列内順を保つ)
+    expect(outcome.businessTags).toEqual(["核酸医薬", "医療用医薬品(新薬・先発品)"]);
     expect(outcome.themes).toEqual(["創薬・新薬開発"]);
     expect(outcome.uncertainText).toBeNull();
 
@@ -121,6 +123,7 @@ describe("summarizeJudgments", () => {
       upstream: [],
       downstream: [],
       distribution: [],
+      businessTags: [],
       themes: [],
       uncertainText: null,
       evidence: [],
