@@ -1,6 +1,7 @@
 /**
  * diag(INC-20261103-kabulab_tool_cloudflare-macro-vix-429): 撤去予定。
- * Yahoo への HTTP 応答が 429 のときだけ 1 行出す。再送・例外・期限・分岐には使わない。
+ * Yahoo への HTTP 応答が 429 のとき、または共有停止の期限内で送信前に
+ * 止めるときだけ 1 行出す。再送・例外・期限・分岐には使わない。
  */
 
 export const YAHOO_429_DIAG_TAG = "[INC-20261103-kabulab_tool_cloudflare-macro-vix-429]";
@@ -112,6 +113,41 @@ export async function logYahooHttp429(
       status: response.status,
       headers,
       body,
+    }));
+  } catch {
+    // 計測の失敗は既存の例外経路を変えない
+  }
+}
+
+export function formatYahooCooldownShortCircuitLine(input: {
+  stage: Yahoo429Stage;
+  symbol: string;
+  remainingMs: number;
+}): string {
+  return (
+    `${YAHOO_429_DIAG_TAG} branch="cooldown-short-circuit"` +
+    ` remainingMs=${input.remainingMs}` +
+    ` stage=${JSON.stringify(input.stage)}` +
+    ` symbol=${JSON.stringify(input.symbol)}`
+  );
+}
+
+/**
+ * 共有停止の期限内で送信前に止めるときだけ 1 行出す。
+ * 段階と記号は 429 応答の計測と同じ決め方。URL・クエリ・秘密は出さない。
+ * 失敗しても投げない。
+ */
+export function logYahooCooldownShortCircuit(
+  requestUrl: string,
+  diagSymbol: string | undefined,
+  remainingMs: number,
+): void {
+  try {
+    if (typeof remainingMs !== "number" || !Number.isFinite(remainingMs)) return;
+    console.warn(formatYahooCooldownShortCircuitLine({
+      stage: stageFromYahooUrl(requestUrl),
+      symbol: resolveSymbol(requestUrl, diagSymbol),
+      remainingMs,
     }));
   } catch {
     // 計測の失敗は既存の例外経路を変えない

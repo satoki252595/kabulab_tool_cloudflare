@@ -1,6 +1,7 @@
 /**
  * INC-20261103-kabulab_tool_cloudflare-macro-vix-429
- * 429 の計測行だけを足す。秘密・Cookie・crumb を出さないことと、既存の例外経路を変えないことを見る。
+ * 429 応答と、共有停止で送信前に止める分岐の計測行だけを足す。
+ * 秘密・Cookie・crumb を出さないことと、既存の例外経路を変えないことを見る。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -8,6 +9,7 @@ import {
   YAHOO_429_EXACT_HEADERS,
   YAHOO_429_HEADER_PREFIXES,
   isYahoo429HeaderName,
+  logYahooCooldownShortCircuit,
   logYahooHttp429,
   symbolFromYahooUrl,
 } from "./yahoo-429-diag.js";
@@ -335,5 +337,193 @@ describe("yahooFetchDirect 経由の 429 計測", () => {
     expect(message).toContain("yahoo rate limited");
     expect(incidentLines(warn)).toEqual([]);
     expect(message).not.toContain("proxy-cookie-secret");
+  });
+});
+
+describe("cooldown short-circuit の計測", () => {
+  const SUMMARY = "https://query1.finance.yahoo.com/v10/finance/quoteSummary/7203.T?modules=financialData";
+  const START = 1_790_727_043_000;
+  const RETRY_AFTER_MS = 120_000;
+
+  function requestUrl(input: RequestInfo | URL): string {
+    return typeof input === "string" ? input : input.toString();
+  }
+
+  function cooldownLines(warn: { mock: { calls: unknown[][] } }): string[] {
+    return incidentLines(warn).filter((line) => line.includes('branch="cooldown-short-circuit"'));
+  }
+
+  it("段階と記号は 429 計測と同じで、URL・crumb・Cookie は出さない", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    logYahooCooldownShortCircuit(`${PAGE}?crumb=secret-crumb`, "^VIX", 1_500);
+    logYahooCooldownShortCircuit(`${CRUMB}?crumb=secret-crumb`, "^VIX", 1_500);
+    logYahooCooldownShortCircuit(`${CHART}&crumb=secret-crumb`, undefined, 1_500);
+    logYahooCooldownShortCircuit(`${SUMMARY}&crumb=secret-crumb`, undefined, 1_500);
+
+    const lines = incidentLines(warn);
+    expect(lines).toEqual([
+      `${YAHOO_429_DIAG_TAG} branch="cooldown-short-circuit" remainingMs=1500 stage="auth-page" symbol="^VIX"`,
+      `${YAHOO_429_DIAG_TAG} branch="cooldown-short-circuit" remainingMs=1500 stage="auth-crumb" symbol="^VIX"`,
+      `${YAHOO_429_DIAG_TAG} branch="cooldown-short-circuit" remainingMs=1500 stage="chart" symbol="^VIX"`,
+      `${YAHOO_429_DIAG_TAG} branch="cooldown-short-circuit" remainingMs=1500 stage="quote-summary" symbol="7203.T"`,
+    ]);
+    for (const line of lines) {
+      expect(line).not.toMatch(/\n/);
+      expect(warn.mock.calls.every((call) => call.length === 1)).toBe(true);
+      for (const secret of ["secret-crumb", "finance.yahoo.com", "query1", "query2", "range=", "modules=", "AAPL", "Cookie", "http"]) {
+        expect(line).not.toContain(secret);
+      }
+    }
+  });
+
+  it("計測が投げても外へ出さない", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {
+      throw new Error("diag boom crumb=diag-crumb-secret Cookie: A1=diag-cookie-secret");
+    });
+    expect(() => logYahooCooldownShortCircuit(`${CHART}&crumb=diag-crumb-secret`, "^VIX", 10)).not.toThrow();
+  });
+
+  it("待機中は1行だけ出し、保存済みのレート制限例外をそのまま投げる", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let now = START;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let chartCalls = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url === PAGE) return new Response("", { headers: { "Set-Cookie": "A1=page-secret-value; Path=/" } });
+      if (url === CRUMB) return new Response("crumb-secret-value");
+      if (url.includes("/v8/finance/chart/")) {
+        chartCalls += 1;
+        if (chartCalls === 1) {
+          return new Response("edge too many", {
+            status: 429,
+            headers: { "Retry-After": "120", "Set-Cookie": "A1=chart-cookie-secret" },
+          });
+        }
+        return new Response("ok-chart");
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { yahooFetchDirect, YahooRateLimitError } = await import("./client.js");
+    const retryAtMs = START + RETRY_AFTER_MS;
+
+    const first = await yahooFetchDirect(CHART);
+    expect(first.status).toBe(429);
+    expect(cooldownLines(warn)).toEqual([]);
+    expect(incidentLines(warn)).toHaveLength(1);
+    expect(incidentLines(warn)[0]).toContain('stage="chart"');
+    expect(incidentLines(warn)[0]).toContain("status=429");
+
+    warn.mockClear();
+    now = START + 30_000;
+    const stopped = await yahooFetchDirect(CHART).catch((error: unknown) => error);
+    expect(stopped).toBeInstanceOf(YahooRateLimitError);
+    expect(stopped).toMatchObject({
+      status: 429,
+      retryAfterMs: RETRY_AFTER_MS,
+      retryAtMs,
+      authStage: null,
+    });
+    expect(stopped).toBeInstanceOf(Error);
+    expect((stopped as Error).message).toBe(`yahoo 429 (rate limited); retry-at-ms=${retryAtMs}`);
+    expect((stopped as Error & { cause?: unknown }).cause).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(warn.mock.calls).toHaveLength(1);
+    expect(warn.mock.calls[0]).toHaveLength(1);
+    const line = incidentLines(warn)[0];
+    expect(line).toBe(
+      `${YAHOO_429_DIAG_TAG} branch="cooldown-short-circuit" remainingMs=90000 stage="chart" symbol="^VIX"`,
+    );
+    for (const secret of [
+      "crumb-secret-value",
+      "page-secret-value",
+      "chart-cookie-secret",
+      "query1.finance.yahoo.com",
+      "range=",
+      "interval=",
+      "http",
+      "Cookie",
+    ]) {
+      expect(line).not.toContain(secret);
+    }
+
+    warn.mockClear();
+    now = START + 31_000;
+    const again = await yahooFetchDirect(SUMMARY).catch((error: unknown) => error);
+    expect(again).toBe(stopped);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(incidentLines(warn)).toEqual([
+      `${YAHOO_429_DIAG_TAG} branch="cooldown-short-circuit" remainingMs=89000 stage="quote-summary" symbol="7203.T"`,
+    ]);
+    expect(incidentLines(warn)[0]).not.toContain("crumb-secret-value");
+    expect(incidentLines(warn)[0]).not.toContain("financialData");
+
+    warn.mockClear();
+    now = retryAtMs;
+    const recovered = await yahooFetchDirect(CHART);
+    expect(recovered.status).toBe(200);
+    expect(await recovered.text()).toBe("ok-chart");
+    expect(chartCalls).toBe(2);
+    expect(cooldownLines(warn)).toEqual([]);
+    expect(incidentLines(warn)).toEqual([]);
+  });
+
+  it("待機中でなければ cooldown-short-circuit は出ない", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url === PAGE) return new Response("", { headers: { "Set-Cookie": "A1=page-secret-value; Path=/" } });
+      if (url === CRUMB) return new Response("crumb-secret-value");
+      if (url.includes("/v8/finance/chart/")) return new Response("ok-chart");
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { yahooFetchDirect } = await import("./client.js");
+
+    const first = await yahooFetchDirect(CHART);
+    const second = await yahooFetchDirect(CHART);
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(cooldownLines(warn)).toEqual([]);
+    expect(incidentLines(warn)).toEqual([]);
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(0);
+  });
+
+  it("計測が投げても待機中のレート制限例外は置き換わらない", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let now = START;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url === PAGE) return new Response("", { headers: { "Set-Cookie": "A1=page-secret-value; Path=/" } });
+      if (url === CRUMB) return new Response("crumb-secret-value");
+      if (url.includes("/v8/finance/chart/")) {
+        return new Response("edge too many", {
+          status: 429,
+          headers: { "Retry-After": "120" },
+        });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { yahooFetchDirect, YahooRateLimitError } = await import("./client.js");
+    const retryAtMs = START + RETRY_AFTER_MS;
+
+    expect((await yahooFetchDirect(CHART)).status).toBe(429);
+    warn.mockImplementation(() => {
+      throw new Error("diag boom crumb=diag-crumb-secret Cookie: A1=diag-cookie-secret");
+    });
+    now = START + 1_000;
+    const stopped = await yahooFetchDirect(CHART).catch((error: unknown) => error);
+    const repeated = await yahooFetchDirect(SUMMARY).catch((error: unknown) => error);
+
+    expect(stopped).toBeInstanceOf(YahooRateLimitError);
+    expect(repeated).toBe(stopped);
+    expect((stopped as Error).message).toBe(`yahoo 429 (rate limited); retry-at-ms=${retryAtMs}`);
+    expect(String(stopped)).not.toContain("diag boom");
+    expect(String(stopped)).not.toContain("diag-crumb-secret");
+    expect(String(stopped)).not.toContain("diag-cookie-secret");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });

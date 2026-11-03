@@ -33,7 +33,7 @@ import { fetchYahooWithSpacing } from "./request-spacing.js";
 import { YahooSharedCooldownError } from "./shared-cooldown.js";
 import { parseCorporateEvents, yahooChartSourceUrl, type CorporateEvents } from "./corporate-events.js";
 import { buildStockCorporateDiagnostics, extractStockCorporateEvents, type StockCorporateDiagnostics } from "./stock-corporate-events.js";
-import { logYahooHttp429, symbolFromYahooUrl } from "./yahoo-429-diag.js";
+import { logYahooCooldownShortCircuit, logYahooHttp429, symbolFromYahooUrl } from "./yahoo-429-diag.js";
 
 /**
  * 日本株銘柄コード。
@@ -215,7 +215,10 @@ async function pacedYahooFetch(
   diagSymbol?: string,
 ): Promise<Response> {
   const assertNotRateLimited = () => {
-    if (credentialRateLimitError !== null && Date.now() < credentialRateLimitedUntil) {
+    const now = Date.now();
+    if (credentialRateLimitError !== null && now < credentialRateLimitedUntil) {
+      // 計測のみ (INC-20261103)。送信前に止める。例外オブジェクトと停止条件は変えない。
+      logYahooCooldownShortCircuit(url, diagSymbol, credentialRateLimitedUntil - now);
       throw credentialRateLimitError;
     }
     beforeRequest?.();
