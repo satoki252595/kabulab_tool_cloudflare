@@ -31,7 +31,7 @@ function row(): SupplementRow {
   return { pageId: "protocol-row", stockCode: latest.stockCode, companyName: latest.companyName, sector33: latest.sector33,
     docId: latest.doc!.docId, docType: "有報", periodEnd: latest.doc!.periodEnd, submittedAt: latest.doc!.submittedAt,
     textStatus: "取得済", tagStatus: "判定済", tagDoc: "S100YFQC 2026年3月期", vocabVersion: "v1", judgedAt: null,
-    candidateCount: null, attempts: null, nextRetryAt: null, error: null, judgeInput: null, upstream: ["工作機械"], downstream: [], distribution: [], businessTags: ["工作機械"], themes: [],
+    candidateCount: null, attempts: null, nextRetryAt: null, error: null, judgeInput: null, businessTags: ["工作機械"], themes: [],
     uncertain: null, evidenceText: "保存済み判定根拠（protocol）", masterLinked: true,
     texts: Object.fromEntries(TEXT_SECTIONS.map(s => [s.title, s.key === "business" ? business : ""])) };
 }

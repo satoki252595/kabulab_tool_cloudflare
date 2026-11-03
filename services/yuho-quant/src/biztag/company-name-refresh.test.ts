@@ -40,7 +40,7 @@ const receipt = { docId: document.docId, textPageId: document.notionDocPageId,
 const row = (): SupplementRow => ({ pageId: saved.item.archivePageId, stockCode: latest.stockCode, companyName: latest.companyName,
   sector33: null, docId: latest.doc!.docId, docType: "有報", periodEnd: latest.doc!.periodEnd, submittedAt: latest.doc!.submittedAt,
   textStatus: "取得済", tagStatus: null, tagDoc: null, vocabVersion: null, judgedAt: null, candidateCount: null, judgeInput: null,
-  textSyncReceipt: JSON.stringify(receipt), attempts: null, nextRetryAt: null, error: null, upstream: [], downstream: [], distribution: [], businessTags: [], themes: [],
+  textSyncReceipt: JSON.stringify(receipt), attempts: null, nextRetryAt: null, error: null, businessTags: [], themes: [],
   uncertain: null, evidenceText: null, masterLinked: true, masterPageIds: [masterId], texts: Object.fromEntries(Object.entries(texts).map(([key, value]) => [key, value ?? ""])) });
 let sqlite: DatabaseSync, sqls: string[];
 function db() {

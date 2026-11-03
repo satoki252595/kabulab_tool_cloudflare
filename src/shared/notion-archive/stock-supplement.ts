@@ -43,9 +43,6 @@ export const SUPPLEMENT_PROPS = {
   periodEnd: "会計期末",
   submittedAt: "提出日",
   textStatus: "本文の状態",
-  upstream: "事業タグ（素材・部品・装置）",
-  downstream: "事業タグ（製品・サービス）",
-  distribution: "事業タグ（流通・サービス）",
   businessTags: "事業タグ",
   themes: "投資テーマ",
   uncertain: "要確認タグ",
@@ -73,13 +70,6 @@ export const TAG_TEXT_FRESHNESS_COLUMN = "事業タグと現在本文の対応";
 export const BUSINESS_TAGS_DESCRIPTION =
   "事業タグ全区分の和集合。川上（素材・部品・装置）／川下（製品・サービス）／流通・サービスの別は単語帳（語彙）の notionColumn が正本。この列の選択肢は書込時に自動作成される。";
 
-/**
- * 旧3列 (素材・部品・装置 / 製品・サービス / 流通・サービス) の列説明文。
- * 1列化 (2026-11-03) で凍結し、新しい判定では更新されないことを列自体に明記する。
- */
-export const LEGACY_TAG_COLUMN_DESCRIPTION =
-  "旧列（2026-11-03で凍結）。事業タグの正は『事業タグ』列。川上・川下・流通の別は単語帳の notionColumn が正本。";
-
 export type TextStatus = "取得済" | "本文なし" | "読込失敗";
 export type TagStatus = "判定済" | "本文なし" | "読込失敗" | "判定不能" | "未判定";
 export type DocTypeLabel = "有報" | "訂正有報";
@@ -97,9 +87,6 @@ const DOC_TYPE_VALUES: readonly DocTypeLabel[] = ["有報", "訂正有報"];
 export interface SupplementSchemaSpec {
   /** 開示テキスト列 (`TEXT_SECTIONS` の項目名そのまま)。呼び出し側が正本を持つ */
   textColumns: string[];
-  upstreamOptions: string[];
-  downstreamOptions: string[];
-  distributionOptions: string[];
   themeOptions: string[];
   versionOptions: string[];
   sector33Options: string[];
@@ -147,18 +134,6 @@ function buildDbProperties(spec: SupplementSchemaSpec): Record<string, unknown> 
     [SUPPLEMENT_PROPS.periodEnd]: { date: {} },
     [SUPPLEMENT_PROPS.submittedAt]: { date: {} },
     [SUPPLEMENT_PROPS.textStatus]: { select: { options: TEXT_STATUS_OPTIONS } },
-    [SUPPLEMENT_PROPS.upstream]: {
-      multi_select: { options: toOptions(spec.upstreamOptions) },
-      description: LEGACY_TAG_COLUMN_DESCRIPTION,
-    },
-    [SUPPLEMENT_PROPS.downstream]: {
-      multi_select: { options: toOptions(spec.downstreamOptions) },
-      description: LEGACY_TAG_COLUMN_DESCRIPTION,
-    },
-    [SUPPLEMENT_PROPS.distribution]: {
-      multi_select: { options: toOptions(spec.distributionOptions) },
-      description: LEGACY_TAG_COLUMN_DESCRIPTION,
-    },
     // 統合列「事業タグ」は選択肢をスキーマで一括定義しない。全語彙(212種)は
     // スキーマ定義リクエストの上限 (options.length ≤ 100、2026-11-03 実証) を
     // 超えるため、選択肢はページ書込時の自動作成に委ねる (同日実証で累計212種可)。
@@ -381,10 +356,6 @@ export interface SupplementRow {
   attempts: number | null;
   nextRetryAt: string | null;
   error: string | null;
-  /** 旧3列 (2026-11-03 で凍結。新規判定では更新されない。参照は監査用のみ)。 */
-  upstream: string[];
-  downstream: string[];
-  distribution: string[];
   /** 統合列「事業タグ」の値 (1列化後の正)。 */
   businessTags: string[];
   themes: string[];
@@ -476,9 +447,6 @@ function parseSupplementRow(page: NotionPage, textColumns: string[]): Supplement
     attempts: readNumber(p[SUPPLEMENT_PROPS.attempts]),
     nextRetryAt: readDate(p[SUPPLEMENT_PROPS.nextRetryAt]),
     error: readRich(p[SUPPLEMENT_PROPS.error]) || null,
-    upstream: readMultiSelect(p[SUPPLEMENT_PROPS.upstream]),
-    downstream: readMultiSelect(p[SUPPLEMENT_PROPS.downstream]),
-    distribution: readMultiSelect(p[SUPPLEMENT_PROPS.distribution]),
     businessTags: readMultiSelect(p[SUPPLEMENT_PROPS.businessTags]),
     themes: readMultiSelect(p[SUPPLEMENT_PROPS.themes]),
     uncertain: readRich(p[SUPPLEMENT_PROPS.uncertain]) || null,
@@ -581,7 +549,7 @@ export function assertCompleteSupplementPage(page: NotionPage, dbId: string, tex
   }
   const title = page.properties[SUPPLEMENT_PROPS.name];
   if (title?.type !== "title" || title.has_more === true || !Array.isArray(title.title) || title.title.some(v => typeof v.plain_text !== "string")) stop();
-  for (const name of [SUPPLEMENT_PROPS.upstream, SUPPLEMENT_PROPS.downstream, SUPPLEMENT_PROPS.distribution, SUPPLEMENT_PROPS.businessTags, SUPPLEMENT_PROPS.themes]) {
+  for (const name of [SUPPLEMENT_PROPS.businessTags, SUPPLEMENT_PROPS.themes]) {
     const p = page.properties[name];
     if (p?.type !== "multi_select" || !Array.isArray(p.multi_select) || p.multi_select.some(v => typeof v.name !== "string")) stop();
   }
@@ -697,10 +665,7 @@ export interface SupplementRowInput {
   textStatus?: TextStatus;
   /** 列名(開示テキスト項目名) → 原文全文。Notion本文表示だけU+200Bを除く。null/""はクリア */
   texts?: Record<string, string | null>;
-  upstream?: string[];
-  downstream?: string[];
-  distribution?: string[];
-  /** 統合列「事業タグ」への値 (3列の和集合)。移行期は3列と二重に書く。 */
+  /** 統合列「事業タグ」への値 (全区分の和集合)。 */
   businessTags?: string[];
   themes?: string[];
   uncertain?: string | null;
@@ -837,21 +802,6 @@ export function buildSupplementProperties(
       // judgeInput/根拠/他metadataは変更せず、可視文字の読戻し照合も緩めない。
       props[col] = clearableRichText(normalizeSupplementText(value), col);
     }
-  }
-  if (input.upstream !== undefined) {
-    props[SUPPLEMENT_PROPS.upstream] = multiSelectValue(SUPPLEMENT_PROPS.upstream, input.upstream);
-  }
-  if (input.downstream !== undefined) {
-    props[SUPPLEMENT_PROPS.downstream] = multiSelectValue(
-      SUPPLEMENT_PROPS.downstream,
-      input.downstream
-    );
-  }
-  if (input.distribution !== undefined) {
-    props[SUPPLEMENT_PROPS.distribution] = multiSelectValue(
-      SUPPLEMENT_PROPS.distribution,
-      input.distribution
-    );
   }
   if (input.businessTags !== undefined) {
     props[SUPPLEMENT_PROPS.businessTags] = multiSelectValue(

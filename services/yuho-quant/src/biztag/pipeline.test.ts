@@ -328,7 +328,7 @@ describe("runBiztag 新規と既存の外部判定境界", () => {
     expect(summary.failures).toEqual([]);
     expect(notionMocks.replaceEvidenceBlock).toHaveBeenCalledTimes(1);
     expect(notionMocks.replaceEvidenceBlock.mock.calls[0][2].judgeInput).toContain("保存済み旧判定");
-    expect(notionMocks.replaceEvidenceBlock.mock.calls[0][2].upstream).toBeUndefined();
+    expect(notionMocks.replaceEvidenceBlock.mock.calls[0][2].businessTags).toBeUndefined();
     expect(createClefClient).not.toHaveBeenCalled();
     expect(createJevClient).not.toHaveBeenCalled();
   });
@@ -440,10 +440,7 @@ function minimalRow(overrides: Partial<SupplementRow>): SupplementRow {
     attempts: null,
     nextRetryAt: null,
     error: null,
-    upstream: [],
-    downstream: [],
-    distribution: [],
-    businessTags: [...(overrides.upstream ?? []), ...(overrides.downstream ?? []), ...(overrides.distribution ?? [])],
+    businessTags: [],
     themes: [],
     uncertain: null,
     evidenceText: null,
@@ -569,7 +566,7 @@ describe("runBiztag — 保存済みマスタの参照", () => {
     const emptyTexts = Object.fromEntries(TEXT_SECTIONS.map(s => [s.title, ""]));
     const emptySha = createHash("sha256").update(JSON.stringify(TEXT_SECTIONS.map(s => [s.title, null]))).digest("hex");
     const row = minimalRow({ stockCode: "6103", companyName: "保存タグ確認", docId, docType: "有報", periodEnd: "2026-03-31", submittedAt: "2026-06-25T00:00:00.000Z", textStatus: "取得済",
-      tagStatus: "判定済", tagDoc: docId, vocabVersion, upstream: ["工作機械"], evidenceText: "保存済み根拠",
+      tagStatus: "判定済", tagDoc: docId, vocabVersion, businessTags: ["工作機械"], evidenceText: "保存済み根拠",
       judgeInput: withTextSyncReceipt("保存済み判定説明", { docId, textPageId: "test-text", textsSha256: emptySha }) });
     notionMocks.loadSupplementRows.mockResolvedValueOnce([row]); notionMocks.readSupplementRowFully.mockResolvedValue({ ...row, texts: emptyTexts });
     const summary = await runBiztag({ budgetMs: 10_000, dryRun,
@@ -794,7 +791,7 @@ describe("runBiztag input-change safety", () => {
   function changedSource() {
     vi.mocked(loadLatestDocs).mockResolvedValue([{ stockCode: "6103", companyName: "オークマ", sector33: "機械",
       doc: { docId: "S100YFQC", docTypeCode: "120", periodEnd: "2026-03-31", submittedAt: "2026-06-25T00:00:00Z", notionDocPageId: "new-text", textParseStatus: "ok" } }]);
-    notionMocks.loadSupplementRows.mockResolvedValueOnce([minimalRow({ stockCode: "6103", companyName: "オークマ", sector33: "機械", docId: "S100OLD", tagDoc: "S100OLD 2025年3月期", tagStatus: "判定済", vocabVersion: "v0", upstream: ["工作機械"], evidenceText: "保存済み根拠" })]);
+    notionMocks.loadSupplementRows.mockResolvedValueOnce([minimalRow({ stockCode: "6103", companyName: "オークマ", sector33: "機械", docId: "S100OLD", tagDoc: "S100OLD 2025年3月期", tagStatus: "判定済", vocabVersion: "v0", businessTags: ["工作機械"], evidenceText: "保存済み根拠" })]);
   }
   it.each(["dryRun", "mechanicalOnly"] as const)("%s source changes do not read fulltext, infer, or change existing values", async (mode) => {
     changedSource();
@@ -859,7 +856,7 @@ it("normal Mac/tag source metadata HOLD preserves old row and never reserves or 
     notionDocPageId: "source-page", textParseStatus: "ok" } };
   vi.mocked(loadLatestDocs).mockResolvedValue([latest]);
   const old = minimalRow({ stockCode: "6103", companyName: "オークマ", sector33: "機械", docId: "S100OLD",
-    tagDoc: "S100OLD 2025年3月期", tagStatus: "判定済", vocabVersion: "v0", upstream: ["工作機械"], evidenceText: "保存済み根拠" });
+    tagDoc: "S100OLD 2025年3月期", tagStatus: "判定済", vocabVersion: "v0", businessTags: ["工作機械"], evidenceText: "保存済み根拠" });
   notionMocks.loadSupplementRows.mockResolvedValue([old]);
   vi.mocked(readQualifiedBiztagDocText).mockRejectedValueOnce(new BiztagTextQualificationError(new Error("7メタ不一致")));
   const journal = { assertReady: vi.fn(async () => {}), reserve: vi.fn(async () => { throw new Error("no publication"); }) };
