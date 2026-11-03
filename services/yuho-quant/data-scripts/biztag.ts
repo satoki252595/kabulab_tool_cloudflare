@@ -55,6 +55,7 @@ import {
 import { loadCompetitorEvalSet } from "../src/biztag/competitors/evalset.js";
 import { runCompetitors } from "../src/biztag/competitors/pipeline.js";
 import { prepareCompetitors } from "./lib/prepare-competitors.js";
+import { runUnifiedTagsMigration } from "../src/biztag/migrate-unified-tags.js";
 
 const [, , subcommand, ...rest] = process.argv;
 
@@ -561,6 +562,26 @@ async function statsCommand(): Promise<void> {
   );
 }
 
+async function migrateUnifiedTagsCommand(): Promise<void> {
+  const allowed = /^--(apply|journal=.+|limit=\d+|codes=[0-9A-Z,]+)$/;
+  if (rest.some((flag) => !allowed.test(flag))) {
+    throw new Error("migrate-unified-tags の未知の引数は受け付けません");
+  }
+  const limitRaw = arg("limit");
+  const summary = await runUnifiedTagsMigration({
+    apply: hasFlag("apply"),
+    journalPath: arg("journal"),
+    limit: limitRaw === undefined ? undefined : Number(limitRaw),
+    codes: arg("codes")?.split(",").filter((c) => c.length > 0),
+  });
+  console.info(JSON.stringify(summary, null, 2));
+  if (summary.failed > 0 || summary.mismatchedAfter > 0) {
+    throw new Error(
+      `migrate-unified-tags: 失敗 ${summary.failed} 件 / 検証不一致 ${summary.mismatchedAfter} 件が残りました`
+    );
+  }
+}
+
 async function main(): Promise<void> {
   if (
     ["gate", "golden"].includes(subcommand) ||
@@ -580,6 +601,8 @@ async function main(): Promise<void> {
     }
     case "reconcile-applied":
       return reconcileAppliedCommand();
+    case "migrate-unified-tags":
+      return migrateUnifiedTagsCommand();
     case "run":
       return runCommand();
     case "gate":
@@ -598,7 +621,7 @@ async function main(): Promise<void> {
       return competitorsEvalCommand();
     default:
       console.error(
-        "usage: pnpm biztag <run|acknowledge-clef-error|reconcile-applied|gate|golden|rollback|packet|stats|competitors|competitors-eval> [options] " +
+        "usage: pnpm biztag <run|acknowledge-clef-error|reconcile-applied|migrate-unified-tags|gate|golden|rollback|packet|stats|competitors|competitors-eval> [options] " +
           "(docs/005-yuho-quant-business-tags.md §11・「競合他社」節)"
       );
       process.exit(2);
