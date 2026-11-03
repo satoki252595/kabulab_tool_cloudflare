@@ -11,6 +11,7 @@ import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import zeroWidthNative from "./fixtures/9273-s100z2z6-notion-zero-width.json";
 import {
+  BUSINESS_TAGS_DESCRIPTION,
   buildEvidenceBlock,
   buildSupplementProperties,
   chunkPropertiesByBytes,
@@ -89,6 +90,15 @@ describe("stock-supplement (純粋関数)", () => {
       const props = buildSupplementProperties({ distribution: ["人材紹介・派遣"] });
       expect(props["事業タグ（流通・サービス）"]).toEqual({
         multi_select: [{ name: "人材紹介・派遣" }],
+      });
+    });
+
+    it("統合列「事業タグ」も multi_select として書ける", () => {
+      const props = buildSupplementProperties({
+        businessTags: ["半導体パッケージ・基板材料", "人材紹介・派遣"],
+      });
+      expect(props["事業タグ"]).toEqual({
+        multi_select: [{ name: "半導体パッケージ・基板材料" }, { name: "人材紹介・派遣" }],
       });
     });
 
@@ -462,6 +472,58 @@ describe("stock-supplement (Notion 通信)", () => {
       expect(calls.filter((c) => c.init.method === "PATCH")).toHaveLength(0);
     });
 
+    it("統合列「事業タグ」が無ければ空の選択肢＋説明文付きで追加する (選択肢は書込自動作成)", async () => {
+      process.env.NOTION_STOCK_SUPPLEMENT_DB_ID = "d".repeat(32);
+      const fullSchema = buildFullSchema(spec.textColumns);
+      delete fullSchema["事業タグ"];
+      route("GET", `/v1/databases/${"d".repeat(32)}`, [
+        { id: "d".repeat(32), properties: fullSchema },
+      ]);
+      route("PATCH", `/v1/databases/${"d".repeat(32)}`, [
+        { id: "d".repeat(32), properties: buildFullSchema(spec.textColumns) },
+      ]);
+      const { ensureSupplementDb } = await load();
+      const got = await ensureSupplementDb(spec);
+      expect(got.propertyIds["事業タグ"]).toBe("biztags-id");
+      const patchCall = calls.find((c) => c.init.method === "PATCH");
+      const patchBody = JSON.parse(String(patchCall?.init.body)) as {
+        properties: Record<string, unknown>;
+      };
+      expect(Object.keys(patchBody.properties)).toEqual(["事業タグ"]);
+      expect(patchBody.properties["事業タグ"]).toEqual({
+        multi_select: { options: [] },
+        description: BUSINESS_TAGS_DESCRIPTION,
+      });
+    });
+
+    it("統合列の説明文が無ければ説明文だけ PATCH し、選択肢には触れない", async () => {
+      process.env.NOTION_STOCK_SUPPLEMENT_DB_ID = "d".repeat(32);
+      const fullSchema = buildFullSchema(spec.textColumns);
+      fullSchema["事業タグ"] = {
+        id: "biztags-id",
+        type: "multi_select",
+        description: null,
+        multi_select: { options: [{ name: "メモリ半導体" }] },
+      };
+      route("GET", `/v1/databases/${"d".repeat(32)}`, [
+        { id: "d".repeat(32), properties: fullSchema },
+      ]);
+      route("PATCH", `/v1/databases/${"d".repeat(32)}`, [
+        { id: "d".repeat(32), properties: buildFullSchema(spec.textColumns) },
+      ]);
+      const { ensureSupplementDb } = await load();
+      await ensureSupplementDb(spec);
+      const patchCall = calls.find((c) => c.init.method === "PATCH");
+      const patchBody = JSON.parse(String(patchCall?.init.body)) as {
+        properties: Record<string, unknown>;
+      };
+      expect(Object.keys(patchBody.properties)).toEqual(["事業タグ"]);
+      expect(patchBody.properties["事業タグ"]).toEqual({
+        multi_select: {},
+        description: BUSINESS_TAGS_DESCRIPTION,
+      });
+    });
+
     it("スキーマが既に全て揃っていれば PATCH しない", async () => {
       process.env.NOTION_STOCK_SUPPLEMENT_DB_ID = "d".repeat(32);
       const fullSchema = buildFullSchema();
@@ -518,6 +580,9 @@ describe("stock-supplement (Notion 通信)", () => {
           "事業タグ（素材・部品・装置）": { multi_select: [{ name: "半導体パッケージ・基板材料" }] },
           "事業タグ（製品・サービス）": { multi_select: [] },
           "事業タグ（流通・サービス）": { multi_select: [{ name: "人材紹介・派遣" }] },
+          事業タグ: {
+            multi_select: [{ name: "半導体パッケージ・基板材料" }, { name: "人材紹介・派遣" }],
+          },
           投資テーマ: { multi_select: [] },
           要確認タグ: { rich_text: [] },
           事業タグの根拠文: { rich_text: [{ plain_text: "核酸医薬（はい 0.93）：「テスト引用文」— 事業の内容" }] },
@@ -560,11 +625,33 @@ describe("stock-supplement (Notion 通信)", () => {
         masterPageIds: ["master-page-1"],
         upstream: ["半導体パッケージ・基板材料"],
         distribution: ["人材紹介・派遣"],
+        businessTags: ["半導体パッケージ・基板材料", "人材紹介・派遣"],
         evidenceText: "核酸医薬（はい 0.93）：「テスト引用文」— 事業の内容",
         texts: { 事業の内容: "自動車を製造する。" },
       });
       expect(rows[0]?.texts).not.toHaveProperty("対処すべき課題");
       expect(new URL(calls[0].url).searchParams.getAll("filter_properties")).toContain("判定入力-id");
+    });
+
+    it("統合列が無いDBでは businessTags が undefined になる (移行期の任意読み)", async () => {
+      const page = {
+        id: "row-1",
+        properties: {
+          銘柄名: { title: [{ plain_text: "テスト株式会社" }] },
+          銘柄コード: { rich_text: [{ plain_text: "1234" }] },
+          "事業タグ（素材・部品・装置）": { multi_select: [{ name: "半導体パッケージ・基板材料" }] },
+        },
+      };
+      route("POST", "/v1/databases/db-1/query", [
+        { results: [page], has_more: false, next_cursor: null },
+      ]);
+      const { loadSupplementRows } = await load();
+      const idsWithoutUnified = { ...propertyIds };
+      delete idsWithoutUnified["事業タグ"];
+      const [row] = await loadSupplementRows("db-1", idsWithoutUnified);
+      expect(row.businessTags).toBeUndefined();
+      expect(row.upstream).toEqual(["半導体パッケージ・基板材料"]);
+      expect(new URL(calls[0].url).searchParams.getAll("filter_properties")).not.toContain("事業タグ-id");
     });
 
     it.each([[], undefined])("判定入力がクリア/欠落ならreaderは明示nullを返す (%s)", async (rich) => {
@@ -727,6 +814,7 @@ describe("stock-supplement (Notion 通信)", () => {
 interface TestPropertyDef {
   id: string;
   type: string;
+  description?: string | null;
   select?: { options: Array<{ id?: string; name: string; color?: string }> };
   multi_select?: { options: Array<{ id?: string; name: string; color?: string }> };
 }
@@ -735,6 +823,12 @@ function buildFullSchema(extraTextColumns: string[] = []): Record<string, TestPr
   const cols = [...allColumnNames(), ...extraTextColumns];
   const out: Record<string, TestPropertyDef> = {};
   for (const c of cols) out[c] = { id: `${c}-id`, type: "rich_text" };
+  out["事業タグ"] = {
+    id: "biztags-id",
+    type: "multi_select",
+    description: BUSINESS_TAGS_DESCRIPTION,
+    multi_select: { options: [] },
+  };
   out["事業タグと現在本文の対応"] = { id: "tag-current-id", type: "formula" };
   out["銘柄名"] = { id: "name-id", type: "title" };
   out["銘柄マスタ"] = { id: "master-id", type: "relation" };
@@ -761,6 +855,7 @@ function allColumnNames(): string[] {
     "事業タグ（素材・部品・装置）",
     "事業タグ（製品・サービス）",
     "事業タグ（流通・サービス）",
+    "事業タグ",
     "投資テーマ",
     "要確認タグ",
     "事業タグの根拠文",
