@@ -433,22 +433,23 @@ def _read_official_page(
     records, skipped = _parse_official_rows(
         html, target_date, fetched_at=artifact.fetched_at
     )
-    if skipped:
-        return _census(
-            "skipped_rows",
-            count=None,
-            skipped_rows=skipped,
-            gets=gets,
-            detail=f"{page_no}ページ目で {skipped} 行を読み飛ばした",
-        ), gets
     span = end - start + 1
-    if len(records) != span:
+    # リンクなし行は doc_id が無い。kaijiSum の範囲は「解析できた行 + 読み飛ばし」
+    # で説明する。説明できない差分は件数不一致のまま（0 件成功にしない）。
+    if len(records) + skipped != span:
+        if skipped == 0:
+            detail = f"{page_no}ページ目は {len(records)} 行で、kaijiSum の範囲は {span} 件"
+        else:
+            detail = (
+                f"{page_no}ページ目は解析 {len(records)} 件・読み飛ばし {skipped} 行で、"
+                f"kaijiSum の範囲は {span} 件"
+            )
         return _census(
             "count_mismatch",
             count=None,
-            skipped_rows=0,
+            skipped_rows=skipped,
             gets=gets,
-            detail=f"{page_no}ページ目は {len(records)} 行で、kaijiSum の範囲は {span} 件",
+            detail=detail,
         ), gets
     return _PageBody(total, expected_last, len(records), skipped, tuple(records)), gets
 
@@ -460,7 +461,7 @@ def census_official_list(
     before_fetch: Callable[[], None] | None = None,
     on_raw: Callable[[RawArtifact], None] | None = None,
 ) -> OfficialListCensus:
-    """対象日の公式一覧を読み、行数と kaijiSum が一致するか返す。
+    """対象日の公式一覧を読み、doc_id のある行と kaijiSum の説明が付くか返す。
 
     GET は最大 OFFICIAL_FRESHNESS_MAX_GETS（40）。休日（200 で開示なしの文、
     表も kaijiSum も無い）は count=0。1 ページ目の FetchError は fetch_failed。
@@ -490,6 +491,7 @@ def census_official_list(
         )
     parsed = first.parsed
     collected = list(first.records)
+    skipped_total = first.skipped
     for page_no in range(2, first.expected_last + 1):
         nxt, gets = _read_official_page(
             settings,
@@ -504,18 +506,51 @@ def census_official_list(
             return nxt
         parsed += nxt.parsed
         collected.extend(nxt.records)
-    if parsed != first.total or len(collected) != parsed:
-        detail = (
-            f"読み取った {parsed} 件が kaijiSum {first.total} 件と違う"
-            if parsed != first.total
-            else f"ページごとの件数 {parsed} と開示一覧 {len(collected)} が違う"
-        )
+        skipped_total += nxt.skipped
+    # リンクなし行は kaijiSum に含まれるが doc_id が無い。件数の辻褄は
+    # 「解析行 + 読み飛ばし = kaijiSum」で見る。doc_id の集合は解析できた行だけ。
+    if parsed + skipped_total != first.total or len(collected) != parsed:
+        if skipped_total == 0 and parsed != first.total:
+            detail = f"読み取った {parsed} 件が kaijiSum {first.total} 件と違う"
+        elif len(collected) != parsed:
+            detail = f"ページごとの件数 {parsed} と開示一覧 {len(collected)} が違う"
+        else:
+            detail = (
+                f"解析 {parsed} 件・読み飛ばし {skipped_total} 行が"
+                f" kaijiSum {first.total} 件と違う"
+            )
         return _census(
             "count_mismatch",
             count=None,
-            skipped_rows=0,
+            skipped_rows=skipped_total,
             gets=gets,
             detail=detail,
+        )
+    if skipped_total and not collected:
+        # doc_id が 1 件も無い。読み飛ばしを 0 件確定にはしない。
+        detail = (
+            f"1ページ目で {skipped_total} 行を読み飛ばした"
+            if first.expected_last == 1
+            else f"{skipped_total} 行を読み飛ばした"
+        )
+        return _census(
+            "skipped_rows",
+            count=None,
+            skipped_rows=skipped_total,
+            gets=gets,
+            detail=detail,
+        )
+    if skipped_total:
+        return _census(
+            "confirmed",
+            count=len(collected),
+            skipped_rows=skipped_total,
+            gets=gets,
+            detail=(
+                f"kaijiSum {first.total} 件のうちリンクなし {skipped_total} 行を除き"
+                f" {len(collected)} 件"
+            ),
+            records=tuple(collected),
         )
     return _census(
         "confirmed",

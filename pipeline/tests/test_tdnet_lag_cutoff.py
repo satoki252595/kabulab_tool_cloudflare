@@ -126,6 +126,15 @@ def _official_row(n: int, at: str) -> str:
     )
 
 
+def _linkless_row(at: str) -> str:
+    """PDF リンクが無く doc_id を導出できない公式行。"""
+    return f'<tr><td class="kjTime">{at}</td><td class="kjTitle">リンクなし</td></tr>'
+
+
+def _linked_rows() -> list[str]:
+    return [_official_row(n, at) for n, at in _OFFICIAL]
+
+
 def _official_pages(rows: tuple[tuple[int, str], ...]) -> dict:
     total = len(rows)
     return {
@@ -141,6 +150,16 @@ def _official_pages(rows: tuple[tuple[int, str], ...]) -> dict:
 
 
 def _run(monkeypatch, tmp_path, caplog, yanoshin: tuple[tuple[int, datetime], ...], rows):
+    return _run_html(
+        monkeypatch,
+        tmp_path,
+        caplog,
+        yanoshin,
+        [_official_row(n, at) for n, at in rows],
+    )
+
+
+def _run_html(monkeypatch, tmp_path, caplog, yanoshin, html_rows: list[str]):
     records = [_record(n, at) for n, at in yanoshin]
     monkeypatch.setattr(mod, "now_jst", lambda: NOW)
     monkeypatch.setattr(mod, "probe_yanoshin_newest", lambda *a, **k: NEWEST)
@@ -148,7 +167,17 @@ def _run(monkeypatch, tmp_path, caplog, yanoshin: tuple[tuple[int, datetime], ..
     monkeypatch.setattr(mod, "_load_master_map", lambda _ctx: ({}, True))
     monkeypatch.setattr(mod.upsert, "load_disclosure_page_entries", lambda *a, **k: {})
     monkeypatch.setattr(mod.file_upload, "load_raw_page_map", lambda *a, **k: {})
-    calls = _install_fetch(monkeypatch, _official_pages(rows))
+    pages = {
+        tof.page_url(TARGET, 1): _page(
+            TARGET,
+            total=len(html_rows),
+            start=1,
+            end=len(html_rows),
+            pages=[1],
+            rows=html_rows,
+        )
+    }
+    calls = _install_fetch(monkeypatch, pages)
     ctx = _ctx(tmp_path, TARGET)
     ctx.persist = lambda *a, **k: True  # noqa: ARG005
     with caplog.at_level(logging.INFO):
@@ -170,6 +199,36 @@ def test_missing_doc_before_cutoff_still_fails(monkeypatch, tmp_path, caplog):
     yanoshin = tuple(item for item in _YANOSHIN if item[0] != 2)
     with pytest.raises(mod.OfficialListNotFresh) as raised:
         _run(monkeypatch, tmp_path, caplog, yanoshin, _OFFICIAL)
+    message = str(raised.value)
+    assert "status=count_mismatch" in message
+    assert _doc(2) in message
+    assert "before_cutoff_only_official" in message
+
+
+def test_linkless_row_before_cutoff_does_not_fail_when_doc_ids_match(monkeypatch, tmp_path, caplog):
+    """締切より前のリンクなし行は doc_id を持たない。集合が一致すれば失敗しない。"""
+    rows = [_linkless_row("08:05"), *_linked_rows()]
+    ctx, _calls = _run_html(monkeypatch, tmp_path, caplog, _YANOSHIN, rows)
+    assert ctx.processed == 5
+    assert ctx.failed == 0
+    assert "status=count_mismatch" not in caplog.text
+
+
+def test_linkless_row_after_cutoff_does_not_fail(monkeypatch, tmp_path, caplog):
+    """締切より後のリンクなし行でも、締切より前の doc_id が一致すれば失敗しない。"""
+    rows = [*_linked_rows(), _linkless_row("09:10")]
+    ctx, _calls = _run_html(monkeypatch, tmp_path, caplog, _YANOSHIN, rows)
+    assert ctx.processed == 5
+    assert ctx.failed == 0
+    assert "status=count_mismatch" not in caplog.text
+
+
+def test_linkless_row_with_real_gap_before_cutoff_is_count_mismatch(monkeypatch, tmp_path, caplog):
+    """リンクなし行があっても、締切より前の実開示が 1 件欠けたら count_mismatch。"""
+    rows = [_linkless_row("08:05"), *_linked_rows()]
+    yanoshin = tuple(item for item in _YANOSHIN if item[0] != 2)
+    with pytest.raises(mod.OfficialListNotFresh) as raised:
+        _run_html(monkeypatch, tmp_path, caplog, yanoshin, rows)
     message = str(raised.value)
     assert "status=count_mismatch" in message
     assert _doc(2) in message
@@ -338,6 +397,45 @@ def test_first_run_matches_previous_weekday_doc_ids(monkeypatch, tmp_path, caplo
     assert (
         f"{mod.INCIDENT_TAG} previous_weekday=2026-11-04 status=matched count=1"
     ) in caplog.text
+
+
+def test_previous_weekday_linkless_row_matches(monkeypatch, tmp_path, caplog):
+    """前日照合は、リンクなし行があっても doc_id 集合が一致すれば失敗しない。"""
+    kept = "140120261104000011"
+    ctx = _prepare_first_run(
+        monkeypatch,
+        tmp_path,
+        caplog,
+        previous_rows=[_previous_row(kept), _linkless_row("16:00")],
+        previous_records=[_prev_record(kept)],
+    )
+    with caplog.at_level(logging.INFO):
+        mod.execute(ctx)
+    assert ctx.processed == 1
+    assert "status=count_mismatch" not in caplog.text
+    assert (
+        f"{mod.INCIDENT_TAG} previous_weekday=2026-11-04 status=matched count=1"
+    ) in caplog.text
+
+
+def test_previous_weekday_linkless_row_with_gap_is_count_mismatch(monkeypatch, tmp_path, caplog):
+    """前日照合は、リンクなし行があっても実 doc_id が欠けたら count_mismatch。"""
+    kept = "140120261104000011"
+    missing = "140120261104000012"
+    ctx = _prepare_first_run(
+        monkeypatch,
+        tmp_path,
+        caplog,
+        previous_rows=[_previous_row(kept), _linkless_row("16:00"), _previous_row(missing)],
+        previous_records=[_prev_record(kept)],
+    )
+    with caplog.at_level(logging.INFO), pytest.raises(mod.OfficialListNotFresh) as raised:
+        mod.execute(ctx)
+    assert ctx.processed == 1
+    message = str(raised.value)
+    assert "status=count_mismatch" in message
+    assert "previous_weekday=2026-11-04" in message
+    assert missing in message
 
 
 def test_previous_weekday_at_yanoshin_limit_is_not_matched(monkeypatch, tmp_path, caplog):
