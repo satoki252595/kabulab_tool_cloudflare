@@ -193,6 +193,7 @@ class OfficialListCensus:
     skipped_rows: int
     gets: int
     detail: str
+    records: tuple[DisclosureRecord, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -201,6 +202,7 @@ class _PageBody:
     expected_last: int
     parsed: int
     skipped: int
+    records: tuple[DisclosureRecord, ...]
 
 
 def _listed_date(html: str) -> date | None:
@@ -230,8 +232,9 @@ def _census(
     skipped_rows: int,
     gets: int,
     detail: str,
+    records: tuple[DisclosureRecord, ...] = (),
 ) -> OfficialListCensus:
-    return OfficialListCensus(status, count, skipped_rows, gets, detail)
+    return OfficialListCensus(status, count, skipped_rows, gets, detail, records)
 
 
 def _save_official_page(
@@ -447,7 +450,7 @@ def _read_official_page(
             gets=gets,
             detail=f"{page_no}ページ目は {len(records)} 行で、kaijiSum の範囲は {span} 件",
         ), gets
-    return _PageBody(total, expected_last, len(records), skipped), gets
+    return _PageBody(total, expected_last, len(records), skipped, tuple(records)), gets
 
 
 def census_official_list(
@@ -486,6 +489,7 @@ def census_official_list(
             ),
         )
     parsed = first.parsed
+    collected = list(first.records)
     for page_no in range(2, first.expected_last + 1):
         nxt, gets = _read_official_page(
             settings,
@@ -499,13 +503,19 @@ def census_official_list(
         if isinstance(nxt, OfficialListCensus):
             return nxt
         parsed += nxt.parsed
-    if parsed != first.total:
+        collected.extend(nxt.records)
+    if parsed != first.total or len(collected) != parsed:
+        detail = (
+            f"読み取った {parsed} 件が kaijiSum {first.total} 件と違う"
+            if parsed != first.total
+            else f"ページごとの件数 {parsed} と開示一覧 {len(collected)} が違う"
+        )
         return _census(
             "count_mismatch",
             count=None,
             skipped_rows=0,
             gets=gets,
-            detail=f"読み取った {parsed} 件が kaijiSum {first.total} 件と違う",
+            detail=detail,
         )
     return _census(
         "confirmed",
@@ -513,6 +523,7 @@ def census_official_list(
         skipped_rows=0,
         gets=gets,
         detail=f"kaijiSum {first.total} 件と一致",
+        records=tuple(collected),
     )
 
 
