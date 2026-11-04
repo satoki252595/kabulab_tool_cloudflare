@@ -51,11 +51,11 @@ def _ctx(tmp_path, day: date) -> JobContext:
     return ctx
 
 
-def _row(i: int, *, skip: bool = False) -> str:
+def _row(i: int, *, skip: bool = False, at: str = "15:00") -> str:
     if skip:
-        return '<tr><td class="kjTime">15:00</td><td class="kjTitle">リンクなし</td></tr>'
+        return f'<tr><td class="kjTime">{at}</td><td class="kjTitle">リンクなし</td></tr>'
     return (
-        '<tr><td class="kjTime">15:00</td><td class="kjCode">72030</td>'
+        f'<tr><td class="kjTime">{at}</td><td class="kjCode">72030</td>'
         f'<td class="kjTitle"><a href="140120261026{i:06d}.pdf">お知らせ</a></td></tr>'
     )
 
@@ -275,10 +275,18 @@ def test_nonempty_elapsed_14400_stays_stopped_without_official_get(monkeypatch, 
 
 
 def test_nonempty_official_count_mismatch_is_not_fresh(monkeypatch, tmp_path, caplog):
-    """やのしん 1 件・公式 kaijiSum 2 件は fresh の成功にしない。"""
+    """やのしん 1 件・公式 kaijiSum 2 件は fresh の成功にしない。
+
+    余分な 1 件は締切（やのしんの 15:00）より前。同じ分以降の遅れは対象外。
+    """
     pages = {
         tof.page_url(TARGET, 1): _page(
-            TARGET, total=2, start=1, end=2, pages=[1], rows=[_row(1), _row(2)]
+            TARGET,
+            total=2,
+            start=1,
+            end=2,
+            pages=[1],
+            rows=[_row(2, at="14:00"), _row(1, at="15:00")],
         )
     }
     calls = _install_fetch(monkeypatch, pages)

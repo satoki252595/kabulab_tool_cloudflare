@@ -223,12 +223,123 @@ class OfficialListNotFresh(RuntimeError):
     """公式一覧の件数を確定できない。fresh にも 0 件成功にもしない。"""
 
 
-def _gate_official_list(ctx: JobContext, target_date: date, expected_count: int, judgement) -> None:
-    """時間判定が fresh のときだけ、公式一覧の件数と突き合わせる。
+# 19:00 で翌回へ回した分の照合場所。統括が catchup の保存件数へ差し替えるときは
+# この値と reconcile_deferred_tail の本体だけを変える。
+DEFERRED_TAIL_RECONCILE = "next_business_day_first_run"
+INCIDENT_TAG = "[INC-20261026-kabulab_tool_cloudflare-tdnet-empty-success]"
+_FIRST_RUN_HOUR = 9
+_LAST_RUN_HOUR = 19
 
+
+def floor_minute(moment: datetime) -> datetime:
+    """タイムゾーン付き時刻を分へ切り捨てる。秒が無いまま分を繰り上げない。"""
+    if moment.tzinfo is None or moment.utcoffset() is None:
+        raise ValueError("開示時刻にタイムゾーンが必要です")
+    local = moment.astimezone(JST)
+    return local.replace(second=0, microsecond=0)
+
+
+def _aware_disclosure(moment: datetime) -> datetime:
+    if moment.tzinfo is None or moment.utcoffset() is None:
+        raise ValueError("開示時刻にタイムゾーンが必要です")
+    return moment.astimezone(JST)
+
+
+def disclosure_cutoff(records: list[DisclosureRecord]) -> datetime:
+    """やのしんの最新時刻を分へ切り捨てた締切。開示が無ければ締切を作らない。"""
+    if not records:
+        raise ValueError("やのしんの開示が無いので締切を切れない")
+    latest = max(records, key=lambda record: _aware_disclosure(record.disclosed_at))
+    return floor_minute(latest.disclosed_at)
+
+
+def doc_ids_before(records: list[DisclosureRecord], cutoff: datetime) -> set[str]:
+    return {
+        record.doc_id
+        for record in records
+        if _aware_disclosure(record.disclosed_at) < cutoff
+    }
+
+
+def doc_ids_on_or_after(records: list[DisclosureRecord], cutoff: datetime) -> set[str]:
+    return {
+        record.doc_id
+        for record in records
+        if _aware_disclosure(record.disclosed_at) >= cutoff
+    }
+
+
+def previous_weekday(day: date) -> date:
+    """定時が動く直前の平日。月曜は金曜。JPX 休場日は scheduled.py と同じく推測しない。"""
+    prev = day - timedelta(days=1)
+    while prev.weekday() >= 5:
+        prev -= timedelta(days=1)
+    return prev
+
+
+def _join_doc_ids(doc_ids: set[str]) -> str:
+    ordered = sorted(doc_ids)
+    return ",".join(ordered) if ordered else "-"
+
+
+def format_deferred_tail_log(
+    *,
+    cutoff: datetime,
+    official_ids: set[str],
+    yanoshin_ids: set[str],
+) -> str:
+    """19:00 で次の run に回した分。件数と doc_id を障害タグ付きで残す。"""
+    return (
+        f"{INCIDENT_TAG} deferred_tail"
+        f" official_count={len(official_ids)} yanoshin_count={len(yanoshin_ids)}"
+        f" official_doc_ids={_join_doc_ids(official_ids)}"
+        f" yanoshin_doc_ids={_join_doc_ids(yanoshin_ids)}"
+        f" cutoff={floor_minute(cutoff).isoformat()}"
+    )
+
+
+def _scheduled_slot_hour(ctx: JobContext) -> int | None:
+    window = getattr(ctx.args, "_scheduled_window", None)
+    if window is None:
+        return None
+    slot = window[0]
+    if not isinstance(slot, datetime) or slot.tzinfo is None or slot.utcoffset() is None:
+        raise ValueError("予定slotにタイムゾーン付き時刻が必要です")
+    return slot.astimezone(JST).hour
+
+
+def _official_list_line(census, status: str, expected_count: int, detail: str) -> str:
+    return (
+        f"tdnet_official_list status={status} count={census.count} expected={expected_count}"
+        f" skipped={census.skipped_rows} gets={census.gets} detail={detail}"
+    )
+
+
+def _reject_official_list(judgement, line: str) -> None:
+    logger.info(
+        "%s",
+        format_yanoshin_upstream_log(judgement, judgement_name="official_unconfirmed"),
+    )
+    logger.info("%s", line)
+    raise OfficialListNotFresh(line)
+
+
+def _gate_official_list(
+    ctx: JobContext,
+    target_date: date,
+    yanoshin_records: list[DisclosureRecord],
+    judgement,
+) -> None:
+    """時間判定が fresh のとき、締切より前の doc_id 集合を公式一覧と突き合わせる。
+
+    締切はやのしんの最新時刻を分へ切り捨てたもの。同じ分とそれより後は次の run
+    に回す。1 件でも違えば count_mismatch。リンクなし行は doc_id が無いので集合に
+    入らない（census の count はリンクなしを除いた件数）。やのしんが 0 件のときは
+    締切が無いので、公式件数との等号のまま（空一覧を件数未確定の成功にしない）。
     追加 GET は census の上限（40）まで。14400 秒の比較はここでは変えない。
     再試行は足さない。読めない件数を 0 で埋めない。
     """
+    expected_count = len(yanoshin_records)
     if expected_count < 0:
         raise ValueError("公式一覧と突き合わせる件数は 0 以上が必要です")
 
@@ -244,22 +355,131 @@ def _gate_official_list(ctx: JobContext, target_date: date, expected_count: int,
     status = census.status
     detail = census.detail
     count = census.count
-    if status in {"confirmed", "holiday"} and count != expected_count:
-        status = "count_mismatch"
-        detail = f"{detail}; official={count} expected={expected_count}"
-    line = (
-        f"tdnet_official_list status={status} count={count} expected={expected_count}"
-        f" skipped={census.skipped_rows} gets={census.gets} detail={detail}"
-    )
-    if status in {"confirmed", "holiday"} and count == expected_count:
+    matched = False
+    if status in {"confirmed", "holiday"} and count is not None and not yanoshin_records:
+        if count == expected_count:
+            matched = True
+        else:
+            status = "count_mismatch"
+            detail = f"{detail}; official={count} expected={expected_count}"
+    elif status in {"confirmed", "holiday"} and count is not None:
+        if len(census.records) != count:
+            status = "count_mismatch"
+            detail = (
+                f"{detail}; official={count} expected={expected_count}"
+                f"; records={len(census.records)}"
+            )
+        else:
+            cutoff = disclosure_cutoff(yanoshin_records)
+            official_rows = list(census.records)
+            official_before = doc_ids_before(official_rows, cutoff)
+            yanoshin_before = doc_ids_before(yanoshin_records, cutoff)
+            if _scheduled_slot_hour(ctx) == _LAST_RUN_HOUR:
+                logger.info(
+                    "%s",
+                    format_deferred_tail_log(
+                        cutoff=cutoff,
+                        official_ids=doc_ids_on_or_after(official_rows, cutoff),
+                        yanoshin_ids=doc_ids_on_or_after(yanoshin_records, cutoff),
+                    ),
+                )
+            if official_before != yanoshin_before:
+                status = "count_mismatch"
+                detail = (
+                    f"{detail}; official={count} expected={expected_count}"
+                    "; before_cutoff_only_official="
+                    f"{_join_doc_ids(official_before - yanoshin_before)}"
+                    "; before_cutoff_only_yanoshin="
+                    f"{_join_doc_ids(yanoshin_before - official_before)}"
+                )
+            else:
+                matched = True
+    line = _official_list_line(census, status, expected_count, detail)
+    if matched:
         logger.info("%s", line)
         return
-    logger.info(
-        "%s",
-        format_yanoshin_upstream_log(judgement, judgement_name="official_unconfirmed"),
+    _reject_official_list(judgement, line)
+
+
+def reconcile_deferred_tail(ctx: JobContext, target_date: date) -> None:
+    """19:00 で翌回へ回した分を照合する。実装は翌平日 09:00 の前日集合比較だけ。
+
+    前日は日が閉じているので分の締切は掛けない。catchup の保存件数へ差し替える
+    ときは DEFERRED_TAIL_RECONCILE とこの関数の本体を置き換える。
+    """
+    if DEFERRED_TAIL_RECONCILE != "next_business_day_first_run":
+        raise RuntimeError(
+            f"繰越照合 {DEFERRED_TAIL_RECONCILE} は未実装です。"
+            "catchup の保存件数に差し替える場合は reconcile_deferred_tail を置き換えてください。"
+        )
+    _reconcile_previous_weekday(ctx, target_date)
+
+
+def _reconcile_previous_weekday(ctx: JobContext, target_date: date) -> None:
+    prev = previous_weekday(target_date)
+    assert_scheduled_source(ctx.args, now_jst())
+    artifact, records = tdnet_yanoshin.list_disclosures(
+        ctx.settings,
+        prev.strftime("%Y%m%d"),
+        limit=YANOSHIN_LIMIT,
+        **source_request_options(ctx.args),
+    )
+    ctx.upload_raw(artifact, sha_map_date=prev)
+    if len(records) >= YANOSHIN_LIMIT:
+        raise OfficialListNotFresh(
+            "tdnet_official_list status=partial count=None"
+            f" expected={len(records)} skipped=0 gets=0"
+            f" detail=前日 {prev.isoformat()} のやのしん一覧が上限 {YANOSHIN_LIMIT} 件に達し"
+            " doc_id 集合を確定できない"
+        )
+
+    def before() -> None:
+        assert_scheduled_source(ctx.args, now_jst())
+
+    def keep(raw: RawArtifact) -> None:
+        ctx.upload_raw(raw, sha_map_date=prev)
+
+    census = tdnet_official_fallback.census_official_list(
+        ctx.settings, prev, before_fetch=before, on_raw=keep
+    )
+    status = census.status
+    detail = census.detail
+    count = census.count
+    official_ids = {record.doc_id for record in census.records}
+    yanoshin_ids = {record.doc_id for record in records}
+    confirmed = (
+        status in {"confirmed", "holiday"}
+        and count is not None
+        and len(census.records) == count
+    )
+    if confirmed and official_ids == yanoshin_ids:
+        logger.info(
+            "%s previous_weekday=%s status=matched count=%d",
+            INCIDENT_TAG,
+            prev.isoformat(),
+            count,
+        )
+        return
+    if confirmed:
+        status = "count_mismatch"
+        detail = (
+            f"{detail}; official={count} expected={len(records)}"
+            f"; only_official={_join_doc_ids(official_ids - yanoshin_ids)}"
+            f"; only_yanoshin={_join_doc_ids(yanoshin_ids - official_ids)}"
+        )
+    line = (
+        f"{INCIDENT_TAG} previous_weekday={prev.isoformat()} "
+        f"tdnet_official_list status={status} count={count} expected={len(records)}"
+        f" skipped={census.skipped_rows} gets={census.gets} detail={detail}"
     )
     logger.info("%s", line)
     raise OfficialListNotFresh(line)
+
+
+def _carry_if_first_run(ctx: JobContext, target_date: date) -> None:
+    if _scheduled_slot_hour(ctx) != _FIRST_RUN_HOUR:
+        return
+    reconcile_deferred_tail(ctx, target_date)
 
 
 def default_target_date(now: datetime) -> date:
@@ -291,12 +511,13 @@ def execute(ctx: JobContext) -> None:
             shown = "upstream_stopped"
         # 14400 秒以内の fresh でも、公式一覧が 0 件と確定するまで 0 件成功にしない。
         if shown == "fresh":
-            _gate_official_list(ctx, target_date, 0, judgement)
+            _gate_official_list(ctx, target_date, [], judgement)
         line = format_yanoshin_upstream_log(judgement, judgement_name=shown)
         logger.info("%s", line)
         if shown == "upstream_stopped":
             raise YanoshinUpstreamStopped(f"yanoshin upstream stopped: {line}")
         ctx.confirm_zero_work(STATUS_OBSERVED_EMPTY)
+        _carry_if_first_run(ctx, target_date)
         return
 
     # 非空でも recent の最新を見る。対象日に1件載ったあと上流が止まると、
@@ -313,8 +534,9 @@ def execute(ctx: JobContext) -> None:
     shown = "upstream_stopped" if stopped else judgement.judgement
     unparsed = item_count is not None and item_count >= 1
     if shown == "fresh" and not unparsed:
+        listed = [record for _artifact, batch, _urls in batches for record in batch]
         try:
-            _gate_official_list(ctx, target_date, record_count, judgement)
+            _gate_official_list(ctx, target_date, listed, judgement)
         except OfficialListNotFresh:
             for artifact, _records, _urls in batches:
                 ctx.upload_raw(artifact, sha_map_date=target_date)
@@ -444,6 +666,7 @@ def execute(ctx: JobContext) -> None:
 
     if disc_skipped:
         logger.info("④ 同値 skip: %d 件の再 PATCH を省いた", disc_skipped)
+    _carry_if_first_run(ctx, target_date)
 
 
 def _existing_page_id(pid: str) -> str:
