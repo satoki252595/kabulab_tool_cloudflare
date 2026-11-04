@@ -14,7 +14,12 @@ import { diagnoseConfirmedCloses, selectConfirmedCloses } from "./macro-session.
 import {
   INC_FINANCIALS_STALE_TAG,
   formatConfirmedHoldDiag,
+  formatMacroGateHoldLines,
+  formatMissingJpLegHoldLine,
   formatStockSessionDiag,
+  macroHoldReasonCode,
+  readChartSessionClock,
+  type MacroGateHoldLogInput,
 } from "./inc-financials-stale-diag.js";
 
 const FX = join(dirname(fileURLToPath(import.meta.url)), "__fixtures__/macro-canonical");
@@ -133,5 +138,180 @@ describe("format*Diag", () => {
       { reason: "null", candidateDate: "2026-10-07", sessionDate: "2026-10-08", ended: false });
     expect(line).toBe(`${INC_FINANCIALS_STALE_TAG} macro {"symbol":"^N225","receivedAt":null,"reason":"null",` +
       `"candidateDate":"2026-10-07","sessionDate":"2026-10-08","ended":false}`);
+  });
+});
+
+const SESSION_START = 1_790_726_400;
+const SESSION_END = 1_790_749_800;
+
+function sessionRaw(rmt: number, extra: Record<string, unknown> = {}): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify({
+    chart: {
+      result: [{
+        meta: {
+          exchangeTimezoneName: "Asia/Tokyo",
+          regularMarketTime: rmt,
+          currentTradingPeriod: { regular: { start: SESSION_START, end: SESSION_END } },
+          ...extra,
+        },
+      }],
+    },
+  }));
+}
+
+function holdInput(overrides: Partial<MacroGateHoldLogInput> = {}): MacroGateHoldLogInput {
+  return {
+    reason: "VIX 確定日 2026-10-30 ≠ GSPC 2026-11-02 (混ぜない)",
+    charts: {
+      "^N225": { date: "2026-11-02" },
+      "^VIX": { date: "2026-10-30" },
+      "^GSPC": { date: "2026-11-02" },
+      "NIY=F": { date: "2026-11-02" },
+    },
+    nikkeiViDate: "2026-11-02",
+    attempts: [],
+    jpN225ReceivedAt: null,
+    jpViReceivedAt: null,
+    ...overrides,
+  };
+}
+
+describe("macro gate HOLD diag", () => {
+  it("gate の日本語 reason をコードへ写し、未知の文は null", () => {
+    expect(macroHoldReasonCode("VIX 確定日 2026-10-30 ≠ GSPC 2026-11-02 (混ぜない)")).toBe("vix_date_ne_gspc");
+    expect(macroHoldReasonCode("N225 確定日 2026-09-25 ≠ GSPC 2026-09-29 (混ぜない)")).toBe("n225_date_ne_gspc");
+    expect(macroHoldReasonCode("VI 日付 2026-09-30 ≠ GSPC 2026-09-29 (混ぜない)")).toBe("vi_date_ne_gspc");
+    expect(macroHoldReasonCode("GSPC 確定日 2026-11-02 ≠ 予定日 2026-11-03 (過去日を代用しない)")).toBe("gspc_date_ne_expected");
+    expect(macroHoldReasonCode("GSPC 確定日が無い (取得失敗または session 不足)")).toBe("gspc_date_missing");
+    expect(macroHoldReasonCode("N225 確定日が無い (取得失敗または session 不足)")).toBe("n225_date_missing");
+    expect(macroHoldReasonCode("VIX 確定日が無い (取得失敗または session 不足)")).toBe("vix_date_missing");
+    expect(macroHoldReasonCode("VI 日付が無い (取得失敗または session 不足)")).toBe("vi_date_missing");
+    expect(macroHoldReasonCode("JPX 休場日 (休日) は書かない")).toBe("jpx_closed");
+    expect(macroHoldReasonCode("NIY snapshotが無い (部分行を書かない)")).toBe("niy_price_missing");
+    expect(macroHoldReasonCode("VI 価格が無い (部分行を書かない)")).toBe("vi_price_missing");
+    expect(macroHoldReasonCode("想定外の文")).toBeNull();
+  });
+
+  it("rmt が regularEnd 未満なら ended=false、同値以上なら true。JST で出す", () => {
+    expect(readChartSessionClock(sessionRaw(1_790_732_425))).toEqual({
+      exchangeSessionDate: "2026-09-30",
+      regularStart: "2026-09-30T09:00:00+09:00",
+      regularEnd: "2026-09-30T15:30:00+09:00",
+      regularEndSec: SESSION_END,
+      regularMarketTime: "2026-09-30T10:40:25+09:00",
+      regularMarketTimeSec: 1_790_732_425,
+      ended: false,
+    });
+    expect(readChartSessionClock(sessionRaw(SESSION_END)).ended).toBe(true);
+    expect(readChartSessionClock(sessionRaw(SESSION_END)).regularMarketTime).toBe("2026-09-30T15:30:00+09:00");
+  });
+
+  it("原文が壊れていても null で戻り、crumb や URL は行に出さない", () => {
+    expect(readChartSessionClock(null)).toEqual({
+      exchangeSessionDate: null,
+      regularStart: null,
+      regularEnd: null,
+      regularEndSec: null,
+      regularMarketTime: null,
+      regularMarketTimeSec: null,
+      ended: null,
+    });
+    expect(readChartSessionClock(new TextEncoder().encode("{broken"))).toMatchObject({ ended: null, regularEnd: null });
+    const lines = formatMacroGateHoldLines(holdInput({
+      attempts: [{
+        target: "^VIX",
+        attempt: 0,
+        requestedAt: "2026-11-02T21:00:00.000Z",
+        completedAt: "2026-11-02T21:00:01.000Z",
+        receivedAt: "2026-11-02T21:00:01.000Z",
+        bytes: sessionRaw(1_790_732_425, {
+          crumb: "secret-crumb",
+          url: "https://query.example/v8/finance/chart/^VIX?crumb=secret-crumb&cookie=abc",
+        }),
+      }],
+    }));
+    expect(lines).toHaveLength(5);
+    expect(lines.map((line) => line.startsWith(`${INC_FINANCIALS_STALE_TAG} macro-hold `)).every(Boolean)).toBe(true);
+    const joined = lines.join("\n");
+    expect(joined).not.toMatch(/crumb|cookie|https?:|secret/i);
+    const vix = JSON.parse(lines[1].slice(lines[1].indexOf("{"))) as Record<string, unknown>;
+    expect(vix).toMatchObject({
+      symbol: "^VIX",
+      sessionDate: "2026-10-30",
+      exchangeSessionDate: "2026-09-30",
+      regularEnd: "2026-09-30T15:30:00+09:00",
+      regularMarketTimeSec: 1_790_732_425,
+      ended: false,
+      receivedAt: "2026-11-02T21:00:01.000Z",
+      reason: "vix_date_ne_gspc",
+    });
+    const n225 = JSON.parse(lines[0].slice(lines[0].indexOf("{"))) as Record<string, unknown>;
+    expect(n225).toMatchObject({
+      symbol: "^N225",
+      sessionDate: "2026-11-02",
+      regularEnd: null,
+      ended: null,
+      receivedAt: null,
+      reason: "vix_date_ne_gspc",
+    });
+  });
+
+  it("bytes の無い後続 attempt より、本文のある attempt の時計を使う", () => {
+    const lines = formatMacroGateHoldLines(holdInput({
+      attempts: [
+        {
+          target: "^GSPC",
+          attempt: 0,
+          requestedAt: "2026-11-02T21:00:00.000Z",
+          completedAt: "2026-11-02T21:00:01.000Z",
+          receivedAt: "2026-11-02T21:00:01.000Z",
+          bytes: sessionRaw(SESSION_END),
+        },
+        {
+          target: "^GSPC",
+          attempt: 1,
+          requestedAt: "2026-11-02T21:00:02.000Z",
+          completedAt: "2026-11-02T21:00:03.000Z",
+          receivedAt: null,
+          bytes: null,
+        },
+      ],
+    }));
+    const gspc = JSON.parse(lines[2].slice(lines[2].indexOf("{"))) as Record<string, unknown>;
+    expect(gspc).toMatchObject({
+      ended: true,
+      attempt: 0,
+      receivedAt: "2026-11-02T21:00:01.000Z",
+      regularMarketTimeSec: SESSION_END,
+    });
+  });
+
+  it("JP leg の取得時刻は chart attempt が無い記号にだけ付ける", () => {
+    const lines = formatMacroGateHoldLines(holdInput({
+      jpN225ReceivedAt: "2026-11-02T06:30:00.000Z",
+      jpViReceivedAt: "2026-11-02T06:31:00.000Z",
+    }));
+    const n225 = JSON.parse(lines[0].slice(lines[0].indexOf("{"))) as Record<string, unknown>;
+    const vix = JSON.parse(lines[1].slice(lines[1].indexOf("{"))) as Record<string, unknown>;
+    const vi = JSON.parse(lines[4].slice(lines[4].indexOf("{"))) as Record<string, unknown>;
+    expect(n225.receivedAt).toBe("2026-11-02T06:30:00.000Z");
+    expect(vix.receivedAt).toBeNull();
+    expect(vi).toMatchObject({
+      symbol: "NIKKEI_VI",
+      sessionDate: "2026-11-02",
+      ended: null,
+      regularEnd: null,
+      receivedAt: "2026-11-02T06:31:00.000Z",
+    });
+  });
+
+  it("JP leg 欠落行は ID と理由コードだけ", () => {
+    expect(formatMissingJpLegHoldLine("2026-11-03")).toBe(
+      `${INC_FINANCIALS_STALE_TAG} jp-leg-missing ${JSON.stringify({
+        reason: "missing_jp_leg",
+        expectedDate: "2026-11-03",
+      })}`
+    );
+    expect(formatMissingJpLegHoldLine("not-a-date")).toContain('"expectedDate":null');
   });
 });
