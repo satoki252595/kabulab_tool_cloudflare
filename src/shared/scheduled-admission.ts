@@ -97,8 +97,119 @@ export function scheduledMarginWindow(date: string) {
   return { start, latestStart: start + 10 * 60_000, sourceDeadline: start + 20 * 60_000, deadline: start + 30 * 60_000 };
 }
 
-export function scheduledMacroWindow(date: string) {
-  const start = Date.parse(`${date}T21:00:00.000Z`);
-  return { start, latestStart: start + 30 * 60_000, sourceDeadline: start + 50 * 60_000,
-    deadline: start + 60 * 60_000 };
+/**
+ * 定時マクロの時刻窓。Python の macro_schedule と同じ式。
+ *
+ * L = ^VIX 通常引け 16:15 America/New_York + 45分 = 17:00 ET。
+ * 受付は L..L+30、新規取得は L+50、保存と ops_check の日付切替は L+60、
+ * readcheck は L+65。夏は 21:00 UTC、冬は 22:00 UTC。切替日もこの変換で決める。
+ * 早期終了（regular.end 13:00 ET）でも L は動かさない。13:45 ET は
+ * 立会中拒否（daily.ts の 9:30–16:00 ET）の内側になる。
+ */
+const ET_ZONE = "America/New_York";
+const VIX_REGULAR_END_MINUTES = 16 * 60 + 15;
+const MACRO_LAG_MINUTES = 45;
+const MACRO_ADMISSION_MINUTES = 30;
+const MACRO_FETCH_DEADLINE_MINUTES = 50;
+const MACRO_SAVE_DEADLINE_MINUTES = 60;
+const MACRO_READCHECK_MINUTES = 65;
+
+interface EtParts {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+}
+
+function etParts(utcMs: number): EtParts {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: ET_ZONE,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).formatToParts(new Date(utcMs));
+  const map = new Map(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+  const year = map.get("year");
+  const month = map.get("month");
+  const day = map.get("day");
+  const hourRaw = map.get("hour");
+  const minute = map.get("minute");
+  if (year === undefined || month === undefined || day === undefined || hourRaw === undefined || minute === undefined) {
+    throw new Error(`America/New_York の時刻分解に失敗しました: ${new Date(utcMs).toISOString()}`);
+  }
+  const hour = hourRaw === "24" ? 0 : Number(hourRaw);
+  if (![Number(year), Number(month), Number(day), hour, Number(minute)].every(Number.isInteger)) {
+    throw new Error(`America/New_York の時刻分解が数値ではありません: ${new Date(utcMs).toISOString()}`);
+  }
+  return { year: Number(year), month: Number(month), day: Number(day), hour, minute: Number(minute) };
+}
+
+/** date の ET 壁時計を UTC ms にする。17:00 は DST の隙間・重複に入らない。合わなければ throw。 */
+function etWallToUtc(date: string, hour: number, minute: number): number {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isInteger(hour) || !Number.isInteger(minute) ||
+      hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    throw new Error(`ET壁時計が不正です: ${date} ${hour}:${minute}`);
+  }
+  const [y, m, d] = date.split("-").map(Number);
+  if (y === undefined || m === undefined || d === undefined) throw new Error(`ET壁時計が不正です: ${date}`);
+  const probe = Date.UTC(y, m - 1, d, 16, 0, 0);
+  if (new Date(probe).toISOString().slice(0, 10) !== date) throw new Error(`マクロ予定日が実在しません: ${date}`);
+  const probeEt = etParts(probe);
+  const offsetMinutes = (Date.UTC(probeEt.year, probeEt.month - 1, probeEt.day, probeEt.hour, probeEt.minute) - probe) / 60_000;
+  if (!Number.isInteger(offsetMinutes)) {
+    throw new Error(`America/New_York のオフセットが分単位ではありません: ${date}`);
+  }
+  const utc = Date.UTC(y, m - 1, d, hour, minute) - offsetMinutes * 60_000;
+  const got = etParts(utc);
+  if (got.year !== y || got.month !== m || got.day !== d || got.hour !== hour || got.minute !== minute) {
+    throw new Error(
+      `America/New_York の ${date} ${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")} を一意に変換できません` +
+      ` (得た ${got.year}-${String(got.month).padStart(2, "0")}-${String(got.day).padStart(2, "0")} ${String(got.hour).padStart(2, "0")}:${String(got.minute).padStart(2, "0")})`,
+    );
+  }
+  return utc;
+}
+
+export interface MacroWindow {
+  /** L。受付の開始。 */
+  start: number;
+  /** L+30。受付の終端（この瞬間は含む）。 */
+  latestStart: number;
+  /** L+50。新規取得の期限。 */
+  sourceDeadline: number;
+  /** L+60。保存期限。 */
+  deadline: number;
+  /** L+65。readcheck。 */
+  readcheck: number;
+  /** L+60。ops_check が当日へ切り替える瞬間（保存期限と同じ）。 */
+  dateSwitch: number;
+}
+
+export function scheduledMacroWindow(date: string): MacroWindow {
+  const lMinutes = VIX_REGULAR_END_MINUTES + MACRO_LAG_MINUTES;
+  if (lMinutes < 0 || lMinutes >= 24 * 60) throw new Error("マクロ開始が日をまたぎます");
+  const start = etWallToUtc(date, Math.floor(lMinutes / 60), lMinutes % 60);
+  const minute = 60_000;
+  const deadline = start + MACRO_SAVE_DEADLINE_MINUTES * minute;
+  return {
+    start,
+    latestStart: start + MACRO_ADMISSION_MINUTES * minute,
+    sourceDeadline: start + MACRO_FETCH_DEADLINE_MINUTES * minute,
+    deadline,
+    readcheck: start + MACRO_READCHECK_MINUTES * minute,
+    dateSwitch: deadline,
+  };
+}
+
+/** 発火時刻の分が、その UTC 日の ET 窓（dispatch=L、readcheck=L+65）と一致するか。 */
+export function macroTriggerMatches(scheduledTimeMs: number, kind: "dispatch" | "readcheck"): boolean {
+  if (!Number.isFinite(scheduledTimeMs)) throw new Error("マクロ予定時刻が不正です");
+  const date = new Date(scheduledTimeMs).toISOString().slice(0, 10);
+  const window = scheduledMacroWindow(date);
+  const expected = kind === "dispatch" ? window.start : window.readcheck;
+  return Math.floor(scheduledTimeMs / 60_000) === Math.floor(expected / 60_000);
 }

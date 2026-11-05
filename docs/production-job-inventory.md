@@ -6,7 +6,7 @@
 
 | 担当 | 起動元 | 実行する処理 | 先行条件・重複防止 | LLM |
 |---|---|---|---|---|
-| Cloudflare | 14 Cron Trigger | 株式・VWAP・独立資金フロー・開示補完・マクロのdispatch/既存期限確認、信用残・日証金・Python開示のdispatch | `main`へ起動。receiptを条件付き確保し、同じ予定を自動再送しない | なし |
+| Cloudflare | 16 Cron Trigger | 株式・VWAP・独立資金フロー・開示補完・マクロのdispatch/期限確認（マクロは夏冬各2本。ETと一致しない方は失敗にしない）、信用残・日証金・Python開示のdispatch | `main`へ起動。receiptを条件付き確保し、同じ予定を自動再送しない | なし |
 | Actions `stock-sync.yml` | CF dispatch／毎月10日10:30 | 株式・金融指標→33業種→条件付き業種資金フロー。別targetでマクロ／月次母集団・優待原文・再計算 | `stock-sync`と`yahoo-source`。33業種は株価失敗でも実行。資金フローは価格資格・株式job成功・許容失敗なしが必要 | なし |
 | Actions `vwap-ingest.yml` | CF dispatch | 日足→5分足、または信用残 | 段階間で`yahoo-source`を解放し、同run/attempt受付を継承。信用残は専用排他。日足exit2・原本未閉鎖では5分足を開始しない | なし |
 | Actions `moneyflow.yml` | CF dispatch／株式成功後のworkflow_call | 独立28取得元、または価格依存の業種資金フロー | 閉鎖済み非Yahoo→独立Yahoo→両lane成功時のjoin。既知のsource失敗と保存結果不明を区別し、不明なら後続停止 | なし |

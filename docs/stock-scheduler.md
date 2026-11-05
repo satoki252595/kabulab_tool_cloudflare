@@ -19,15 +19,18 @@ Trigger へ移す。実実行は従来どおり GitHub Actions (`stock-sync.yml`
 
 ## 設計
 
-CF cron 14 本 (`wrangler.toml` `[triggers]`、曜日は `MON-FRI` 名前指定。
-CF の数字曜日は 1=日曜で GitHub と違うため):
+CF cron 16 本 (`wrangler.toml` `[triggers]`、曜日は `MON-FRI` 名前指定。
+CF の数字曜日は 1=日曜で GitHub と違うため)。マクロは夏冬を両方登録し、
+その日の米東 17:00 / 18:05 と一致しない方は失敗にせず戻る:
 
 | cron (UTC) | 処理 (`src/scheduler/stock.ts`) |
 |---|---|
 | `0 9 * * MON-FRI` | R2 receipt を claim → workflow_dispatch POST → run 詳細を CAS 保存（18:00 JST。取引日 D の当日） |
 | `35 14 * * MON-FRI` | 期限 readcheck (receipt + Jobs API で完了検証。成功以外は error。23:35 JST) |
-| `0 21 * * MON-FRI` | `scheduled-context` をdispatch。株式・sector33・moneyflowは起動しない |
-| `5 22 * * MON-FRI` | 専用context receiptのrunを読み、同日のcontext成功と22:00完了期限を検証 |
+| `0 21 * * MON-FRI` | 夏（EDT）の `scheduled-context`。17:00 ET = 21:00 UTC。株式・sector33・moneyflowは起動しない |
+| `0 22 * * MON-FRI` | 冬（EST）の `scheduled-context`。17:00 ET = 22:00 UTC。夏の日は no-op |
+| `5 22 * * MON-FRI` | 夏の context readcheck。18:05 ET = 22:05 UTC。完了窓は 17:00〜18:00 ET |
+| `5 23 * * MON-FRI` | 冬の context readcheck。18:05 ET = 23:05 UTC。夏の日は no-op |
 | `15 9 * * MON-FRI` | `moneyflow.yml` に `only=independent` をdispatch。株価・JPX休場に依存しない取得元 |
 | `45 14 * * MON-FRI` | 専用moneyflow receiptのrun・ingest step成功と同日09:15〜14:40完了を検証 |
 | `0 10 * * MON-FRI` | `catchup.yml`の`scheduled-catchup`をdispatch。19:00 JST、TDnet→EDINETの順で実行 |
@@ -101,7 +104,8 @@ D1読取はN社で通常`2N+1`回（各2API＋N225）。従来proxyの同じPK�
   `html_url`) 後に native `etagMatches` で CAS 保存。
 - マクロreceiptは `stock-scheduler/context-receipt-<予定UTC日>.json`。
   株式と同日でも別claimとし、原本・成果・成功判定を混同しない。
-  マクロは21:00 UTCの予定slotを保持し、21:50 UTCの新source締切以後はPOST前に停止する。
+  マクロは米東17:00の予定slotを保持し、17:50 ETの新source締切以後はPOST前に停止する。
+  夏は21:00/21:50 UTC、冬は22:00/22:50 UTC。
 - GitHub API は `User-Agent` 必須。Jobs 分頁は同一 origin/path・run 限定、
   循環検出・10 頁上限超過は error。run ID は正の整数のみ。
 - pending・結果不明は成功にしない。自動再 POST なし (CAS 競合時は
@@ -122,11 +126,11 @@ D1読取はN社で通常`2N+1`回（各2API＋N225）。従来proxyの同じPK�
   空の環境では既存の単一入口 `pnpm ingest:moneyflow` を先に直列で正常完了させ、指標定義・
   観測ログ・取込ログ・一次データDBの準備を済ませてから定期分割を有効にする。
   共有schema更新は不足列・既存選択肢を保持した追加だけで、既存列の削除・型変換を行わない。
-- `scheduled-context` は日付が必須。Node入口は予定日21:00〜21:30 UTCだけ
+- `scheduled-context` は日付が必須。Node入口は予定日の米東17:00〜17:30だけ
   開始を許可し、GSPC確定日が予定日と一致することを既存原本gateに追加する。
   N225/VIX/VIの同日・必須値・物理保管は既存条件を保持する。保管後に
-  22:00を超えた場合はD1保存を止める。古い確定日を予定日へ置換しない。
-- マクロreadcheckはsync jobとcontext stepの一意な成功、同日21:00〜22:00
+  18:00 ETを超えた場合はD1保存を止める。古い確定日を予定日へ置換しない。
+- マクロreadcheckはsync jobとcontext stepの一意な成功、同日17:00〜18:00 ET
   の完了、株式stepとmoneyflow jobのskipを全て要求する。HOLDは成功にしない。
 - readcheck 成功条件: job `sync` が completed・success かつ `stock daily
   sync` が success・completed_at が同日 09:00〜14:30 UTC (古い別日の
@@ -218,7 +222,7 @@ Linux biztagの一意skipを要求する。今日の未観測runや歴史的成�
    (値はログ・PR・Issue に出さない)。
 3. Root: 本 PR をレビュー後 merge する (既存 cron を先に止めない。
    削除は本 PR に含まれる)。
-4. 翌平日: 株式09:00/14:35、マクロ21:00/22:05のreceipt・run・readcheckを確認する。
+4. 翌平日: 株式09:00/14:35、マクロは夏21:00/22:05・冬22:00/23:05 UTCのreceipt・run・readcheckを確認する。不一致の季節cronは失敗ログにならない。
    株式 step の完了が 14:30 UTC（23:30 JST）より後なら readcheck は失敗する。
 5. 異常時: Cron Events / Workers Logs の error を見て手動トリアージする。
    自動再 POST はしない。
@@ -257,7 +261,7 @@ rows_written=0、SQL20.73ms。OHLCV全走査やR2列挙は追加しない。
 | 株式 | 予定18:00〜20:00、実source開始は23:00未満。手動GHも実job時計へ束縛 | 23:00 / 23:30（手動を含めjob予算で短縮） | 閉鎖30分。native 360分から後続sector33の原本保存枠600秒と終了5分を予約する |
 | 独立資金フロー | 予定18:15以降、実source開始は23:30未満 | 23:30 / 23:40（さらにjob予算で短縮） | 既知失敗は独立laneへ渡せるがjoinは全source成功のみ。各lane native 120分 |
 | Node開示補完 | 予定19:00〜19:05、実source開始は19:43未満 | 19:43 / 19:53 | TDnet→EDINET。native 54分、期限確認上限19:54。手動targetは従来どおり |
-| マクロ | 予定06:00〜06:30（UTC前日21時）、実source開始は06:50未満 | 06:50 / 07:00 | 元UTC予定日のJP保存原本と米国原本。米国立会中は実時計で拒否 |
+| マクロ | 米東17:00〜17:30（夏は翌06:00 JST、冬は翌07:00 JST）。実source開始は17:50 ET未満 | 17:50 / 18:00 ET | 元UTC予定日のJP保存原本と米国原本。米国立会中（9:30〜16:00 ET）は実時計で拒否 |
 
 株式・VWAP・独立資金フロー・Python3系統のActionsでは、最初の実取得より前にJobs APIの完全ページ（100 jobsまで）から同run/attempt・job名・runnerの一意な`started_at`を検証する。job未反映・runner未割当・開始時刻未公表だけを最大30秒内・3回のGETで再確認し、元の実開始時刻を現在時刻で代用しない。HTTP失敗・不完全ページ・曖昧・未来は即停止し、出力は固定理由だけとする。閉鎖期限は **固定締切と「実job開始＋native timeout−5分」の早い方**、新source停止はその10分前。株式はさらにsector33の原本保存枠600秒を予約し、閉鎖30分を確保する。600秒はsector33全体の所要上限ではなく、sector33自身も同じ元job時計でsource/hardを検査する。依存準備も予算に含み、原本閉鎖後のartifact・既存実行記録には外部終了までの5分を残す。取得不能・曖昧・予算不足は取得前に停止する。時計は自動注入で、設定や監視の追加はない。
 

@@ -1860,21 +1860,23 @@ export async function runMarketContextSync(db: Db, jpLegStore?: MacroJpLegStore)
   const scheduled = sharedEnv.STOCK_SYNC_TARGET() === "scheduled-context";
   const targetDate = runDateKeys(startedAt).runDate;
   assertScheduledDate(targetDate);
+  let deadline: number | undefined;
+  let sourceDeadline: number | undefined;
   if (scheduled) {
     const scheduledMs = scheduledAtForDate(sharedEnv.SCHEDULED_AT(), targetDate, startedAt);
     const window = scheduledMacroWindow(targetDate);
     if (scheduledMs < window.start || scheduledMs > window.latestStart) {
-      throw new Error("定時マクロの開始は予定日21:00〜21:30 UTCに限定します");
+      throw new Error(`定時マクロの開始は予定日 ${new Date(window.start).toISOString()}〜${new Date(window.latestStart).toISOString()} に限定します`);
     }
-    if (Date.now() > Date.parse(`${targetDate}T22:00:00.000Z`)) {
-      throw new Error("定時マクロの保存期限22:00 UTCを超過しました");
+    if (Date.now() > window.deadline) {
+      throw new Error(`定時マクロの保存期限 ${new Date(window.deadline).toISOString()} を超過しました`);
     }
     // 不正なフラグは Yahoo を叩く前に止める。未設定は検出のみで、ここでは throw しない。
     sharedEnv.MACRO_CONTEXT_GAP_FILL();
+    deadline = window.deadline;
+    sourceDeadline = window.sourceDeadline;
   }
   const nativeWindow = nativeJobExecutionWindow(startedAt, sharedEnv.BATCH_JOB_STARTED_AT(), 360, 10);
-  let deadline = scheduled ? scheduledMacroWindow(targetDate).deadline : undefined;
-  let sourceDeadline = scheduled ? scheduledMacroWindow(targetDate).sourceDeadline : undefined;
   if (nativeWindow !== undefined) {
     deadline = deadline === undefined ? nativeWindow.deadline : Math.min(deadline, nativeWindow.deadline);
     sourceDeadline = sourceDeadline === undefined ? nativeWindow.sourceDeadline : Math.min(sourceDeadline, nativeWindow.sourceDeadline);
@@ -3532,8 +3534,11 @@ async function persistMarketContext(
     return false;
   }
   const today = gate.key;
-  if (expectedDate !== undefined && Date.now() > Date.parse(`${expectedDate}T22:00:00.000Z`)) {
-    throw new Error("定時マクロの保存期限22:00 UTCを超過しました");
+  if (expectedDate !== undefined) {
+    const saveDeadline = scheduledMacroWindow(expectedDate).deadline;
+    if (Date.now() > saveDeadline) {
+      throw new Error(`定時マクロの保存期限 ${new Date(saveDeadline).toISOString()} を超過しました`);
+    }
   }
 
   await db
