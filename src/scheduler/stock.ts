@@ -1,5 +1,5 @@
 import { marketClosure, type MarketClosure } from "../shared/market-calendar.js";
-import { parseScheduledAt, scheduledAtIso, scheduledMacroWindow } from "../shared/scheduled-admission.js";
+import { macroTriggerMatches, parseScheduledAt, scheduledAtIso, scheduledMacroWindow } from "../shared/scheduled-admission.js";
 import { scheduledStockSyncWindow } from "../shared/stock-sync-window.js";
 import { assertVwapAdmission, scheduledVwapWindow, VWAP_DISPATCH_CRON, VWAP_READCHECK_CRON } from "../shared/vwap-schedule.js";
 export { VWAP_DISPATCH_CRON, VWAP_READCHECK_CRON } from "../shared/vwap-schedule.js";
@@ -21,8 +21,14 @@ export { VWAP_DISPATCH_CRON, VWAP_READCHECK_CRON } from "../shared/vwap-schedule
 export const DISPATCH_CRON = "0 9 * * MON-FRI";
 /** 完了窓の上限（14:30 UTC = 23:30 JST）の直後。Yahoo は取らない。 */
 export const READCHECK_CRON = "35 14 * * MON-FRI";
+/** 夏時間 (EDT)。17:00 ET = 21:00 UTC。冬の対は CONTEXT_DISPATCH_CRON_WINTER。 */
 export const CONTEXT_DISPATCH_CRON = "0 21 * * MON-FRI";
+/** 夏時間の readcheck。18:05 ET = 22:05 UTC。 */
 export const CONTEXT_READCHECK_CRON = "5 22 * * MON-FRI";
+/** 冬時間 (EST)。17:00 ET = 22:00 UTC。ET と一致しない発火は失敗にしない。 */
+export const CONTEXT_DISPATCH_CRON_WINTER = "0 22 * * MON-FRI";
+/** 冬時間の readcheck。18:05 ET = 23:05 UTC。 */
+export const CONTEXT_READCHECK_CRON_WINTER = "5 23 * * MON-FRI";
 const CONTEXT_DISPATCH_TARGET = "scheduled-context";
 /** 独立取得元は株価・日米休場に依存させない。既存source直列lockを共有する。 */
 export const MONEYFLOW_DISPATCH_CRON = "15 9 * * MON-FRI";
@@ -121,12 +127,27 @@ export function schedulerToken(env: SchedulerEnv): string {
   return v;
 }
 
+/** その UTC 日の ET 開始に一致する dispatch cron。どちらでもなければ throw（近い方を選ばない）。 */
+export function contextDispatchCron(date: string): string {
+  const start = scheduledMacroWindow(date).start;
+  const hour = new Date(start).getUTCHours();
+  const minute = new Date(start).getUTCMinutes();
+  const rows = [
+    [CONTEXT_DISPATCH_CRON, 21, 0],
+    [CONTEXT_DISPATCH_CRON_WINTER, 22, 0],
+  ] as const;
+  for (const [cron, cronHour, cronMinute] of rows) {
+    if (hour === cronHour && minute === cronMinute) return cron;
+  }
+  throw new Error(`ET計算のマクロ開始 ${new Date(start).toISOString()} に対応するcronがありません`);
+}
+
 /** cron 文字列 → 処理分岐。未知は POST/照会の前に落とす。 */
 export function routeCron(cron: string): SchedulerRoute {
   if (cron === DISPATCH_CRON) return "dispatch";
   if (cron === READCHECK_CRON) return "readcheck";
-  if (cron === CONTEXT_DISPATCH_CRON) return "context-dispatch";
-  if (cron === CONTEXT_READCHECK_CRON) return "context-readcheck";
+  if (cron === CONTEXT_DISPATCH_CRON || cron === CONTEXT_DISPATCH_CRON_WINTER) return "context-dispatch";
+  if (cron === CONTEXT_READCHECK_CRON || cron === CONTEXT_READCHECK_CRON_WINTER) return "context-readcheck";
   if (cron === MONEYFLOW_DISPATCH_CRON) return "moneyflow-dispatch";
   if (cron === MONEYFLOW_READCHECK_CRON) return "moneyflow-readcheck";
   if (cron === CATCHUP_DISPATCH_CRON) return "catchup-dispatch";
@@ -134,7 +155,7 @@ export function routeCron(cron: string): SchedulerRoute {
   if (cron === VWAP_DISPATCH_CRON) return "vwap-dispatch";
   if (cron === VWAP_READCHECK_CRON) return "vwap-readcheck";
   throw new Error(
-    `未知の cron です: ${cron} (想定: ${DISPATCH_CRON} / ${READCHECK_CRON} / ${CONTEXT_DISPATCH_CRON} / ${CONTEXT_READCHECK_CRON} / ${MONEYFLOW_DISPATCH_CRON} / ${MONEYFLOW_READCHECK_CRON} / ${CATCHUP_DISPATCH_CRON} / ${CATCHUP_READCHECK_CRON} / ${VWAP_DISPATCH_CRON} / ${VWAP_READCHECK_CRON})`
+    `未知の cron です: ${cron} (想定: ${DISPATCH_CRON} / ${READCHECK_CRON} / ${CONTEXT_DISPATCH_CRON} / ${CONTEXT_DISPATCH_CRON_WINTER} / ${CONTEXT_READCHECK_CRON} / ${CONTEXT_READCHECK_CRON_WINTER} / ${MONEYFLOW_DISPATCH_CRON} / ${MONEYFLOW_READCHECK_CRON} / ${CATCHUP_DISPATCH_CRON} / ${CATCHUP_READCHECK_CRON} / ${VWAP_DISPATCH_CRON} / ${VWAP_READCHECK_CRON})`
   );
 }
 
@@ -416,7 +437,7 @@ async function runScheduledDispatch(deps: DispatchDeps, kind: SyncKind): Promise
   if (deps.scheduledAt === undefined) throw new Error("scheduled_atが無いかUTC時刻として不正です");
   const scheduledAt = deps.scheduledAt;
   const expectedCron = kind === "stocks" ? DISPATCH_CRON : kind === "context"
-    ? CONTEXT_DISPATCH_CRON : kind === "moneyflow" ? MONEYFLOW_DISPATCH_CRON : kind === "vwap" ? VWAP_DISPATCH_CRON : CATCHUP_DISPATCH_CRON;
+    ? contextDispatchCron(deps.scheduledDate) : kind === "moneyflow" ? MONEYFLOW_DISPATCH_CRON : kind === "vwap" ? VWAP_DISPATCH_CRON : CATCHUP_DISPATCH_CRON;
   if (deps.cron !== expectedCron) throw new Error("dispatch の種別と cron が一致しません");
   const key = kind === "stocks" ? receiptKey(deps.scheduledDate) : kind === "context"
     ? contextReceiptKey(deps.scheduledDate) : kind === "moneyflow" ? moneyflowReceiptKey(deps.scheduledDate) : kind === "vwap" ? vwapReceiptKey(deps.scheduledDate) : catchupReceiptKey(deps.scheduledDate);
@@ -891,10 +912,14 @@ export function evaluateContextReadcheck(jobs: RunJob[], scheduledDate: string):
     throw new Error("market context sync が一意の成功完了ではありません");
   }
   const done = stepCompletedAtMs(context[0], "market context sync");
-  const floor = Date.parse(`${scheduledDate}T21:00:00.000Z`);
-  const cutoff = Date.parse(`${scheduledDate}T22:00:00.000Z`);
-  if (!Number.isFinite(floor) || done < floor || done > cutoff) {
-    throw new Error("market context sync の完了が同日21:00〜22:00 UTCの範囲外です");
+  const window = scheduledMacroWindow(scheduledDate);
+  const floor = window.start;
+  const cutoff = window.deadline;
+  if (!Number.isFinite(floor) || !Number.isFinite(cutoff)) {
+    throw new Error("market context sync の完了窓を計算できません");
+  }
+  if (done < floor || done > cutoff) {
+    throw new Error(`market context sync の完了が同日 ${new Date(floor).toISOString()}〜${new Date(cutoff).toISOString()} の範囲外です`);
   }
   const stocks = steps.filter((step) => step.name === STEP_STOCK);
   const moneyflow = jobs.filter((job) => job.name === "moneyflow");
@@ -911,7 +936,7 @@ export async function runContextDeadlineReadcheck(deps: {
   const key = contextReceiptKey(deps.scheduledDate);
   const obj = await deps.bucket.get(key);
   if (obj === null) throw new Error(`context receipt がありません: ${key}`);
-  const receipt = parseStoredReceipt(await obj.text(), key, deps.scheduledDate, CONTEXT_DISPATCH_CRON);
+  const receipt = parseStoredReceipt(await obj.text(), key, deps.scheduledDate, contextDispatchCron(deps.scheduledDate));
   const jobs = await fetchAllJobs(deps.fetchFn, deps.token, receipt.workflowRunId);
   const verdict = evaluateContextReadcheck(jobs, deps.scheduledDate);
   console.info(`[stock-scheduler] context readcheck OK: date=${deps.scheduledDate} run_id=${receipt.workflowRunId} context_completed_at=${verdict.contextCompletedAt}`);
@@ -1075,8 +1100,21 @@ export async function handleStockScheduled(
   controller: ScheduledControllerLike,
   env: SchedulerEnv,
   deps: { fetchFn?: typeof fetch; nowMs?: number } = {}
-): Promise<DispatchOutcome | ReadcheckVerdict | ContextReadcheckVerdict | MoneyflowReadcheckVerdict | CatchupReadcheckVerdict | VwapReadcheckVerdict | { status: "market_closed"; scheduledDate: string; closures: MarketClosure[] }> {
+): Promise<DispatchOutcome | ReadcheckVerdict | ContextReadcheckVerdict | MoneyflowReadcheckVerdict | CatchupReadcheckVerdict | VwapReadcheckVerdict | { status: "market_closed"; scheduledDate: string; closures: MarketClosure[] } | { status: "macro_cron_skipped"; scheduledDate: string; cron: string }> {
   const route = routeCron(controller.cron);
+  if (route === "context-dispatch" || route === "context-readcheck") {
+    const kind = route === "context-dispatch" ? "dispatch" : "readcheck";
+    if (!macroTriggerMatches(controller.scheduledTime, kind)) {
+      const scheduledDate = new Date(controller.scheduledTime).toISOString().slice(0, 10);
+      const window = scheduledMacroWindow(scheduledDate);
+      const expected = kind === "dispatch" ? window.start : window.readcheck;
+      console.info(
+        `[stock-scheduler] macro cron skipped: date=${scheduledDate} cron=${controller.cron}` +
+        ` expected=${new Date(expected).toISOString()} (ET予定と不一致。失敗ではない)`,
+      );
+      return { status: "macro_cron_skipped", scheduledDate, cron: controller.cron };
+    }
+  }
   const nowMs = deps.nowMs ?? Date.now();
   const scheduledDate = resolveRunDate(route, controller.scheduledTime, nowMs);
   const scheduledAt = scheduledAtIso(controller.scheduledTime);

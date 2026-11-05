@@ -1512,9 +1512,8 @@ class TestStockCoverage:
 
 
 def _expected_macro_date(now: datetime) -> date:
-    utc = now.astimezone(UTC)
-    macro_day = utc.date() if utc.hour >= 22 else utc.date() - timedelta(days=1)
-    return ops_check.latest_session_date(macro_day, ("JPX", "NYSE"))
+    # 旧式は utc.hour >= 22。夏の保存期限とだけ一致し、冬は1時間早かった。
+    return ops_check.expected_macro_date(now)
 
 
 def _joint_session_dates(
