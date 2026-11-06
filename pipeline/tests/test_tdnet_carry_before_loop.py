@@ -71,7 +71,8 @@ def test_nine_oclock_reconcile_survives_loop_deadline(monkeypatch, tmp_path):
         "d1_rows_read": 0,
         "notion_gets": 0,
         "seconds": round(elapsed, 6),
-        "reconcile_before_deadline": True,
+        "reconcile_after_deadline": events.index("deadline") < events.index("reconcile"),
     }
     print("H3_BENCH " + json.dumps(report))
+    assert report["reconcile_after_deadline"] is True
     assert report["d1_queries"] == 0 and report["d1_rows_read"] == 0
