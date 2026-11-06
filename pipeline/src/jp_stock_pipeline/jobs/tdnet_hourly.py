@@ -39,6 +39,11 @@ from .runner import (
     run_job,
 )
 from .scheduled import add_scheduled_argument, assert_scheduled_io, assert_scheduled_source, scheduled_target, source_request_options
+from .tdnet_xbrl_completion import (
+    XbrlProofStats,
+    financial_xbrl_already_complete,
+    load_tdnet_financials_by_doc_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -576,6 +581,16 @@ def execute(ctx: JobContext) -> None:
         logger.warning("⑤ 事前マップ取得失敗 → per-record 検索にフォールバック: %s", exc)
         sha_map = None
 
+    # sha_map は⑤の再 upload 防止のまま。完了判定には使わない（SHA は fetch 後）。
+    proof = XbrlProofStats()
+    candidate_ids = [
+        record.doc_id
+        for _artifact, records, urls in batches
+        for record in apply_limit(records, ctx.args.limit)
+        if _has_financial_xbrl(record, urls) and record.doc_id
+    ]
+    rows_by_doc = load_tdnet_financials_by_doc_id(ctx, candidate_ids, proof)
+
     for artifact, records, xbrl_urls in batches:
         # 原本必須: 本番共通 strict (Notion⑤未保管で取得単位を中止 §8.1-4)
         raw_page_id = ctx.upload_raw(artifact, sha_map=sha_map, sha_map_date=target_date)
@@ -652,18 +667,29 @@ def execute(ctx: JobContext) -> None:
                     )
 
             if _has_financial_xbrl(record, xbrl_urls):
-                try:
-                    _process_financial_xbrl(
-                        ctx, record, xbrl_urls[record.doc_id],
-                        master_id=master_id, master_resolved=master_resolved,
-                        sha_map=sha_map, sha_map_date=target_date,
-                    )
-                except (FetchError, file_upload.RawUploadError, NotionUnknownResultError):
-                    raise  # 取得・原本保管が不明なまま次の開示を取得しない。
-                except Exception as exc:
-                    # ③ 反映失敗は欠損として記録 (④ は成立済み。ダミーで埋めない §3-1)
-                    ctx.add_failure(record.doc_id, f"短信XBRL→③失敗: {exc}")
+                # ベストエフォート（mirror / per-share / forecast）の欠測では戻さない。
+                # それらを保存済み・不要とも扱わず、補填も成功計上もしない。
+                if financial_xbrl_already_complete(
+                    ctx, record, rows_by_doc.get(record.doc_id, []),
+                    master_id=master_id, stats=proof,
+                ):
+                    proof.skip += 1
+                else:
+                    proof.reprocess += 1
+                    try:
+                        _process_financial_xbrl(
+                            ctx, record, xbrl_urls[record.doc_id],
+                            master_id=master_id, master_resolved=master_resolved,
+                            sha_map=sha_map, sha_map_date=target_date,
+                        )
+                    except (FetchError, file_upload.RawUploadError, NotionUnknownResultError):
+                        raise  # 取得・原本保管が不明なまま次の開示を取得しない。
+                    except Exception as exc:
+                        # ③ 反映失敗は欠損として記録 (④ は成立済み。ダミーで埋めない §3-1)
+                        ctx.add_failure(record.doc_id, f"短信XBRL→③失敗: {exc}")
 
+    if candidate_ids:
+        logger.info("%s", proof.log_line())
     if disc_skipped:
         logger.info("④ 同値 skip: %d 件の再 PATCH を省いた", disc_skipped)
     _carry_if_first_run(ctx, target_date)

@@ -79,7 +79,8 @@ class D1Store:
         )
 
     def query(
-        self, sql: str, params: list | None = None, *, idempotent: bool = True
+        self, sql: str, params: list | None = None, *, idempotent: bool = True,
+        observe: dict | None = None,
     ) -> list[dict[str, Any]]:
         """1 文を実行して結果行を返す。
 
@@ -132,6 +133,14 @@ class D1Store:
         for index, row in enumerate(rows):
             if not isinstance(row, dict):
                 raise D1Error(f"D1 応答の {index} 行目が object でない: {sql[:80]!r}")
+        if observe is not None:
+            # D1 が meta.rows_read を返したときだけ記録する。無い応答から件数を作らない。
+            meta = entry.get("meta")
+            rows_read = meta.get("rows_read") if isinstance(meta, dict) else None
+            if type(rows_read) is int and rows_read >= 0:
+                observe["rows_read"] = rows_read
+            else:
+                observe["rows_read_absent"] = True
         # 空 results は正常 (行なし SELECT・書込の空応答)。欠落とは区別する。
         return rows
 
