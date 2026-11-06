@@ -38,7 +38,14 @@ from .runner import (
     main_exit,
     run_job,
 )
-from .scheduled import add_scheduled_argument, assert_scheduled_io, assert_scheduled_source, scheduled_target, source_request_options
+from .scheduled import (
+    ScheduledWindowError,
+    add_scheduled_argument,
+    assert_scheduled_io,
+    assert_scheduled_source,
+    scheduled_target,
+    source_request_options,
+)
 from .tdnet_xbrl_completion import (
     XbrlProofStats,
     financial_xbrl_already_complete,
@@ -570,7 +577,6 @@ def execute(ctx: JobContext) -> None:
         ),
         "④",
     )
-    disc_skipped = 0
     # ⑤ 重複検索の事前マップ（L-21）。原本ごとの 1 req を対象日 1 回にまとめる。
     # 失敗時は per-record 検索へ（upload 側の既定動作）。
     try:
@@ -581,8 +587,6 @@ def execute(ctx: JobContext) -> None:
         logger.warning("⑤ 事前マップ取得失敗 → per-record 検索にフォールバック: %s", exc)
         sha_map = None
 
-    # 09:00 の前日照合は当日ループの期限切れで飛ばさない。失敗は握らない。
-    _carry_if_first_run(ctx, target_date)
     # sha_map は⑤の再 upload 防止のまま。完了判定には使わない（SHA は fetch 後）。
     proof = XbrlProofStats()
     candidate_ids = [
@@ -593,107 +597,115 @@ def execute(ctx: JobContext) -> None:
     ]
     rows_by_doc = load_tdnet_financials_by_doc_id(ctx, candidate_ids, proof)
 
-    for artifact, records, xbrl_urls in batches:
-        # 原本必須: 本番共通 strict (Notion⑤未保管で取得単位を中止 §8.1-4)
-        raw_page_id = ctx.upload_raw(artifact, sha_map=sha_map, sha_map_date=target_date)
+    disc_skipped = 0
+    loop_deadline: ScheduledWindowError | None = None
+    try:
+        for artifact, records, xbrl_urls in batches:
+            # 原本必須: 本番共通 strict (Notion⑤未保管で取得単位を中止 §8.1-4)
+            raw_page_id = ctx.upload_raw(artifact, sha_map=sha_map, sha_map_date=target_date)
 
-        # ③ の `core_stocks.id` を 1 回でまとめて解決する (§8.3 と同じ考え方)。
-        # 毎時実行は同一日の一覧を丸ごと再処理するので、繁忙日（短信1,000件超）は
-        # per-record SELECT が 1 回の実行で 1,000 往復になり 30 分 cap を脅かす。
-        # 走査行は変わらない（どちらも code の UNIQUE 索引を引いた分だけ）。
-        if ctx.cloud is not None:
-            ctx.cloud.prefetch_stock_ids(
-                [
-                    r.code
-                    for r in apply_limit(records, ctx.args.limit)
-                    if r.code and _has_financial_xbrl(r, xbrl_urls)
-                ]
-            )
-
-        for record in apply_limit(records, ctx.args.limit):
-            assert_scheduled_source(ctx.args, now_jst())
-            record.provenance.raw_page_id = raw_page_id
-            # ① relation 解決: 事前マップ優先(miss は relation 欠落のみ=benign)、未取得時は
-            # per-record 検索へ degrade。検索失敗も relation 無しで本体は書く(§3-2)。
-            master_id, master_resolved = _resolve_master(
-                ctx, record.code, master_map, master_map_ok, record.doc_id
-            )
-            # ④ dedup を事前マップで省く。date-scoped マップは対象日のレコードにのみ信用
-            # できるため、disclosed_at が対象日と一致する場合のみ page_resolved。
-            disc_resolved = bool(
-                disc_map_ok and record.disclosed_at.date() == target_date
-            )
-            disc_entry = disc_entries.get(record.doc_id) if disc_resolved else None
-            # L-20: 既存行と同値なら再 PATCH を省く（毎時 395 件 → 差分のみ）。
-            # ローカル系統には書く（persist の notion 側だけを no-op にする）。
-            if disc_entry is not None and upsert.disclosure_matches_page(
-                disc_entry[1], record, master_id
-            ):
-                notion_write = partial(_existing_page_id, disc_entry[0])
-                disc_skipped += 1
-            else:
-                notion_write = partial(
-                    upsert.upsert_disclosure,
-                    ctx.client, ctx.settings, record, master_id,
-                    existing_page_id=disc_entry[0] if disc_entry else None,
-                    page_resolved=disc_resolved,
+            # ③ の `core_stocks.id` を 1 回でまとめて解決する (§8.3 と同じ考え方)。
+            # 毎時実行は同一日の一覧を丸ごと再処理するので、繁忙日（短信1,000件超）は
+            # per-record SELECT が 1 回の実行で 1,000 往復になり 30 分 cap を脅かす。
+            # 走査行は変わらない（どちらも code の UNIQUE 索引を引いた分だけ）。
+            if ctx.cloud is not None:
+                ctx.cloud.prefetch_stock_ids(
+                    [
+                        r.code
+                        for r in apply_limit(records, ctx.args.limit)
+                        if r.code and _has_financial_xbrl(r, xbrl_urls)
+                    ]
                 )
-            # ④ を Notion とローカルへ独立に書く（双方向フェールセーフ）
-            assert_scheduled_io(ctx.args, now_jst())
-            if ctx.persist(
-                record,
-                notion_write,
-                label=f"④{record.doc_id}",
-            ):
-                ctx.add_success()
-            else:
-                ctx.add_failure(record.doc_id, "④: Notion/ローカル両系統に書けず")
-                continue
 
-            # 上場廃止/新規上場 開示は ① のライフサイクル状態へ反映 (§ Phase3)。
-            # 事前①マップ由来の master_id を渡し、内部の ① 検索を省く。
-            if record.doc_type in upsert.LIFECYCLE_DOC_TYPES:
-                assert_scheduled_io(ctx.args, now_jst())
-                if not ctx.persist_lifecycle(
-                    record,
-                    lambda rec=record, mid=master_id, mr=master_resolved: (
-                        upsert.apply_disclosure_lifecycle(
-                            ctx.client, ctx.settings, rec,
-                            master_page_id=mid, master_resolved=mr,
-                        )
-                    ),
-                    label=f"①lifecycle:{record.doc_id}",
+            for record in apply_limit(records, ctx.args.limit):
+                assert_scheduled_source(ctx.args, now_jst())
+                record.provenance.raw_page_id = raw_page_id
+                # ① relation 解決: 事前マップ優先(miss は relation 欠落のみ=benign)、未取得時は
+                # per-record 検索へ degrade。検索失敗も relation 無しで本体は書く(§3-2)。
+                master_id, master_resolved = _resolve_master(
+                    ctx, record.code, master_map, master_map_ok, record.doc_id
+                )
+                # ④ dedup を事前マップで省く。date-scoped マップは対象日のレコードにのみ信用
+                # できるため、disclosed_at が対象日と一致する場合のみ page_resolved。
+                disc_resolved = bool(
+                    disc_map_ok and record.disclosed_at.date() == target_date
+                )
+                disc_entry = disc_entries.get(record.doc_id) if disc_resolved else None
+                # L-20: 既存行と同値なら再 PATCH を省く（毎時 395 件 → 差分のみ）。
+                # ローカル系統には書く（persist の notion 側だけを no-op にする）。
+                if disc_entry is not None and upsert.disclosure_matches_page(
+                    disc_entry[1], record, master_id
                 ):
-                    ctx.add_failure(
-                        record.doc_id, "①ライフサイクル: Notion/ローカル両系統に書けず"
-                    )
-
-            if _has_financial_xbrl(record, xbrl_urls):
-                # ベストエフォート（mirror / per-share / forecast）の欠測では戻さない。
-                # それらを保存済み・不要とも扱わず、補填も成功計上もしない。
-                if financial_xbrl_already_complete(
-                    ctx, record, rows_by_doc.get(record.doc_id, []),
-                    master_id=master_id, stats=proof,
-                ):
-                    proof.skip += 1
+                    notion_write = partial(_existing_page_id, disc_entry[0])
+                    disc_skipped += 1
                 else:
-                    proof.reprocess += 1
-                    try:
-                        _process_financial_xbrl(
-                            ctx, record, xbrl_urls[record.doc_id],
-                            master_id=master_id, master_resolved=master_resolved,
-                            sha_map=sha_map, sha_map_date=target_date,
-                        )
-                    except (FetchError, file_upload.RawUploadError, NotionUnknownResultError):
-                        raise  # 取得・原本保管が不明なまま次の開示を取得しない。
-                    except Exception as exc:
-                        # ③ 反映失敗は欠損として記録 (④ は成立済み。ダミーで埋めない §3-1)
-                        ctx.add_failure(record.doc_id, f"短信XBRL→③失敗: {exc}")
+                    notion_write = partial(
+                        upsert.upsert_disclosure,
+                        ctx.client, ctx.settings, record, master_id,
+                        existing_page_id=disc_entry[0] if disc_entry else None,
+                        page_resolved=disc_resolved,
+                    )
+                # ④ を Notion とローカルへ独立に書く（双方向フェールセーフ）
+                assert_scheduled_io(ctx.args, now_jst())
+                if ctx.persist(
+                    record,
+                    notion_write,
+                    label=f"④{record.doc_id}",
+                ):
+                    ctx.add_success()
+                else:
+                    ctx.add_failure(record.doc_id, "④: Notion/ローカル両系統に書けず")
+                    continue
 
+                # 上場廃止/新規上場 開示は ① のライフサイクル状態へ反映 (§ Phase3)。
+                # 事前①マップ由来の master_id を渡し、内部の ① 検索を省く。
+                if record.doc_type in upsert.LIFECYCLE_DOC_TYPES:
+                    assert_scheduled_io(ctx.args, now_jst())
+                    if not ctx.persist_lifecycle(
+                        record,
+                        lambda rec=record, mid=master_id, mr=master_resolved: (
+                            upsert.apply_disclosure_lifecycle(
+                                ctx.client, ctx.settings, rec,
+                                master_page_id=mid, master_resolved=mr,
+                            )
+                        ),
+                        label=f"①lifecycle:{record.doc_id}",
+                    ):
+                        ctx.add_failure(
+                            record.doc_id, "①ライフサイクル: Notion/ローカル両系統に書けず"
+                        )
+
+                if _has_financial_xbrl(record, xbrl_urls):
+                    # ベストエフォート（mirror / per-share / forecast）の欠測では戻さない。
+                    # それらを保存済み・不要とも扱わず、補填も成功計上もしない。
+                    if financial_xbrl_already_complete(
+                        ctx, record, rows_by_doc.get(record.doc_id, []),
+                        master_id=master_id, stats=proof,
+                    ):
+                        proof.skip += 1
+                    else:
+                        proof.reprocess += 1
+                        try:
+                            _process_financial_xbrl(
+                                ctx, record, xbrl_urls[record.doc_id],
+                                master_id=master_id, master_resolved=master_resolved,
+                                sha_map=sha_map, sha_map_date=target_date,
+                            )
+                        except (FetchError, file_upload.RawUploadError, NotionUnknownResultError):
+                            raise  # 取得・原本保管が不明なまま次の開示を取得しない。
+                        except Exception as exc:
+                            # ③ 反映失敗は欠損として記録 (④ は成立済み。ダミーで埋めない §3-1)
+                            ctx.add_failure(record.doc_id, f"短信XBRL→③失敗: {exc}")
+    except ScheduledWindowError as exc:
+        # 期限で当日ループが止まっても、09:00 の前日照合は飛ばさない。期限は握らない。
+        loop_deadline = exc
     if candidate_ids:
         logger.info("%s", proof.log_line())
     if disc_skipped:
         logger.info("④ 同値 skip: %d 件の再 PATCH を省いた", disc_skipped)
+    _carry_if_first_run(ctx, target_date)
+    if loop_deadline is not None:
+        raise loop_deadline
 
 
 def _existing_page_id(pid: str) -> str:

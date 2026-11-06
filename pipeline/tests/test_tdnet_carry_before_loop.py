@@ -50,9 +50,8 @@ def test_nine_oclock_reconcile_survives_loop_deadline(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "reconcile_deferred_tail", reconcile)
 
     def source(args, now):
-        if "reconcile" in events:
-            events.append("deadline")
-            raise ScheduledWindowError("CF予定の新規取得期限です（原本閉鎖へ移行・未完）")
+        events.append("deadline")
+        raise ScheduledWindowError("CF予定の新規取得期限です（原本閉鎖へ移行・未完）")
 
     monkeypatch.setattr(mod, "assert_scheduled_source", source)
     ctx.cloud = type("Cloud", (), {
@@ -65,7 +64,7 @@ def test_nine_oclock_reconcile_survives_loop_deadline(monkeypatch, tmp_path):
     with pytest.raises(ScheduledWindowError, match="新規取得期限"):
         mod.execute(ctx)
     elapsed = time.perf_counter() - started
-    assert events.index("reconcile") < events.index("deadline")
+    assert events.index("deadline") < events.index("reconcile")
     assert _status(ctx, True) == STATUS_FAILURE
     report = {
         "d1_queries": len(d1_calls),

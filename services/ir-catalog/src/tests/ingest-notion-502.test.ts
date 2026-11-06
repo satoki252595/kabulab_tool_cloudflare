@@ -246,6 +246,9 @@ describe("catchup の Notion 502 でも作成済み分は D1 に残る", () => {
         if (pagePosts === 1) return { id: "page-created-before-502" } as never;
         throw failure;
       }
+      if (method === "GET" && path === "/pages/page-created-before-502") {
+        return { properties: {} } as never;
+      }
       throw new Error(`想定外の Notion 呼び出しです: ${method} ${path}`);
     });
 
