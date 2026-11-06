@@ -36,7 +36,7 @@ import {
 import { NotionConfigError, notionEnv } from "./env.js";
 import { NotionFileTooLargeError, uploadFile } from "./file-upload.js";
 import { verifyArchivedAttachments } from "./readback.js";
-import { listPageFiles } from "./page-file.js";
+import { listPageFiles, type PagePropertiesResponse } from "./page-file.js";
 import { jpxPdfUrl, matchesKnownOfficialPdf, officialPdfId, type ArchivedPdfProvenance } from "../../../services/ir-catalog/src/services/official-pdf.js";
 import { sha256HexBytes } from "../sha256.js";
 import { ScheduledSourceDeadlineError } from "../scheduled-admission.js";
@@ -1299,18 +1299,22 @@ async function runUpsertDisclosuresByStock(
         );
         pageId = createdPage.id;
       }
+      // 添付 readback と取得来歴は同じ GET の応答で照合する。bytes・SHA・来歴は省かない。
+      let archivePage: PagePropertiesResponse | undefined;
+      if (pdfBytesForClassify !== null || originText !== undefined) {
+        archivePage = await notionRequest<PagePropertiesResponse>("GET", `/pages/${pageId}`);
+      }
       if (pdfBytesForClassify !== null) {
         await verifyArchivedAttachments(
           pageId,
           [{ filename: irFile[0].name, bytes: pdfBytesForClassify }],
           "TDnet 開示 PDF",
-          "IR資料"
+          "IR資料",
+          archivePage
         );
       }
       if (originText !== undefined) {
-        const readback = await notionRequest<{ properties: Record<string, { type: string;
-          rich_text?: Array<{ plain_text: string }> }> }>("GET", `/pages/${pageId}`);
-        const saved = readback.properties["IR取得来歴"];
+        const saved = archivePage?.properties["IR取得来歴"];
         if (saved?.type !== "rich_text" || saved.rich_text?.map((part) => part.plain_text).join("") !== originText) {
           throw new Error("archive_provenance_readback_mismatch");
         }

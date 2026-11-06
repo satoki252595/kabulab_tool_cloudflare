@@ -11,7 +11,7 @@
  */
 import { sha256HexBytes } from "../sha256.js";
 import { recordIrPdfReadback } from "./ir-pdf-timing.js";
-import { listPageFiles } from "./page-file.js";
+import { filesFromPage, listPageFiles, type PagePropertiesResponse } from "./page-file.js";
 import { downloadArchivedFile } from "./archived-download.js";
 import { currentScheduledDeadline } from "../scheduled-admission.js";
 
@@ -24,7 +24,8 @@ export async function verifyArchivedAttachments(
   pageId: string,
   files: readonly ArchivedFileInput[],
   label: string,
-  propertyName: string = "Files"
+  propertyName: string = "Files",
+  page?: PagePropertiesResponse
 ): Promise<void> {
   const deadline = currentScheduledDeadline();
   deadline?.assertActive();
@@ -33,7 +34,10 @@ export async function verifyArchivedAttachments(
   };
   const names = files.map((f) => f.filename);
   if (new Set(names).size !== names.length) fail("添付名の重複 (内部不整合)");
-  const hosted = await listPageFiles(pageId, propertyName);
+  // 渡されたページ応答を使うときは GET しない。bytes と SHA の照合は省かない。
+  const hosted = page === undefined
+    ? await listPageFiles(pageId, propertyName)
+    : filesFromPage(page, pageId, propertyName);
   if (hosted.length !== files.length) {
     fail(`添付 ${hosted.length} 件 ≠ 記録 ${files.length} 件`);
   }

@@ -581,4 +581,66 @@ describe("適時開示の未知送信は次行の取得を停止", () => {
       warn.mockRestore();
     }
   });
+
+  it.each(["match", "bytes", "provenance"])("保管ページのGETは1回で全bytes・SHA・来歴を検査する (%s)", async (mode) => {
+    pageError = null;
+    const pdf = new TextEncoder().encode("%PDF-test");
+    const tdnet = "https://release.tdnet.info/inbs/140120260810517386.pdf";
+    const jpx = "https://www2.jpx.co.jp/disc/10010/140120260810517386.pdf";
+    const actual = await vi.importActual<typeof import("./readback.js")>("./readback.js");
+    vi.mocked(verifyArchivedAttachments).mockImplementation(actual.verifyArchivedAttachments);
+    const started = Date.now();
+    let storedOrigin = "";
+    let storedName = "";
+    const base = vi.mocked(notionRequest).getMockImplementation()!;
+    vi.mocked(notionRequest).mockImplementation(async (method, path, body) => {
+      if (method === "POST" && path === "/pages") {
+        const properties = (body as { properties: {
+          IR取得来歴: { rich_text: Array<{ text: { content: string } }> };
+          IR資料: { files: Array<{ name: string }> };
+        } }).properties;
+        storedOrigin = properties.IR取得来歴.rich_text[0].text.content;
+        storedName = properties.IR資料.files[0].name;
+        return { id: "written" } as never;
+      }
+      if (method === "GET" && path === "/pages/written") {
+        return { properties: {
+          IR資料: { type: "files", files: [{ name: storedName, type: "file", file: { url: "https://file.notion.so/saved.pdf" } }] },
+          IR取得来歴: { type: "rich_text", rich_text: [{ plain_text: mode === "provenance" ? "{}" : storedOrigin }] },
+        } } as never;
+      }
+      return base(method, path, body);
+    });
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      const target = String(url);
+      if (target === tdnet) return Object.defineProperty(new Response("", { status: 404 }), "url", { value: tdnet });
+      if (target === jpx) return Object.defineProperty(new Response(pdf), "url", { value: jpx });
+      if (target === "https://file.notion.so/saved.pdf") {
+        return new Response(mode === "bytes" ? new TextEncoder().encode("%PDF-DIFF") : pdf);
+      }
+      throw new Error(`unexpected fetch ${target}`);
+    }));
+    const persisted = vi.fn();
+    const { upsertDisclosuresByStock } = await import("./dataset.js");
+    const pending = upsertDisclosuresByStock({
+      service: "shared-get", tagOptions: [], rows: [{
+        ...row, key: "1274696", documentUrl: tdnet,
+      }], onPagePersisted: persisted,
+    });
+    if (mode === "match") {
+      expect((await pending).created).toBe(1);
+      expect(persisted).toHaveBeenCalledWith("1274696", "written");
+    } else if (mode === "bytes") {
+      await expect(pending).rejects.toThrow(/SHA256|readback/);
+      expect(persisted).not.toHaveBeenCalled();
+    } else {
+      await expect(pending).rejects.toThrow("archive_provenance_readback_mismatch");
+      expect(persisted).not.toHaveBeenCalled();
+    }
+    const pageGets = vi.mocked(notionRequest).mock.calls.filter(([method, path]) => method === "GET" && path === "/pages/written");
+    expect(pageGets).toHaveLength(1);
+    const archiveGets = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("file.notion.so"));
+    expect(archiveGets.length).toBeGreaterThan(0);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(0);
+  });
 });
