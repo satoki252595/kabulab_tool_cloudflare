@@ -581,6 +581,8 @@ def execute(ctx: JobContext) -> None:
         logger.warning("⑤ 事前マップ取得失敗 → per-record 検索にフォールバック: %s", exc)
         sha_map = None
 
+    # 09:00 の前日照合は当日ループの期限切れで飛ばさない。失敗は握らない。
+    _carry_if_first_run(ctx, target_date)
     # sha_map は⑤の再 upload 防止のまま。完了判定には使わない（SHA は fetch 後）。
     proof = XbrlProofStats()
     candidate_ids = [
@@ -692,7 +694,6 @@ def execute(ctx: JobContext) -> None:
         logger.info("%s", proof.log_line())
     if disc_skipped:
         logger.info("④ 同値 skip: %d 件の再 PATCH を省いた", disc_skipped)
-    _carry_if_first_run(ctx, target_date)
 
 
 def _existing_page_id(pid: str) -> str:
