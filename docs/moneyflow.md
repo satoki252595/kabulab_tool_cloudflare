@@ -217,7 +217,7 @@ source分離・正常なunit regressionを、通常全量の期限内受入の�
 - `services/moneyflow/lib/indicators.ts` — 指標定義カタログ (Phase 1: 6指標)
 - `services/moneyflow/lib/iso-week.ts` — ISO週番号ユーティリティ
 - `scripts/moneyflow/ingest.ts` — 取込 CLI (`pnpm ingest:moneyflow`)
-- `.github/workflows/moneyflow.yml` — stock-sync の株式 sync 成功後に workflow_call 連鎖 (独立 cron は #160 で廃止)。`trade_date` 固定入力で sector-turnover の as-of を pin 留めする
+- `.github/workflows/moneyflow.yml` — stock-sync の株式 sync 成功後に workflow_call 連鎖 (独立 cron は #160 で廃止)。`trade_date` 固定入力で sector-turnover の as-of と空売り日次の要求日を pin 留めする
 
 ## Phase 2〜5 取得元 (2026-09-27 実装)
 
@@ -283,6 +283,13 @@ IMF CPIS・BIS・World Bank・日銀ストック表は **残高 (ストック)**
 列ずれの素通り、定義文の誤り等) も修正済み。
 
 ### 運用上の注意・未解決事項
+
+- **空売り業種別の要求日 (2026-11-06)**: `jpx-short-selling` は `--as-of`
+  （workflow の `trade_date`。未指定は当日 UTC）の業種別 PDF だけを、当月
+  index か select.backnumber の月別 archives から取る。要求日が無ければ別日で
+  代用しない。月次は対象月の 1 日〜要求日で、JPX 公式休業日
+  （`src/shared/market-calendar.ts`）と公式の 0 件行を欠けにしない。営業日の
+  保管が欠けていれば観測ログへ upsert せず、その run は失敗する。
 
 - **sector-turnover のカバレッジ定義 (2026-11-01 変更)**: 旧条件「as-of 日に
   母集団全銘柄の日足があること」は、出来高の小さい銘柄の無出来日 (日足行が

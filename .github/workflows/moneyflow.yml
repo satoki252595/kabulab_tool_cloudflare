@@ -5,6 +5,7 @@
 # 当日分の D1 日足が無いまま sector-turnover を要求して失敗した。cron ずらし
 # では再発防止にならない (GitHub の schedule  jitter が数時間ある実測) ため、
 # 独立 cron を廃止し、producer の実 tradingDate を固定入力で受けて走る。
+# trade_date は sector-turnover の as-of と空売り日次の要求日に使う。信用残の基準日には使わない。
 # `scripts/moneyflow/ingest.ts` が:
 #   - JPX 業種別時価総額 (月次PDF)・空売り業種別集計 (日次PDF+当月の月次集計)
 #     を取得し、一次データとして Notion「一次データ｜moneyflow」へ記録
@@ -51,7 +52,7 @@ on:
         type: string
         default: ""
       trade_date:
-        description: "sector-turnover の as-of 日 (YYYY-MM-DD。空なら当日 UTC)"
+        description: "sector-turnover の as-of 日と空売り日次の要求日 (YYYY-MM-DD。空なら当日 UTC)"
         type: string
         default: ""
       scheduled_date:
@@ -65,7 +66,7 @@ on:
   workflow_call:
     inputs:
       trade_date:
-        description: "producer (stock-sync) の実 tradingDate (YYYY-MM-DD。必須)"
+        description: "producer (stock-sync) の実 tradingDate。sector-turnover の as-of と空売り日次の要求日 (YYYY-MM-DD。必須)"
         type: string
         required: true
       dry_run:
