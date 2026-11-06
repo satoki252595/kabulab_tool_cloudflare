@@ -31,6 +31,41 @@ it("同じ41日一覧と12分phaseへだけ絶対締切を追加し、source順�
   expect(vi.mocked(listRange).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(ingestBatch).mock.invocationCallOrder[0]);
 });
 
+it("予算未完は保存済みを保持したまま日次完了と ran:true にしない", async () => {
+  vi.mocked(listRange).mockResolvedValue([freshUpstream]);
+  vi.mocked(ingestBatch).mockResolvedValueOnce({
+    fetched: 3, inUniverse: 3, upserted: 3, unclassified: 0, byPrimaryTag: {}, notionArchive: null,
+    notionByStock: {
+      stocksTouched: 1, created: 2, updated: 0, skippedExisting: 0, skippedNoFile: 0,
+      rejudged: 0, rowErrors: 0, reachedDeadline: true,
+    },
+  });
+  await expect(runIrCatalogCatchup({} as never, undefined, now)).rejects.toThrow(/未完/);
+  expect(ingestBatch).toHaveBeenCalledTimes(1);
+  const saved = await vi.mocked(ingestBatch).mock.results[0].value;
+  expect(saved.notionByStock).toMatchObject({ created: 2, reachedDeadline: true });
+  const logs = vi.mocked(console.info).mock.calls.map((call) => String(call[0])).join("\n");
+  expect(logs).not.toContain("日次完了");
+});
+
+it("銘柄別Notionを予算内で走り切ったら日次完了する", async () => {
+  vi.mocked(listRange).mockResolvedValue([freshUpstream]);
+  vi.mocked(ingestBatch).mockResolvedValueOnce({
+    fetched: 1, inUniverse: 1, upserted: 1, unclassified: 0, byPrimaryTag: {}, notionArchive: null,
+    notionByStock: {
+      stocksTouched: 1, created: 1, updated: 0, skippedExisting: 0, skippedNoFile: 0,
+      rejudged: 0, rowErrors: 0, reachedDeadline: false,
+    },
+  });
+  const result = await runIrCatalogCatchup({} as never, undefined, now);
+  expect(result.ran).toBe(true);
+  const logs = vi.mocked(console.info).mock.calls.map((call) => String(call[0])).join("\n");
+  expect(logs).toContain("日次完了");
+  expect(ingestBatch).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({
+    notionByStockBudgetMs: 720_000,
+  }));
+});
+
 it("expired/invalid入口と源一覧中の締切では次のD1/保管へ進めない", async () => {
   for (const deadline of [now, NaN, Infinity]) await expect(runIrCatalogCatchup({} as never, undefined, now, deadline)).rejects.toThrow("絶対締切");
   expect(loadIngestCodeToId).not.toHaveBeenCalled(); expect(listRange).not.toHaveBeenCalled();
