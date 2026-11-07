@@ -362,6 +362,43 @@ class TestR2Store:
         with pytest.raises(R2Error):
             _store(fake).exists("raw/x")
 
+    def test_list_objects_paginates_and_returns_key_and_last_modified(self):
+        from datetime import UTC, datetime
+
+        stamp = datetime(2026, 11, 6, 9, 0, tzinfo=UTC)
+        pages = [
+            {"Contents": [{"Key": "daily/7203.json", "LastModified": stamp}],
+             "IsTruncated": True, "NextContinuationToken": "tok-2"},
+            {"Contents": [{"Key": "daily/9983.json", "LastModified": stamp}],
+             "IsTruncated": False},
+        ]
+        calls: list[dict] = []
+        fake = _FakeS3()
+        fake.list_objects_v2 = lambda **kwargs: calls.append(kwargs) or pages[len(calls) - 1]
+        objects = _store(fake, bucket="vwap-data").list_objects("daily/")
+        assert objects == [
+            {"key": "daily/7203.json", "last_modified": stamp},
+            {"key": "daily/9983.json", "last_modified": stamp},
+        ]
+        assert calls[0].get("ContinuationToken") is None
+        assert calls[1]["ContinuationToken"] == "tok-2"
+        assert all(c["Prefix"] == "daily/" and c["Bucket"] == "vwap-data" for c in calls)
+
+    def test_list_objects_raises_on_page_error_and_truncated_without_token(self):
+        from jp_stock_pipeline.cloud_store.r2 import R2Error
+
+        failing = _FakeS3()
+        failing.list_objects_v2 = lambda **_: (_ for _ in ()).throw(
+            _make_client_error("InternalError", 500)
+        )
+        with pytest.raises(R2Error):
+            _store(failing).list_objects("daily/")
+
+        truncated = _FakeS3()
+        truncated.list_objects_v2 = lambda **_: {"Contents": [], "IsTruncated": True}
+        with pytest.raises(R2Error):
+            _store(truncated).list_objects("daily/")
+
 
 class TestD1Store:
     def _store(self, monkeypatch, captured: list, response: dict):

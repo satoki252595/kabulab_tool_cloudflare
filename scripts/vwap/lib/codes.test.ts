@@ -22,6 +22,7 @@ import {
   assertCodesInUniverse,
   loadCodes,
   loadCodesFromDb,
+  rotateCodesForDate,
 } from "./codes.js";
 
 const ROOT = fileURLToPath(new URL("../../..", import.meta.url));
@@ -124,6 +125,38 @@ describe("assertCodesInUniverse", () => {
     expect(() => assertCodesInUniverse(["7203", "9999"], ["7203"])).toThrow(
       /対象外コード/
     );
+  });
+});
+
+describe("rotateCodesForDate", () => {
+  const codes = Array.from({ length: 100 }, (_, i) => String(i).padStart(4, "0"));
+
+  it("集合を変えない回転で、同日は決定的", () => {
+    const rotated = rotateCodesForDate(codes, "2026-11-09");
+    expect([...rotated].sort()).toEqual(codes);
+    const offset = codes.indexOf(rotated[0]);
+    expect(offset).toBeGreaterThan(0);
+    expect(rotated).toEqual(codes.map((_, i) => codes[(i + offset) % codes.length]));
+    expect(rotateCodesForDate(codes, "2026-11-09")).toEqual(rotated);
+  });
+
+  it("毎日先頭30件で fatal 停止しても、連続5日で全銘柄へ到達する", () => {
+    const reached = new Set<string>();
+    for (let d = 0; d < 5; d++) {
+      const date = new Date(Date.parse("2026-11-09T00:00:00Z") + d * 86_400_000)
+        .toISOString().slice(0, 10);
+      for (const code of rotateCodesForDate(codes, date).slice(0, 30)) reached.add(code);
+    }
+    expect(reached.size).toBe(codes.length);
+  });
+
+  it.each(["", "2026-02-30", "2026/11/09", "2026-11-09T00:00:00Z"])("不正な日付 %s は throw", (date) => {
+    expect(() => rotateCodesForDate(codes, date)).toThrow();
+  });
+
+  it("空・1件はそのまま返す", () => {
+    expect(rotateCodesForDate([], "2026-11-09")).toEqual([]);
+    expect(rotateCodesForDate(["7203"], "2026-11-09")).toEqual(["7203"]);
   });
 });
 

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { fetchDaily, YahooRawTooLargeError, MAX_YAHOO_RAW_BYTES, type YahooRawCapture } from "../../src/shared/yahoo/client.js";
 import { r2GetVersion, r2Put, confirmUnknownPricePut, mapLimit, sleep, beginR2PutDiagRun, logR2PutRunSummary, noteR2PutFatal, R2PutRejectedError, R2PutUnknownError, type PricePutReadback } from "./lib/r2.js";
 import { buildRepairPost } from "./lib/repair-daily.js";
-import { assertCodesInUniverse, loadCodes, arg } from "./lib/codes.js";
+import { assertCodesInUniverse, loadCodes, rotateCodesForDate, arg } from "./lib/codes.js";
 import { sharedEnv } from "../../src/shared/env.js";
 import { archiveSummaryOrFatal, assertSavedDailyShape, bodyPin, buildIngestSummary, completedDailyFetch, findInvalidBars, hasCompletedDailyFetch, resolveExitCode, resolveRunId, sanitizeLogText, shouldSkipPut, universePin, writeSummaryLocal, type IngestCodeOutcome } from "./lib/ingest-guard.js";
 import { isStrictIsoUtc, jstDateSec, tenYearRangeForDate } from "../../src/shared/vwap/proof.js";
@@ -69,6 +69,14 @@ export async function main() {
   if (only) assertCodesInUniverse(only.split(","), universe);
   let codes = only ? only.split(",") : universe;
   const limit = arg("limit"); if (limit) codes = codes.slice(0, Number(limit));
+  // 定時の全母集団runだけ開始位置を予定日で回転 (fatal途中停止の尾部飢餓対策 #674)。
+  // 手動runは運用者が対象を選ぶ前提で従来の昇順を維持する。集合・件数は不変で、
+  // summary の universePin/outcomes は順序非依存。
+  const scheduledDate = arg("scheduled-date");
+  if (!only && !limit && scheduledDate !== undefined) {
+    codes = rotateCodesForDate(codes, scheduledDate);
+    console.info(JSON.stringify({ codeRotation: { date: scheduledDate, first: codes[0], size: codes.length } }));
+  }
 
   const CONC = 1; // Yahoo取得は環境変数によらず直列。実HTTP間隔は共有clientで制御。
   const TEN_Y_RANGE = tenYearRange(startedAt); // run 内一定の明示 10y range

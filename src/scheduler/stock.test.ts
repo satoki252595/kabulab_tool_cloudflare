@@ -59,15 +59,20 @@ describe("定時VWAPは同頻度CF one-shotで開始/終了窓を検査", () => 
   ] }, { name: "scheduled-result", run_id: 101, status: "completed", conclusion: "success", steps: [
     { name: "VWAP scheduled result", status: "completed", conclusion: "success", started_at: `${date}T14:01:00.000Z`, completed_at: `${date}T14:30:00.000Z` },
   ] }];
-  it("月水金17時と期限照会を識別し、別曜日と23:30以降はPOST/claim0", async () => {
+  it("平日17時と期限照会を識別し、土日と23:30以降はPOST/claim0", async () => {
     expect(routeCron(VWAP_DISPATCH_CRON)).toBe("vwap-dispatch");
     expect(routeCron(VWAP_READCHECK_CRON)).toBe("vwap-readcheck");
     expect(resolveRunDate("vwap-dispatch", start, start + 600_000)).toBe(date);
+    // 火・木も平日として受理する (#674: 月水金だけでは火・木の夜に日足が欠ける)。
+    for (const weekday of ["2026-10-13", "2026-10-15"]) {
+      expect(resolveRunDate("vwap-dispatch", Date.parse(`${weekday}T08:00:00.000Z`),
+        Date.parse(`${weekday}T08:00:00.000Z`) + 600_000)).toBe(weekday);
+    }
     const { bucket, puts } = makeBucket(), { fetchFn, calls } = makeFetch(() => jsonRes({}));
     await expect(handleStockScheduled({ cron: VWAP_DISPATCH_CRON, scheduledTime: start },
       { BUCKET: bucket, GITHUB_ACTIONS_TOKEN: TOKEN }, { fetchFn, nowMs: Date.parse(`${date}T14:30:00.000Z`) })).rejects.toThrow(/完了期限|23:30/);
-    await expect(handleStockScheduled({ cron: VWAP_DISPATCH_CRON, scheduledTime: Date.parse("2026-10-15T08:00:00.000Z") },
-      { BUCKET: bucket, GITHUB_ACTIONS_TOKEN: TOKEN }, { fetchFn, nowMs: Date.parse("2026-10-15T08:00:00.000Z") })).rejects.toThrow();
+    await expect(handleStockScheduled({ cron: VWAP_DISPATCH_CRON, scheduledTime: Date.parse("2026-10-17T08:00:00.000Z") },
+      { BUCKET: bucket, GITHUB_ACTIONS_TOKEN: TOKEN }, { fetchFn, nowMs: Date.parse("2026-10-17T08:00:00.000Z") })).rejects.toThrow();
     expect(calls).toEqual([]); expect(puts).toEqual([]);
   });
   it("本番で観測した17:00:52は同じ17:00分のdispatch・receipt・Actions受付へ実時計を保持する", async () => {

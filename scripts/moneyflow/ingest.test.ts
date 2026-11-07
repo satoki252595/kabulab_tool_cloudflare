@@ -769,6 +769,8 @@ describe("短売り欠測", () => {
   });
 
   it("短売り欠測: as-of未指定の当日PDFが未掲載なら最新の掲載日で月次を成功にしない", async () => {
+    // 未指定時の要求日は当日UTC。実時計に依存すると翌日から落ちるため固定する。
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-11-06T10:00:00.000Z"));
     const indexPath = `${DIR}/index.html`;
     const html = listingHtml(indexPath, [[indexPath, "2026年11月"]], pdfRow("2026-11-05") + pdfRow("2026-11-02"));
     const result = await runShort({

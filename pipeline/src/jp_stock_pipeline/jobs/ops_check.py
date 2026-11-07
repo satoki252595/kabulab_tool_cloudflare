@@ -28,6 +28,8 @@ from datetime import UTC, date, datetime, timedelta
 
 from ..cloud_store import slo
 from ..cloud_store.d1 import D1Error, D1Store
+from ..cloud_store.r2 import R2Error, R2Store
+from ..config import CloudStoreSettings
 from ..collectors.tdnet_yanoshin import BASE_URL
 from ..collectors.yanoshin_upstream import (
     format_yanoshin_upstream_log,
@@ -179,6 +181,31 @@ STOCK_COVERAGE_SQL = (
 )
 
 
+# INC-20261107-kabulab_tool_cloudflare-vwap-daily-coverage (#674)
+# VWAP 保存日足 (R2 vwap-data の daily/{code}.json) は D1 に断面が無く、
+# dataset 鮮度 (SQL 観測) では測れない。月水金だけの定時実行と fatal 途中
+# 停止で 10/30〜11/5 に後方銘柄が欠けても、鮮度表は緑のままだった。
+# ここでは R2 の最終書込日 (JST) を母集団と突合して欠け銘柄数を数える。
+# 日足は取引日 D の夕方に D まで書かれるのが契約で、1取引日遅れは翌runの
+# backfill で埋まる前提のため鳴らさない (HOLD/timeout の恒常数件で毎日
+# 鳴らす判定にしない)。2取引日以上遅れ・欠落と、当日の書込 0 (run 不在)
+# だけを失敗にする。件数内訳は常時ログに出す。
+_VWAP_DAILY_INCIDENT = "[INC-20261107-kabulab_tool_cloudflare-vwap-daily-coverage]"
+_VWAP_DAILY_PREFIX = "daily/"
+# instrument_type は WHERE だけ (STOCK_COVERAGE_SQL と同じ述語)。
+_VWAP_DAILY_CODES_SQL = (
+    "SELECT code FROM core_stocks"
+    " WHERE is_active = 1 AND instrument_type = 'equity'"
+)
+
+
+def _vwap_daily_r2(settings: CloudStoreSettings) -> R2Store | None:
+    """時系列バケット (vwap-data) の読み取り用 store。未設定は None。"""
+    if not settings.r2_enabled():
+        return None
+    return R2Store(settings, settings.bucket_timeseries, writer=JOB_NAME)
+
+
 def expected_stock_date(now: datetime) -> date:
     """23:30 JST完了期限の前は前取引日、以降は当取引日を要求する。"""
     local = now.astimezone(JST)
@@ -238,6 +265,89 @@ def _check_stock_coverage(store: D1Store, problems: list[str], *, now: datetime 
                             f"（価格欠測例={row.get('price_sample')}）")
     if row.get("macro_date") != macro_date:
         problems.append(f"マクロ基準日: 実保存={row.get('macro_date')} 予定={macro_date}")
+
+
+def _check_vwap_daily_coverage(
+    store: D1Store,
+    r2: R2Store | None,
+    problems: list[str],
+    *,
+    now: datetime | None = None,
+) -> None:
+    """VWAP保存日足の最終書込日を母集団と突合し、欠け銘柄数を判定する。読み取りのみ。"""
+    if r2 is None:
+        problems.append(f"{_VWAP_DAILY_INCIDENT} R2 が未設定のため保存日足を判定できない")
+        return
+    current = now or datetime.now(UTC)
+    try:
+        expected = expected_stock_date(current)
+        previous = latest_session_date(expected - timedelta(days=1))
+    except ValueError as exc:
+        problems.append(f"{_VWAP_DAILY_INCIDENT} 期待取引日の暦を判定できない: {exc}")
+        return
+    try:
+        rows = store.query(_VWAP_DAILY_CODES_SQL)
+    except D1Error as exc:
+        problems.append(f"{_VWAP_DAILY_INCIDENT} 母集団を読めない: {exc}")
+        return
+    codes: set[str] = set()
+    for row in rows:
+        code = row.get("code")
+        if not isinstance(code, str) or code == "":
+            problems.append(f"{_VWAP_DAILY_INCIDENT} core_stocks.code が空の行があるため母集団を確定できない")
+            return
+        codes.add(code)
+    if not codes:
+        problems.append(f"{_VWAP_DAILY_INCIDENT} active普通株の母集団を確認できない")
+        return
+    try:
+        objects = r2.list_objects(_VWAP_DAILY_PREFIX)
+    except R2Error as exc:
+        problems.append(f"{_VWAP_DAILY_INCIDENT} 保存日足を列挙できない: {exc}")
+        return
+    written: dict[str, date] = {}
+    for obj in objects:
+        key = obj.get("key")
+        if not isinstance(key, str) or not key.startswith(_VWAP_DAILY_PREFIX) or not key.endswith(".json"):
+            continue
+        code = key[len(_VWAP_DAILY_PREFIX):-len(".json")]
+        if code not in codes:
+            continue  # 母集団外の凍結オブジェクト (REIT等) は数えない
+        stamp = obj.get("last_modified")
+        if not isinstance(stamp, datetime) or stamp.tzinfo is None:
+            problems.append(
+                f"{_VWAP_DAILY_INCIDENT} 保存日足 {key} の最終書込時刻が読めない"
+                " (欠け銘柄数を確定できない)"
+            )
+            return
+        written[code] = stamp.astimezone(JST).date()
+    fresh = sorted(c for c in codes if written.get(c, date.min) >= expected)
+    lagging = sorted(
+        c for c in codes if previous <= written.get(c, date.min) < expected
+    )
+    stale = sorted(c for c in codes if written.get(c, date.min) < previous)
+    logger.info(
+        "%s VWAP保存日足: 期待取引日=%s 当日書込=%d/%d 1取引日遅れ=%d 2取引日以上遅れ・欠落=%d",
+        _VWAP_DAILY_INCIDENT, expected.isoformat(), len(fresh), len(codes),
+        len(lagging), len(stale),
+    )
+    if not fresh:
+        problems.append(
+            f"{_VWAP_DAILY_INCIDENT} VWAP保存日足: 期待取引日 {expected.isoformat()} の"
+            f"書込が 0/{len(codes)} 銘柄 (当夜の定時run不在の疑い。"
+            f"1取引日遅れ={len(lagging)} 2取引日以上遅れ・欠落={len(stale)})"
+        )
+        return
+    if stale:
+        sample = stale[:10]
+        rest = len(stale) - len(sample)
+        suffix = f" 他{rest}件" if rest > 0 else ""
+        oldest = min((written[c] for c in stale if c in written), default=None)
+        problems.append(
+            f"{_VWAP_DAILY_INCIDENT} VWAP保存日足: 期待取引日 {expected.isoformat()} に対し"
+            f"2取引日以上遅れ・欠落が {len(stale)}/{len(codes)} 銘柄"
+            f" (例={','.join(sample)}{suffix} 最古書込={oldest} 1取引日遅れ={len(lagging)})"
+        )
 
 
 def _check_macro_context_gaps(
@@ -715,6 +825,7 @@ def execute(ctx: JobContext) -> None:
     _check_idle_runs(store, problems)
     _check_capacity(store, problems)
     _check_stock_coverage(store, problems)
+    _check_vwap_daily_coverage(store, _vwap_daily_r2(settings), problems)
     _check_macro_context_gaps(store, problems)
     _check_ir_pdf_archive(store, problems)
     _check_ir_universe_gap(store, problems)

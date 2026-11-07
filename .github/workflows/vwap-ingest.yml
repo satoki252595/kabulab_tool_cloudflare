@@ -152,7 +152,7 @@ jobs:
             exit 2
           fi
 
-      # 日足10年 + 5分足 (CF月水金17時または明示dispatch)。dispatch=daily は日足だけ。
+      # 日足10年 + 5分足 (CF平日17時または明示dispatch)。dispatch=daily は日足だけ。
       - name: VWAP daily + intra → R2
         id: prices
         if: >-

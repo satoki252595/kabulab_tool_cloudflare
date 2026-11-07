@@ -220,6 +220,37 @@ class R2Store:
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         self.put_bytes(key, body, content_type="application/json")
 
+    def list_objects(self, prefix: str) -> list[dict[str, Any]]:
+        """prefix 配下の全オブジェクトの key / last_modified を列挙する (読み取りのみ)。
+
+        ページングは ContinuationToken を手で回す。botocore の paginator は
+        `_send` のガードを通らないため使わない。途中ページの失敗・token 欠落は
+        R2Error (部分列挙を全件と偽らない)。鮮度判定 (jobs/ops_check) が
+        オブジェクトの最終書込日を数えるために使う。
+        """
+        objects: list[dict[str, Any]] = []
+        token: str | None = None
+        while True:
+            kwargs: dict[str, Any] = {"Bucket": self.bucket, "Prefix": prefix, "MaxKeys": 1000}
+            if token is not None:
+                kwargs["ContinuationToken"] = token
+            try:
+                resp = self._send("list_objects_v2", **kwargs)
+            except RequestNotStartedError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - botocore の例外型に依存しない
+                raise R2Error(f"R2 LIST 失敗 {self.bucket}/{prefix}: {exc}") from exc
+            for entry in resp.get("Contents") or []:
+                objects.append({"key": entry.get("Key"), "last_modified": entry.get("LastModified")})
+            if not resp.get("IsTruncated"):
+                return objects
+            token = resp.get("NextContinuationToken")
+            if not isinstance(token, str) or token == "":
+                raise R2Error(
+                    f"R2 LIST が途中ページで継続tokenを返さない {self.bucket}/{prefix}"
+                    " (部分列挙を全件と扱わない)"
+                )
+
     def exists(self, key: str) -> bool:
         """immutable キーの冪等スキップ判定。"""
         try:

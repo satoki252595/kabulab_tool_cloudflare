@@ -9,7 +9,9 @@ export const TIMED_WORKFLOWS = [
   { cron: "17 3 * * MON-FRI", name: "supply", workflow: "supply_daily.yml", hours: [3], minute: 17 },
   { cron: "0 0-10 * * MON-FRI", name: "tdnet", workflow: "tdnet_hourly.yml", hours: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], minute: 0 },
   { cron: "0 12 * * MON-FRI", name: "edinet", workflow: "edinet_daily.yml", hours: [12], minute: 0 },
-  { cron: "0 8 * * MON-FRI", name: "margin", workflow: "vwap-ingest.yml", hours: [8], minute: 0 },
+  // VWAP日足dispatch (0 8 MON-FRI) と文字列が衝突すると isTimedCron が先勝ちで
+  // 日足へ届かないため、信用残の受付窓 (17:00〜17:10 JST) 内の17:05に置く。
+  { cron: "5 8 * * MON-FRI", name: "margin", workflow: "vwap-ingest.yml", hours: [8], minute: 5 },
 ] as const;
 
 export function isTimedCron(cron: string): boolean {

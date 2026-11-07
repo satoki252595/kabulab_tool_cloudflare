@@ -197,7 +197,7 @@ export function resolveRunDate(
     );
   }
   if (route === "vwap-dispatch" || route === "vwap-readcheck") {
-    const window = scheduledVwapWindow(scheduledDate); // 月水金だけ。休場は後段で明示skip。
+    const window = scheduledVwapWindow(scheduledDate); // 平日だけ。休場は後段で明示skip。
     if (route === "vwap-dispatch") {
       // Cronは分の契約。scheduledTimeには本番で17:00:52のような秒も含まれる。
       // 17:00〜17:10は起動受付窓。23:30は終値NULL帯の新規IO締切で、実時計のまま残す。

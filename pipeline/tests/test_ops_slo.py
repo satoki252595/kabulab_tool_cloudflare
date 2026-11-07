@@ -86,6 +86,21 @@ def _wire(monkeypatch, store: _FakeStore, *modules) -> None:
     # 容量観測は database API を叩くので小さな値で差し替える (個別テストで上書き可)。
     # 入れないと probe のテストが本物の HTTP を出す。
     store.database_file_size = lambda: {"file_size": 1_000_000_000, "num_tables": 32}
+    # VWAP保存日足の判定は R2 列挙を伴う。個別テスト (TestVwapDailyCoverage) が
+    # 本体を見るので、main 経路では「母集団全件が当日書込済み」のスタブに倒す。
+    class _FreshDailyR2:
+        def list_objects(self, prefix: str):
+            rows = store.query(
+                "SELECT code FROM core_stocks"
+                " WHERE is_active = 1 AND instrument_type = 'equity'"
+            )
+            stamp = datetime.now(UTC)
+            return [
+                {"key": f"daily/{row['code']}.json", "last_modified": stamp}
+                for row in rows
+            ]
+
+    monkeypatch.setattr(ops_check, "_vwap_daily_r2", lambda settings: _FreshDailyR2(), raising=False)
 
 
 def _jst_today() -> date:
@@ -1509,6 +1524,82 @@ class TestStockCoverage:
         problems: list[str] = []
         ops_check._check_stock_coverage(store, problems, now=datetime(2026, 10, 13, 19, 0, tzinfo=JST))
         assert len(problems) == expected_failures
+
+
+class _FakeDailyR2:
+    def __init__(self, written: dict[str, datetime] | None = None, *, error: Exception | None = None):
+        self._written = written or {}
+        self._error = error
+
+    def list_objects(self, prefix: str):
+        if self._error is not None:
+            raise self._error
+        assert prefix == "daily/"
+        return [
+            {"key": f"daily/{code}.json", "last_modified": stamp}
+            for code, stamp in sorted(self._written.items())
+        ]
+
+
+class TestVwapDailyCoverage:
+    # 2026-11-06 (金) 23:35 JST。期待取引日=11/06、前取引日=11/05。
+    NOW = datetime(2026, 11, 6, 23, 35, tzinfo=JST)
+
+    def _store(self, codes=("7203", "7204", "7205")):
+        store = _FakeStore()
+        for i, code in enumerate(codes, start=1):
+            store.query(
+                "INSERT INTO core_stocks (id,code,is_active,instrument_type) VALUES (?,?,1,'equity')",
+                [i, code],
+            )
+        # 母集団外 (REIT・非active) は数えない。
+        store.query("INSERT INTO core_stocks (id,code,is_active,instrument_type) VALUES (90,'3470',1,'reit_fund')")
+        store.query("INSERT INTO core_stocks (id,code,is_active,instrument_type) VALUES (91,'7206',0,'equity')")
+        return store
+
+    @staticmethod
+    def _at(day: int) -> datetime:
+        return datetime(2026, 11, day, 18, 30, tzinfo=JST)
+
+    def test_全銘柄が当取引日に書かれていれば問題なし(self) -> None:
+        problems: list[str] = []
+        r2 = _FakeDailyR2({"7203": self._at(6), "7204": self._at(6), "7205": self._at(6), "3470": self._at(1)})
+        ops_check._check_vwap_daily_coverage(self._store(), r2, problems, now=self.NOW)
+        assert problems == []
+
+    def test_1取引日遅れは次回backfill前提で鳴らさない(self) -> None:
+        problems: list[str] = []
+        r2 = _FakeDailyR2({"7203": self._at(6), "7204": self._at(5), "7205": self._at(6)})
+        ops_check._check_vwap_daily_coverage(self._store(), r2, problems, now=self.NOW)
+        assert problems == []
+
+    def test_2取引日以上遅れと欠落は件数と例付きで失敗する(self) -> None:
+        problems: list[str] = []
+        r2 = _FakeDailyR2({"7203": self._at(6), "7204": self._at(4)})  # 7205 は欠落
+        ops_check._check_vwap_daily_coverage(self._store(), r2, problems, now=self.NOW)
+        assert len(problems) == 1
+        assert "2/3" in problems[0]
+        assert "7204" in problems[0] and "7205" in problems[0]
+
+    def test_当日の書込が0ならrun不在として失敗する(self) -> None:
+        problems: list[str] = []
+        r2 = _FakeDailyR2({"7203": self._at(5), "7204": self._at(5), "7205": self._at(5)})
+        ops_check._check_vwap_daily_coverage(self._store(), r2, problems, now=self.NOW)
+        assert len(problems) == 1
+        assert "0/3" in problems[0]
+
+    def test_R2列挙失敗とR2未設定は判定不能として失敗する(self) -> None:
+        from jp_stock_pipeline.cloud_store.r2 import R2Error
+
+        problems: list[str] = []
+        ops_check._check_vwap_daily_coverage(
+            self._store(), _FakeDailyR2(error=R2Error("boom")), problems, now=self.NOW
+        )
+        assert len(problems) == 1 and "列挙" in problems[0]
+
+        problems = []
+        ops_check._check_vwap_daily_coverage(self._store(), None, problems, now=self.NOW)
+        assert len(problems) == 1 and "R2" in problems[0]
 
 
 def _expected_macro_date(now: datetime) -> date:
