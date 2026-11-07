@@ -40,6 +40,29 @@ export function assertCodesInUniverse(requested: string[], universe: string[]): 
   }
 }
 
+/**
+ * 全母集団runの処理開始位置を日付で決定的に回転させる。
+ *
+ * 昇順固定だと、fatal (R2 PUT結果不明・原本保管結果不明) で途中停止した日に
+ * 未到達だった尾部が、翌runでも最後尾のまま飢餓する (#674: 10/30〜11/5に
+ * 後方コードが滞留)。集合は変えず開始位置だけを黄金比ステップで日次に
+ * ずらすことで、停止位置が偏っても数日以内に全銘柄へ到達する。
+ * 明示 `--codes`/`--limit` の部分runには使わない (呼び出し側が選ぶ)。
+ */
+export function rotateCodesForDate(codes: readonly string[], date: string): string[] {
+  const startMs = Date.parse(`${date}T00:00:00.000Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(startMs) ||
+      new Date(startMs).toISOString().slice(0, 10) !== date) {
+    throw new Error(`rotateCodesForDate: 実在するYYYY-MM-DDが必要です: ${date}`);
+  }
+  if (codes.length <= 1) return [...codes];
+  const n = codes.length;
+  const epochDay = Math.floor(startMs / 86_400_000);
+  const step = Math.max(1, Math.floor(n * 0.6180339887498949));
+  const offset = ((epochDay % n) * step) % n;
+  return [...codes.slice(offset), ...codes.slice(0, offset)];
+}
+
 // 引数 --key=value を読む簡易パーサ
 export function arg(key: string): string | undefined {
   const a = process.argv.find((x) => x.startsWith(`--${key}=`));

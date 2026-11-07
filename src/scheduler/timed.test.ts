@@ -85,7 +85,9 @@ describe("公表取得のCF起動は予定slot保持・one-shot", () => {
   it.each(TIMED_WORKFLOWS)("$nameは5分超配送でもCLI開始期限まで同じslotで1回だけdispatchする", async profile => {
     const planned = start + profile.hours[0] * 3_600_000 + profile.minute * 60_000;
     const c = { cron: profile.cron, scheduledTime: planned + 52_000 };
-    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(planned + 19 * 60_000);
+    // margin は17:05予定でも新規取得締切17:20は不変なので、配送遅延の猶予は15分未満。
+    const delay = profile.name === "margin" ? 14 * 60_000 : 19 * 60_000;
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(planned + delay);
     const { store } = bucket(), fetchFn = vi.fn<typeof fetch>().mockImplementation(async () => new Response(JSON.stringify(dispatch), { status: 200 }));
     const env = { BUCKET: store, GITHUB_ACTIONS_TOKEN: "test-token" };
     expect((await handleTimedScheduled(c, env, { fetchFn })).status).toBe("dispatched");

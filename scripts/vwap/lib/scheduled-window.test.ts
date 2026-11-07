@@ -10,12 +10,12 @@ const date = "2026-10-14";
 const start = Date.parse(`${date}T08:00:00.000Z`);
 
 describe("VWAP定時窓と同run受付時計", () => {
-  it.each(["2026-10-12", date, "2026-10-16"])("月水金 %s を17時から23:30に固定する", (day) => {
+  it.each(["2026-10-12", "2026-10-13", date, "2026-10-15", "2026-10-16"])("平日 %s を17時から23:30に固定する", (day) => {
     const window = scheduledVwapWindow(day);
     expect(window.completionCutoff - window.start).toBe(390 * 60_000);
     expect(window.admissionCutoff - window.start).toBe(10 * 60_000);
   });
-  it.each(["", "2026-10-13", "2026-10-15", "2026-10-17", "2026-02-30", "2026-10-14T00:00:00Z"])("不正な予定日 %s を拒否", (day) => {
+  it.each(["", "2026-10-17", "2026-10-18", "2026-02-30", "2026-10-14T00:00:00Z"])("不正な予定日 %s を拒否", (day) => {
     expect(() => scheduledVwapWindow(day)).toThrow("plannedDate");
   });
   it.each([start - 1, start + 600_001, start + 26_400_000, NaN])("遅配/早発/不正時計 %s は受付しない", (nowMs) => {

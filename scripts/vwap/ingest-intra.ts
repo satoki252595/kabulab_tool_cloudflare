@@ -7,7 +7,7 @@ import "dotenv/config";
 import { fileURLToPath } from "node:url";
 import { fetchBars5m, fetchBars5mWindow, describeIntraSource, YahooIntraSourceUnavailableError, YahooRawTooLargeError, MAX_YAHOO_RAW_BYTES, type YahooRawCapture } from "../../src/shared/yahoo/client.js";
 import { r2GetVersion, r2Put, confirmUnknownPricePut, mapLimit, sleep, retry, beginR2PutDiagRun, logR2PutRunSummary, noteR2PutFatal, R2PutRejectedError, R2PutUnknownError, type PricePutReadback } from "./lib/r2.js";
-import { assertCodesInUniverse, loadCodes, arg } from "./lib/codes.js";
+import { assertCodesInUniverse, loadCodes, rotateCodesForDate, arg } from "./lib/codes.js";
 import { sharedEnv } from "../../src/shared/env.js";
 import { archiveSummaryOrFatal, assertSavedIntraShape, bodyPin, buildIngestSummary, findInvalidBars, mergeIntraBars, resolveExitCode, resolveRunId, retainIntraSourceStatus, sanitizeLogText, shouldSkipPut, universePin, writeSummaryLocal, type IngestCodeOutcome, type SavedIntra } from "./lib/ingest-guard.js";
 import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
@@ -61,6 +61,12 @@ export async function main() {
   if (only) assertCodesInUniverse(only.split(","), universe);
   let codes = only ? only.split(",") : universe;
   if (limit) codes = codes.slice(0, Number(limit));
+  // 定時の全母集団runだけ開始位置を予定日で回転 (fatal途中停止の尾部飢餓対策 #674。日足と同基準)。
+  const scheduledDate = arg("scheduled-date");
+  if (!only && !limit && scheduledDate !== undefined) {
+    codes = rotateCodesForDate(codes, scheduledDate);
+    console.info(JSON.stringify({ codeRotation: { date: scheduledDate, first: codes[0], size: codes.length } }));
+  }
 
   const cutoffTs = Math.floor(Date.now() / 1000) - KEEP_DAYS * 86400;
   const CONC = 1; // Yahoo取得は環境変数によらず直列。実HTTP間隔は共有clientで制御。

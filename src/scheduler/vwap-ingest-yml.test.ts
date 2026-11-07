@@ -4,11 +4,29 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { VWAP_DISPATCH_CRON, VWAP_READCHECK_CRON } from "../shared/vwap-schedule.js";
+import { routeCron } from "./stock.js";
+import { isTimedCron } from "./timed.js";
 
 describe("通常VWAPのCF移管と既存Yahoo直列契約", () => {
   const yml = readFileSync(new URL("../../.github/workflows/vwap-ingest.yml", import.meta.url), "utf8");
   const config = readFileSync(new URL("../../wrangler.toml", import.meta.url), "utf8");
-  it("日足/5分足のGH cronだけを廃止して同MWF17時CFと期限照会へ移す", () => {
+  it("wranglerの全cronは一意で、timed/定時のどちらか一方にだけ届く", () => {
+    const list = config.match(/crons = \[([^\]]+)\]/)?.[1];
+    expect(list).toBeDefined();
+    const crons = [...list!.matchAll(/"([^"]+)"/g)].map(m => m[1]);
+    expect(crons.length).toBe(new Set(crons).size);
+    for (const cron of crons) {
+      const timed = isTimedCron(cron);
+      let routed = true;
+      try { routeCron(cron); } catch { routed = false; }
+      // 両方true (先勝ちで片方が死ぬ) と両方false (未知cronで落ちる) を禁止。
+      expect(timed !== routed, cron).toBe(true);
+    }
+    expect(isTimedCron(VWAP_DISPATCH_CRON)).toBe(false);
+    expect(routeCron(VWAP_DISPATCH_CRON)).toBe("vwap-dispatch");
+    expect(routeCron(VWAP_READCHECK_CRON)).toBe("vwap-readcheck");
+  });
+  it("日足/5分足のGH cronだけを廃止して同平日17時CFと期限照会へ移す", () => {
     expect(yml).not.toContain("0 8 * * 1,3,5");
     expect(yml).not.toContain("  schedule:"); // 信用残も同時刻のCFへ移管
     expect(yml).toContain("- scheduled-margin");

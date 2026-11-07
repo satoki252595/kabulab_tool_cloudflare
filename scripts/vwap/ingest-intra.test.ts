@@ -329,7 +329,14 @@ describe("ingest-intra main flow", () => {
       await operation;
       expect(writeActive).toBe(0); expect(writePeak).toBe(2);
       const body = recordedBody() as { outcomes: Record<string, { status: string }>; unknown: string[]; rejected: string[] };
-      expect(body.outcomes.B.status).toBe("written");
+      if (mode === "deadline") {
+        // 定時は予定日回転で開始2件が A/B とは限らない。開始済み2件だけが written。
+        const started = mockR2Put.mock.calls.slice(0, 2).map(c => String(c[0]).replace(/^intra\//, "").replace(/\.json$/, ""));
+        expect(started.map(code => body.outcomes[code].status)).toEqual(["written", "written"]);
+        expect(Object.values(body.outcomes).filter(o => o.status === "written")).toHaveLength(2);
+      } else {
+        expect(body.outcomes.B.status).toBe("written");
+      }
       if (mode === "success") { expect(process.exitCode).toBe(0); expect(body.outcomes.C.status).toBe("written"); }
       else {
         expect(process.exitCode).toBe(2); expect(mockFetch5m).toHaveBeenCalledTimes(30);

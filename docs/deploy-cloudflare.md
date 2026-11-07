@@ -56,13 +56,13 @@ GitHub Actions 4 本 (`.github/workflows/` の stock-sync / vwap-ingest / catchu
 | ワークフロー | 内容 | スケジュール (UTC) |
 |---|---|---|
 | `.github/workflows/stock-sync.yml` | 日次 stock(core/rsi/swing) / マクロ / 月次 universe + otakara rebuild | CF trigger 09:00（株式）・21:00（マクロ）。14:35/22:05に各期限確認 / 月次10日01:30 |
-| `.github/workflows/vwap-ingest.yml` | 日足10年 + 5分足 / 信用残高週次 → R2 | 月水金 08:00 / 土 09:00 |
+| `.github/workflows/vwap-ingest.yml` | 日足10年 + 5分足 / 信用残高週次 → R2 | 平日 08:00（日足+5分足）/ 平日 08:05（信用残）/ 土 09:00 |
 | `.github/workflows/catchup.yml` | 005 有報(EDINET) + 006 適時開示(TDnet) キャッチアップ | 平日 11:00 |
 | `.github/workflows/ci.yml` | 型・lint・単体テスト + 地図突合 + D1 generate 差分 (push/PR) | — (cron なし) |
 
 - 手動実行は Actions タブの「Run workflow」(stock: daily/monthly/all、vwap: daily-intra/intra/margin/all、catchup: all/tdnet/edinet)。
 - **schedule は default ブランチ(main)のワークフローのみ発火**。
-- 実行時間の目安 (public repo のため Actions 分課金は無し): 日次 stock(~40-50分)×平日 + VWAP(月水金。差分時は数十分、バックフィル時は 2-3h 域。timeout 300 分) ≈ 月 1,300-1,600 分(バックフィル除く)。
+- 実行時間の目安 (public repo のため Actions 分課金は無し): 日次 stock(~40-50分)×平日 + VWAP(平日。差分時は数十分、バックフィル時は 2-3h 域。timeout 360 分)。
 
 ### 必要な GitHub Secrets
 

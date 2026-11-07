@@ -1,14 +1,16 @@
-/** MWF 17時の通常VWAPだけに適用する窓。保存原本の取得時計は変更しない。 */
-export const VWAP_DISPATCH_CRON = "0 8 * * MON,WED,FRI";
-export const VWAP_READCHECK_CRON = "35 14 * * MON,WED,FRI";
+/** 平日17時の通常VWAPだけに適用する窓。保存原本の取得時計は変更しない。 */
+export const VWAP_DISPATCH_CRON = "0 8 * * MON-FRI";
+// 株式readcheck (35 14 MON-FRI) と文字列が衝突すると routeCron が先勝ちで
+// VWAP照会へ届かないため、23:40 JST の別分に置く。
+export const VWAP_READCHECK_CRON = "40 14 * * MON-FRI";
 export const VWAP_START_DEADLINE_MINUTES = 10;
 
 export function scheduledVwapWindow(plannedDate: string) {
   const start = Date.parse(`${plannedDate}T08:00:00.000Z`);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(plannedDate) || !Number.isFinite(start) ||
       new Date(start).toISOString().slice(0, 10) !== plannedDate ||
-      ![1, 3, 5].includes(new Date(start).getUTCDay())) {
-    throw new Error("VWAP plannedDateは実在する月水金のYYYY-MM-DDが必要です");
+      ![1, 2, 3, 4, 5].includes(new Date(start).getUTCDay())) {
+    throw new Error("VWAP plannedDateは実在する平日のYYYY-MM-DDが必要です");
   }
   const completionCutoff = Date.parse(`${plannedDate}T14:30:00.000Z`);
   return { start, admissionCutoff: start + VWAP_START_DEADLINE_MINUTES * 60_000,

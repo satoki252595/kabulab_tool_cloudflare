@@ -11,8 +11,8 @@ mono-repo横断のCLI。サービス内の細かな処理は`services/<slug>/dat
 | `sync/universe.ts` | JPX公式母集団 |
 | `sync/yuho-edinet.ts` | 共有Node取込をD1 HTTPで実行。Worker管理ルートを叩く薄いトリガではない |
 | `sync/ir-tdnet.ts` | NodeのTDnet・IR取込 |
-| `vwap/ingest-daily.ts` / `ingest-intra.ts` | CF→Actions月水金17時、日足→5分足 |
-| `vwap/ingest-margin.ts` | Actions平日17時、市場信用残 |
+| `vwap/ingest-daily.ts` / `ingest-intra.ts` | CF→Actions平日17時、日足→5分足 |
+| `vwap/ingest-margin.ts` | Actions平日17:05、市場信用残 |
 | `moneyflow/ingest.ts` | 29取得元。独立28はCF平日18:15、業種売買代金は株式成功後 |
 | `sync/all-daily.ts` | 手動一括。独立した定期設定ではない |
 | `sync/all-monthly.ts` | 手動の優待取得→再計算。Mac要約の起動は除去済み |

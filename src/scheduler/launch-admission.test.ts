@@ -19,13 +19,13 @@ it("catchupは4分50秒遅れでもscheduled_atが19:00〜19:05なら受理す�
   expect(() => assertCatchupInvocation("all", "workflow_dispatch", catchupEvent(scheduledAt), now)).not.toThrow();
 });
 
-it("marginは4分50秒遅れでも予定分が17:00なら受理し生のscheduled_atを渡す", () => {
-  const scheduledTime = Date.parse("2026-10-23T08:00:52.000Z");
+it("marginは4分50秒遅れでも予定分が17:05なら受理し生のscheduled_atを渡す", () => {
+  const scheduledTime = Date.parse("2026-10-23T08:05:52.000Z");
   const plan = timedDispatchPlan(
-    { cron: "0 8 * * MON-FRI", scheduledTime },
+    { cron: "5 8 * * MON-FRI", scheduledTime },
     scheduledTime + FOUR_MIN_50_SEC,
   );
-  expect(plan.inputs.scheduled_at).toBe("2026-10-23T08:00:52.000Z");
+  expect(plan.inputs.scheduled_at).toBe("2026-10-23T08:05:52.000Z");
 });
 
 it("vwapは約19分遅れでも予定時刻が17:00の分なら受理する", () => {
@@ -54,9 +54,9 @@ it("catchupの実時計が19:53以降なら拒否する", () => {
 });
 
 it("marginの実時計が17:30 JST以降なら拒否する", () => {
-  const scheduledTime = Date.parse("2026-10-23T08:00:52.000Z");
+  const scheduledTime = Date.parse("2026-10-23T08:05:52.000Z");
   expect(() => timedDispatchPlan(
-    { cron: "0 8 * * MON-FRI", scheduledTime },
+    { cron: "5 8 * * MON-FRI", scheduledTime },
     Date.parse("2026-10-23T08:30:00.000Z"),
   )).toThrow(/17:30/);
 });
