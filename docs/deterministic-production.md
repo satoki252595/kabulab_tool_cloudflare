@@ -1,6 +1,6 @@
 # 決定的な本番処理
 
-更新: 2026-10-27。**本文39/基本補足と優待の決定的同期はGitHub Actions日次。Mac定期は廃止・停止済みで、Clef・競合の意味判断・優待`--allow-model`は[月次手動](mac-monthly-manual.md)**。[取得元・機能の全件一覧](batch-data-inventory.md)を参照。取得・抽出・計算・照合・保存・検証は通常CLIと共有関数を使う。過去分の有限補完も同じparser・保存・停止条件を通す。
+更新: 2026-11-03。**本文39/基本補足と優待の決定的同期はGitHub Actions日次。Mac定期は廃止・停止済みで、Clef・競合の意味判断・優待`--allow-model`は[月次手動](mac-monthly-manual.md)**。[取得元・機能の全件一覧](batch-data-inventory.md)を参照。取得・抽出・計算・照合・保存・検証は通常CLIと共有関数を使う。過去分の有限補完も同じparser・保存・停止条件を通す。
 
 予定・担当・先行条件・LLM利用は[README](../README.md#本番の定期処理先行条件llm利用)、workflowとSSHの運用は[本番処理一覧](production-job-inventory.md)、最新の実測・残件・未受入は[10/25の作業記録](work-plans/production-completion-20261025.md)を参照する。予定と実行成功、個別復旧と全件完了を区別する。
 
@@ -34,10 +34,11 @@
 4. 通信や保存の結果不明はintent/inFlightを残し、自動再送しない。価格PUTだけは同processで送信した全bytes・全metadataを単発の完全GETで確認できた場合に限り、ACK不明の証拠を残して続行する。旧値や照合不能は停止を維持し、過去runのunknownを解除しない。
 5. EDINET情報修正は、修正前後の主体・形式・期末、保存ZIP、通常parserの全factsと全文が完全一致した観測だけを追記台帳で解決する。取下げ・不開示・parser不一致はHOLD。
 6. `exit0`・未処理0・タグ判定済みだけで全データ充足とは扱わない。全no・要確認・候補0・原本なしを分け、予定日・対象集合・結果・欠測理由・receiptで検収する。
+7. `tdnet_hourly` は、やのしんの監視窓が 14400 秒以内でも、公式一覧（`I_list_*.html`）を確定できないときは fresh にも 0 件成功にもしない。やのしんが 1 件以上のときは、最新時刻を分へ切り捨てた締切より前の doc_id だけを公式と比べ、1 件でも違えば count_mismatch。同じ分とそれより後は次の run に回す。予定 19:00 はその件数と doc_id をログに残す。予定 09:00 は直前の平日の doc_id 集合全体を照合し、違えば失敗する（分の締切は掛けない。JPX 休場日は推測しない）。当日レコードの処理が新規取得期限で止まっても、この照合は実行してから期限の失敗を返す。照合不一致は、その回に保存できた当日分を残したまま失敗する。やのしん 0 件のときは締切が無く、公式件数 0 との等号のまま。休日は HTTP 200 で「に開示された情報はありません。」かつ表も kaijiSum も無いページだけ。取得失敗（FetchError）とは分ける。追加 GET は最大 40。14400 秒は変えない。
 
 ## マクロ欠け日
 
-定時 `scheduled-context`（Actions の market context sync。火〜土 06:00 JST）は予定日の1行に加え、終端日から30暦日の日米共通営業日で `swing_market_context` に無い日を検出する。検出は予定日の chart（1mo、追加取得なし）と、その日の R2 JP leg だけを使う。値が欠けたらその日は HOLD で、別日の終値では埋めない。D1 への INSERT は環境変数 `MACRO_CONTEXT_GAP_FILL=1` のときだけ（既定は未設定で検出のみ。Actions はリポジトリ変数を渡す）。既存行は `ON CONFLICT DO NOTHING`。開始窓 21:00–21:30 UTC と保存期限 22:00 UTC は予定日の本行のまま変えない。ops_check は同じ30暦日の欠け日数を読み、`MAX(date)` との比較も残す。
+定時 `scheduled-context`（Actions の market context sync。米東17:00。夏は火〜土 06:00 JST、冬は火〜土 07:00 JST）は予定日の1行に加え、終端日から30暦日の日米共通営業日で `swing_market_context` に無い日を検出する。検出は予定日の chart（1mo、追加取得なし）と、その日の R2 JP leg だけを使う。値が欠けたらその日は HOLD で、別日の終値では埋めない。D1 への INSERT は環境変数 `MACRO_CONTEXT_GAP_FILL=1` のときだけ（既定は未設定で検出のみ。Actions はリポジトリ変数を渡す）。既存行は `ON CONFLICT DO NOTHING`。開始窓は米東17:00–17:30、保存期限は17:00の60分後（夏 22:00 UTC、冬 23:00 UTC）。ops_check は同じ30暦日の欠け日数を読み、`MAX(date)` との比較も残す。
 
 ## 必要原本だけを扱う
 

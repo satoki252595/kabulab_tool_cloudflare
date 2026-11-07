@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { JPX_33_SECTORS } from "../../services/moneyflow/lib/sector-names.js";
 import { SOURCES, classifyRunStatus, parseAsOfArg, parseOnlyArg, sectorMarketCapSkipDetail, sectorTurnoverRange, verifySectorTurnoverResult } from "./ingest.js";
 
 describe("parseOnlyArg", () => {
@@ -595,5 +596,236 @@ describe("main() の --dry-run 契約", () => {
       else process.env.CRON_SECRET = prevCron;
       globalThis.fetch = prevFetch;
     }
+  });
+});
+
+describe("短売り欠測", () => {
+  const originalArgv = [...process.argv];
+  const INDEX = "https://www.jpx.co.jp/markets/statistics-equities/short-selling/index.html";
+  const DIR = "/markets/statistics-equities/short-selling";
+
+  afterEach(() => {
+    process.argv = [...originalArgv];
+    process.exitCode = undefined;
+    vi.doUnmock("../../services/moneyflow/lib/pdf-text.js");
+    vi.doUnmock("../../src/shared/notion-archive/index.js");
+    vi.doUnmock("./lib/archived-files.js");
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    vi.resetModules();
+    vi.useRealTimers();
+  });
+
+  function sectorPdfText(iso: string): string {
+    const [y, m, d] = iso.split("-");
+    const line = (name: string) => `${name} 1,000 50.0% 100 10.0% 100 10.0% 1,200`;
+    return `${y}年${Number(m)}月${Number(d)}日 ` + [...JPX_33_SECTORS, "その他（33業種外）"].map(line).join(" ");
+  }
+
+  function pdfRow(iso: string): string {
+    const [y, m, d] = iso.split("-");
+    const yymmdd = `${y.slice(2)}${m}${d}`;
+    const cell = (kind: "m" | "g") =>
+      `<td class="a-center"><a href="${DIR}/t-att/${yymmdd}-${kind}.pdf"><img alt="PDF"></a></td>`;
+    return `<tr><td class="a-center">${y}/${m}/${d}</td>${cell("m")}${cell("g")}</tr>`;
+  }
+
+  function zeroRow(iso: string): string {
+    const [y, m, d] = iso.split("-");
+    return `<tr><td class="a-center">${y}/${m}/${d}</td><td class="a-center">-</td><td class="a-center">-</td></tr>`;
+  }
+
+  function listingHtml(selfPath: string, options: Array<[string, string]>, rows: string): string {
+    const opts = options.map(([path, label]) =>
+      `<option value="${path}"${path === selfPath ? ' selected="selected"' : ""}>${label}</option>`).join("");
+    return `<title>日次集計 | 空売り集計 | 日本取引所グループ</title><select class="backnumber">${opts}</select>` +
+      `<table><tr><th>日付</th><th>空売り集計</th><th>業種別集計</th></tr>${rows}</table>`;
+  }
+
+  async function runShort(opts: {
+    argv: string[];
+    pages: Record<string, string>;
+    records: readonly string[];
+  }) {
+    vi.resetModules();
+    process.exitCode = undefined;
+    process.argv = [...originalArgv, "--only=jpx-short-selling", ...opts.argv];
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      calls.push(url);
+      const html = opts.pages[url];
+      if (html !== undefined) return new Response(html, { status: 200 });
+      const fromIso = url.match(/(20\d{2}-\d{2}-\d{2})/)?.[1];
+      const fromName = url.match(/(\d{2})(\d{2})(\d{2})-[mg]\.pdf$/);
+      const iso = fromIso ?? (fromName ? `20${fromName[1]}-${fromName[2]}-${fromName[3]}` : undefined);
+      if (!iso) return new Response("not found", { status: 404 });
+      return new Response(new TextEncoder().encode(iso), { status: 200 });
+    }));
+    vi.doMock("../../services/moneyflow/lib/pdf-text.js", () => ({
+      extractPdfText: async (bytes: Uint8Array) => {
+        const iso = new TextDecoder().decode(bytes);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) throw new Error(`pdf mock date: ${iso}`);
+        return sectorPdfText(iso);
+      },
+    }));
+    const upsertObservationBatch = vi.fn<(dbId: string, rows: ReadonlyArray<{ periodEnd: string; category: string }>) => Promise<unknown[]>>().mockResolvedValue([]);
+    const ensureObservationsDb = vi.fn(async () => ({ dbId: "obs" }));
+    const recordRunLog = vi.fn<(dbId: string, row: { status: string; successCount?: number; failedCount?: number }) => Promise<{ pageId: string }>>().mockResolvedValue({ pageId: "run" });
+    const recordPrimaryData = vi.fn(async () => ({ pageId: "primary", outcome: "recorded", fileTooLarge: false }));
+    vi.doMock("../../src/shared/notion-archive/index.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../../src/shared/notion-archive/index.js")>()),
+      ensureIndicatorDefsDb: vi.fn(async () => ({ dbId: "defs" })),
+      upsertIndicatorDef: vi.fn(async () => ({ pageId: "def" })),
+      ensureRunLogDb: vi.fn(async () => ({ dbId: "logs" })),
+      recordRunLog,
+      recordPrimaryData,
+      ensureObservationsDb,
+      upsertObservationBatch,
+      isArchived: vi.fn(async () => false),
+    }));
+    vi.doMock("./lib/archived-files.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./lib/archived-files.js")>()),
+      requirePrimaryDataDbId: vi.fn(async () => "primary-db"),
+      verifyArchivedAttachments: vi.fn(async () => undefined),
+      listArchivedRecordsByPrefix: vi.fn(async () => opts.records.map((date) => ({
+        pageId: `page-${date}`,
+        key: `jpx-short-selling-sector-${date}`,
+        files: [{ name: `jpx-short-selling-sector-${date}.pdf`, url: `https://file.notion.so/${date}` }],
+      }))),
+    }));
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { main } = await import("./ingest.js");
+    await main();
+    const logged = info.mock.calls.map((c) => String(c[0])).find((line) => line.includes('"outcomes"'));
+    const outcomes = logged
+      ? (JSON.parse(logged) as { outcomes: Array<{ source: string; ok: boolean; detail: string }> }).outcomes
+      : [];
+    return { calls, upsertObservationBatch, ensureObservationsDb, recordRunLog, recordPrimaryData, outcomes };
+  }
+
+  it("短売り欠測: as-of=10-01は同ページの10-02を選ばず、その日だけで月次upsertする", async () => {
+    const indexPath = `${DIR}/index.html`;
+    const html = listingHtml(indexPath, [
+      [indexPath, "2026年10月"],
+      [`${DIR}/00-archives-01.html`, "2026年9月"],
+    ], pdfRow("2026-10-02") + pdfRow("2026-10-01"));
+    const result = await runShort({
+      argv: ["--as-of=2026-10-01"],
+      pages: { [INDEX]: html },
+      records: ["2026-10-01"],
+    });
+    expect(result.calls.filter((url) => url.includes("-g.pdf"))).toEqual([
+      `https://www.jpx.co.jp${DIR}/t-att/261001-g.pdf`,
+    ]);
+    expect(result.upsertObservationBatch).toHaveBeenCalledTimes(1);
+    expect(result.outcomes).toMatchObject([{ source: "jpx-short-selling", ok: true }]);
+    expect(result.outcomes[0]?.detail).toContain("2026-10-01");
+    expect(result.outcomes[0]?.detail).toContain("1日分");
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("短売り欠測: 要求日がindexに無い月はarchivesの該当月だけを解決する", async () => {
+    const indexPath = `${DIR}/index.html`;
+    const octPath = `${DIR}/00-archives-01.html`;
+    const options: Array<[string, string]> = [
+      [indexPath, "2026年11月"],
+      [octPath, "2026年10月"],
+    ];
+    const result = await runShort({
+      argv: ["--as-of=2026-10-01"],
+      pages: {
+        [INDEX]: listingHtml(indexPath, options, pdfRow("2026-11-05") + pdfRow("2026-11-04") + pdfRow("2026-11-02")),
+        [`https://www.jpx.co.jp${octPath}`]: listingHtml(octPath, options, pdfRow("2026-10-02") + pdfRow("2026-10-01")),
+      },
+      records: ["2026-10-01"],
+    });
+    expect(result.calls.some((url) => url.endsWith("/00-archives-01.html"))).toBe(true);
+    expect(result.calls.filter((url) => url.includes("-g.pdf"))).toEqual([
+      `https://www.jpx.co.jp${DIR}/t-att/261001-g.pdf`,
+    ]);
+    expect(result.upsertObservationBatch).toHaveBeenCalledTimes(1);
+    expect(result.outcomes[0]?.ok).toBe(true);
+  });
+
+  it("短売り欠測: 要求日がindex/archivesに無ければ最新日で成功せず月次upsertしない", async () => {
+    const indexPath = `${DIR}/index.html`;
+    const html = listingHtml(indexPath, [[indexPath, "2026年11月"]], pdfRow("2026-11-05") + pdfRow("2026-11-04") + pdfRow("2026-11-02"));
+    const result = await runShort({
+      argv: ["--as-of=2026-11-06"],
+      pages: { [INDEX]: html },
+      records: ["2026-11-05", "2026-11-04", "2026-11-02"],
+    });
+    expect(result.calls.filter((url) => url.includes("-g.pdf"))).toEqual([]);
+    expect(result.recordPrimaryData).not.toHaveBeenCalled();
+    expect(result.ensureObservationsDb).not.toHaveBeenCalled();
+    expect(result.upsertObservationBatch).not.toHaveBeenCalled();
+    expect(result.outcomes).toMatchObject([{ source: "jpx-short-selling", ok: false }]);
+    expect(result.outcomes[0]?.detail).toContain("2026-11-06");
+    expect(result.recordRunLog.mock.calls[0]?.[1]).toMatchObject({ status: "失敗", successCount: 0, failedCount: 1 });
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("短売り欠測: as-of未指定の当日PDFが未掲載なら最新の掲載日で月次を成功にしない", async () => {
+    const indexPath = `${DIR}/index.html`;
+    const html = listingHtml(indexPath, [[indexPath, "2026年11月"]], pdfRow("2026-11-05") + pdfRow("2026-11-02"));
+    const result = await runShort({
+      argv: [],
+      pages: { [INDEX]: html },
+      records: ["2026-11-05", "2026-11-02"],
+    });
+    expect(result.calls.filter((url) => url.includes("-g.pdf"))).toEqual([]);
+    expect(result.upsertObservationBatch).not.toHaveBeenCalled();
+    expect(result.outcomes[0]).toMatchObject({ ok: false });
+    expect(result.outcomes[0]?.detail).toContain("2026-11-06");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("短売り欠測: 保管2日だけの不完全月次はupsertせずrunを失敗させる", async () => {
+    const indexPath = `${DIR}/index.html`;
+    const html = listingHtml(indexPath, [[indexPath, "2026年10月"]], [
+      "2026-10-06", "2026-10-05", "2026-10-02", "2026-10-01",
+    ].map(pdfRow).join(""));
+    const result = await runShort({
+      argv: ["--as-of=2026-10-06"],
+      pages: { [INDEX]: html },
+      records: ["2026-10-02", "2026-10-01"],
+    });
+    expect(result.calls.filter((url) => url.includes("-g.pdf"))).toEqual([
+      `https://www.jpx.co.jp${DIR}/t-att/261006-g.pdf`,
+    ]);
+    expect(result.recordPrimaryData).toHaveBeenCalledTimes(1);
+    expect(result.ensureObservationsDb).not.toHaveBeenCalled();
+    expect(result.upsertObservationBatch).not.toHaveBeenCalled();
+    expect(result.outcomes[0]).toMatchObject({ source: "jpx-short-selling", ok: false });
+    expect(result.outcomes[0]?.detail).toContain("2026-10-05");
+    expect(result.outcomes[0]?.detail).not.toContain("2026-10-03");
+    expect(result.outcomes[0]?.detail).not.toContain("2026-10-04");
+    expect(result.recordRunLog.mock.calls[0]?.[1]).toMatchObject({ status: "失敗", failedCount: 1 });
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("短売り欠測: 休場と公式0件の営業日が無くても月次を欠けとして失敗させない", async () => {
+    const indexPath = `${DIR}/index.html`;
+    const stored = ["2026-10-01", "2026-10-02", "2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08", "2026-10-13"];
+    const html = listingHtml(indexPath, [[indexPath, "2026年10月"]], [
+      ...stored.map(pdfRow),
+      zeroRow("2026-10-09"),
+    ].join(""));
+    const result = await runShort({
+      argv: ["--as-of=2026-10-13"],
+      pages: { [INDEX]: html },
+      records: stored,
+    });
+    expect(result.upsertObservationBatch).toHaveBeenCalledTimes(1);
+    expect(result.outcomes[0]).toMatchObject({ ok: true });
+    expect(result.outcomes[0]?.detail).toContain("7日分");
+    expect(result.outcomes[0]?.detail).not.toContain("欠け");
+    const rows = result.upsertObservationBatch.mock.calls[0]?.[1] ?? [];
+    expect(rows).toHaveLength(33);
+    expect(new Set(rows.map((row) => row.periodEnd))).toEqual(new Set(["2026-10-13"]));
+    expect(process.exitCode).toBeUndefined();
   });
 });

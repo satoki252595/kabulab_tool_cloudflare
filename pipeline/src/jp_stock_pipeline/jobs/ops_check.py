@@ -40,6 +40,7 @@ from ..http import FetchError, fetch
 from ..models import JST
 from ..contracts.market_calendar import is_session_day, latest_session_date
 from .freshness_probe import CAPACITY_DATASET
+from .macro_schedule import macro_schedule
 from .runner import STATUS_SUCCESS, JobContext, build_parser, main_exit, run_job
 
 logger = logging.getLogger(__name__)
@@ -215,11 +216,12 @@ def expected_stock_date(now: datetime) -> date:
 
 
 def expected_macro_date(now: datetime) -> date:
-    """22:00 UTC の保存期限前は前日、以降は当日を起点に日米共通の直近営業日。"""
+    """保存期限（米東 17:00 の 60 分後）より前は前日、以降は当日を起点に日米共通の直近営業日。"""
     if now.tzinfo is None:
         raise ValueError("マクロ基準日の現在時刻にタイムゾーンがありません")
     utc = now.astimezone(UTC)
-    macro_day = utc.date() if utc.hour >= 22 else utc.date() - timedelta(days=1)
+    switch = macro_schedule(utc.date())["date_switch"].astimezone(UTC)
+    macro_day = utc.date() if utc >= switch else utc.date() - timedelta(days=1)
     return latest_session_date(macro_day, ("JPX", "NYSE"))
 
 
@@ -243,7 +245,7 @@ def _check_stock_coverage(store: D1Store, problems: list[str], *, now: datetime 
     current = now or datetime.now(UTC)
     try:
         expected_date = expected_stock_date(current).isoformat()
-        # contextは同日22:00 UTCが保存期限。JPX/NYSE共通取引日だけが対象。
+        # contextの保存期限は米東17:00の60分後。JPX/NYSE共通取引日だけが対象。
         macro_date = expected_macro_date(current).isoformat()
         # 期限前に既に完了した当日分も受け入れる。未来の日付は受け入れない。
         today = latest_session_date(current.astimezone(JST).date()).isoformat()

@@ -701,6 +701,14 @@ function hasArchivedPage(pageId: string | null | undefined): boolean {
   return typeof pageId === "string" && pageId.length > 0;
 }
 
+/** 本文行がまだ D1 に無い状態。想定外の status は別の値で成功扱いにしない。 */
+function pdfTextNeedsSave(status: string | null, textId: number | null): boolean {
+  if (status === null || status === "pending" || status === "error") return true;
+  if (status === "no_text") return false;
+  if (status === "ok") return textId === null;
+  throw new Error(`pdf_text_status が想定外です: ${status}`);
+}
+
 /**
  * 予算付きの二次投入で Notion へ渡す行。
  * 本文まで終端の保存済み行は照会しない。本文未完と遡及未保存は古くても足す。
@@ -840,6 +848,13 @@ async function archiveDisclosuresByStock(
     }
     const sentKeys = new Set(selected.rows.map((row) => row.key));
     const recoverPdfTextPages = new Map([...recoverable].filter(([key]) => sentKeys.has(key)));
+    const pendingPdfTextKeys = new Set<string>();
+    for (const key of sentKeys) {
+      const stored = currentByKey.get(key);
+      if (stored === undefined || pdfTextNeedsSave(stored.status, stored.textId)) {
+        pendingPdfTextKeys.add(key);
+      }
+    }
     // ファイルプロキシ用に (tdnet_id → notion_page_id) と PDF 本文を集める。
     // upsert は行の create/PATCH 直後に callback する。D1 への書き戻しは
     // 成功時も、途中の 502 で例外になる時も、try/finally でやってから
@@ -887,6 +902,7 @@ async function archiveDisclosuresByStock(
         onPdfClassified: (key, c) => pdfMap.set(key, c),
         rejudgePdf: opts.rejudgePdfSentiment ?? false,
         recoverPdfTextPages,
+        pendingPdfTextKeys,
       });
       notionByStock = {
         stocksTouched: r.stocksTouched,

@@ -1,6 +1,7 @@
 """Notion の通信障害注入。財務データではなく再送回数と既存失敗経路を検証する。"""
 
 import json
+import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event, Lock
@@ -233,31 +234,125 @@ def test_dry_run_archive_is_recorded_without_network(dry_client):
     ]
 
 
+_DOWNLOAD_DIAG = (
+    "[INC-20261105-kabulab_tool_cloudflare-tdnet-notion-attach-verify] "
+    "download_file RequestException "
+)
+
+
+def _download_diag_lines(caplog) -> list[str]:
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelname == "WARNING" and record.getMessage().startswith(_DOWNLOAD_DIAG)
+    ]
+
+
 @pytest.mark.parametrize("status", [200, 302, 503])
-def test_hosted_readback_is_uncredentialed_and_never_retries(client, monkeypatch, status):
+def test_hosted_readback_is_uncredentialed_and_never_retries(client, monkeypatch, status, caplog):
     from types import SimpleNamespace
 
     get = Mock(return_value=SimpleNamespace(status_code=status, content=b"whole-file-protocol"))
     monkeypatch.setattr(module.requests, "get", get)
-    if status == 200:
-        assert client.download_file("https://files.example/attachment") == b"whole-file-protocol"
-    else:
-        with pytest.raises(module.NotionRequestError, match=f"HTTP {status}"):
-            client.download_file("https://files.example/attachment")
+    with caplog.at_level(logging.WARNING):
+        if status == 200:
+            assert (
+                client.download_file("https://files.example/attachment")
+                == b"whole-file-protocol"
+            )
+        else:
+            with pytest.raises(module.NotionRequestError, match=f"HTTP {status}"):
+                client.download_file("https://files.example/attachment")
     get.assert_called_once_with("https://files.example/attachment", timeout=120,
                                 allow_redirects=False)
+    assert _download_diag_lines(caplog) == []
 
 
-def test_hosted_unknown_readback_is_not_retried(client, monkeypatch):
+def test_hosted_unknown_readback_is_not_retried(client, monkeypatch, caplog):
     import traceback
 
-    get = Mock(side_effect=requests.Timeout("private signed URL omitted"))
+    url = "https://files.example/attachment?X-Amz-Signature=downloadargsecret"
+    get = Mock(side_effect=requests.Timeout(
+        "read failed https://files.example/attachment?X-Amz-Signature=private%20signed"
+        "&token=rawquerysecret Token=casesecret X-AMZ-Security-Token=uppersecret"
+        ' Authorization="private signed" Authorization: Bearer headersecret'
+    ))
     monkeypatch.setattr(module.requests, "get", get)
-    with pytest.raises(module.NotionRequestError, match="結果不明") as failure:
-        client.download_file("https://files.example/attachment")
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(module.NotionRequestError, match="結果不明") as failure:
+            client.download_file(url)
     assert "private signed" not in str(failure.value)
     assert "private signed" not in "".join(traceback.format_exception(failure.value))
+    assert failure.value.__cause__ is None
+    assert failure.value.__suppress_context__ is True
     assert get.call_count == 1
+    get.assert_called_once_with(url, timeout=120, allow_redirects=False)
+    lines = _download_diag_lines(caplog)
+    assert len(lines) == 1
+    message = lines[0]
+    assert "type=Timeout" in message
+    assert "status=none" in message
+    elapsed = message.split("elapsed_ms=", 1)[1].split(" ", 1)[0]
+    assert elapsed.isdigit()
+    msg = message.split("msg=", 1)[1]
+    assert len(msg) <= 200
+    assert "<url>" in msg
+    for secret in (
+        "https://files.example/attachment",
+        "private signed",
+        "private%20signed",
+        "rawquerysecret",
+        "downloadargsecret",
+        "headersecret",
+        "casesecret",
+        "uppersecret",
+        "X-Amz-Signature=downloadargsecret",
+    ):
+        assert secret not in message
+    assert "Token=<redacted>" in message
+    assert "X-AMZ-Security-Token=<redacted>" in message
+    assert "Authorization=<redacted>" in message
+    assert "Authorization: <redacted>" in message
+
+
+def test_hosted_http_error_readback_logs_status_and_is_not_retried(client, monkeypatch, caplog):
+    import traceback
+
+    url = "https://files.example/attachment?token=downloadargsecret"
+    err = requests.HTTPError(
+        "https://files.example/attachment?Signature=rawquerysecret"
+        ' Authorization="private signed"',
+        response=Mock(status_code=403),
+    )
+    get = Mock(side_effect=err)
+    monkeypatch.setattr(module.requests, "get", get)
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(module.NotionRequestError, match="結果不明") as failure:
+            client.download_file(url)
+    assert "private signed" not in str(failure.value)
+    assert "private signed" not in "".join(traceback.format_exception(failure.value))
+    assert "HTTP 403" not in str(failure.value)
+    assert failure.value.__cause__ is None
+    assert failure.value.__suppress_context__ is True
+    assert get.call_count == 1
+    get.assert_called_once_with(url, timeout=120, allow_redirects=False)
+    lines = _download_diag_lines(caplog)
+    assert len(lines) == 1
+    message = lines[0]
+    assert "type=HTTPError" in message
+    assert "status=403" in message
+    assert "status=none" not in message
+    elapsed = message.split("elapsed_ms=", 1)[1].split(" ", 1)[0]
+    assert elapsed.isdigit()
+    for secret in (
+        "https://files.example/attachment",
+        "private signed",
+        "rawquerysecret",
+        "downloadargsecret",
+    ):
+        assert secret not in message
+    assert "<url>" in message
+    assert "Authorization=<redacted>" in message
 
 
 @pytest.mark.parametrize("length,chunks,accepted", [

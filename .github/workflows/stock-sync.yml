@@ -7,7 +7,8 @@ on:
     # (wrangler.toml [triggers] 0 9 MON-FRI = 18:00 JST) が workflow_dispatch
     # target=scheduled-stocks で行う (docs/stock-scheduler.md)。
     # 株式guard同一N225原本+VI1GETをJP legとしてR2/Notionへ保管。
-    # マクロはCF21:00UTCに同予定日JP leg再読+米3GET、22:05UTCにreceipt期限確認。
+    # マクロは米東17:00（夏21:00UTC / 冬22:00UTC）に同予定日JP leg再読+米3GET。
+    # 期限確認は18:05 ET（夏22:05UTC / 冬23:05UTC）。不一致の季節cronはActionsを起動しない。
     # JPX data_j.xlsx は毎月第3営業日以降に前月末版へ差し替わる。
     # 月初の旧版取得を避け、毎月10日 10:30 JST に母集団同期する。
     - cron: "30 1 10 * *"
@@ -26,7 +27,7 @@ on:
           - monthly
           - all
       scheduled_date:
-        description: "CF予定UTC日。stocksは実18〜20時開始/23:30新規IO締切、contextは既存朝窓"
+        description: "CF予定UTC日。stocksは実18〜20時開始/23:30新規IO締切、contextは米東17:00から30分"
         type: string
         default: ""
       scheduled_at:

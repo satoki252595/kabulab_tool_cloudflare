@@ -42,6 +42,7 @@ import {
   type RecordPrimaryDataInput,
 } from "../shared/notion-archive/index.js";
 import { selectConfirmedCloses } from "./macro-session.js";
+import { INC_FINANCIALS_STALE_TAG } from "./inc-financials-stale-diag.js";
 import * as coreSchema from "../shared/db/core-schema.js";
 import * as rsiSchema from "../../services/rsi-screening/src/db/schema.js";
 import * as swingSchema from "../../services/swing-trading/src/db/schema.js";
@@ -412,6 +413,7 @@ describe("株式とマクロの日次分離", () => {
       expect(a.status).toBe(200);
       expect(a.sha256).toMatch(/^[0-9a-f]{64}$/);
       expect(a.noBodyReason).toBeNull();
+      expect(a).not.toHaveProperty("receivedAt");
     }
     // draft mapping: N225 は helper の確定値、NIY は snapshot。
     const n225 = selectConfirmedCloses(
@@ -463,9 +465,51 @@ describe("株式とマクロの日次分離", () => {
     vi.setSystemTime(new Date("2026-09-30T01:55:26Z"));
     mockMacro({ ...ALIGNED, "^VIX": "vix-friday-stale.symbolic.json" });
     const { db, calls } = recordingDb();
-    expect(await runMarketContextSync(db)).toBe(false);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let lines: string[];
+    try {
+      expect(await runMarketContextSync(db)).toBe(false);
+      lines = warn.mock.calls.map((args) => args[0]).filter((line): line is string => typeof line === "string");
+    } finally {
+      warn.mockRestore();
+    }
     expect(calls).toEqual([]);
-    expect(macroArchiveInputs()).toHaveLength(1);
+    const archived = macroArchiveInputs();
+    expect(archived).toHaveLength(1);
+    for (const attempt of manifestOf(archived[0]).attempts) {
+      expect(attempt).not.toHaveProperty("receivedAt");
+    }
+    const hold = lines.find((line) => line.includes("マクロ保存スキップ (HOLD)"));
+    expect(hold).toContain("VIX 確定日");
+    const parsed = lines
+      .filter((line) => line.startsWith(`${INC_FINANCIALS_STALE_TAG} macro-hold `))
+      .map((line) => JSON.parse(line.slice(line.indexOf("{"))) as Record<string, unknown>);
+    expect(parsed.map((row) => row.symbol)).toEqual(["^N225", "^VIX", "^GSPC", "NIY=F", "NIKKEI_VI"]);
+    const vix = parsed.find((row) => row.symbol === "^VIX");
+    expect(vix).toMatchObject({
+      exchangeSessionDate: "2026-09-28",
+      regularStart: "2026-09-28T22:30:00+09:00",
+      regularEnd: "2026-09-29T05:15:00+09:00",
+      regularEndSec: 1790626500,
+      regularMarketTime: "2026-09-29T00:00:00+09:00",
+      regularMarketTimeSec: 1790607600,
+      ended: false,
+      receivedAt: "2026-09-30T01:55:26.000Z",
+      reason: "vix_date_ne_gspc",
+    });
+    expect(hold).toContain(`VIX 確定日 ${String(vix?.sessionDate)}`);
+    const gspc = parsed.find((row) => row.symbol === "^GSPC");
+    expect(gspc).toMatchObject({
+      ended: true,
+      regularEnd: "2026-09-30T05:00:00+09:00",
+      reason: "vix_date_ne_gspc",
+    });
+    expect(hold).toContain(`≠ GSPC ${String(gspc?.sessionDate)}`);
+    const nikkeiVi = parsed.find((row) => row.symbol === "NIKKEI_VI");
+    expect(nikkeiVi).toMatchObject({ ended: null, regularEnd: null, regularMarketTime: null, reason: "vix_date_ne_gspc" });
+    for (const line of lines.filter((line) => line.startsWith(INC_FINANCIALS_STALE_TAG))) {
+      expect(line).not.toMatch(/crumb|cookie|https?:/i);
+    }
   });
 
   it("原文 capture が無ければ確定日を決められず HOLD する (meta HOLD)", async () => {
@@ -891,7 +935,16 @@ describe("定時マクロの予定日・開始窓・保存期限", () => {
   it("予定日と原本確定日が一致すればcontextだけを保存する", async () => {
     mockMacro(ALIGNED);
     const { db, calls, params } = recordingDb();
-    expect(await runMarketContextSync(db, emptyJpStore)).toBe(true);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let warned: string;
+    try {
+      expect(await runMarketContextSync(db, emptyJpStore)).toBe(true);
+      warned = warn.mock.calls.map((args) => String(args[0])).join("\n");
+    } finally {
+      warn.mockRestore();
+    }
+    expect(warned).not.toContain("macro-hold");
+    expect(warned).not.toContain("jp-leg-missing");
     const contextInserts = calls.flatMap((sql, index) => (
       sql.includes('insert into "swing_market_context"') ? [params[index]] : []
     ));
@@ -908,15 +961,31 @@ describe("定時マクロの予定日・開始窓・保存期限", () => {
     const manifest = JSON.parse(new TextDecoder().decode(composite.files!.find((file) => file.filename === "macro-manifest.json")!.bytes));
     expect(manifest.version).toBe(2);
     expect(manifest.jpLeg).toMatchObject({ archivePageId: "test-jp-page", expectedDate: "2026-09-29" });
+    for (const attempt of manifest.attempts) {
+      expect(attempt).not.toHaveProperty("receivedAt");
+    }
   });
 
   it("保存JP原本が無ければHOLD/理由を保管し、当日/旧日の新規N225・VI・米国GETは0", async () => {
     vi.mocked(jpLegModule.loadMacroJpLeg).mockResolvedValue(null);
     const { db, calls } = recordingDb();
-    expect(await runMarketContextSync(db, emptyJpStore)).toBe(false);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let lines: string[];
+    try {
+      expect(await runMarketContextSync(db, emptyJpStore)).toBe(false);
+      lines = warn.mock.calls.map((args) => args[0]).filter((line): line is string => typeof line === "string");
+    } finally {
+      warn.mockRestore();
+    }
     expect(fetchChart).not.toHaveBeenCalled();
     expect(fetchNikkeiVi).not.toHaveBeenCalled();
     expect(calls).toEqual([]);
+    expect(lines).toContain(
+      `${INC_FINANCIALS_STALE_TAG} jp-leg-missing ${JSON.stringify({
+        reason: "missing_jp_leg",
+        expectedDate: "2026-09-29",
+      })}`
+    );
     const files = macroArchiveInputs()[0].files!;
     expect(files.map((file) => file.filename)).toEqual(["macro-manifest.json"]);
     expect(new TextDecoder().decode(files[0].bytes)).toContain("missing-jp-leg");

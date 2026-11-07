@@ -367,6 +367,8 @@ class TestTdnetHourly:
         monkeypatch.setattr(
             tdnet_hourly, "probe_yanoshin_newest", lambda *a, **k: datetime.now(JST)
         )
+        # 公式件数の突き合わせはこのテストの対象外（④ と XBRL 失敗の期待は変えない）。
+        monkeypatch.setattr(tdnet_hourly, "_gate_official_list", lambda *a, **k: None)
         # XBRL 取得はネットワークのため遮断 (失敗経路 = 欠損として記録 §3-2)
         from jp_stock_pipeline.http import FetchError
 
@@ -415,6 +417,7 @@ class TestTdnetHourly:
         monkeypatch.setattr(
             tdnet_hourly, "probe_yanoshin_newest", lambda *a, **k: datetime.now(JST)
         )
+        monkeypatch.setattr(tdnet_hourly, "_gate_official_list", lambda *a, **k: None)
         monkeypatch.setattr(tdnet_hourly, "fetch", lambda url, **k: (_ for _ in ()).throw(
             FetchError("net cut")))
 

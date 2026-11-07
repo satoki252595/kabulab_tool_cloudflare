@@ -490,6 +490,38 @@ describe("予算付き二次投入の D1 選択", () => {
     );
   }
 
+  it("ページIDが無く本文が未保存の行は既知ページの回復マップに入らず本文未保存集合に入る", async () => {
+    const db = makeDb(createD1(sqlite));
+    await ingestBatch(db as never, [{ ...ITEM, pubdate: jstDaysAgo(10) }], {
+      batchKey: "saved", source: "test", archiveToNotion: false, notionByStock: false,
+      codeToId: new Map([["1001", 1]]),
+    });
+    await ingestBatch(db as never, [], {
+      batchKey: "look", source: "test", archiveToNotion: false,
+      notionByStock: true, notionByStockBudgetMs: 60_000, unsavedLookbackDays: 40,
+      codeToId: new Map([["1001", 1]]),
+    });
+    const input = vi.mocked(upsertDisclosuresByStock).mock.calls.at(-1)![0];
+    expect([...input.pendingPdfTextKeys!]).toEqual([ITEM.id]);
+    expect([...input.recoverPdfTextPages!.keys()]).toEqual([]);
+  });
+
+  it("想定外の pdf_text_status は本文未保存にせず停止する", async () => {
+    const db = makeDb(createD1(sqlite));
+    await ingestBatch(db as never, [{ ...ITEM, pubdate: jstDaysAgo(10) }], {
+      batchKey: "saved", source: "test", archiveToNotion: false, notionByStock: false,
+      codeToId: new Map([["1001", 1]]),
+    });
+    sqlite.exec("UPDATE ir_disclosures SET pdf_text_status='bogus'");
+    vi.mocked(upsertDisclosuresByStock).mockClear();
+    await expect(ingestBatch(db as never, [], {
+      batchKey: "look", source: "test", archiveToNotion: false,
+      notionByStock: true, notionByStockBudgetMs: 60_000, unsavedLookbackDays: 40,
+      codeToId: new Map([["1001", 1]]),
+    })).rejects.toThrow("pdf_text_status が想定外です: bogus");
+    expect(upsertDisclosuresByStock).not.toHaveBeenCalled();
+  });
+
   it("本文終端の notion_page_id がある行だけでは Notion を呼ばない", async () => {
     const db = makeDb(createD1(sqlite));
     const base = {

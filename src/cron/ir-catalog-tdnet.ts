@@ -170,6 +170,12 @@ export async function runIrCatalogCatchup(
 
   const elapsedSec = (Date.now() - started) / 1000;
   const bs = r.notionByStock;
+  if (bs && "reachedDeadline" in bs && bs.reachedDeadline) {
+    console.info(
+      `[ir-catalog] 予算未完 range=${range} 銘柄別 created=${bs.created} upd=${bs.updated} skip=${bs.skippedExisting} （保存済みは保持）`
+    );
+    throw new Error("TDnet catchupの銘柄別Notionが予算内未完です（保存済みは保持、日次完了にしない）");
+  }
   const bsInfo =
     bs && "created" in bs
       ? `銘柄別${bs.stocksTouched}社+${bs.created}/upd${bs.updated}/skip${bs.skippedExisting}/skipNF${bs.skippedNoFile}/rej${bs.rejudged}/err${bs.rowErrors}${

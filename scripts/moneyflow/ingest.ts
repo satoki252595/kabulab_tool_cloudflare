@@ -64,7 +64,9 @@ import {
   aggregateMonthlyShortSellingRatio,
   parseShortSellingSectorText,
   fetchShortSellingSector,
+  missingShortSellingBusinessDays,
   shortSellingArchiveInput,
+  shortSellingDateFromArchiveKey,
   type ShortSellingData,
 } from "../../services/moneyflow/lib/jpx-short-selling.js";
 import { isoWeekLabelOf, mostRecentMondayOf } from "../../services/moneyflow/lib/iso-week.js";
@@ -341,9 +343,11 @@ async function reparseArchivedShortSelling(
 }
 
 async function runShortSelling(): Promise<RunOutcome> {
-  const data = await fetchShortSellingSector();
+  // sector-turnover と同じ窓口。未指定は当日 UTC。要求日の PDF が無ければ別日で埋めない。
+  const requestedDate = AS_OF ?? new Date().toISOString().slice(0, 10);
+  const data = await fetchShortSellingSector(requestedDate);
   if (DRY_RUN) {
-    console.info(JSON.stringify({ source: "jpx-short-selling", dryRun: true, data }, null, 2));
+    console.info(JSON.stringify({ source: "jpx-short-selling", dryRun: true, requestedDate, data }, null, 2));
     return { source: "jpx-short-selling", ok: true, detail: `dry-run date=${data.date}` };
   }
 
@@ -356,15 +360,46 @@ async function runShortSelling(): Promise<RunOutcome> {
   const archivedNote =
     archive.outcome === "skipped_existing" ? "既取得PDFを再利用" : "新規PDFを記録";
 
-  // 当月分の月次集計 (今日ぶんを含む、Notion に既に積んである日次 PDF を
-  // すべて再取得して加重平均する — recordPrimaryData 以外の追加ストレージを
-  // 持たない設計上の帰結。運用開始直後は月初からの日数分しか無いため、
-  // 月が進むほど正確になる)。
+  // 月次は要求日の月の 1 日〜要求日。休場と公式 0 件は欠けにしない。
+  // 営業日の保管が欠けていれば upsert せず失敗する（保管済みの日だけでは成功にしない）。
+  if (data.officialZeroDates === undefined) {
+    throw new Error("jpx-short-selling: 公式一覧の0件判定が無いため月次を書きません");
+  }
   const month = data.date.slice(0, 7);
   const primaryDbId = await requirePrimaryDataDbId("runShortSelling");
-  // key (= jpx-short-selling-sector-YYYY-MM-DD) の日付昇順
   const files = await listArchivedRecordsByPrefix(primaryDbId, `jpx-short-selling-sector-${month}`);
-  const dailyRows = await Promise.all(files.map(reparseArchivedShortSelling));
+  const storedDates = files.map((ref) => shortSellingDateFromArchiveKey(ref.key));
+  if (!storedDates.includes(data.date)) storedDates.push(data.date);
+  const missing = missingShortSellingBusinessDays({
+    through: data.date,
+    storedDates,
+    officialZeroDates: data.officialZeroDates,
+  });
+  if (missing.length > 0) {
+    throw new Error(
+      `jpx-short-selling: ${month} の月次は ${data.date} 時点で営業日が欠けているため観測ログを書きません: ${missing.join(", ")}`
+    );
+  }
+  const seen = new Set<string>();
+  const dailyRows: Array<Omit<ShortSellingData, "pdfBytes" | "pdfUrl" | "officialZeroDates">> = [];
+  for (const ref of files) {
+    const date = shortSellingDateFromArchiveKey(ref.key);
+    if (date > data.date) continue;
+    if (seen.has(date)) throw new Error(`jpx-short-selling: 保管日 ${date} が重複しています`);
+    seen.add(date);
+    if (date === data.date) {
+      dailyRows.push({ date: data.date, sectors: data.sectors, other: data.other });
+      continue;
+    }
+    const parsed = await reparseArchivedShortSelling(ref);
+    if (parsed.date !== date) {
+      throw new Error(`jpx-short-selling: 保管キー ${ref.key} とPDF本文の日付 ${parsed.date} が一致しません`);
+    }
+    dailyRows.push(parsed);
+  }
+  if (!seen.has(data.date)) {
+    dailyRows.push({ date: data.date, sectors: data.sectors, other: data.other });
+  }
   const monthly = aggregateMonthlyShortSellingRatio(dailyRows);
 
   const { dbId: obsDbId } = await ensureObservationsDb();

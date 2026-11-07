@@ -67,7 +67,7 @@ import { collectOfficialRightsCustody, type OfficialRightsCustody } from "./righ
 import { confirmedCloseOnDate, diagnoseConfirmedCloses, selectConfirmedCloses } from "./macro-session.js";
 import { marketClosure } from "../shared/market-calendar.js";
 import { captureMacroJpLeg, loadMacroJpLeg, macroJpCacheKey, type MacroJpLeg, type MacroJpLegStore } from "./macro-jp-leg.js";
-import { INC_FINANCIALS_STALE_TAG, formatConfirmedHoldDiag, formatNullBandHoldLog, formatStockSessionDiag } from "./inc-financials-stale-diag.js";
+import { INC_FINANCIALS_STALE_TAG, formatConfirmedHoldDiag, formatMacroGateHoldLines, formatMissingJpLegHoldLine, formatNullBandHoldLog, formatStockSessionDiag, type MacroGateHoldLogInput } from "./inc-financials-stale-diag.js";
 import { finishNullBarsSummaryLine, logFreshCloseNullBars, startNullBarsRun } from "./inc-stock-sync-null-bars-diag.js";
 
 // core スキーマ (共有。日次 sync が更新)
@@ -377,7 +377,13 @@ interface MacroRawAttempt {
   sha256: string | null;
   /** 通信失敗などで body が無い理由 (body があるとき null)。 */
   noBodyReason: string | null;
+  /**
+   * chart capture の受信時刻 (ISO)。ログ専用。
+   * 一次原本 manifest には書かない。VI HTML capture には時刻が無いので null。
+   */
+  receivedAt: string | null;
 }
+type MacroGateHoldSources = Omit<MacroGateHoldLogInput, "reason">;
 /**
  * swing_daily_ohlcv の保持本数 (営業日相当)。増分 upsert と併せて書込/容量を抑える。
  * 適用は Phase 4 の一括 sweep (pruneOhlcvRetention) — 書き込み経路では行わない。
@@ -1854,21 +1860,23 @@ export async function runMarketContextSync(db: Db, jpLegStore?: MacroJpLegStore)
   const scheduled = sharedEnv.STOCK_SYNC_TARGET() === "scheduled-context";
   const targetDate = runDateKeys(startedAt).runDate;
   assertScheduledDate(targetDate);
+  let deadline: number | undefined;
+  let sourceDeadline: number | undefined;
   if (scheduled) {
     const scheduledMs = scheduledAtForDate(sharedEnv.SCHEDULED_AT(), targetDate, startedAt);
     const window = scheduledMacroWindow(targetDate);
     if (scheduledMs < window.start || scheduledMs > window.latestStart) {
-      throw new Error("定時マクロの開始は予定日21:00〜21:30 UTCに限定します");
+      throw new Error(`定時マクロの開始は予定日 ${new Date(window.start).toISOString()}〜${new Date(window.latestStart).toISOString()} に限定します`);
     }
-    if (Date.now() > Date.parse(`${targetDate}T22:00:00.000Z`)) {
-      throw new Error("定時マクロの保存期限22:00 UTCを超過しました");
+    if (Date.now() > window.deadline) {
+      throw new Error(`定時マクロの保存期限 ${new Date(window.deadline).toISOString()} を超過しました`);
     }
     // 不正なフラグは Yahoo を叩く前に止める。未設定は検出のみで、ここでは throw しない。
     sharedEnv.MACRO_CONTEXT_GAP_FILL();
+    deadline = window.deadline;
+    sourceDeadline = window.sourceDeadline;
   }
   const nativeWindow = nativeJobExecutionWindow(startedAt, sharedEnv.BATCH_JOB_STARTED_AT(), 360, 10);
-  let deadline = scheduled ? scheduledMacroWindow(targetDate).deadline : undefined;
-  let sourceDeadline = scheduled ? scheduledMacroWindow(targetDate).sourceDeadline : undefined;
   if (nativeWindow !== undefined) {
     deadline = deadline === undefined ? nativeWindow.deadline : Math.min(deadline, nativeWindow.deadline);
     sourceDeadline = sourceDeadline === undefined ? nativeWindow.sourceDeadline : Math.min(sourceDeadline, nativeWindow.sourceDeadline);
@@ -1897,6 +1905,7 @@ export async function runMarketContextSync(db: Db, jpLegStore?: MacroJpLegStore)
   const jpLeg = jpLegStore === undefined ? undefined : await loadMacroJpLeg(jpLegStore, targetDate);
   if (jpLeg === null) {
     console.warn(`[sync-context] JP leg HOLD: 予定日 ${targetDate} の保存済み日本市場原本がありません。上流取得を開始しません。`);
+    console.warn(formatMissingJpLegHoldLine(targetDate));
     await archiveMacroSourceBatch({ startedAt, draft: createMarketContextDraft(), attempts: [], expectedDate: targetDate,
       jpLeg: { kind: "missing-jp-leg", expectedDate: targetDate, cacheKey: macroJpCacheKey(targetDate) } });
     return false;
@@ -3224,7 +3233,7 @@ async function collectMacroRawAttempt(
   collector: MacroRawAttempt[],
   target: MarketContextTarget,
   requestedAt: string,
-  capture: { status: number; bytes: Uint8Array } | null,
+  capture: { status: number; bytes: Uint8Array; receivedAt?: string } | null,
   noBodyReason: string | null
 ): Promise<void> {
   const attempt = collector.filter((a) => a.target === target).length;
@@ -3237,6 +3246,7 @@ async function collectMacroRawAttempt(
     bytes: capture ? new Uint8Array(capture.bytes) : null,
     sha256: capture ? await sha256HexBytes(Uint8Array.from(capture.bytes)) : null,
     noBodyReason: capture ? null : (noBodyReason ?? "body なし (onRaw 未発火)"),
+    receivedAt: capture !== null && typeof capture.receivedAt === "string" ? capture.receivedAt : null,
   });
 }
 
@@ -3500,7 +3510,8 @@ function marketContextValues(draft: MarketContextDraft, today: string) {
 async function persistMarketContext(
   db: Db,
   draft: MarketContextDraft,
-  expectedDate?: string
+  expectedDate: string | undefined,
+  holdLog: MacroGateHoldSources
 ): Promise<boolean> {
   // 書くのは正準 gate が通るときだけ (F-06 の後継)。不一致・不足は
   // 書かず前回値を残す (HOLD)。実行日・run 日はキーに使わない。
@@ -3509,11 +3520,25 @@ async function persistMarketContext(
     console.warn(
       `[sync-daily]   マクロ保存スキップ (HOLD): ${gate.reason}。前回値を保持します。`
     );
+    // 計測のみ (INC-20261008)。gate の戻り値・保存・分岐には使わない。
+    for (const line of formatMacroGateHoldLines({
+      reason: gate.reason,
+      charts: draft.charts,
+      nikkeiViDate: draft.nikkeiViDate,
+      attempts: holdLog.attempts,
+      jpN225ReceivedAt: holdLog.jpN225ReceivedAt,
+      jpViReceivedAt: holdLog.jpViReceivedAt,
+    })) {
+      console.warn(line);
+    }
     return false;
   }
   const today = gate.key;
-  if (expectedDate !== undefined && Date.now() > Date.parse(`${expectedDate}T22:00:00.000Z`)) {
-    throw new Error("定時マクロの保存期限22:00 UTCを超過しました");
+  if (expectedDate !== undefined) {
+    const saveDeadline = scheduledMacroWindow(expectedDate).deadline;
+    if (Date.now() > saveDeadline) {
+      throw new Error(`定時マクロの保存期限 ${new Date(saveDeadline).toISOString()} を超過しました`);
+    }
   }
 
   await db
@@ -3648,12 +3673,13 @@ async function reconcileMissingMarketContext(
 async function persistMarketContextWithDiagnostics(
   db: Db,
   draft: MarketContextDraft,
-  expectedDate?: string,
-  beforeWrite?: () => void
+  expectedDate: string | undefined,
+  beforeWrite: (() => void) | undefined,
+  holdLog: MacroGateHoldSources
 ): Promise<boolean> {
   beforeWrite?.();
   try {
-    return await persistMarketContext(db, draft, expectedDate);
+    return await persistMarketContext(db, draft, expectedDate, holdLog);
   } catch (error) {
     console.warn(
       "[sync-daily]   マクロ保存失敗:",
@@ -3692,7 +3718,13 @@ async function archiveAndPersistMarketContext(
   jpLeg?: MacroJpLeg["reference"]
 ): Promise<boolean> {
   await archiveMacroSourceBatch({ startedAt, draft, attempts, expectedDate, jpLeg });
-  return persistMarketContextWithDiagnostics(db, draft, expectedDate, beforeWrite);
+  return persistMarketContextWithDiagnostics(db, draft, expectedDate, beforeWrite, {
+    charts: draft.charts,
+    nikkeiViDate: draft.nikkeiViDate,
+    attempts,
+    jpN225ReceivedAt: jpLeg === undefined ? null : jpLeg.n225.receivedAt,
+    jpViReceivedAt: jpLeg === undefined ? null : jpLeg.vi.receivedAt,
+  });
 }
 
 async function archiveMacroSourceBatch(args: {

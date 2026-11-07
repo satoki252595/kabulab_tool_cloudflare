@@ -16,7 +16,9 @@ import {
   COMPLETION_CUTOFF_TIME,
   COMPLETION_FLOOR_TIME,
   CONTEXT_DISPATCH_CRON,
+  CONTEXT_DISPATCH_CRON_WINTER,
   CONTEXT_READCHECK_CRON,
+  CONTEXT_READCHECK_CRON_WINTER,
   DISPATCH_CRON,
   READCHECK_CRON,
   evaluateReadcheck,
@@ -151,14 +153,19 @@ describe("株式 dispatch は null 帯の外（修正前の 13 17 では落ち�
     expect(() => evaluateReadcheck([stockJob(`${D}T20:30:00.000Z`)], D)).toThrow("14:30 UTC を超過");
   });
 
-  it("マクロの cron は残し、wrangler の株式 cron だけが新しい時刻になる", () => {
+  it("マクロは夏 cron を残して冬 cron を足し、株式 cron だけが 09:00 UTC", () => {
+    // 夏（EDT）の 17:00/18:05 ET は従来の 21:00/22:05 UTC のまま。冬（EST）は1時間後。
     expect(CONTEXT_DISPATCH_CRON).toBe("0 21 * * MON-FRI");
     expect(CONTEXT_READCHECK_CRON).toBe("5 22 * * MON-FRI");
+    expect(CONTEXT_DISPATCH_CRON_WINTER).toBe("0 22 * * MON-FRI");
+    expect(CONTEXT_READCHECK_CRON_WINTER).toBe("5 23 * * MON-FRI");
     const toml = readFileSync(new URL("../../wrangler.toml", import.meta.url), "utf8");
     expect(toml).toContain(`"${DISPATCH_CRON}"`);
     expect(toml).toContain(`"${READCHECK_CRON}"`);
     expect(toml).toContain('"0 21 * * MON-FRI"');
     expect(toml).toContain('"5 22 * * MON-FRI"');
+    expect(toml).toContain('"0 22 * * MON-FRI"');
+    expect(toml).toContain('"5 23 * * MON-FRI"');
     expect(toml).not.toContain('"13 17 * * MON-FRI"');
     expect(toml).not.toContain('"5 21 * * MON-FRI"');
   });

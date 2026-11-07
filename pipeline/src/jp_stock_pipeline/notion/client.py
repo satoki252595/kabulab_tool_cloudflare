@@ -193,6 +193,26 @@ def _retry_after_seconds(exc: Exception, attempt: int) -> float:
     return max(retry_after, min(2.0**attempt, 120.0))
 
 
+_DOWNLOAD_EXCEPTION_URL_RE = re.compile(r"https?://\S+")
+# query 相当の値だけを消す。X-Amz-* を token / Signature より先に見て、キーの一部を取りこぼさない。
+_DOWNLOAD_EXCEPTION_SECRET_RE = re.compile(
+    r"(?i)((?:x-amz-[a-z0-9_-]+|authorization|signature|token)=)"
+    r"(?:\"[^\"]*\"|'[^']*'|[^\s&]*)"
+)
+_DOWNLOAD_EXCEPTION_AUTH_HEADER_RE = re.compile(
+    r"(?i)authorization\s*:\s*(?:bearer\s+)?\S+"
+)
+
+
+def _sanitize_download_exception_message(message: str) -> str:
+    """診断ログ用。URL と query / Authorization の値を消してから先頭 200 字だけ返す。"""
+    sanitized = _DOWNLOAD_EXCEPTION_URL_RE.sub("<url>", message)
+    sanitized = _DOWNLOAD_EXCEPTION_SECRET_RE.sub(r"\1<redacted>", sanitized)
+    sanitized = _DOWNLOAD_EXCEPTION_AUTH_HEADER_RE.sub("Authorization: <redacted>", sanitized)
+    sanitized = sanitized.replace("\r", " ").replace("\n", " ")
+    return sanitized[:200]
+
+
 class NotionClient:
     def __init__(
         self,
@@ -432,6 +452,7 @@ class NotionClient:
         assert_request_allowed()
         try:
             options = {"stream": True} if max_bytes is not None else {}
+            t0 = time.monotonic()
             response = requests.get(url, timeout=120, allow_redirects=False, **options)
             if response.status_code != 200:
                 if max_bytes is not None:
@@ -452,8 +473,18 @@ class NotionClient:
                 finally:
                     response.close()
             return response.content
-        except requests.RequestException:
+        except requests.RequestException as exc:
             # presigned URL の認証queryを、ジョブの例外traceへ持ち出さない。
+            # 診断ログも url 引数・query・Authorization を出さず、同じ例外のまま終える。
+            status_code = getattr(getattr(exc, "response", None), "status_code", None)
+            logger.warning(
+                "[INC-20261105-kabulab_tool_cloudflare-tdnet-notion-attach-verify] "
+                "download_file RequestException type=%s status=%s elapsed_ms=%s msg=%s",
+                type(exc).__name__,
+                "none" if status_code is None else status_code,
+                int((time.monotonic() - t0) * 1000),
+                _sanitize_download_exception_message(str(exc)),
+            )
             raise NotionRequestError("Notion 添付読戻しの結果不明。再試行しません") from None
 
     def list_page_property_items(self, page_id: str, property_id: str) -> list[dict]:

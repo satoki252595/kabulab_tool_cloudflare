@@ -4,8 +4,31 @@ import { listPageFiles } from "./page-file.js";
 import * as downloader from "./archived-download.js";
 import * as sha from "../sha256.js";
 import { installScheduledDeadline } from "../scheduled-admission.js";
-vi.mock("./page-file.js", () => ({ listPageFiles: vi.fn() }));
+vi.mock("./page-file.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./page-file.js")>();
+  return { ...actual, listPageFiles: vi.fn() };
+});
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
+
+it("共有したpage応答でも複数添付の全bytesとSHAを検査し、追加GETはしない", async () => {
+  const first = Uint8Array.from([1, 2, 3]);
+  const second = Uint8Array.from([4, 5, 6, 7]);
+  const page = { properties: { Files: { type: "files", files: [
+    { name: "a.bin", type: "file", file: { url: "https://file.notion.so/a" } },
+    { name: "b.bin", type: "file", file: { url: "https://file.notion.so/b" } },
+  ] } } };
+  vi.mocked(listPageFiles).mockImplementation(() => { throw new Error("second GET"); });
+  const started = Date.now();
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => new Response(
+    String(url).endsWith("/b") ? second : first,
+  ));
+  await expect(verifyArchivedAttachments("page", [
+    { filename: "a.bin", bytes: first }, { filename: "b.bin", bytes: second },
+  ], "原本", "Files", page as never)).resolves.toBeUndefined();
+  expect(listPageFiles).not.toHaveBeenCalled();
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(Date.now() - started).toBeGreaterThanOrEqual(0);
+});
 
 describe("通常原本readbackのbounded同URL GET", () => {
   const expected = Uint8Array.from([1, 2, 3]);

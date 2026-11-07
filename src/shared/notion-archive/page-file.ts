@@ -21,11 +21,12 @@ export interface PageFileRef {
   kind: "file" | "external";
 }
 
-interface PagePropertiesResponse {
+export interface PagePropertiesResponse {
   properties: Record<
     string,
     {
       type: string;
+      rich_text?: Array<{ plain_text: string }>;
       files?: Array<{
         name: string;
         type: "file" | "external" | string;
@@ -67,14 +68,11 @@ export async function fetchPageFileUrl(
  * 不正エントリ (種別・名前・URL・構造の欠損) は黙って落とさず STOP する
  * (ルール2。valid1+malformed1 を refs1 に縮めて件数検査を誤通過させない)。
  */
-export async function listPageFiles(
+export function filesFromPage(
+  page: PagePropertiesResponse,
   pageId: string,
   propertyName: string
-): Promise<PageFileRef[]> {
-  const page = await notionRequest<PagePropertiesResponse>(
-    "GET",
-    `/pages/${pageId}`
-  );
+): PageFileRef[] {
   const prop = page.properties?.[propertyName];
   if (!prop || prop.type !== "files") return [];
   const out: PageFileRef[] = [];
@@ -96,4 +94,15 @@ export async function listPageFiles(
     out.push({ name: f.name, url, kind: f.type });
   }
   return out;
+}
+
+export async function listPageFiles(
+  pageId: string,
+  propertyName: string
+): Promise<PageFileRef[]> {
+  const page = await notionRequest<PagePropertiesResponse>(
+    "GET",
+    `/pages/${pageId}`
+  );
+  return filesFromPage(page, pageId, propertyName);
 }
