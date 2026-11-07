@@ -57,15 +57,18 @@ export const TDNET_PDF_RETAIN_DAYS = 40;
  * 二次データ Notion 投入の実時間上限。**二次フェーズ開始から測る**
  * (D1 upsert 所要に食われない。開始起点の 50s では 2026-06 以降ほぼ
  * 0 件投入だった)。予算は notion_page_id が空の行だけに使う。
- * 直近の catchup は 7 日窓 1,181〜1,326 行のうち skip 479〜603 が
- * 保存済みの照会で、新規は 18〜106 行だった。保存済みを外すと
- * 定常状態で回すのはおおよそ 1 日分（コメント上の見積 120〜260 行、
- * 1 行 2〜5 秒）で、12 分に収まる見込み。収まり切らない日は古い未保存を
- * 優先し、残りは tdnetId をログに残して翌回の遡及が拾う。
- * 常態的に reachedDeadline=true なら backfill を回す合図。
- * catchup.yml の timeout (30 分、yuho と共有) 内に収まること。
+ * 定常時は 1 日分 (120〜260 行、1 行 2〜5 秒) で収まるが、決算期は
+ * 1 日 400〜800 件の開示が流入し、12 分 (実測 168〜183 件/run) では
+ * 滞留が増え続けた (2026-10-30〜11-06 に未保管 2,557 件。#674 の D1
+ * 精査で確認)。25 分へ広げても定時の絶対締切 (19:53 JST、source
+ * 締切はその 10 分前) が上限として効き、後続 yuho の開始予算は
+ * 残時間から計算される。流入の少ない時期は予算を使い切らずに終わる。
+ * 収まり切らない日は古い未保存を優先し、残りは tdnetId をログに
+ * 残して翌回の遡及が拾う。常態的に reachedDeadline=true なら
+ * backfill (ir-tdnet --resume-from/--resume-to) を回す合図。
+ * catchup.yml の timeout (定時 54 分、yuho と共有) 内に収まること。
  */
-const NOTION_BUDGET_MS = 12 * 60_000;
+const NOTION_BUDGET_MS = 25 * 60_000;
 
 export interface IrCatalogResult {
   ran: boolean;

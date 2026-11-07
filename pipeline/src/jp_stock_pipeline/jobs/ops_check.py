@@ -163,6 +163,17 @@ _MACRO_DATES_SQL = (
     "SELECT date FROM swing_market_context WHERE date >= ? AND date <= ?"
 )
 
+# INC-20261107-kabulab_tool_cloudflare-sector-daily-gap
+# セクター日次集計 (aggregateSectorDaily) は当日の indicators 断面だけを
+# 読むため、被覆率 90% 未満でスキップした日は翌日以降も埋まらない
+# (実測: 2026-10-29・2026-11-06 が恒久欠落)。writer の保持 30 日に
+# 合わせ、直近 30 暦日の JPX 営業日に行が無い日を数える。
+_SECTOR_DAILY_INCIDENT = "[INC-20261107-kabulab_tool_cloudflare-sector-daily-gap]"
+SECTOR_DAILY_GAP_LOOKBACK_DAYS = 30
+_SECTOR_DATES_SQL = (
+    "SELECT DISTINCT date FROM swing_sector_daily WHERE date >= ? AND date <= ?"
+)
+
 
 # 小さな断面3表だけをPKで結合する。OHLCV全走査・R2列挙は行わない。
 # MAXが1銘柄だけ進んだ日に、残りの凍結/未登録を見逃さない。
@@ -391,6 +402,54 @@ def _check_macro_context_gaps(
         f"{_MACRO_GAP_INCIDENT} マクロ欠け日: 窓{start.isoformat()}〜{end.isoformat()}"
         f"の日米共通営業日 {len(expected)} 日のうち {len(missing)} 日が"
         f" swing_market_context に無い ({listed})"
+    )
+
+
+def _check_sector_daily_gaps(
+    store: D1Store, problems: list[str], *, now: datetime | None = None
+) -> None:
+    """直近30暦日のJPX営業日で、swing_sector_daily に行が無い日を数える。読み取りのみ。"""
+    current = now or datetime.now(UTC)
+    try:
+        end = expected_stock_date(current)
+    except ValueError as exc:
+        problems.append(f"{_SECTOR_DAILY_INCIDENT} セクター欠け日の暦を判定できない: {exc}")
+        return
+    start = end - timedelta(days=SECTOR_DAILY_GAP_LOOKBACK_DAYS - 1)
+    expected: list[date] = []
+    day = start
+    while day <= end:
+        if is_session_day(day, ("JPX",)):
+            expected.append(day)
+        day += timedelta(days=1)
+    if not expected:
+        problems.append(f"{_SECTOR_DAILY_INCIDENT} セクター欠け日の窓が空です: {end.isoformat()}")
+        return
+    try:
+        rows = store.query(_SECTOR_DATES_SQL, [start.isoformat(), end.isoformat()])
+    except D1Error as exc:
+        problems.append(
+            f"{_SECTOR_DAILY_INCIDENT} swing_sector_daily の窓内日付を読めない: {exc}"
+        )
+        return
+    present: set[str] = set()
+    for row in rows:
+        value = row.get("date")
+        if not isinstance(value, str) or value == "":
+            problems.append(f"{_SECTOR_DAILY_INCIDENT} swing_sector_daily.date を読めない")
+            return
+        present.add(value)
+    missing = [d.isoformat() for d in expected if d.isoformat() not in present]
+    if not missing:
+        logger.info(
+            "%s セクター欠け日: 窓%s〜%sのJPX営業日 %d 日は全て行がある",
+            _SECTOR_DAILY_INCIDENT, start.isoformat(), end.isoformat(), len(expected),
+        )
+        return
+    problems.append(
+        f"{_SECTOR_DAILY_INCIDENT} セクター欠け日: 窓{start.isoformat()}〜{end.isoformat()}"
+        f"のJPX営業日 {len(expected)} 日のうち {len(missing)} 日が"
+        f" swing_sector_daily に無い ({','.join(missing)})"
     )
 
 
@@ -827,6 +886,7 @@ def execute(ctx: JobContext) -> None:
     _check_stock_coverage(store, problems)
     _check_vwap_daily_coverage(store, _vwap_daily_r2(settings), problems)
     _check_macro_context_gaps(store, problems)
+    _check_sector_daily_gaps(store, problems)
     _check_ir_pdf_archive(store, problems)
     _check_ir_universe_gap(store, problems)
 
