@@ -25,6 +25,7 @@ import { downloadArchivedFile } from "../../../../../src/shared/notion-archive/a
 import { sha256HexBytes } from "../../../../../src/shared/sha256.js";
 import { notionRequest } from "../../../../../src/shared/notion-archive/client.js";
 import { edinetArchiveNativeMetadata, type edinetArchiveMetadata } from "./archive-metadata.js";
+import { zipContentsEqual } from "./zip.js";
 
 /** EDINET 書類取得種別 (1=XBRL ZIP / 5=CSV ZIP)。 */
 export type EdinetArchiveDocType = 1 | 5;
@@ -255,6 +256,11 @@ export function archiveTallyFailed(errorCount: number): boolean {
  * skipped_existing は先に unique 行 + 実体ありを検証する。旧 manifest
  * unknown でも実 bytes 一致は許容し、unknown 表示は保持する
  * (manifest を書換えない)。
+ *
+ * 例外: EDINET type1 ZIP は再取得毎にコンテナのタイムスタンプが変わり
+ * 生バイト列が一致しないため、fingerprint 不一致の保全停止時は保管済み
+ * 原本と中身の完全一致を証明できた場合に限り skipped_existing
+ * (manifestMatch: "unknown") で再開する (resolveContentEquivalentExisting)。
  */
 export async function recordEdinetZip(args: {
   service: string;
@@ -271,21 +277,35 @@ export async function recordEdinetZip(args: {
   if ("docID" in metadata && metadata.docID !== docID) {
     throw new Error("recordEdinetZip: 明示docIDとmetadata.docIDが不一致です。上書きせず停止します");
   }
-  const result = await recordPrimaryData({
-    service,
-    key: edinetArchiveKey(docID, type),
-    source,
-    fetchedAt,
-    metadata: { ...metadata, docID, edinetDocType: type },
-    files: [
-      {
-        bytes: new Uint8Array(zip),
-        filename: edinetArchiveFilename(docID, type),
-        contentType: "application/zip",
-      },
-    ],
-    force,
-  });
+  let result: RecordResult;
+  try {
+    result = await recordPrimaryData({
+      service,
+      key: edinetArchiveKey(docID, type),
+      source,
+      fetchedAt,
+      metadata: { ...metadata, docID, edinetDocType: type },
+      files: [
+        {
+          bytes: new Uint8Array(zip),
+          filename: edinetArchiveFilename(docID, type),
+          contentType: "application/zip",
+        },
+      ],
+      force,
+    });
+  } catch (e) {
+    // EDINET type1 ZIP は再取得のたびにコンテナのタイムスタンプが変わり
+    // 生バイト列 fingerprint が一致しない (中身は同一)。初回保管後の中断→
+    // 再実行が「同一 key の入力が変更」保全停止で恒久停止するため、この
+    // エラーに限り保管済み原本と中身の完全一致を証明できれば既存扱いで
+    // 再開する。証明できない場合は元の保全停止をそのまま投げる。
+    if (!force && service === "yuho-quant" && isInputChangedStop(e, edinetArchiveKey(docID, type))) {
+      const resolved = await resolveContentEquivalentExisting(docID, type, zip);
+      if (resolved !== null) return resolved;
+    }
+    throw e;
+  }
   if (result.fileTooLarge) {
     throw new Error(
       `recordEdinetZip: 実ファイルが Notion 上限超過で未添付です (metadata のみ記録扱いにしない): ${edinetArchiveKey(docID, type)}`
@@ -305,6 +325,50 @@ export async function recordEdinetZip(args: {
     `EDINET一次 ${edinetArchiveKey(docID, type)}`
   );
   return result;
+}
+
+/** notion-archive の「同一 key の入力が変更」保全停止かどうか (key 束縛つき)。 */
+function isInputChangedStop(e: unknown, key: string): boolean {
+  return (
+    e instanceof Error &&
+    e.message.includes("同一 key の入力が変更されているため保全停止") &&
+    e.message.includes(`key=${key}`)
+  );
+}
+
+/**
+ * 保管済み原本を厳密資格確認つきで読み戻し (readSavedEdinetZip: 一意行・
+ * Key/metadata・単一物理ファイル・manifest 自己整合)、今回取得 ZIP と
+ * 中身 (全エントリの名前+展開後バイト列) が完全一致するときだけ
+ * skipped_existing を返す。一致を証明できない要因 (資格不適格・DL失敗・
+ * ZIP解釈不能・中身相違) はすべて null とし、呼び出し側が元の保全停止を
+ * 投げる (黙って成功扱いにしない)。manifest は生バイト列基準のため
+ * manifestMatch は "unknown" (manifest 一致とは主張しない)。
+ */
+async function resolveContentEquivalentExisting(
+  docID: string,
+  type: EdinetArchiveDocType,
+  zip: Buffer | Uint8Array
+): Promise<RecordResult | null> {
+  let saved: Awaited<ReturnType<typeof readSavedEdinetZip>>;
+  try {
+    saved = await readSavedEdinetZip(docID, type);
+  } catch {
+    return null;
+  }
+  let equal: boolean;
+  try {
+    equal = zipContentsEqual(saved.bytes, Buffer.from(zip));
+  } catch {
+    return null;
+  }
+  if (!equal) return null;
+  return {
+    pageId: saved.pageId,
+    outcome: "skipped_existing",
+    fileTooLarge: false,
+    manifestMatch: "unknown",
+  };
 }
 
 /**
