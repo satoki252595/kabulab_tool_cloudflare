@@ -39,6 +39,7 @@ _LEGACY_DDL: tuple[str, ...] = (
     "CREATE TABLE swing_stock_indicators (stock_id INTEGER PRIMARY KEY, latest_date TEXT, latest_close REAL)",
     "CREATE TABLE p_momentum (stock_id INTEGER PRIMARY KEY, as_of TEXT, source_max_date TEXT, bars INTEGER)",
     "CREATE TABLE swing_market_context (date TEXT PRIMARY KEY)",
+    "CREATE TABLE swing_sector_daily (date TEXT, sector TEXT)",
     "CREATE TABLE core_stocks (id INTEGER PRIMARY KEY, code TEXT, updated_at INTEGER,"
     " is_active INTEGER DEFAULT 1, instrument_type TEXT DEFAULT 'equity')",
     "CREATE TABLE yutai_benefits"
@@ -892,6 +893,16 @@ class TestOpsCheck:
                     [day.isoformat()],
                 )
             day += timedelta(days=1)
+        # セクター日次 (swing_sector_daily) も期待取引日までの JPX 営業日を緑で置く。
+        sector_end = ops_check.expected_stock_date(current)
+        day = sector_end - timedelta(days=ops_check.SECTOR_DAILY_GAP_LOOKBACK_DAYS - 1)
+        while day <= sector_end:
+            if is_session_day(day, ("JPX",)):
+                store.query(
+                    "INSERT INTO swing_sector_daily (date, sector) VALUES (?, '化学')",
+                    [day.isoformat()],
+                )
+            day += timedelta(days=1)
         for dataset, (latest, n, epoch) in rows.items():
             ops.record_freshness(
                 store, dataset=dataset, store_name="D1", location=dataset,
@@ -1680,3 +1691,46 @@ class TestMacroContextGaps:
         warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
         assert any("マクロ基準日" in line for line in warnings)
         assert not any("swing_market_context に無い" in line for line in warnings)
+
+
+class TestSectorDailyGaps:
+    """swing_sector_daily の営業日欠け (部分日の集計スキップは翌日に埋まらない)。"""
+
+    NOW = datetime(2026, 11, 6, 23, 35, tzinfo=JST)
+
+    def _seed(self, store: _FakeStore, *, omit: set[str]) -> None:
+        end = ops_check.expected_stock_date(self.NOW)
+        day = end - timedelta(days=ops_check.SECTOR_DAILY_GAP_LOOKBACK_DAYS - 1)
+        while day <= end:
+            if is_session_day(day, ("JPX",)) and day.isoformat() not in omit:
+                store.query(
+                    "INSERT INTO swing_sector_daily (date, sector) VALUES (?, '化学')",
+                    [day.isoformat()],
+                )
+            day += timedelta(days=1)
+
+    def test_窓内の欠け日を件数と日付付きで失敗にする(self) -> None:
+        store = _FakeStore()
+        self._seed(store, omit={"2026-10-29", "2026-11-06"})
+        problems: list[str] = []
+        ops_check._check_sector_daily_gaps(store, problems, now=self.NOW)
+        assert len(problems) == 1
+        assert "2026-10-29" in problems[0] and "2026-11-06" in problems[0]
+
+    def test_全営業日そろっていれば問題なし(self) -> None:
+        store = _FakeStore()
+        self._seed(store, omit=set())
+        problems: list[str] = []
+        ops_check._check_sector_daily_gaps(store, problems, now=self.NOW)
+        assert problems == []
+
+    def test_読めなければ判定不能として失敗する(self) -> None:
+        from jp_stock_pipeline.cloud_store.d1 import D1Error
+
+        class _Broken:
+            def query(self, sql, params=None):
+                raise D1Error("boom")
+
+        problems: list[str] = []
+        ops_check._check_sector_daily_gaps(_Broken(), problems, now=self.NOW)
+        assert len(problems) == 1

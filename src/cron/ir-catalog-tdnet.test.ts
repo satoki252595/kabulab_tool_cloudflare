@@ -19,14 +19,14 @@ const freshUpstream = {
 beforeEach(() => { vi.clearAllMocks(); vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(now); vi.spyOn(console, "info").mockImplementation(() => {}); });
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
-it("同じ41日一覧と12分phaseへだけ絶対締切を追加し、source順序を保つ", async () => {
+it("同じ41日一覧と25分phaseへだけ絶対締切を追加し、source順序を保つ", async () => {
   const deadline = now + 58.5 * 60_000;
   vi.mocked(listRange).mockResolvedValue([freshUpstream]);
   await runIrCatalogCatchup({} as never, undefined, now, deadline);
   expect(listRange).toHaveBeenCalledWith("20260904-20261014", expect.any(Function));
   expect(ingestBatch).toHaveBeenCalledWith(expect.anything(), [freshUpstream], expect.objectContaining({
     batchKey: "tdnet-daily-2026-10-14", dailySnapshot: true,
-    notionByStockBudgetMs: 720_000, notionByStockDeadlineMs: deadline - 10 * 60_000, unsavedLookbackDays: 40,
+    notionByStockBudgetMs: 1_500_000, notionByStockDeadlineMs: deadline - 10 * 60_000, unsavedLookbackDays: 40,
   }));
   expect(vi.mocked(listRange).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(ingestBatch).mock.invocationCallOrder[0]);
 });
@@ -62,7 +62,7 @@ it("銘柄別Notionを予算内で走り切ったら日次完了する", async (
   const logs = vi.mocked(console.info).mock.calls.map((call) => String(call[0])).join("\n");
   expect(logs).toContain("日次完了");
   expect(ingestBatch).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({
-    notionByStockBudgetMs: 720_000,
+    notionByStockBudgetMs: 1_500_000,
   }));
 });
 
