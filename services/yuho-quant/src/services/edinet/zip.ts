@@ -9,6 +9,7 @@
  * 形式 (ZIP64・暗号化・未知の圧縮法) は CLAUDE.md ルール2 に従い throw する
  * — 黙って空や部分結果を返さない。
  */
+import { createHash } from "node:crypto";
 import { inflateRawSync } from "node:zlib";
 
 const EOCD_SIG = 0x06054b50;
@@ -86,4 +87,35 @@ export function unzip(buf: Buffer, limits?: { maxEntries: number; maxExpandedByt
     entries.set(name, data);
   }
   return entries;
+}
+
+/** エントリ名順の (名前, 展開長, 展開後SHA256) 一覧。コンテナのメタ情報は含めない。 */
+function zipContentDigests(buf: Buffer): string {
+  const entries = unzip(buf);
+  // unzip は同名エントリを Map で潰すため、CD 宣言件数も束縛する
+  // (同名重複の差分を等価と誤判定しない)。
+  const totalEntries = buf.readUInt16LE(findEocdOffset(buf) + 10);
+  const lines = [...entries.keys()]
+    .sort()
+    .map((name) => {
+      const data = entries.get(name)!;
+      const sha = createHash("sha256").update(data).digest("hex");
+      return `${name}\0${data.length}\0${sha}`;
+    });
+  return [String(totalEntries), ...lines].join("\n");
+}
+
+/**
+ * 2つの ZIP の「中身」が完全一致するか (全エントリの名前と展開後バイト列)。
+ *
+ * EDINET の type1 (XBRL) ZIP はダウンロード毎に全エントリの ZIP
+ * タイムスタンプが再生成され、同一書類でも生バイト列が変わる (実測:
+ * S100ASBR、内容は全エントリ一致・生SHAのみ不一致)。保管済み原本との
+ * 再照合を生バイト列で行うと再実行が恒久に失敗するため、等価判定は
+ * コンテナでなく中身で行う。ZIP として読めない入力は unzip の throw を
+ * そのまま伝える (黙って不一致扱いにしない)。
+ */
+export function zipContentsEqual(a: Buffer, b: Buffer): boolean {
+  if (a.equals(b)) return true;
+  return zipContentDigests(a) === zipContentDigests(b);
 }
