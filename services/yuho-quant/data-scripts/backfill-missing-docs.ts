@@ -22,13 +22,20 @@
  *               D1_DATABASE_ID, NOTION_*(ルール6)。
  *
  * 実行: pnpm yuho:backfill:missing -- --from=2026-06-01 --to=2026-08-31 [--limit=N] [--force] [--dry-run]
+ *
+ * docID 指定モード: --docids-file=<JSONL> を渡すと、期間走査ではなく
+ * ファイル記載の docID (提出日つき) だけを対象にする。突合で特定した
+ * 欠落分だけを回収し、範囲内の既存通の再処理を避けるためのモード。
+ * 形式は lib/docid-targets.ts が正本。--from/--to とは同時指定不可。
  */
 import "dotenv/config";
 import {
   createD1HttpBatchSender,
   createD1HttpDb,
 } from "../../../src/shared/db/d1-http-client.js";
+import { readFileSync } from "node:fs";
 import { processMissingDoc } from "./lib/missing-backfill.js";
+import { parseDocidTargets } from "./lib/docid-targets.js";
 import { loadIngestCodeToId } from "../../../src/shared/db/active-equity.js";
 import {
   archiveTallyFailed,
@@ -56,8 +63,16 @@ const dryRun = process.argv.includes("--dry-run");
 const limit = arg("limit") ? Number(arg("limit")) : Infinity;
 const fromArg = arg("from");
 const toArg = arg("to");
-if (!fromArg || !toArg || !/^\d{4}-\d{2}-\d{2}$/.test(fromArg) || !/^\d{4}-\d{2}-\d{2}$/.test(toArg)) {
-  console.error("usage: --from=YYYY-MM-DD --to=YYYY-MM-DD [--limit=N] [--force] [--dry-run]");
+const docidsFile = arg("docids-file");
+let dayTargets: Map<string, Set<string>> | null = null;
+if (docidsFile !== undefined) {
+  if (fromArg !== undefined || toArg !== undefined) {
+    console.error("usage: --docids-file は --from/--to と同時指定できません");
+    process.exit(1);
+  }
+  dayTargets = parseDocidTargets(readFileSync(docidsFile, "utf-8"));
+} else if (!fromArg || !toArg || !/^\d{4}-\d{2}-\d{2}$/.test(fromArg) || !/^\d{4}-\d{2}-\d{2}$/.test(toArg)) {
+  console.error("usage: --from=YYYY-MM-DD --to=YYYY-MM-DD [--limit=N] [--force] [--dry-run] / --docids-file=<JSONL>");
   process.exit(1);
 }
 // raw-before-DB 契約: write mode で --no-archive は未対応 (明示 STOP)。
@@ -85,7 +100,11 @@ const db = createD1HttpDb(yuhoSchema);
 const d1HttpBatch = createD1HttpBatchSender();
 const { yuhoDocuments } = yuhoSchema;
 const codeToId = await loadIngestCodeToId(db);
-console.info(`[missing] 母集団 ${codeToId.size} 社 range=${fromArg}〜${toArg} force=${force} dryRun=${dryRun}`);
+console.info(
+  dayTargets
+    ? `[missing] 母集団 ${codeToId.size} 社 docids-file=${docidsFile} 対象=${[...dayTargets.values()].reduce((s, v) => s + v.size, 0)}通/${dayTargets.size}日 force=${force} dryRun=${dryRun}`
+    : `[missing] 母集団 ${codeToId.size} 社 range=${fromArg}〜${toArg} force=${force} dryRun=${dryRun}`
+);
 
 // 取込済み docId は全件 1 回だけ引く (日ごとに引くと 22k 行 × 日数になる)。
 // 本文ポインタの有無も一緒に引き、parse 済み (ok) なのにポインタ NULL の通は
@@ -112,13 +131,24 @@ const custodyMemo = new Map<string, DocCustody>();
 let done = 0;
 let target = 0;
 
-for (const date of eachDay(fromArg, toArg)) {
+for (const date of dayTargets ? [...dayTargets.keys()] : eachDay(fromArg!, toArg!)) {
   if (target >= limit) break;
   let listed: EdinetDoc[];
   try {
     const captured = await captureListSnapshot(date);
     await recordReportedChanges(db, captured.list, captured.snapshot, () => false);
     listed = captured.list.results;
+    if (dayTargets) {
+      const targets = dayTargets.get(date)!;
+      const listedIds = new Set(listed.map((doc) => doc.docID));
+      for (const id of targets) {
+        if (!listedIds.has(id)) {
+          console.error(`[missing] docids-file の対象が ${date} の一覧に無いため未回収 docID=${id}`);
+          tally.target_not_listed = (tally.target_not_listed ?? 0) + 1;
+        }
+      }
+      listed = listed.filter((doc) => targets.has(doc.docID));
+    }
   } catch (e) {
     // 原一覧の物理保管/変更観測はwriter。未知ACKをread失敗と混ぜて次の日へ進めない。
     console.error(`[missing] list/報告状態の保存未完 ${date} (再送なし)`);
@@ -196,7 +226,8 @@ if (
       (tally.notion_text_error ?? 0) +
       (tally.notion_text_no_code ?? 0) +
       (tally.notion_text_no_pointer ?? 0) +
-      (tally.archive_metadata_only ?? 0)
+      (tally.archive_metadata_only ?? 0) +
+      (tally.target_not_listed ?? 0)
   )
 ) {
   process.exitCode = 1;
