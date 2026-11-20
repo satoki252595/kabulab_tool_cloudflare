@@ -2,6 +2,7 @@
 import "dotenv/config";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
@@ -82,6 +83,31 @@ export function mechanicalPublishingAssertionDiagnostic(error: Error): string {
   const message = Array.from(raw.replace(/\r\n|\r|\n/g, " ")).slice(0, 300).join("");
   return `[INC-20261026-kabulab_tool_cloudflare-mechpub-fail] assert=${message} at=${firstAssertionFrame(error.stack)}`;
 }
+/**
+ * PublishingReadOnlyError の cause 同定用。載せるのは cause の name・kind・
+ * message の sha256 先頭12桁・最初の stack frame だけ。本文・URL・SQL・
+ * bind・鍵は読まない (2026-11-13 から supplement が同クラスで停止し続け、
+ * クラス名だけでは失敗した読み取りを特定できなかったため)。
+ */
+export function mechanicalPublishingCauseDiagnostic(error: Error): string {
+  let cause: unknown = error;
+  for (let depth = 0; depth < 5; depth++) {
+    const next = (cause as { cause?: unknown } | null | undefined)?.cause;
+    if (!(next instanceof Error)) break;
+    cause = next;
+  }
+  const target = cause instanceof Error ? cause : error;
+  const name = (typeof target.name === "string" ? target.name : typeof target.name).replace(/[\r\n]/g, "");
+  const message = typeof target.message === "string" ? target.message : "";
+  const d1 = /^D1 HTTP (\d{3})(?!\d)/.exec(message);
+  const notionCode = (target as { code?: unknown }).code;
+  const kind = d1?.[1] !== undefined ? `d1_http_${d1[1]}`
+    : typeof notionCode === "string" && /^[a-z_]+$/.test(notionCode) ? `notion_${notionCode}`
+    : message.startsWith("EDINET") ? "edinet_other"
+    : target instanceof TypeError ? "network" : "other";
+  const msgSha = createHash("sha256").update(message).digest("hex").slice(0, 12);
+  return `[INC-20261121-kabulab_tool_cloudflare-mechpub-readonly] cause=${name} kind=${kind} msgSha=${msgSha} at=${firstAssertionFrame(target.stack)}`;
+}
 function firstAssertionFrame(stack: string | undefined): string {
   if (typeof stack !== "string") return "不明";
   for (const line of stack.split(/\r?\n/)) {
@@ -99,6 +125,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     console.error(`[mechanical-publishing] stopped_no_automatic_retry class=${name}`);
     if (error instanceof Error && error.name === "AssertionError") {
       try { console.error(mechanicalPublishingAssertionDiagnostic(error)); }
+      catch { /* 計測行の失敗では停止種別も終了コードも変えない */ }
+    }
+    if (error instanceof Error && error.name === "PublishingReadOnlyError") {
+      try { console.error(mechanicalPublishingCauseDiagnostic(error)); }
       catch { /* 計測行の失敗では停止種別も終了コードも変えない */ }
     }
     process.exitCode = 2;
