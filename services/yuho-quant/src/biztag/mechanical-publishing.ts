@@ -7,6 +7,16 @@ import { createD1HttpDb } from "../../../../src/shared/db/d1-http-client.js";
 import { parseStockCode } from "../../../../src/shared/jpx/stock-code.js";
 import { currentPublishingWriter, publishingReadOnly, PublishingReadOnlyError } from "../../../../scripts/mechanical-publishing/shared-writer.js";
 import { SavedEdinetZipMissingError } from "../services/edinet/archive.js";
+
+/** 読み取りラッパ (資格化) を挟んでも cause 鎖から保存原本の欠落を見分ける。 */
+function hasMissingSavedZipCause(error: Error): boolean {
+  let cause: unknown = error.cause;
+  for (let depth = 0; depth < 5 && cause instanceof Error; depth++) {
+    if (cause instanceof SavedEdinetZipMissingError) return true;
+    cause = cause.cause;
+  }
+  return false;
+}
 import { buildSupplementProperties, createSupplementRow, ensureSupplementDb, loadStockMasterIndex, loadSupplementRows,
   notionStats, replaceEvidenceBlock, resetNotionStats, type SupplementRow, type SupplementRowInput } from "../../../../src/shared/notion-archive/index.js";
 import { normalizeSupplementText, readSupplementRowFully, SupplementWriteHeldError } from "../../../../src/shared/notion-archive/stock-supplement.js";
@@ -171,7 +181,7 @@ export async function runMechanicalPublishing(options: { limit: number; budgetMs
         }
         done.add(item.stockCode);
       } catch (error) {
-        if (error instanceof PublishingReadOnlyError && error.cause instanceof SavedEdinetZipMissingError) {
+        if (error instanceof PublishingReadOnlyError && hasMissingSavedZipCause(error)) {
           // type別key統一 (#168) 前の旧形式保管だけがあり、保存原本を読めない既知状態。
           // 書込前の読み取りで確定するため、この銘柄だけ旧値を保持して進める
           // (2026-11-13 から supplement 全体がこの1件で停止していた)。
