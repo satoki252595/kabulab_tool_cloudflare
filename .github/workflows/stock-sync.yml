@@ -147,8 +147,11 @@ jobs:
           NOTION_ARCHIVE_PAGE_ID: ${{ secrets.NOTION_ARCHIVE_PAGE_ID }}
         run: nix develop -c bash -c 'cd pipeline && uv run python -m jp_stock_pipeline.jobs.sector33_sync --job-started-at "$BATCH_JOB_STARTED_AT"'
 
+      # sector33 の失敗で市場判定まで止めない (2026-11-18〜20 に実際に発生)。
+      # sector33 step 自体の失敗は job の失敗として残る。
       - name: market context sync
         if: >-
+          always() && !cancelled() &&
           github.event_name == 'workflow_dispatch' &&
             (github.event.inputs.target == 'daily' || github.event.inputs.target == 'context' || github.event.inputs.target == 'scheduled-context' || github.event.inputs.target == 'all')
         env:
@@ -164,9 +167,10 @@ jobs:
       # 要約は独立Linux定期。原文importも同じR2共有gateの明示移行が先。
       - name: monthly universe + benefits + rebuild
         if: >-
-          (github.event_name == 'schedule' && github.event.schedule == '30 1 10 * *') ||
+          always() && !cancelled() &&
+          ((github.event_name == 'schedule' && github.event.schedule == '30 1 10 * *') ||
           (github.event_name == 'workflow_dispatch' &&
-            (github.event.inputs.target == 'monthly' || github.event.inputs.target == 'all'))
+            (github.event.inputs.target == 'monthly' || github.event.inputs.target == 'all')))
         run: |
           pnpm sync:universe
           pnpm yutai:fetch

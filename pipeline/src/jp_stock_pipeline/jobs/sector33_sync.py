@@ -69,6 +69,10 @@ ARCHIVE_SERVICE = "universe"
 ARCHIVE_CLI = Path("scripts/sync/edinet-codelist-archive.ts")
 TSX_BIN = Path("node_modules/.bin/tsx")
 ARCHIVE_TIMEOUT_SECS = 600
+# 新規上場銘柄が EDINET コードリストへ収載されるまでの猶予 (日)。
+# 収載前の銘柄は提出者業種を確定できず、gap 失敗にすると後続の同期
+# (market context 等) まで止まる。猶予を過ぎたら従来どおり失敗にする。
+NEW_LISTING_GRACE_DAYS = 60
 
 # 合法欠損の ticker 原値 (strip 後)。空は parser に見えないため scan が拾う。
 # `00000` は record (`0000`) になるため共有検査が HOLD する (二重診断を避け
@@ -125,6 +129,8 @@ class SectorReport:
     written: int = 0
     planned: int = 0
     gaps: list[str] = field(default_factory=list)
+    # 新規上場直後でコードリスト未収載のため猶予中の gap (失敗にしない)。
+    pending_new_listings: list[str] = field(default_factory=list)
     archive_page_id: str | None = None
     stopped: str | None = None
 
@@ -504,9 +510,35 @@ def execute(ctx: JobContext) -> SectorReport:
     # のため、changes に居れば解消済み。未有効な現値 (NULL・空・33 業種外)
     # は NULL 書換えせず保持したまま gap に載せ partial にする。
     report.gaps = gaps
-    if gaps:
-        sample = ",".join(gaps[:10])
-        ctx.add_failure("sector33-gap", f"{len(gaps)} 件の不足が残る: {sample}")
+    # 新規上場直後は EDINET コードリスト自体に未収載で、提出者業種を
+    # 確定できない。収載までの猶予中は失敗にせず pending として残す
+    # (実例: 657A。猶予切れ・収載済みなのに未確定は従来どおり失敗)。
+    listed_codes = {r.code for r in records}
+    by_code = {str(r.get("code") or ""): r for r in current}
+    asof_date = date.fromisoformat(asof)
+    pending_new: list[str] = []
+    hard_gaps: list[str] = []
+    for code in gaps:
+        listed_raw = (by_code.get(code) or {}).get("latest_listing_date")
+        listed_date = None
+        if isinstance(listed_raw, str) and listed_raw:
+            try:
+                listed_date = date.fromisoformat(listed_raw)
+            except ValueError:
+                listed_date = None
+        if (code not in listed_codes and listed_date is not None
+                and 0 <= (asof_date - listed_date).days <= NEW_LISTING_GRACE_DAYS):
+            pending_new.append(code)
+        else:
+            hard_gaps.append(code)
+    report.pending_new_listings = pending_new
+    if pending_new:
+        logger.warning(
+            "新規上場でEDINETコードリスト未収載のため業種未確定 (猶予%d日・失敗にしない): %s",
+            NEW_LISTING_GRACE_DAYS, ",".join(pending_new))
+    if hard_gaps:
+        sample = ",".join(hard_gaps[:10])
+        ctx.add_failure("sector33-gap", f"{len(hard_gaps)} 件の不足が残る: {sample}")
     return report
 
 
