@@ -299,12 +299,30 @@ def load_raw_page_map(
     return _oldest_page_ids(pages, sha_of)
 
 
-def _verify_raw_files(
+def _expected_attachment(path: Path, artifact: RawArtifact, original_name: str) -> tuple[str, bool, str]:
+    """ローカルファイルに対応する保管済み添付名 (内名, zipラップ要否, 添付名)。"""
+    ext = path.suffix.lstrip(".").lower()
+    wrapped = bool(ext and ext not in NOTION_UPLOAD_EXTENSIONS)
+    # SHA 冪等キーは取得日をまたぐ。旧原本の実添付名を正本にし、
+    # 正規の変換版命名だけ同じ原本 stem に対応させる (値は全バイト照合)。
+    if path == artifact.local_path:
+        file_name = original_name
+    elif path.name.startswith(f"{artifact.local_path.stem}_converted."):
+        file_name = f"{Path(original_name).stem}{path.name[len(artifact.local_path.stem):]}"
+    else:
+        file_name = path.name
+    return file_name, wrapped, f"{file_name}.zip" if wrapped else file_name
+
+
+def _check_raw_files(
     client: NotionClient, page_id: str, artifact: RawArtifact, *, expected_master_id=None
-) -> None:
-    """作成 ACK や SHA 索引だけでは保管済みとせず、原本・変換版の全実体を照合する。"""
-    if client.dry_run:
-        return
+) -> tuple[str, list[Path]]:
+    """ページ同定と添付バイト照合。不一致・欠落したローカル path の一覧を返す。
+
+    ページ形式・SHAプロパティ等の構造不正は従来どおり RawUploadError。
+    バイト不一致だけは呼び出し側の判断 (新規=停止 / 既存=変換版の差し替え)
+    に委ねるため例外にしない。
+    """
     page = client.get_page(page_id)
     if page.get("object") != "page" or page.get("id") != page_id or page.get("archived") is not False:
         raise RawUploadError("⑤ 読戻しページの形式・状態が不正")
@@ -341,19 +359,13 @@ def _verify_raw_files(
     if len(by_name) != len(files):
         raise RawUploadError("⑤ 読戻し添付名が重複")
     paths = [artifact.local_path, *artifact.converted_paths]
+    mismatched: list[Path] = []
     for path in paths:
-        ext = path.suffix.lstrip(".").lower()
-        wrapped = bool(ext and ext not in NOTION_UPLOAD_EXTENSIONS)
-        # SHA 冪等キーは取得日をまたぐ。旧原本の実添付名を正本にし、
-        # 正規の変換版命名だけ同じ原本 stem に対応させる（値は全バイト照合）。
-        if path == artifact.local_path:
-            file_name = original_name
-        elif path.name.startswith(f"{artifact.local_path.stem}_converted."):
-            file_name = f"{Path(original_name).stem}{path.name[len(artifact.local_path.stem):]}"
-        else:
-            file_name = path.name
-        name = f"{file_name}.zip" if wrapped else file_name
-        attachment = by_name[name]
+        file_name, wrapped, name = _expected_attachment(path, artifact, original_name)
+        attachment = by_name.get(name)
+        if attachment is None:
+            mismatched.append(path)
+            continue
         if attachment.get("type") != "file":
             raise RawUploadError("⑤ 読戻し添付が物理ファイルでない")
         content = client.download_file(attachment["file"]["url"])
@@ -363,8 +375,45 @@ def _verify_raw_files(
                     raise RawUploadError("⑤ 読戻し ZIP ラップの形式・CRC 不一致")
                 content = zf.read(file_name)
         if content != path.read_bytes():
-            raise RawUploadError("⑤ 読戻し添付の全バイト不一致")
-    logger.info("⑤ 物理読戻し全バイト一致: 添付 %d ファイル", len(paths))
+            mismatched.append(path)
+    return original_name, mismatched
+
+
+def _verify_raw_files(
+    client: NotionClient, page_id: str, artifact: RawArtifact, *, expected_master_id=None
+) -> None:
+    """作成 ACK や SHA 索引だけでは保管済みとせず、原本・変換版の全実体を照合する。"""
+    if client.dry_run:
+        return
+    _, mismatched = _check_raw_files(
+        client, page_id, artifact, expected_master_id=expected_master_id)
+    if mismatched:
+        names = ",".join(p.name for p in mismatched)
+        raise RawUploadError(f"⑤ 読戻し添付の全バイト不一致: {names}")
+    logger.info("⑤ 物理読戻し全バイト一致: 添付 %d ファイル",
+                1 + len(artifact.converted_paths))
+
+
+def _refresh_existing_files(
+    client: NotionClient, page_id: str, artifact: RawArtifact, original_name: str
+) -> None:
+    """既存ページの添付を現行生成物で差し替える (原本は一致確認済みの同値)。
+
+    変換形式の変更 (列追加等) で旧変換版と現行生成物が食い違う場合の移行。
+    添付名は保管時の名前を保ち、Files プロパティ全体を再アップロードで置く。
+    差し替え後の全バイト再検証は呼び出し側が行う。
+    """
+    paths = [artifact.local_path, *artifact.converted_paths]
+    for path in paths:
+        _upload_name(path)  # 後半の長名で前半だけ送信済みになることを防ぐ。
+    uploads: list[tuple[str, str]] = []
+    with tempfile.TemporaryDirectory(prefix="raw-refresh-") as td:
+        for path in paths:
+            file_name, _wrapped, _name = _expected_attachment(path, artifact, original_name)
+            staged = Path(td) / file_name
+            staged.write_bytes(path.read_bytes())
+            uploads.append(upload_file(client, staged))
+    client.update_page(page_id, {S.RAW_PROP_FILES: files_prop(uploads)})
 
 
 def upload_raw_artifact(
@@ -401,7 +450,24 @@ def upload_raw_artifact(
             # 漏らさず、呼び出し側は RawUploadError のみ握れば取得単位を degrade できる)
             existing = find_raw_page_by_sha256(client, settings, artifact.sha256)
         if existing:
-            _verify_raw_files(client, existing, artifact)
+            if client.dry_run:
+                artifact.notion_page_id = existing
+                return existing
+            original_name, mismatched = _check_raw_files(client, existing, artifact)
+            if mismatched:
+                if artifact.local_path in mismatched:
+                    # 原本そのものの相違は改竄・破損として差し替えず停止する。
+                    names = ",".join(p.name for p in mismatched)
+                    raise RawUploadError(f"⑤ 読戻し添付の全バイト不一致: {names}")
+                # 変換版だけの相違は変換形式の世代差。原本の一致を確認済みの
+                # 上で、添付を現行生成物へ差し替えて全バイト再検証する。
+                names = ",".join(p.name for p in mismatched)
+                logger.warning(
+                    "⑤ 既存ページの変換版が現行生成と相違。差し替えます: %s (page=%s)",
+                    names, existing)
+                _refresh_existing_files(client, existing, artifact, original_name)
+                _verify_raw_files(client, existing, artifact)
+                logger.info("⑤ 変換版を現行生成へ差し替え完了: %s", existing)
             logger.info("⑤ 重複スキップ (SHA256=%s): %s", artifact.sha256[:12], existing)
             artifact.notion_page_id = existing
             return existing

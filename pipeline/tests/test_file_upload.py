@@ -535,28 +535,82 @@ class TestRawUploadError:
                         {"name": n, "type": "file", "file": {"url": str(i)}}
                         for i, n in enumerate(names)]},
                 }}
+
+        def fake_update(page_id, properties):
+            # 変換版の差し替え後は現行生成物が読める状態を模す。
+            calls.append("update")
+            blobs[1] = artifact.converted_paths[0].read_bytes()
+            return {"id": page_id}
+
         client = SimpleNamespace(
             dry_run=False,
             query_database=lambda *a, **k: [{"id": "page-protocol"}] if existing else [],
             create_page=lambda **k: calls.append("create") or {"id": "page-protocol"},
+            update_page=fake_update,
             get_page=lambda page_id: calls.append("read-page") or page,
             download_file=lambda url: calls.append(f"read-{url}") or blobs[int(url)],
         )
         monkeypatch.setattr(file_upload, "upload_file", lambda c, p: (
             calls.append("upload") or "upload-protocol",
-            f"{p.name}.zip" if p == parquet else p.name,
+            f"{p.name}.zip" if p.name == parquet.name else p.name,
         ))
-        if tampered:
+        if tampered and not existing:
+            # 作りたてページの不一致は改竄・破損として従来どおり停止する。
             with pytest.raises(file_upload.RawUploadError, match="全バイト不一致"):
                 file_upload.upload_raw_artifact(client, settings, artifact)
             assert artifact.notion_page_id is None
-            assert "read-2" not in calls
+            assert calls.count("update") == 0
         else:
             assert file_upload.upload_raw_artifact(client, settings, artifact) == "page-protocol"
             assert calls[-4:] == ["read-page", "read-0", "read-1", "read-2"]
             assert artifact.notion_page_id == "page-protocol"
-        assert calls.count("upload") == (0 if existing else 3)
+        if existing and tampered:
+            # 既存ページの変換版だけの相違は、原本一致を確認してから
+            # 現行生成物へ差し替えて再検証する (旧変換形式の移行)。
+            assert calls.count("update") == 1
+            assert calls.count("upload") == 3
+        else:
+            assert calls.count("update") == 0
+            assert calls.count("upload") == (0 if existing else 3)
         assert calls.count("create") == (0 if existing else 1)
+
+    def test_existing_page_original_mismatch_never_refreshes(
+        self, tmp_path, monkeypatch
+    ):
+        """既存ページでも原本そのものの不一致は差し替えず停止する。"""
+        from types import SimpleNamespace
+
+        settings = make_settings()
+        artifact = make_artifact(tmp_path, with_converted=True)
+        names = ["previous-capture.zip", "previous-capture_converted.csv"]
+        blobs = [b"tampered-original", artifact.converted_paths[0].read_bytes()]
+        page = {"object": "page", "id": "page-protocol", "archived": False,
+                "properties": {
+                    S.RAW_PROP_FILENAME: {"type": "title", "title": [{"plain_text": names[0]}]},
+                    S.RAW_PROP_SHA256: {"type": "rich_text", "rich_text": [
+                        {"plain_text": artifact.sha256}]},
+                    S.RAW_PROP_SIZE: {"type": "number", "number": artifact.size_bytes},
+                    S.RAW_PROP_FILES: {"type": "files", "files": [
+                        {"name": n, "type": "file", "file": {"url": str(i)}}
+                        for i, n in enumerate(names)]},
+                }}
+        calls = []
+        client = SimpleNamespace(
+            dry_run=False,
+            query_database=lambda *a, **k: [{"id": "page-protocol"}],
+            create_page=lambda **k: calls.append("create") or {"id": "page-protocol"},
+            update_page=lambda page_id, properties: calls.append("update") or {"id": page_id},
+            get_page=lambda page_id: page,
+            download_file=lambda url: blobs[int(url)],
+        )
+        monkeypatch.setattr(
+            file_upload, "upload_file",
+            lambda c, p: calls.append("upload") or ("upload-protocol", p.name))
+        with pytest.raises(file_upload.RawUploadError, match="全バイト不一致"):
+            file_upload.upload_raw_artifact(client, settings, artifact)
+        assert artifact.notion_page_id is None
+        assert "update" not in calls
+        assert "upload" not in calls
 
     def test_ambiguous_page_creation_degrades_without_second_post(
         self, dry_client, tmp_path, monkeypatch
