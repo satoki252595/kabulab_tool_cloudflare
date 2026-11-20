@@ -107,11 +107,14 @@ it("reported-source HOLD and empty source cannot clear old body/tag", async () =
 it("missing saved-zip rows hold only that stock and keep old body/tag", async () => {
   const { SavedEdinetZipMissingError } = await import("../services/edinet/archive.js");
   io.latest.mockResolvedValue([latest, { ...latest, stockCode: "6104" }]);
-  const rows2 = [row(), { ...row(), pageId: "protocol-row-2", stockCode: "6104" }];
+  // 1件目は社名表示差分で refresh 経路 (本番の失敗経路) を通す。
+  const rows2 = [{ ...row(), companyName: "旧表示名（protocol control）" }, { ...row(), pageId: "protocol-row-2", stockCode: "6104" }];
   io.rows.mockResolvedValue(rows2);
   io.full.mockImplementation(async (pageId: string) => rows2.find((r) => r.pageId === pageId) ?? row());
   vi.mocked(loadStockMasterIndex).mockResolvedValueOnce({ index: new Map([["6103", "protocol-master"], ["6104", "protocol-master"]]), duplicates: new Map() });
-  io.qualified.mockRejectedValueOnce(new SavedEdinetZipMissingError("EDINET保存原本のtype別行がありません"));
+  // 本番では資格化ラッパ (BiztagTextQualificationError) を挟んで届く。
+  io.renamed.mockRejectedValueOnce(new BiztagTextQualificationError(
+    new SavedEdinetZipMissingError("EDINET保存原本のtype別行がありません")));
   const result = await withSharedPublishingWriter(() => runMechanicalPublishing({ codes: ["6103", "6104"], limit: 2, budgetMs: 60_000 }), store());
   expect(result).toMatchObject({ processed: 2,
     outcomes: [{ stockCode: "6103", outcome: "held", holds: ["保存原本のtype別行が未整備（旧形式保管）。旧本文/タグを保持"] },
