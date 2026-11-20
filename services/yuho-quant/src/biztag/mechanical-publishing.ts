@@ -5,7 +5,8 @@ import { stocks } from "../../../../src/shared/db/core-schema.js";
 import { activeEquityCondition } from "../../../../src/shared/db/active-equity.js";
 import { createD1HttpDb } from "../../../../src/shared/db/d1-http-client.js";
 import { parseStockCode } from "../../../../src/shared/jpx/stock-code.js";
-import { currentPublishingWriter, publishingReadOnly } from "../../../../scripts/mechanical-publishing/shared-writer.js";
+import { currentPublishingWriter, publishingReadOnly, PublishingReadOnlyError } from "../../../../scripts/mechanical-publishing/shared-writer.js";
+import { SavedEdinetZipMissingError } from "../services/edinet/archive.js";
 import { buildSupplementProperties, createSupplementRow, ensureSupplementDb, loadStockMasterIndex, loadSupplementRows,
   notionStats, replaceEvidenceBlock, resetNotionStats, type SupplementRow, type SupplementRowInput } from "../../../../src/shared/notion-archive/index.js";
 import { normalizeSupplementText, readSupplementRowFully, SupplementWriteHeldError } from "../../../../src/shared/notion-archive/stock-supplement.js";
@@ -170,6 +171,12 @@ export async function runMechanicalPublishing(options: { limit: number; budgetMs
         }
         done.add(item.stockCode);
       } catch (error) {
+        if (error instanceof PublishingReadOnlyError && error.cause instanceof SavedEdinetZipMissingError) {
+          // type別key統一 (#168) 前の旧形式保管だけがあり、保存原本を読めない既知状態。
+          // 書込前の読み取りで確定するため、この銘柄だけ旧値を保持して進める
+          // (2026-11-13 から supplement 全体がこの1件で停止していた)。
+          held.push({ stockCode: item.stockCode, reason: "保存原本のtype別行が未整備（旧形式保管）。旧本文/タグを保持" }); done.add(item.stockCode); continue;
+        }
         if (!(error instanceof SupplementWriteHeldError)) throw error;
         // A HOLD after reserve has a durable pending intent and must stop the whole writer.
         await writer.assertReady(); held.push({ stockCode: item.stockCode, reason: "補足publicationの資格HOLD。旧値を保持" }); done.add(item.stockCode);
