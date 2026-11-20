@@ -968,6 +968,7 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
   if (!pricePhase) sourceBefore = await recordRecoveryInfo(args.archivePageId, sourceInfo!, "実行中（結果未確定）", "原表の資格成立。今回windowの読戻しは未完了", false, undefined, sourceBefore);
   if (preBytes !== undefined) sourceInfo!.legacyMigration!.pre = await archiveMigration(args.source, sourceInfo!.legacyMigration!.pre, preBytes);
   const migrationPosts: HoldingPage[] = [];
+  const windowRows: HoldingPage[] = [];
   const result = { status: "published" as const, parsed: selected.length, created: 0, updated: 0, unchanged: 0 };
   let unavailableInWindow = 0;
   const unavailableReasons = new Map<string, number>();
@@ -999,12 +1000,12 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
       const rawProperties = Object.fromEntries(Object.entries(properties).filter(([name]) => !VALUATION_COLUMNS.has(name)));
       assertProperties(existing.properties, rawProperties);
       if (valuation.status !== "qualified" && (args.valuationSources === undefined || existing.properties["価格照合済"]?.checkbox === true)) {
-        result.unchanged++; continue;
+        windowRows.push(existing); result.unchanged++; continue;
       }
       const expected = Object.fromEntries(Object.entries(properties).filter(([name]) => VALUATION_COLUMNS.has(name)));
       if (existing.properties["価格照合済"]?.checkbox === true) {
         if (!pricePhase?.info.previousPricePass) assertProperties(existing.properties, expected);
-        result.unchanged++;
+        windowRows.push(existing); result.unchanged++;
         continue;
       }
     }
@@ -1014,9 +1015,12 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
       const fresh = await notionRequest<HoldingPage>("GET", `/pages/${existing.id}`);
       assertSameHoldingPage(fresh, existing);
     }
+    // 通常sourceの POST /pages は client の非冪等create保護が結果不明だけを止めるため、明示429の再送を塞がない。
+    // 物理置換proof付きsourceは従来どおり単発送信を維持する。
+    const createOptions = patchResolutionProof ? { singleAttempt: true } as const : undefined;
     const saved: { object: string; id: string } = existing
       ? await notionRequest("PATCH", `/pages/${existing.id}`, { properties: mutationProperties }, { singleAttempt: true })
-      : await notionRequest("POST", "/pages", { parent: { database_id: dbId }, properties }, { singleAttempt: true });
+      : await notionRequest("POST", "/pages", { parent: { database_id: dbId }, properties }, createOptions);
     assert.equal(saved.object, "page"); assert.match(saved.id.replaceAll("-", ""), /^[a-f0-9]{32}$/);
     if (existing) assert.equal(saved.id.replaceAll("-", ""), existing.id.replaceAll("-", ""), "保有明細PATCH ACKが別行です");
     const readback = await notionRequest<HoldingPage>("GET", `/pages/${saved.id}`);
@@ -1037,6 +1041,7 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
       }
     }
     if (migrateLegacy) { assertMigrationPost(readback, existing!, properties, schema); migrationPosts.push(readback); }
+    windowRows.push(readback);
     if (existing) result.updated++; else result.created++;
   }
   if (migrationPosts.length > 0) {
@@ -1051,7 +1056,11 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
   if (!pricePhase) {
     const nextOffset = offset + selected.length, pending = nextOffset < parsed.holdings.length;
     if (!pending) {
-      const finalRows = await readHoldingPeriodRows(dbId, args.source);
+      const queriedRows = await readHoldingPeriodRows(dbId, args.source);
+      // DB queryが作成直後の行を未反映にする場合だけ、直接GETで全props照合済みの当window行をID単位で補う。
+      const rowsById = new Map(queriedRows.map(row => [row.id.replaceAll("-", ""), row]));
+      for (const row of windowRows) if (!rowsById.has(row.id.replaceAll("-", ""))) rowsById.set(row.id.replaceAll("-", ""), row);
+      const finalRows = [...rowsById.values()];
       const final = verifyCompletedHoldingsSource(args.source, args.ownerName, parsed, zipSha256, finalRows);
       if (final.status === "held") throw new Error(`全原表の最終読戻しが未成立です。${final.reason}`);
       if (patchResolutionProof) sourceInfo!.patchResolution!.legacyPost = await finishHoldingPatchMigration(sourceInfo!, patchResolutionProof, parsed, finalRows, schema);

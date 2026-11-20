@@ -497,12 +497,19 @@ describe("株式保有の原典限定writer", () => {
     });
     vi.mocked(queryUniqueRow).mockResolvedValue(null);
     await expect(publishVerifiedShareholdings(args)).rejects.toThrow("ACK_UNKNOWN");
-    expect(notionRequest).toHaveBeenLastCalledWith("POST", "/pages", expect.any(Object), { singleAttempt: true });
+    // POST /pages は client 側の非冪等create保護で結果不明だけを止め、明示429は再送可能にする。
+    expect(notionRequest).toHaveBeenLastCalledWith("POST", "/pages", expect.any(Object), undefined);
     expect(saved[`/pages/${args.archivePageId}`]).toMatchObject({ "保有明細状態": { select: { name: "実行中（結果未確定）" } } });
     vi.clearAllMocks();
     vi.mocked(verifyArchivedAttachments).mockRejectedValueOnce(new Error("SOURCE_SHA_MISMATCH"));
     await expect(publishSavedShareholdings({ ...args, archivePageId: "f".repeat(32) })).rejects.toThrow("SOURCE_SHA_MISMATCH");
     expect(notionRequest).not.toHaveBeenCalled();
+  });
+
+  it("作成直後のDB query未反映でも、直接GETで照合済みの行で最終検証する", async () => {
+    holdingPeriodRows = async () => [];
+    expect(await publishVerifiedShareholdings(args)).toEqual({ status: "published", parsed: 1, created: 1, updated: 0, unchanged: 0 });
+    expect(saved[`/pages/${args.archivePageId}`]).toMatchObject({ "保有明細状態": { select: { name: "明細原本照合済" } } });
   });
 
   it("並行呼出でも最初の通信前に共有run枠を予約し、未知結果では返却しない", async () => {
