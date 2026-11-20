@@ -104,6 +104,20 @@ it("reported-source HOLD and empty source cannot clear old body/tag", async () =
   expect(io.source).not.toHaveBeenCalled(); expect(io.replace).not.toHaveBeenCalled();
   await expect(mechanicalTextInput(latest, row(), [], null)).rejects.toThrow("旧本文を消しません");
 });
+it("missing saved-zip rows hold only that stock and keep old body/tag", async () => {
+  const { SavedEdinetZipMissingError } = await import("../services/edinet/archive.js");
+  io.latest.mockResolvedValue([latest, { ...latest, stockCode: "6104" }]);
+  const rows2 = [row(), { ...row(), pageId: "protocol-row-2", stockCode: "6104" }];
+  io.rows.mockResolvedValue(rows2);
+  io.full.mockImplementation(async (pageId: string) => rows2.find((r) => r.pageId === pageId) ?? row());
+  vi.mocked(loadStockMasterIndex).mockResolvedValueOnce({ index: new Map([["6103", "protocol-master"], ["6104", "protocol-master"]]), duplicates: new Map() });
+  io.qualified.mockRejectedValueOnce(new SavedEdinetZipMissingError("EDINET保存原本のtype別行がありません"));
+  const result = await withSharedPublishingWriter(() => runMechanicalPublishing({ codes: ["6103", "6104"], limit: 2, budgetMs: 60_000 }), store());
+  expect(result).toMatchObject({ processed: 2,
+    outcomes: [{ stockCode: "6103", outcome: "held", holds: ["保存原本のtype別行が未整備（旧形式保管）。旧本文/タグを保持"] },
+      { stockCode: "6104", outcome: "synced" }] });
+  expect(io.replace).toHaveBeenCalledTimes(1);
+});
 it("a display-name difference uses the shared issuer qualifier before normal journal/CAS, preserving old semantic input", async () => {
   const saved = { ...row(), companyName: "旧表示名（protocol control）" };
   io.rows.mockResolvedValue([saved]); io.full.mockResolvedValue(saved);
