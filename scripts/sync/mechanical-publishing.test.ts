@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
-import { main, mechanicalPublishingAssertionDiagnostic, mechanicalPublishingWindow, parseMechanicalPublishingArgs } from "./mechanical-publishing.js";
+import { main, mechanicalPublishingAssertionDiagnostic, mechanicalPublishingCauseDiagnostic, mechanicalPublishingWindow, parseMechanicalPublishingArgs } from "./mechanical-publishing.js";
 import * as publishing from "../mechanical-publishing/shared-writer.js";
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.useRealTimers(); });
@@ -131,4 +131,34 @@ it("logs an AssertionError message and only its first frame", () => {
   expect(actual).toContain("refs/heads/main");
   expect(actual).toMatch(/ at=\S+:\d+:\d+$/);
   expect(actual.includes("\n")).toBe(false);
+});
+
+it("logs only sanitized cause identity for read-only failures", () => {
+  const marker = "INC-20261121-kabulab_tool_cloudflare-mechpub-readonly";
+  const secret = "https://example.invalid/secret-token-value";
+  const cause = new Error(`D1 HTTP 503 failed ${secret}`);
+  cause.name = "D1HttpError";
+  cause.stack = "D1HttpError: x\n    at read (file:///workspace/services/yuho-quant/src/biztag/mechanical-publishing.ts:88:3)\n    at later (file:///workspace/scripts/sync/mechanical-publishing.ts:79:5)";
+  const wrapped = new Error("publishing_read_only_failed", { cause });
+  wrapped.name = "PublishingReadOnlyError";
+  const line = mechanicalPublishingCauseDiagnostic(wrapped);
+  expect(line.startsWith(`[${marker}] cause=D1HttpError kind=d1_http_503 msgSha=`)).toBe(true);
+  expect(line).toMatch(/msgSha=[a-f0-9]{12} at=file:\/\/\/workspace\/services\/yuho-quant\/src\/biztag\/mechanical-publishing\.ts:88:3$/);
+  expect(line).not.toContain(secret);
+  expect(line).not.toContain("publishing_read_only_failed");
+
+  const notionCause = new Error("rate limited; retry later");
+  notionCause.name = "APIResponseError";
+  Object.assign(notionCause, { code: "rate_limited" });
+  notionCause.stack = undefined;
+  const notionWrapped = new Error("publishing_read_only_failed", { cause: notionCause });
+  notionWrapped.name = "PublishingReadOnlyError";
+  expect(mechanicalPublishingCauseDiagnostic(notionWrapped)).toMatch(
+    new RegExp(`^\\[${marker}\\] cause=APIResponseError kind=notion_rate_limited msgSha=[a-f0-9]{12} at=不明$`));
+
+  const bare = new Error("publishing_read_only_failed");
+  bare.name = "PublishingReadOnlyError";
+  bare.stack = undefined;
+  expect(mechanicalPublishingCauseDiagnostic(bare)).toMatch(
+    new RegExp(`^\\[${marker}\\] cause=PublishingReadOnlyError kind=other msgSha=[a-f0-9]{12} at=不明$`));
 });
