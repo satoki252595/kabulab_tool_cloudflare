@@ -209,6 +209,17 @@ describe("notion-archive client retry", () => {
     expect(fetchCount).toBe(2);
   });
 
+  it("POST /pages の明示 429 は拒否 (未作成確定) のため再送可", async () => {
+    script = [
+      { status: 429, retryAfter: "0" },
+      { status: 200, body: { id: "new-page" } },
+    ];
+    const { notionRequest } = await load();
+    const got = await notionRequest<{ id: string }>("POST", "/pages", {});
+    expect(got).toEqual({ id: "new-page" });
+    expect(fetchCount).toBe(2);
+  });
+
   it("POST /databases/{id}/query の 500 は読取のため再試行する", async () => {
     const page = { results: [], has_more: false, next_cursor: null };
     script = [{ status: 500 }, { status: 200, body: page }];
