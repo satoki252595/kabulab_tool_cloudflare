@@ -682,6 +682,39 @@ class TestWriterSemantics:
         assert state["failed"] == 1
         assert state["codes"][0][0] == "sector33-gap"
 
+    def test_new_listing_absent_from_codelist_is_pending_not_failure(
+        self, monkeypatch, tmp_path
+    ):
+        """新規上場直後でコードリスト未収載の銘柄は猶予し、失敗にしない。
+
+        実例: 657A が EDINET コードリスト未収載の間、sector33-gap で
+        後続の market context 同期まで止まっていた。猶予を過ぎたら
+        従来どおり gap 失敗に戻る。
+        """
+        codes = {r.code for r in edinet_codelist.parse_codelist(_zip_bytes())}
+        assert "111A" not in codes and "222A" not in codes
+        store = _SectorD1(
+            [("111A", None, 1, "equity"), ("222A", None, 1, "equity")]
+        )
+        # fixture の基準日は 2026-06-10。111A は2日前に上場 (猶予内)、
+        # 222A は1年前に上場 (猶予切れ)。
+        store.con.executemany(
+            "INSERT INTO universe_official_events"
+            " (code, kind, effective_date, source_url, fetched_at, raw_sha, archive_key)"
+            " VALUES (?, 'listing', ?, 'fixture', '2026-06-10', 'x', 'k')",
+            [("111A", "2026-06-08"), ("222A", "2025-06-08")],
+        )
+        store.con.commit()
+        _wire(monkeypatch, tmp_path, store)
+        ctx, state = _ctx()
+        report = mod.execute(ctx)
+        assert report.gaps == ["111A", "222A"]
+        assert report.pending_new_listings == ["111A"]
+        assert state["failed"] == 1
+        assert state["codes"][0][0] == "sector33-gap"
+        assert "222A" in state["codes"][0][1]
+        assert "111A" not in state["codes"][0][1]
+
     def test_non_equity_untouched(self, monkeypatch, tmp_path):
         (t1, s1), (t2, _), (t3, _) = _real_tickers(3)
         store = _SectorD1(
