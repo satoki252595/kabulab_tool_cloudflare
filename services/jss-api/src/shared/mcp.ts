@@ -32,6 +32,19 @@ import {
   parseLimit,
 } from "./routes";
 import { isSupplyCode } from "./jpx-margin";
+import {
+  EVENT_KINDS,
+  MASTER_LICENSES,
+  fetchDisclosures,
+  fetchFinancialsByCodes,
+  fetchForecastHistory,
+  fetchOhlcvR2,
+  fetchUniverseEvents,
+  fetchUniverseMaster,
+  parseEventKind,
+  parseG1Date,
+  parseG1Text,
+} from "./g1";
 import type { PrivateEnv } from "./types";
 
 interface JsonRpcRequest {
@@ -179,6 +192,131 @@ export const TOOLS = [
       },
     },
   },
+  {
+    name: "jp_disclosures_list",
+    description:
+      "適時開示 (TDnet) の一覧を新しい順で返す (factual-cite、内部面のみ)。" +
+      "code (4文字)・from/to (YYYY-MM-DD、開示日時の JST 暦日)・titleContains (表題部分一致)・" +
+      "tag (代表タグまたは分類タグ) で絞れる。pubdate は epoch 秒。各行は tdnet_id・code・" +
+      "company_code/company_name・title・document_url・xbrl_url/has_xbrl・tags・primary_tag を含み、" +
+      "本文は返さない。続きは meta.cursor を cursor に渡す。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        code: { type: "string", description: "4桁の銘柄コード" },
+        from: { type: "string", description: "YYYY-MM-DD (JST)" },
+        to: { type: "string", description: "YYYY-MM-DD (JST)" },
+        titleContains: { type: "string" },
+        tag: { type: "string" },
+        limit: { type: "integer", minimum: 1, maximum: 500 },
+        cursor: { type: "string", description: "前応答 meta.cursor。そのまま渡す" },
+      },
+    },
+  },
+  {
+    name: "jp_financials",
+    description:
+      "財務要約 (実績+短信予想列) を期末の新しい順で返す (jss_financials、内部面のみ)。" +
+      "code (単一) か codes (最大 " + MAX_BATCH_CODES + " 件) のどちらか一方を指定する。" +
+      "from/to は期末日 fiscal_period_end (YYYY-MM-DD)、limit は1銘柄あたりの上限。" +
+      "売上・営業利益・経常利益・純利益・EPS/BPS・予想列・配当・CF 等を含み、行ごとの license_tag を " +
+      "meta.licenses へ伝播する。この表に発行済株式数の列はない (BPS 等から逆算しないこと)。" +
+      "行が無い code は data.not_found に列挙し、理由 (unknown_code / not_collected) を出す。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        code: { type: "string", description: "4桁の銘柄コード (単一指定)" },
+        codes: {
+          type: "array",
+          items: { type: "string" },
+          minItems: 1,
+          maxItems: MAX_BATCH_CODES,
+          description: "4桁の銘柄コードの配列 (バッチ指定)",
+        },
+        from: { type: "string", description: "YYYY-MM-DD (期末日)" },
+        to: { type: "string", description: "YYYY-MM-DD (期末日)" },
+        limit: { type: "integer", minimum: 1, maximum: 500, description: "1銘柄あたりの上限" },
+      },
+    },
+  },
+  {
+    name: "jp_forecast_history",
+    description:
+      "会社業績予想の開示単位の全履歴を1銘柄分、開示時刻の古い順で返す (factual-cite、内部面のみ)。" +
+      "jp_forecast_latest (最新1行) と違い過去の各開示が述べた予想をそのまま並べる (合成しない)。" +
+      "from/to は開示日時の JST 暦日で、開示時刻が NULL の行は範囲指定時に含まれない。" +
+      "未知コード・予想行なし (範囲指定なし) はエラーにする。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        code: { type: "string", description: "4桁の銘柄コード" },
+        from: { type: "string", description: "YYYY-MM-DD (JST)" },
+        to: { type: "string", description: "YYYY-MM-DD (JST)" },
+        limit: { type: "integer", minimum: 1, maximum: 500 },
+      },
+      required: ["code"],
+    },
+  },
+  {
+    name: "jp_universe_events",
+    description:
+      "上場・上場廃止・市場区分変更の公式イベントを発効日の新しい順で返す (personal-only、内部面のみ)。" +
+      "kind は delist/listing/transfer、from/to は発効日 effective_date (YYYY-MM-DD)。" +
+      "続きは meta.cursor を cursor に渡す。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: [...EVENT_KINDS] },
+        from: { type: "string", description: "YYYY-MM-DD" },
+        to: { type: "string", description: "YYYY-MM-DD" },
+        code: { type: "string", description: "4桁の銘柄コード" },
+        limit: { type: "integer", minimum: 1, maximum: 500 },
+        cursor: { type: "string", description: "前応答 meta.cursor。そのまま渡す" },
+      },
+    },
+  },
+  {
+    name: "jp_ohlcv_r2_range",
+    description:
+      "R2 (vwap-data) の10年分日足 daily/{code}.json を1銘柄分返す (personal-only、内部面のみ)。" +
+      "bars は保存された {date,o,h,l,c,v} (+保存されていれば adj) をそのまま返し、このツールは" +
+      "分割・配当の調整を適用しない。splits ({date,ratio}) は bars と分離して全件返す。" +
+      "from/to (YYYY-MM-DD) は bars の絞り込みで splits は絞らない。" +
+      "jp_ohlcv_range (D1・調整価格付き) とは別経路。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        code: { type: "string", description: "4桁の銘柄コード" },
+        from: { type: "string", description: "YYYY-MM-DD" },
+        to: { type: "string", description: "YYYY-MM-DD" },
+      },
+      required: ["code"],
+    },
+  },
+  {
+    name: "jp_universe_master",
+    description:
+      "銘柄マスタの最小断面 (code/name/sector33/is_active) を code 順で返す (内部面のみ)。" +
+      "sector33 は EDINET 提出者業種、is_active はアクティブ判定 (boolean)。" +
+      "列ライセンスが混在するため meta.licenses には最も厳しい personal-only を含む。" +
+      "codes (最大 " + MAX_BATCH_CODES + " 件) で集合指定、activeOnly でアクティブのみ、" +
+      "一覧は meta.cursor (直前最後の code) で続ける。見つからない code は単に含まれない。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        codes: {
+          type: "array",
+          items: { type: "string" },
+          minItems: 1,
+          maxItems: MAX_BATCH_CODES,
+          description: "4桁の銘柄コードの配列",
+        },
+        activeOnly: { type: "boolean" },
+        limit: { type: "integer", minimum: 1, maximum: 500 },
+        cursor: { type: "string", description: "前応答 meta.cursor (code)。codes と併用しない" },
+      },
+    },
+  },
   // `jp_xbrl_elements` (jss_xbrl_elements) は 2026-09-25 に削除した。
   // jss_xbrl_documents / jss_xbrl_elements は本番 0 行・writer 不在のまま
   // 退役させた (pipeline/src/jp_stock_pipeline/cloud_store/schema.py 参照)。
@@ -194,6 +332,24 @@ export const TOOLS = [
     },
   },
 ] as const;
+
+/** MCP 引数の任意銘柄コード。`undefined` だけが省略。 */
+function parseMcpCode(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !isValidCode(value)) throw new Error("銘柄コードは4桁");
+  return value;
+}
+
+/** MCP 引数の cursor。形式そのものの検証は g1 fetcher が行う。 */
+function parseMcpCursor(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value === "") throw new Error("cursor が不正");
+  return value;
+}
+
+function parseMcpLimit(value: unknown): number {
+  return parseLimit(value === undefined ? undefined : String(value), 100);
+}
 
 async function callTool(
   name: string,
@@ -291,6 +447,112 @@ async function callTool(
       const jobName = args.job_name ? String(args.job_name) : null;
       const rows = await fetchLatestJobRuns(env.DB, jobName);
       return envelope(rows);
+    }
+    case "jp_disclosures_list": {
+      const result = await fetchDisclosures(env.DB, {
+        code: parseMcpCode(args.code),
+        from: parseG1Date("from", args.from),
+        to: parseG1Date("to", args.to),
+        titleContains: parseG1Text("titleContains", args.titleContains),
+        tag: parseG1Text("tag", args.tag),
+        limit: parseMcpLimit(args.limit),
+        cursor: parseMcpCursor(args.cursor),
+      });
+      return envelope(result.rows, {
+        cursor: result.cursor,
+        sources: result.rows.length > 0 ? ["TDnet"] : [],
+        licenses: ["factual-cite"],
+      });
+    }
+    case "jp_financials": {
+      if (args.code !== undefined && args.codes !== undefined) {
+        throw new Error("code と codes はどちらか一方で指定する");
+      }
+      const single = parseMcpCode(args.code);
+      const codes = single ? [single] : parseCodes(args.codes);
+      const rows = await fetchFinancialsByCodes(env.DB, codes, {
+        from: parseG1Date("from", args.from),
+        to: parseG1Date("to", args.to),
+        limit: parseMcpLimit(args.limit),
+      });
+      const found = new Set(rows.map((r) => String(r.code)));
+      const notFound = codes.filter((c) => !found.has(c));
+      const reasons = await classifyMissingCodes(env.DB, notFound);
+      return envelope(
+        { results: rows, not_found: notFound, not_found_reasons: reasons },
+        {
+          sources: rows.map((r) => String(r.source ?? "")),
+          licenses: rows.map((r) => String(r.license_tag ?? "")),
+        },
+      );
+    }
+    case "jp_forecast_history": {
+      const code = String(args.code ?? "");
+      if (!isValidCode(code)) throw new Error("銘柄コードは4桁");
+      const from = parseG1Date("from", args.from);
+      const to = parseG1Date("to", args.to);
+      const rows = await fetchForecastHistory(env.DB, code, {
+        from,
+        to,
+        limit: parseMcpLimit(args.limit),
+      });
+      if (rows.length === 0) {
+        const [m] = await classifyForecastMissingCodes(env.DB, [code]);
+        if (m?.reason === "unknown_code") throw new Error(`見つからない (unknown_code): ${code}`);
+        if (from === undefined && to === undefined) {
+          throw new Error(`見つからない (no_forecast_in_store): ${code}`);
+        }
+        return envelope([], { licenses: [], sources: [] });
+      }
+      return envelope(rows, {
+        sources: rows.map((r) => String(r.source ?? "")),
+        licenses: rows.map((r) => String(r.license_tag ?? "")),
+      });
+    }
+    case "jp_universe_events": {
+      const result = await fetchUniverseEvents(env.DB, {
+        kind: parseEventKind(args.kind),
+        from: parseG1Date("from", args.from),
+        to: parseG1Date("to", args.to),
+        code: parseMcpCode(args.code),
+        limit: parseMcpLimit(args.limit),
+        cursor: parseMcpCursor(args.cursor),
+      });
+      return envelope(result.rows, {
+        cursor: result.cursor,
+        sources: result.rows.length > 0 ? ["JPX"] : [],
+        licenses: ["personal-only"],
+      });
+    }
+    case "jp_ohlcv_r2_range": {
+      const code = String(args.code ?? "");
+      if (!isValidCode(code)) throw new Error("銘柄コードは4桁");
+      const result = await fetchOhlcvR2(env.VWAP, code, {
+        from: parseG1Date("from", args.from),
+        to: parseG1Date("to", args.to),
+      });
+      if (!result) throw new Error(`見つからない: ${code}`);
+      return envelope(result, { sources: ["Yahoo"], licenses: ["personal-only"] });
+    }
+    case "jp_universe_master": {
+      const codes = args.codes === undefined ? undefined : parseCodes(args.codes);
+      const cursor = parseMcpCursor(args.cursor);
+      if (codes && cursor !== undefined) throw new Error("codes と cursor は併用しない");
+      if (cursor !== undefined && !isValidCode(cursor)) throw new Error("cursor が不正");
+      if (args.activeOnly !== undefined && typeof args.activeOnly !== "boolean") {
+        throw new Error("activeOnly は boolean で指定する");
+      }
+      const result = await fetchUniverseMaster(env.DB, {
+        codes,
+        activeOnly: args.activeOnly === true,
+        limit: parseMcpLimit(args.limit),
+        cursor,
+      });
+      return envelope(result.rows, {
+        cursor: result.cursor,
+        sources: result.rows.length > 0 ? ["EDINET", "JPX"] : [],
+        licenses: MASTER_LICENSES,
+      });
     }
     case "jp_raw_file": {
       const sha = String(args.sha256 ?? "");

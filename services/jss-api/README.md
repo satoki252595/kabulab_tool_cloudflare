@@ -60,6 +60,12 @@ kabuMCP の `edinet_*` とは分けてある（クライアントに両方登録
 | `jp_forecast_latest` | 会社業績予想の最新開示1行（複数銘柄可、TDnet 短信由来） |
 | `jp_dataset_freshness` | 各データセットの鮮度 |
 | `jp_job_runs` | 収集ジョブの最新実行状況（ジョブごとに1件、旧 Notion「⑦収集ジョブログ」の代替） |
+| `jp_disclosures_list` | 適時開示の一覧（下記 G1 節） |
+| `jp_financials` | 財務要約（実績+予想列、単一/最大50銘柄。下記 G1 節） |
+| `jp_forecast_history` | 会社予想の開示単位の全履歴（下記 G1 節） |
+| `jp_universe_events` | 上場・廃止・市場変更イベント（下記 G1 節） |
+| `jp_ohlcv_r2_range` | R2 10年分日足 `daily/{code}.json`（下記 G1 節） |
+| `jp_universe_master` | 銘柄マスタ最小断面（下記 G1 節） |
 | `jp_raw_file` | ⑤原本のメタを SHA256 で引く |
 
 `jp_indicators_latest` / `jp_valuation` は `codes` (配列、最大50件) で複数銘柄を
@@ -81,6 +87,80 @@ REST 側は `GET /v1/forecast/:code`（内部面のみ、TDnet 由来＝factual-
 `jp_job_runs` は `/v1/meta/jobs`（直近N件の履歴列挙）と違い、ジョブ名ごとに
 最新1件へ畳んで返す。頻度の高いジョブに埋もれて低頻度ジョブの最新行が見えなくなる
 問題を避けるため、鮮度確認 (freshness guard) にはこちらを使う。
+
+## G1 読み取り専用（内部面 `jss-api-private` のみ）
+
+前向き検証向けの6本。**公開面には存在しない**（同パスは 404）。内部面でも
+`JSS_API_KEYS` 未設定なら 503、キー不一致なら 401。封筒は通常どおり
+`{ data, meta: { cursor, licenses, attribution } }`。日付は実在する
+`YYYY-MM-DD` のみ（不正・逆転範囲は 400 `invalid_range`）。epoch 列への
+範囲は JST 暦日 `[00:00, 翌00:00)` の両端含む解釈。保存値が壊れている
+（未知の `license_tag` / `kind`、不正な日付・JSON・R2 payload）場合は
+成功扱いにせず 500（MCP は `isError`）。欠損を別値で埋めることはない。
+
+| REST | MCP | 引先・ライセンス |
+|---|---|---|
+| `GET /v1/disclosures?code&from&to&titleContains&tag&limit&cursor` | `jp_disclosures_list` | `ir_disclosures` / factual-cite |
+| `GET /v1/financials/:code?from&to&limit` | `jp_financials`（`code` か `codes[]`） | `jss_financials` / 行 `license_tag` |
+| `GET /v1/forecasts/:code/history?from&to&limit` | `jp_forecast_history` | `jss_financial_forecasts` / 行 `license_tag` |
+| `GET /v1/universe/events?kind&from&to&code&limit&cursor` | `jp_universe_events` | `universe_official_events` / personal-only |
+| `GET /v1/ohlcv-r2/:code?from&to` | `jp_ohlcv_r2_range` | R2 `VWAP` `daily/{code}.json` / personal-only |
+| `GET /v1/universe/master?codes&activeOnly&limit&cursor` | `jp_universe_master` | `core_stocks` 4列 / 列地図（下記） |
+
+- **開示一覧**: 新しい順（`pubdate DESC, id DESC`）。`data[]` は
+  `code`（4文字）・`company_code`（5文字）・`company_name`・`tdnet_id`・
+  `title`・`pubdate`（epoch 秒）・`document_url`・`xbrl_url`・`has_xbrl`・
+  `markets_string`・`tags[]`・`primary_tag`・`ingested_at`。本文・センチメント・
+  Notion ID は返さない。`tag` は代表タグ一致または分類タグ含有。
+  カーソルは `"<pubdate>:<id>"`（不透明値としてそのまま返す）。
+- **財務要約**: 期末の新しい順（`fiscal_period_end DESC` 等）。列は
+  `src/shared/g1.ts` の `FINANCIALS_COLUMNS` + `name`（`stock_id` /
+  `raw_page_id` は出さない）。`limit` は1銘柄あたり。REST は未知コードのみ
+  404 `unknown_code`、実在銘柄の0件は 200 空配列。MCP は
+  `data: {results, not_found, not_found_reasons}` で理由は
+  `unknown_code` / `not_collected`（指定範囲に0行の code が対象）。
+- **予想履歴**: 開示時刻の古い順の全行（列は `FORECAST_COLUMNS` + `name`）。
+  予想未定の開示も NULL のまま残る。範囲指定時は `disclosed_at` が NULL の
+  行を含めない。未知コードは 404 `unknown_code`、実在銘柄で予想行なしは
+  範囲指定なしなら 404 `no_forecast_in_store`、範囲指定ありなら 200 空配列
+  （MCP も同趣旨で、範囲なしの欠落は `isError`）。
+- **イベント**: 発効日の新しい順。`kind` は `delist|listing|transfer` のみ
+  （他は 400 `invalid_kind`）。カーソルは `"<effective_date>:<id>"`。
+- **R2 日足**: `data: {code, updated, bars, splits}`。`bars` は保存された
+  `{date,o,h,l,c,v}`（保存されていれば `adj`）をそのまま返し、**この API は
+  分割・配当の調整を一切適用しない**。`splits`（`{date,ratio}`）は分離して
+  全件返し、`from`/`to` は `bars` だけを絞る。`updated` は保存値（無ければ
+  `null`）。`proof` 等の保存メタは返さない。オブジェクトなしは 404。
+  `/v1/ohlcv/:code`（D1・調整価格付き）とは別経路。
+- **銘柄マスタ**: `code`・`name`・`sector33`（EDINET 提出者業種）・
+  `is_active`（boolean）の4列のみ（JPX 由来の `sector` / `market` 等は
+  出さない）。列ライセンスは `jss_column_license` の宣言どおりで、
+  `meta.licenses` は最も厳しい `personal-only` を含む
+  `["commercial-ok","personal-only"]`。REST の `codes` はカンマ区切り
+  最大50件、`activeOnly` は `true|false` のみ。一覧カーソルは直前最後の
+  `code`。見つからない code は単に含まれない。
+
+### 発行済株式数とベンチマーク指数の所在（コード調査の結果）
+
+- **時点の発行済株式数は D1 の構造化列として存在しない。**
+  `jss_financials` の34列（`pipeline/.../cloud_store/financials.py` の
+  `COLUMNS`）に株式数列は無く、`jss_per_share_facts` は EPS/BPS/DPS の
+  fact のみ。D31 の有報テキスト索引（`yuho_text_sections` の
+  `issued_shares_total` 等）は文字数と要素 ID だけの索引で、数値本体は
+  D1 に無い（本文は Notion 保管）。Yahoo `sharesOutstanding` は取込側で
+  基準チェックに使うだけで永続化しない。したがって今回の読取口では
+  **発行済株式数を返さない**（BPS 等からの逆算もしない）。必要なら
+  EDINET XBRL の発行済株式数要素を構造化保存する別途の取込が要る。
+- **TOPIX 等の指数日足は、宣言だけあって書込経路がコードに無い。**
+  `jss_index_symbols` は `vwap-data` の `index/{slug}.json`
+  （`n225` / `topix` / `vix` / `gspc` / `usdjpy` / `niy_f`）を宣言するが、
+  そのキーへ書く writer はリポジトリ内に存在しない。加えて TOPIX の
+  Yahoo シンボル候補（`^TOPX` 等）は実測 404 のため、宣言どおりの取得も
+  成立していない。よって指数専用の読取口は追加しない。現存する代替は
+  D1 `swing_market_context` の日経終値（`nikkei_close`。TOPIX 水準は無く
+  売買代金比のみ）と、今回の `/v1/ohlcv-r2/:code` で読める指数連動 ETF の
+  日足（例: TOPIX 連動 ETF・日経225連動 ETF の銘柄コード）であり、
+  **指数そのものではない**点に注意すること。
 
 内部RESTの `/v1/yutai/:code` は、権利時期・株数と、原文を含まない
 `public_facts`（期間表記、選択・抽選・申込の記載、併用可否の掲載表記、金額を確定できない理由、
