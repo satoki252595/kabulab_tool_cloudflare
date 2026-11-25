@@ -64,6 +64,7 @@ concurrency:
 permissions:
   contents: read
   issues: write  # SLO 違反時に Issue を立て、緑に戻ったら閉じるため
+  actions: write  # 欠測の再取得計画を既存 workflow へ workflow_dispatch するため
 
 jobs:
   run:
@@ -103,7 +104,7 @@ jobs:
           CF_D1_DATABASE_ID: ${{ secrets.CF_D1_DATABASE_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-        run: nix develop -c bash -c 'cd pipeline && uv run python -m jp_stock_pipeline.jobs.ops_check'
+        run: nix develop -c bash -c 'cd pipeline && uv run python -m jp_stock_pipeline.jobs.ops_check --refetch-plan-out refetch-plan.json'
 
       # 検出層: core_stocks の列定義ドリフト (E7)。**`core_stocks` に対しては
       # SELECT / PRAGMA しか発行しない**（`--apply` を付けない限り DDL は出ない）。
@@ -179,6 +180,42 @@ jobs:
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CF_D1_DATABASE_ID: ${{ secrets.CF_D1_DATABASE_ID }}
         run: nix develop -c bash -c 'cd pipeline && uv run python -m jp_stock_pipeline.jobs.license_map'
+
+      # 再取得 dispatch: 判定層が書いた計画（安全に埋め直せる欠測だけ）を
+      # 既存 workflow の手動入口へ流す。判定層ではないので `id:` は付けない
+      # （Issue を閉じる条件は判定4層の outcome のまま。tests/test_jobs_smoke.py
+      # が id 集合を突き合わせている）。
+      #
+      # - 計画ファイルが無い = 判定が計画書込へ到達していない（鮮度表が
+      #   読めない等）。判定できない日に自動で叩かない。
+      # - 対象 workflow に実行中・待機中の run があれば skip する。
+      #   ops_check は日次1回なので、自動 dispatch も最大1日1回/対象。
+      # - dispatch の失敗は黙らない（このステップが赤になり Issue 側へ出る）。
+      - name: 欠測の再取得を dispatch する
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          PLAN=pipeline/refetch-plan.json
+          if [ ! -s "$PLAN" ]; then
+            echo "再取得計画ファイルが無い（判定が計画書込へ到達していない）ため dispatch しない"
+            exit 0
+          fi
+          echo "再取得計画: $(jq '.requests | length' "$PLAN") 件"
+          while read -r req; do
+            WF=$(printf '%s' "$req" | jq -r .workflow)
+            REASON=$(printf '%s' "$req" | jq -r .reason)
+            ACTIVE=$(gh run list --workflow "$WF" --status in_progress --status queued --limit 5 --json databaseId --jq 'length')
+            if [ "$ACTIVE" != "0" ]; then
+              echo "skip ${WF}: 実行中・待機中の run が ${ACTIVE} 件 (${REASON})"
+              continue
+            fi
+            ARGS=()
+            while IFS= read -r kv; do ARGS+=(-f "$kv"); done < <(printf '%s' "$req" | jq -r '.inputs | to_entries[] | "\(.key)=\(.value)"')
+            echo "dispatch ${WF}: ${REASON}"
+            gh workflow run "$WF" "${ARGS[@]}"
+          done < <(jq -c '.requests[]' "$PLAN")
 
       # どの層で落ちたかが分かるように4ステップの outcome を本文へ入れる
       # （観測が落ちたのか、観測はできたが SLO を割ったのか、列定義がドリフトした
