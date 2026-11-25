@@ -17,6 +17,19 @@ import {
   supplySourcesFromSeries,
 } from "./supply";
 import { isSupplyCode } from "./jpx-margin";
+import {
+  G1FilterError,
+  MASTER_LICENSES,
+  fetchDisclosures,
+  fetchFinancialsByCodes,
+  fetchForecastHistory,
+  fetchOhlcvR2,
+  fetchUniverseEvents,
+  fetchUniverseMaster,
+  parseEventKind,
+  parseG1Date,
+  parseG1Text,
+} from "./g1";
 import type { AnyEnv, PrivateEnv } from "./types";
 
 /** 外部の月は実月のみ。公式「随時」は NULL と schedule で明示する。 */
@@ -363,6 +376,42 @@ export function mountCommon(app: Hono<{ Bindings: AnyEnv }>) {
   app.notFound((c) => c.json(errorBody("そのパスは無い", "not_found"), 404));
 }
 
+/** G1 filter 不正の error.code。field から決定的に引く。 */
+function g1ErrorCode(field: string): string {
+  if (field === "code" || field === "codes") return "invalid_code";
+  if (field === "from" || field === "to") return "invalid_range";
+  if (field === "cursor") return "invalid_cursor";
+  if (field === "kind") return "invalid_kind";
+  return "invalid_query";
+}
+
+/** クエリの任意銘柄コード。空文字も不正 (省略は undefined のみ)。 */
+function parseQueryCode(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  if (!isValidCode(raw)) throw new G1FilterError("code", raw);
+  return raw;
+}
+
+/** `?codes=7203,6758`。最大50件、各コードを正準形で検証する。 */
+function parseQueryCodes(raw: string | undefined): string[] | undefined {
+  if (raw === undefined) return undefined;
+  const codes = raw.split(",");
+  if (codes.length === 0 || codes.length > MAX_BATCH_CODES) {
+    throw new G1FilterError("codes", raw);
+  }
+  for (const code of codes) {
+    if (!isValidCode(code)) throw new G1FilterError("codes", raw);
+  }
+  return codes;
+}
+
+/** `?activeOnly=true|false` のみ受ける。 */
+function parseActiveOnly(raw: string | undefined): boolean {
+  if (raw === undefined || raw === "false") return false;
+  if (raw === "true") return true;
+  throw new G1FilterError("activeOnly", raw);
+}
+
 /** 内部面のみ。personal-only を含む。 */
 export function mountPrivate(app: Hono<{ Bindings: PrivateEnv }>) {
   app.get("/v1/supply/latest", async (c) => {
@@ -505,5 +554,161 @@ export function mountPrivate(app: Hono<{ Bindings: PrivateEnv }>) {
         can_aggregate: false,
       };
     }), { licenses: ["personal-only"] }));
+  });
+
+  // --- G1・前向き検証向け読み取り専用 (内部面のみ。公開面には存在しない) ---
+
+  // 適時開示一覧 (ir_disclosures、factual-cite)。本文は返さない。
+  app.get("/v1/disclosures", async (c) => {
+    try {
+      const result = await fetchDisclosures(c.env.DB, {
+        code: parseQueryCode(c.req.query("code")),
+        from: parseG1Date("from", c.req.query("from")),
+        to: parseG1Date("to", c.req.query("to")),
+        titleContains: parseG1Text("titleContains", c.req.query("titleContains")),
+        tag: parseG1Text("tag", c.req.query("tag")),
+        limit: parseLimit(c.req.query("limit")),
+        cursor: c.req.query("cursor"),
+      });
+      return c.json(envelope(result.rows, {
+        cursor: result.cursor,
+        sources: result.rows.length > 0 ? ["TDnet"] : [],
+        licenses: ["factual-cite"],
+      }));
+    } catch (e) {
+      if (e instanceof G1FilterError) return c.json(errorBody(e.message, g1ErrorCode(e.field)), 400);
+      throw e;
+    }
+  });
+
+  // 財務要約 (jss_financials)。未知コードだけ 404、実在銘柄の0件は 200 空。
+  app.get("/v1/financials/:code", async (c) => {
+    const code = c.req.param("code");
+    if (!isValidCode(code)) {
+      return c.json(errorBody("銘柄コードは4桁", "invalid_code"), 400);
+    }
+    try {
+      const rows = await fetchFinancialsByCodes(c.env.DB, [code], {
+        from: parseG1Date("from", c.req.query("from")),
+        to: parseG1Date("to", c.req.query("to")),
+        limit: parseLimit(c.req.query("limit")),
+      });
+      if (rows.length === 0) {
+        const [m] = await classifyMissingCodes(c.env.DB, [code]);
+        if (m?.reason === "unknown_code") {
+          return c.json(errorBody("見つからない（未知コード）", "unknown_code"), 404);
+        }
+        return c.json(envelope([], { licenses: [], sources: [] }));
+      }
+      return c.json(envelope(rows, {
+        sources: rows.map((r) => String(r.source ?? "")),
+        licenses: rows.map((r) => String(r.license_tag ?? "")),
+      }));
+    } catch (e) {
+      if (e instanceof G1FilterError) return c.json(errorBody(e.message, g1ErrorCode(e.field)), 400);
+      throw e;
+    }
+  });
+
+  // 会社予想の開示単位履歴。範囲指定なしの0件は最新1行と同じ 404 理由、
+  // 範囲指定ありの0件 (実在銘柄) は 200 空にする。
+  app.get("/v1/forecasts/:code/history", async (c) => {
+    const code = c.req.param("code");
+    if (!isValidCode(code)) {
+      return c.json(errorBody("銘柄コードは4桁", "invalid_code"), 400);
+    }
+    try {
+      const from = parseG1Date("from", c.req.query("from"));
+      const to = parseG1Date("to", c.req.query("to"));
+      const rows = await fetchForecastHistory(c.env.DB, code, {
+        from,
+        to,
+        limit: parseLimit(c.req.query("limit")),
+      });
+      if (rows.length === 0) {
+        const [m] = await classifyForecastMissingCodes(c.env.DB, [code]);
+        if (m?.reason === "unknown_code") {
+          return c.json(errorBody("見つからない（未知コード）", "unknown_code"), 404);
+        }
+        if (from !== undefined || to !== undefined) {
+          return c.json(envelope([], { licenses: [], sources: [] }));
+        }
+        return c.json(errorBody("見つからない（会社予想が未収録）", "no_forecast_in_store"), 404);
+      }
+      return c.json(envelope(rows, {
+        sources: rows.map((r) => String(r.source ?? "")),
+        licenses: rows.map((r) => String(r.license_tag ?? "")),
+      }));
+    } catch (e) {
+      if (e instanceof G1FilterError) return c.json(errorBody(e.message, g1ErrorCode(e.field)), 400);
+      throw e;
+    }
+  });
+
+  // 上場・廃止・市場変更イベント (universe_official_events、personal-only)。
+  app.get("/v1/universe/events", async (c) => {
+    try {
+      const result = await fetchUniverseEvents(c.env.DB, {
+        kind: parseEventKind(c.req.query("kind")),
+        from: parseG1Date("from", c.req.query("from")),
+        to: parseG1Date("to", c.req.query("to")),
+        code: parseQueryCode(c.req.query("code")),
+        limit: parseLimit(c.req.query("limit")),
+        cursor: c.req.query("cursor"),
+      });
+      return c.json(envelope(result.rows, {
+        cursor: result.cursor,
+        sources: result.rows.length > 0 ? ["JPX"] : [],
+        licenses: ["personal-only"],
+      }));
+    } catch (e) {
+      if (e instanceof G1FilterError) return c.json(errorBody(e.message, g1ErrorCode(e.field)), 400);
+      throw e;
+    }
+  });
+
+  // R2 10年分日足 (daily/{code}.json)。保存バーをそのまま返し調整しない。
+  app.get("/v1/ohlcv-r2/:code", async (c) => {
+    const code = c.req.param("code");
+    if (!isValidCode(code)) {
+      return c.json(errorBody("銘柄コードは4桁", "invalid_code"), 400);
+    }
+    try {
+      const result = await fetchOhlcvR2(c.env.VWAP, code, {
+        from: parseG1Date("from", c.req.query("from")),
+        to: parseG1Date("to", c.req.query("to")),
+      });
+      if (!result) return c.json(errorBody("見つからない", "not_found"), 404);
+      return c.json(envelope(result, { sources: ["Yahoo"], licenses: ["personal-only"] }));
+    } catch (e) {
+      if (e instanceof G1FilterError) return c.json(errorBody(e.message, g1ErrorCode(e.field)), 400);
+      throw e;
+    }
+  });
+
+  // 銘柄マスタ最小読み取り (core_stocks の code/name/sector33/is_active)。
+  app.get("/v1/universe/master", async (c) => {
+    try {
+      const codes = parseQueryCodes(c.req.query("codes"));
+      const cursorRaw = c.req.query("cursor");
+      if (codes && cursorRaw !== undefined) throw new G1FilterError("cursor", cursorRaw);
+      if (cursorRaw !== undefined && !isValidCode(cursorRaw)) {
+        throw new G1FilterError("cursor", cursorRaw);
+      }
+      const result = await fetchUniverseMaster(c.env.DB, {
+        codes,
+        activeOnly: parseActiveOnly(c.req.query("activeOnly")),
+        limit: parseLimit(c.req.query("limit")),
+        cursor: cursorRaw,
+      });
+      return c.json(envelope(result.rows, {
+        cursor: result.cursor,
+        sources: result.rows.length > 0 ? ["EDINET", "JPX"] : [],
+        licenses: MASTER_LICENSES,
+      }));
+    } catch (e) {
+      if (e instanceof G1FilterError) return c.json(errorBody(e.message, g1ErrorCode(e.field)), 400);
+      throw e;
+    }
   });
 }
