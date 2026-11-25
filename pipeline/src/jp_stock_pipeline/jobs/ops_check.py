@@ -16,6 +16,12 @@
 `slo.ACCEPTED_RED` で宣言して警告に落とし、空振り検知からは診断ジョブを除く。
 更新しないと決めたデータセット（`slo.NOT_REFRESHED`）は加齢を判定せず、
 「判定対象外」と理由をログに出す（0 行・測れないは引き続き違反にする）。
+
+唯一の例外が再取得計画（`--refetch-plan-out`）: 検知した欠測のうち
+既存の手動 dispatch 入口で安全に埋め直せる分（`jobs/refetch_plan.py`）
+を、同一 job 内の受け渡し用 JSON としてローカルファイルへ書く。
+D1/R2/Notion へは従来どおり書かず、dispatch 自体もしない
+（ops_check.yml のシェルが行う）。
 """
 
 from __future__ import annotations
@@ -41,6 +47,7 @@ from ..models import JST
 from ..contracts.market_calendar import is_session_day, latest_session_date
 from .freshness_probe import CAPACITY_DATASET
 from .macro_schedule import macro_schedule
+from .refetch_plan import RefetchRequest, ir_pdf_request, vwap_daily_request, write_plan
 from .runner import STATUS_SUCCESS, JobContext, build_parser, main_exit, run_job
 
 logger = logging.getLogger(__name__)
@@ -123,6 +130,10 @@ _IR_PDF_GAP_WHERE = (
     " AND pubdate >= ? AND pubdate <= ?"
 )
 IR_PDF_GAP_COUNT_SQL = "SELECT COUNT(*) AS n FROM ir_disclosures" + _IR_PDF_GAP_WHERE
+IR_PDF_GAP_SPAN_SQL = (
+    "SELECT MIN(pubdate) AS oldest, MAX(pubdate) AS newest FROM ir_disclosures"
+    + _IR_PDF_GAP_WHERE
+)
 IR_PDF_GAP_SAMPLE_SQL = (
     "SELECT tdnet_id FROM ir_disclosures"
     + _IR_PDF_GAP_WHERE
@@ -284,6 +295,7 @@ def _check_vwap_daily_coverage(
     problems: list[str],
     *,
     now: datetime | None = None,
+    refetch: list[RefetchRequest] | None = None,
 ) -> None:
     """VWAP保存日足の最終書込日を母集団と突合し、欠け銘柄数を判定する。読み取りのみ。"""
     if r2 is None:
@@ -359,6 +371,16 @@ def _check_vwap_daily_coverage(
             f"2取引日以上遅れ・欠落が {len(stale)}/{len(codes)} 銘柄"
             f" (例={','.join(sample)}{suffix} 最古書込={oldest} 1取引日遅れ={len(lagging)})"
         )
+        if refetch is not None:
+            request = vwap_daily_request(stale, expected_date=expected.isoformat())
+            if request is not None:
+                refetch.append(request)
+                logger.info("再取得計画: %s", request.reason)
+            else:
+                logger.warning(
+                    "VWAP保存日足の欠測 %d 銘柄は自動再取得の上限を超えるため計画しない",
+                    len(stale),
+                )
 
 
 def _check_macro_context_gaps(
@@ -619,7 +641,11 @@ def _check_capacity(store: D1Store, problems: list[str]) -> None:
 
 
 def _check_ir_pdf_archive(
-    store: D1Store, problems: list[str], *, now_epoch: int | None = None
+    store: D1Store,
+    problems: list[str],
+    *,
+    now_epoch: int | None = None,
+    refetch: list[RefetchRequest] | None = None,
 ) -> None:
     """公開から一定日数たっても Notion 未保管の適時開示を数える。読み取りのみ。"""
     now = int(datetime.now(UTC).timestamp()) if now_epoch is None else now_epoch
@@ -667,6 +693,32 @@ def _check_ir_pdf_archive(
         f"{IR_PDF_RETAIN_DAYS}日以内で notion_page_id が NULL の適時開示が"
         f" {raw_n} 件 (tdnetId={','.join(ids)}{suffix})"
     )
+    if refetch is not None:
+        try:
+            span = store.query(IR_PDF_GAP_SPAN_SQL, bounds)
+        except D1Error as exc:
+            logger.warning("IR PDF 再取得計画の月範囲を読めない: %s", exc)
+            return
+        oldest = span[0].get("oldest") if span else None
+        newest = span[0].get("newest") if span else None
+        if (
+            not isinstance(oldest, int) or isinstance(oldest, bool)
+            or not isinstance(newest, int) or isinstance(newest, bool)
+        ):
+            logger.warning(
+                "IR PDF 再取得計画の月範囲を読めない (oldest=%r newest=%r)", oldest, newest
+            )
+            return
+        request = ir_pdf_request(
+            gap_count=raw_n, oldest_epoch=oldest, newest_epoch=newest
+        )
+        if request is not None:
+            refetch.append(request)
+            logger.info("再取得計画: %s", request.reason)
+        else:
+            logger.warning(
+                "IR PDF 未保管 %d 件は自動再取得の上限を超えるため計画しない", raw_n
+            )
 
 
 def _unwrap_tdnet_item(item: object) -> dict | None:
@@ -880,15 +932,23 @@ def execute(ctx: JobContext) -> None:
         for problem in problems:
             ctx.add_failure("slo", problem)
         return
+    refetch: list[RefetchRequest] = []
     _check_probe_alive(store, problems)
     _check_idle_runs(store, problems)
     _check_capacity(store, problems)
     _check_stock_coverage(store, problems)
-    _check_vwap_daily_coverage(store, _vwap_daily_r2(settings), problems)
+    _check_vwap_daily_coverage(store, _vwap_daily_r2(settings), problems, refetch=refetch)
     _check_macro_context_gaps(store, problems)
     _check_sector_daily_gaps(store, problems)
-    _check_ir_pdf_archive(store, problems)
+    _check_ir_pdf_archive(store, problems, refetch=refetch)
     _check_ir_universe_gap(store, problems)
+
+    plan_out = getattr(ctx.args, "refetch_plan_out", None)
+    if plan_out:
+        # 欠測が無くても空の計画を書く。「ファイルが無い = 判定できなかった」
+        # と「計画 0 件」を dispatch 側で区別するため。
+        write_plan(plan_out, refetch)
+        logger.info("再取得計画を %s へ書いた (%d 件)", plan_out, len(refetch))
 
     if problems:
         for p in problems:
@@ -903,6 +963,11 @@ def execute(ctx: JobContext) -> None:
 
 def main(argv: list[str] | None = None, *, env: dict[str, str] | None = None) -> int:
     parser = build_parser("鮮度とジョブ結果の SLO 判定（読み取りのみ）")
+    parser.add_argument(
+        "--refetch-plan-out",
+        default=None,
+        help="安全に再取得できる欠測の計画 JSON の書込先（ops_check.yml の dispatch 用）",
+    )
     return run_job(JOB_NAME, execute, argv, parser=parser, env=env)
 
 
